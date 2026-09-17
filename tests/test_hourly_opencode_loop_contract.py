@@ -19,6 +19,7 @@ def test_hourly_loop_uses_the_local_free_orchestrator_without_copilot_token() ->
         "NVIDIA_NIM_API_KEY_SUB",
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
+        "OPENCODE_ZEN_API_KEY",
     ):
         assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow

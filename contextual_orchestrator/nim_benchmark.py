@@ -360,6 +360,32 @@ class _BudgetedModelClient(ModelClient):
         """Return the first benchmark transport-contract failure, if any."""
         return self._benchmark_contract_error
 
+    def _validate_provider(self, agent: ModelAgent) -> tuple[int, tuple[Any, ...]]:
+        """Validate injected-transport metadata without performing duplicate DNS.
+
+        Benchmark transports own endpoint resolution and address pinning.  Repeating
+        the generic client DNS preflight here makes an injected offline transport
+        unreachable and creates a time-of-check/time-of-use split for the production
+        pinned transport.  Keep the URL and credential checks at this adapter boundary;
+        the returned loopback tuple is an unused compatibility value because every
+        benchmark send is handled by ``_benchmark_transport``.
+        """
+        if self._benchmark_transport is None:
+            return super()._validate_provider(agent)
+        parsed = urllib.parse.urlparse(agent.base_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise RuntimeError(f"{agent.id} base_url must use https")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise RuntimeError(
+                f"{agent.id} base_url must not contain credentials, query data, or fragments"
+            )
+        credential_name = agent.credential_name
+        if credential_name and get_credential(credential_name) is None:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        return socket.AF_INET, ("127.0.0.1", parsed.port or 443)
+
     def _send(
         self,
         agent: ModelAgent,
@@ -537,12 +563,13 @@ class EqualBudgetModelClient:
         return getattr(self._delegate, name)
 
     @property
-    def max_output_tokens(self) -> int:
+    def max_output_tokens(self) -> int | None:
         """Expose the delegate cap for compatibility with orchestration clients."""
-        return int(self._delegate.max_output_tokens)
+        value = self._delegate.max_output_tokens
+        return int(value) if value is not None else None
 
     @max_output_tokens.setter
-    def max_output_tokens(self, value: int) -> None:
+    def max_output_tokens(self, value: int | None) -> None:
         """Forward explicit cap changes to the delegated model client."""
         self._delegate.max_output_tokens = value
 
@@ -596,7 +623,10 @@ class EqualBudgetModelClient:
                 "policy cell total-token allowance exhausted"
             )
 
-        output_cap = min(int(self._delegate.max_output_tokens), output_allowance)
+        delegate_cap = self._delegate.max_output_tokens
+        output_cap = output_allowance
+        if type(delegate_cap) is int and delegate_cap > 0:
+            output_cap = min(delegate_cap, output_allowance)
         self.observed_calls += 1
         self.observed_prompt_tokens += prompt_tokens
         self.observed_tokens += prompt_tokens

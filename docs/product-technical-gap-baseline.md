@@ -102,6 +102,603 @@ Proposed until the successor head completes the focused regression, full suite,
 security, and required review lanes; the other three open #971 architecture
 findings remain separate.
 
+## 2026-09-14 trace-scope token (issue #117 acceptance item 9)
+
+Issue #117's maintainer verification map, acceptance item 9, flagged that
+`SecurityConfig.authorize` let a bare single `auth_token` satisfy the `trace`
+scope unconditionally, with no test covering the raw library path (`server.py`
+had `expected = self.auth_token` for scope `trace` whenever no
+`bearer_verifier` was configured, regardless of split admin/inference mode).
+ADR 0026 already documented the intended contract — inference or admin
+authentication alone must not authorize a trace-bearing response, and split
+static admin/inference mode should fail closed for trace absent a verified
+claim — but `authorize()` did not implement that fail-closed branch.
+
+Added an explicit `trace_token: str = ""` field to `SecurityConfig`. In
+`authorize()`, scope `trace` without a `bearer_verifier` now resolves in three
+modes: (1) a configured `trace_token` is the only credential that authorizes
+`trace`; (2) with no `trace_token` and no split `admin_token`/`inference_token`
+(single-token mode), `auth_token` keeps the documented local escape hatch; (3)
+split admin/inference mode without a distinct `trace_token` fails closed with
+the existing `401 unauthorized` — `admin_token`/`inference_token` never
+satisfy `trace`. Wired `--trace-token`/`--trace-token-key` in `__main__.py`
+exactly like `--inference-token` (KV credential name
+`CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN` by default, resolved via
+`get_credential`, no runtime env reads). The CLI's existing `--production`
+gating (which requires split admin/inference credentials and rejects
+identical admin/inference values) is unchanged: it only checks admin/inference
+separation, not a trace credential, and every trace-bearing HTTP route already
+gates on the caller's base admin/inference scope *and* the separate `trace`
+scope over the same bearer, so split mode without a `trace_token` was already
+structurally fail-closed for trace once `authorize()` was fixed — no new
+startup requirement was added.
+
+Raw-library-path tests in `tests/test_security_hardening.py`
+(`test_single_token_mode_keeps_the_documented_trace_escape_hatch`,
+`test_split_token_mode_without_trace_token_fails_closed_for_trace`,
+`test_split_token_mode_trace_token_authorizes_only_trace`) cover all three
+modes directly against `SecurityConfig.authorize`, including that
+`trace_token` does not authorize `admin` or `inference`. One HTTP-level test
+in `tests/test_chat_include_orchestration_trace_http_honesty.py`
+(`test_split_token_mode_refuses_trace_with_inference_token_but_accepts_trace_token`)
+shows a real `/v1/chat/completions` trace-bearing request is refused with the
+plain inference token in split mode, and accepted once `trace_token` is
+provisioned for that credential. Focused suite:
+`tests/test_security_hardening.py`, `tests/test_chat_include_orchestration_trace_http_honesty.py`,
+`tests/test_api_contract.py`, `tests/test_self_check.py`,
+`tests/test_kv_credentials.py` (77 tests) pass; `interrogate` reports 100%
+docstring coverage. Issue #117 acceptance item 6 (tenant/resource binding)
+remains open.
+## 2026-09-13 Output-budget clamp evidence (#1169)
+
+`ModelClient._clamp_agent_token_budget` silently rewrote an explicit caller
+budget (`max_tokens`/`max_completion_tokens`/`max_output_tokens`) down to the
+served agent's published `max_output_tokens` ceiling with no error, header,
+trace field, or usage marker telling the caller its budget was not the budget
+applied — filed as #1169 during the local reproduction review of #1154
+(removal of the global generation-token ceiling per #1151). ADR
+[0130](planning/adrs/0130-output-budget-clamp-evidence.md) records the
+decision to surface the clamp in-band rather than via a response header
+(unavailable on the streaming path, since `_begin_sse()` flushes headers
+before the provider call and its clamp decision exist) or a hard `400`
+rejection (would break `noema`/`opencode`, which send a large `max_tokens` as
+a ceiling, not a demand). `ModelClient` now records
+`requested_output_tokens`/`effective_output_tokens`/`output_budget_clamped`
+per thread (`_clamp_agent_token_budget_with_evidence` /
+`take_output_budget()`, mirroring the existing `take_usage()` pattern), and
+`TaskOrchestrator._invoke`'s non-race branch exposes it the same way it
+already exposes assistant-message extras (`_last_output_budget`, mirroring
+`_last_assistant_message`). The `route`/`conduct` trace-row builders attach
+the three fields to the relevant provider-call trace row, and
+`chat_completion_response` / `chat_completion_chunks` copy them onto the
+existing `orchestration` extension object already used for `cost` and
+`verification`. This now extends to the remaining call paths flagged as follow-up in the
+initial cut: the multi-endpoint `immediate_race` branch (`TaskOrchestrator
+._invoke`'s race `call()` closure also takes `take_output_budget()` and
+records only the winning endpoint's evidence — a losing attempt's clamp
+decision is discarded along with the rest of that attempt), structured/
+`free_only` synthesis (`ModelClient._send_raw` now uses
+`_clamp_agent_token_budget_with_evidence`, and `_orchestrated_provider
+_completion`'s `send_synthesis`/final-response assembly carries the evidence
+on the same ad hoc `orchestration` object it already attaches next to
+`route`), and true-streaming passthrough (`ModelClient._stream_send` now
+uses the evidence-recording clamp too, and `TaskOrchestrator.stream_route`
+gained an `output_budget_callback` parameter — mirroring its existing
+`usage_callback` — that `server.py`'s `_stream_route_completion` uses to
+carry the evidence on the final SSE chunk's `orchestration` object, since
+`_begin_sse()` has already flushed headers by the time the clamp decision
+exists). Verified by `tests/test_output_budget_model_max.py` (clamped,
+unclamped, and no-explicit-budget cases at the `ModelClient` and
+`TaskOrchestrator` layers, plus one clamped/unclamped pair each for the race
+winner, structured/`free_only` synthesis, and streaming-passthrough final
+chunk) plus `tests/test_orchestrator_client_boundaries.py`,
+`tests/test_true_streaming.py`, `tests/test_api_contract.py`, and
+`tests/test_passthrough_provider_failover.py` (168 passed, 1 pre-existing
+unrelated `openai` SDK version-pin failure), the full suite (3697 passed, 1
+skipped, the same SDK version-pin failures plus one pre-existing unrelated
+`mcp.Client`/camoufox environment failure), and `interrogate` at 100% on
+`contextual_orchestrator/`. Not yet covered: the async-batch-submission call
+site (`ModelClient._batch_run`'s `batch_body`/`_clamp_agent_token_budget`
+call) has no synchronous trace or response to attach evidence to and remains
+a separate follow-up.
+
+## 2026-09-13 Free-pool selection ignored single-tool-call evidence (#940)
+
+At `012beaac` the three mechanisms named in #940 stood at: capability
+evidence implemented (`DiscoveredModel.supports_parallel_tool_calls`, probe
+and 400 classifier from #1121, tags `tool_call:single|multi`), passthrough
+400 failover implemented (`_is_single_tool_call_limit_error`), selection-time
+exclusion missing: `_is_general_free_agent` checked only price and input
+modality, so a `tool_call:single` agent was still chosen first for a
+multi-tool request and one provider round-trip was wasted before failover.
+Candidate on `fix/free-pool-single-tool-call-exclusion-940` adds a
+request-shape predicate matching exactly the probe's rejected shape (two or
+more tools without `parallel_tool_calls: false`, or an explicit `true`) and
+passes the chat body at the two tool-carrying selection sites
+(`proxy_completion`, structured `free_only` synthesis). RED: two new tests
+failed with the single-call agent still served; GREEN after the change with
+the single-tool, opt-out, and no-evidence shapes still served by that agent.
+Not established: a live NIM confirmation that a one-tool request without the
+flag is accepted (left to failover by design), and any change to
+`general_free_serving_candidates`, which stays request-blind on purpose.
+
+## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
+
+PR #1053's valid default-null timeout and administrator-policy delta was 169
+commits behind protected `main@012beaacd0631f8cd3391c77744eeb626269b5de`
+and conflicted in five files. A non-force merge preserves both histories. The
+RED merge-result regression had seven failures: ambiguous transport exceptions
+were typed as `provider_outcome_unknown` on one path without updating circuit
+evidence, while newer tests expected the older retryable
+`provider_connection_error`; the concrete-model HTTP path leaked the raw
+exception into a retrying 500 response. The reconciled contract records the
+candidate and group failure once, returns non-retryable
+`provider_outcome_unknown`, omits provider-controlled diagnostics, and emits
+`x-should-retry: false` for both concrete and virtual passthrough. The focused
+timeout, passthrough, telemetry, policy, pool, and admin suite passes 287 tests.
+Protected-main reconciliation also exposed a duplicate DNS preflight in the NIM
+benchmark evaluation adapter: the pinned benchmark transport was never reached,
+so 180 evaluation cells collapsed into local failures after capability probing.
+The adapter now keeps URL and KV credential validation while delegating address
+resolution exclusively to its pinned transport; the malformed-evaluation
+contract again fails before artifact publication. Four focused regression and
+stale-contract tests pass; five additional adapter tests cover the delegated,
+valid injected, unsafe-URL, and missing-credential boundaries. Pytest's
+asynchronous fixture-loop scope is now
+explicit rather than inherited from a deprecated plugin default.
+
+Five review-discovered timeout paths are also repaired on the same Proposed
+successor. Finite model policies now create one monotonic deadline before local
+admission and spend the remaining budget on connection, retries, and every
+stream read. A timeout caused by that explicit policy returns non-retryable
+`model_timeout`; a connection reset remains the distinct non-replayable
+`provider_outcome_unknown`. A local admission expiry occurs before any send and
+therefore moves directly to an eligible sibling without consuming the
+same-agent retry budget. Synchronous embeddings resolve the selected embedding
+agent's timeout instead of the client-wide default. Policy writes and OpenAPI
+now reject values above the socket-safe 2,147,483,647-second maximum. Focused
+tests cover post-send no-replay, streaming lifetime, pre-send failover,
+embedding selection, and the numeric boundary.
+
+The reconciled tree's local full suite reports `3686 passed, 3 skipped, 1
+deselected`; the deselected owner-contract test requires the released
+`fast-mlsirm` native extension, while this runner has neither that artifact nor
+a Rust toolchain. Public-object docstring coverage is 100%, Ruff and compileall
+are clean. Aggregate branch-aware coverage is 94%, so no full-repository 100%
+coverage claim is made and the PR remains Proposed pending hosted exact-head
+evidence.
+
+This remains Proposed exact-tree evidence. Protected merge, immutable release,
+consumer pin update, and a live `orchestrator/free` recovery remain required.
+The triggering `.github` #2106 model gates therefore remain nonpassing even
+though its exact-head CodeQL run has subsequently settled successfully.
+
+## 2026-09-07 per-model serving timeout and HTTP policy writes
+
+PR #1053 now applies an administrator-owned `model_timeout_seconds` value on
+the selected model's serving path. The client default remains null. There is
+no shared application ceiling. Authenticated timeout-only PATCH writes are
+admitted and recorded with the opaque principal digest. GET
+`timeout_policy` still reports a stale serving snapshot when another process
+wrote the durable row; that cross-process refresh remains open. HTTP restore
+and administrator UI remain unfinished. This is local regression evidence,
+not a protected merge or live-provider recovery claim.
+
+## 2026-09-07 timeout audit visibility repair
+
+On PR #1053 base `1ccc9599415096433214cd9ad0df611eddfc8fbb`, successful
+timeout set, clear, and restore operations had durable policy history but no
+operator audit event. A local regression reproduced the missing events; the
+repair adds committed revision references to the existing audit stream.
+History GET access now uses the existing durable replay-authorization path.
+An authenticated loopback HTTP regression reproduced missing access auditing
+and now checks both successful access and HTTP 503 when audit recording fails.
+
+The timeout-policy and agent-pool suites passed 73 tests in 12.30s before this
+documentation update. No live provider, protected merge, or deployment is
+claimed. The HTTP test spies on the durable audit call; it does not prove
+storage survival after a crash. Policy history remains atomic with the policy
+update; the separate operator event is not a new cross-store transaction.
+Default-null model timeout and explicit administrator control are unchanged.
+
+## 2026-09-06 model-specific timeout policy: local, not delivered
+
+PR #1053's remote `661ce8db` has a completed 3400-pass/2-skip regression suite
+for removing the implicit client timeout. The subsequent local durable-policy
+implementation at `439da2e5` has 31 related passes, but does not yet enforce
+model-specific execution limits. HTTP write admission and UI controls remain
+closed for the new setting. Neither result proves deployment or buyer latency.
+
+A new failure-injection test at `6236e982` demonstrates an unresolved audit
+atomicity gap: the update reports an audit error while both memory and a
+restarted instance retain the new 7200-second policy. Policy change/history
+was subsequently moved into one local pool transaction at `4e839ce1`;
+`c3879439` has 37 related passes, including history-insertion rollback for
+new/existing rows and rejection of a stale different-value writer. This does
+not yet cover authenticated actor evidence or cross-process serving refresh.
+Subsequent `d911a38e` adds history-revision comparisons for ABA conflicts;
+`e5e9c96f` reads values and revisions in one database snapshot. Their committed
+RED cases reproduced stale-value acceptance and mixed revisions respectively;
+the latter head has 39 related passes.
+Actor evidence is now stored as an optional opaque principal digest at local
+`c08a5fd5`; this is not yet authenticated HTTP policy-write E2E and null
+historical actors remain unknown. Static-token identity is deployment-scoped.
+Local `37bca9ca` adds revision-checked restoration as a new, source-linked
+history entry; `62ba3c3b` has 54 related passes including foreign-model and
+audit-failure rejection. Authenticated HTTP restore,
+precedence, cancellation semantics, released Rust runtime integration and
+actual administrator visual/E2E evidence also remain open.
+
+Local `9701dec2` guards ordinary pool saves against stale policy value/revision
+overwrites (60 focused passes). `befe04ce` additionally delays removal and
+group-change serving publication until durable saves succeed, following three
+reproduced failures; 103 related tests passed in 15.34 seconds. Multi-model
+batch rollback and cross-process serving refresh remain unproven. Neither
+change supplies model deadline enforcement or a new full-suite result.
+
+Subsequent `ad337e18` reproduced partial persistence in all three group/discovery
+batch paths when the second model conflicted. `36fc35df` now commits each batch
+in one transaction using the existing normalized writes; 122 related tests
+passed in 5.04 seconds. Cross-process refresh and end-to-end timeout delivery
+remain open; separate bootstrap operations are not one atomic batch.
+
+`a2951f67` adds actual authenticated HTTP evidence: stale ordinary edits fail
+without overwriting the other writer's policy, invalid credentials get 401,
+and the unfinished timeout write field remains rejected (1 focused pass,
+4.01 seconds). This is rejection-boundary evidence, not successful policy
+activation or inference enforcement.
+
+See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
+revisions, retained failures, corrected test-evidence limitations, owner
+boundaries and the full remaining acceptance gates. Local configuration work
+must not be represented as released enforcement or psychometric accuracy gain.
+
+## 2026-09-09 Request-to-provider diagnostic correlation
+
+PR #1105 candidate `f588ca8c093ea7c9a86b857685bfbb1ce3c05fe2` connects HTTP
+identity to seven provider diagnostic events and the successful request summary.
+The predecessor `7b7b32006e7ae498db2ee781bd423d9c7b6774fc` completed its full
+suite with 3399 passed, 2 skipped (1594.26s, exit 0). Follow-up code at
+`6b24fe96` passed 81 focused tests, including actual same-socket reuse and
+overlapping same-session HTTP requests with two distinct server thread IDs.
+The integrated `f588ca8c` suite terminated with 3399 passed, 2 skipped and
+1 failure (1767.82s, exit 1): certifi CA loading raised InterruptedError before
+the Responses HTTP test could send a request. Same-head isolated HTTP tests
+then passed 4/4 in 20.05s. The original failure remains unresolved evidence;
+do not infer full-suite success from the isolated pass.
+
+Actual output from all seven provider diagnostic functions at
+`7cb97ec8e2979d35b72c86a801ab18f0fd9c213d` was cross-checked with the central
+PR #2053 sanitizer at `fc0ab87bfde0900461034be815046914f9019bfc`: trusted IDs
+survived, untrusted error-body IDs and text were omitted, and malformed IDs and
+embedded newlines were rejected. This isolated contract test does not establish
+collector adoption. The later sanitizer `4a0125bf9f50d4d26355249011df03c3735b3abc`
+also preserved an actual local GET `/healthz` 200 summary from producer
+`f588ca8c`, including its request ID, while rejecting extra detail and an
+unapproved path. This supersedes the earlier missing-success-summary limitation
+for that route/state only, not every HTTP route. The
+[runbook](doctoring/provider_request_correlation.md) records
+RED evidence, exact revisions, cleanup tests, and bounded visual inspection.
+Not yet established: every orchestration worker path, integrated full-suite and
+security gates, protected release, live collector adoption, or customer KPI
+improvement. Diagnostic traceability is a prerequisite for attributing failures,
+not a substitute for accuracy or decision-latency measurements.
+
+## 2026-09-08 error-response correlation repair
+
+ConceptWeave run 33938445050, job 101256562088, preserves a client-side HTTP
+500 with request ID `175d6d59c5294b0e8a21548193b90482`. Its surviving artifact
+9969701340 contains gateway stderr but only generic request-failure messages;
+it cannot correlate that ID to an internal cause. The job installed CO source
+`2e414d15ba58f28597751b625a8a2f00fc9fadcf`. This is not proof of free-pool
+exhaustion, a disappeared run, or a currently released fix.
+
+The same correlation gap was reproduced on main
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`: the common HTTP error response had
+a generated ID absent from its log. The proposed repair generates one ID for
+both response and warning, prevents detail fields from overriding it, and logs
+neither session values nor error details. RED: one missing-correlation failure;
+GREEN: 45 telemetry tests passed in 6.58 seconds. This improves future failure
+correlation only; it does not recover the historical exception, cover every
+streaming-error path, or prove immutable publication or deployed behavior.
+
+## 2026-09-05 PR #1004 mixed provider failure follow-up
+
+At head `2a6b41562114530315bb44d1aa3dede820a68da1`, both `502 → 404` and
+`404 → 502` on same-endpoint structured-synthesis candidates returned a
+non-retryable missing-model error. The shared exhaustion boundary now preserves
+the recorded retryable upstream error first. Caller-selected endpoint, model, free/ZDR,
+file-replica, and ambiguous-tool-replay restrictions remain unchanged.
+Both ordered regression cases failed before the fix and pass afterward.
+See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
+ Protected merge and post-change live gateway evidence are still required;
+head `cdb672c23a23dd3c83be3cd4190f5a7b1d5da032` passed the full local suite
+(`3409 passed, 2 skipped in 657.92s`). That result predates the accounting
+correction below and does not verify it.
+
+Independent local review reproduced a separate accounting gap: after two grouped
+candidates fail, the group ledger records only the final candidate. A prior
+failure also hides a later terminal 400 or billed malformed response from the
+circuit counter. The proposed correction records both observations at the
+actual failed synthesis attempt, before fallback or a budget stop, and removes
+the outer duplicate group observation. A later 413 is not a provider failure.
+The accounting regressions changed from `7 failed, 11 passed` to `18 passed`;
+the wider provider/group/effort/HTTP suite passed all 124 tests. Full-suite and
+hosted exact-head evidence for this additional correction must be recorded
+separately in the existing PR.
+The subsequent response-before-return regression additionally prevents an
+unassigned response read or reuse of another candidate's usage. Both cases
+failed on `18a29d14`; 178 focused tests pass after the correction. Unknown
+usage stays unavailable. The explicitly interrupted full run on `18a29d14`
+is excluded from passing evidence; see the same doctoring record.
+
+The next current-head review found that `69b79a6bc2a6039396d6fd03edcac5bef80c686e`
+still converted a stale model into an implicit endpoint pin. Existing tests
+had preserved that behavior without proving it was required. New cases failed
+`12/49` before the shared candidate-list correction; the focused unit/HTTP/usage
+suite now passes `52/52`. Virtual AUTO/FREE requests can exhaust each already
+eligible model across endpoints; explicit selections and budget enforcement
+remain bounded. This is proposed local remediation, not protected or live
+acceptance. See the same doctoring record for the corrected contract audit.
+An additional eight-case RED on `2582176d` covered malformed-only/mixed-413
+exhaustion and pre-return repair failures for virtual and concrete models.
+The shared correction preserves the response-failure category and failed-run
+usage evidence; all 60 focused cases pass. The interrupted full run on
+`2582176d` is not acceptance evidence for this correction.
+
+## 2026-09-02 PR #1004 exact-head structured repair 413 RCA
+
+- **Affected exact head:** predecessor `58c159802d85fe6e8f7b812317560cb1a65133aa` failed writer run `33530310548`, job `99931499707` after `138 passed, 1 failed` in the focused suite.
+- **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` established a stale candidate already excluded by a 404, a live candidate producing invalid structured output, and a repair-only 413. The generated handler retired the live candidate and called the generic structured-exhaustion helper, incorrectly raising `StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.
+- **Classification:** deterministic code-generation/repair-path defect in this repository, not a provider/network transient, fixture race, missing permission, or expected fail-closed governance result.
+- **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. If none remains, persist the request-size failure and re-raise the original typed 413. Never retry a request-excluded predecessor.
+ - **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
+
+## 2026-09-04 Bytez discovery: filtered empty catalogs and upstream 5xx are distinct fail-closed states
+
+At `origin/main` `60c562de`, an authenticated, bounded live probe loaded only
+`BYTEZ_API_KEY` from the operator's local `.env` and emitted no token, response
+body, or upstream error text. The earlier `task=chat` HTTP 200 response with an
+empty `output` is a successful transport with no usable catalog, whereas an
+unfiltered HTTP 500 is an upstream server failure. A fresh probe found the
+upstream condition had widened: `chat`, `text-generation`, the other documented
+chat-completion-compatible task filters, and the unfiltered request all returned
+HTTP 500 with a small JSON object and empty `output`. Raw-token and `Key`-prefixed
+authorization produced the same status, so the prefix does not explain the
+failure.
+
+The canonical discovery boundary now queries only `task=chat` and then
+`task=text-generation`. Bytez documents both as compatible with its OpenAI-style
+chat-completions API; audio, image, and video task catalogs are intentionally not
+admitted to the ordinary text-chat pool. Discovery never uses the failing
+unfiltered endpoint as a fallback. A non-empty filtered catalog is parsed through
+the existing Bytez model contract. If both filtered catalogs are empty or fail,
+refresh records only task, outcome, model count, and an allowlisted error code;
+it retains the durable last-known-good catalog and fails closed when none exists.
+The current upstream 5xx therefore remains a first-bootstrap blocker, not a
+reason to fabricate usable models.
+
+## 2026-09-14 rate-limit-aware admission for a 429 storm
+
+Production evidence: org CI review lanes call this gateway with
+`orchestrator/free`. During a free-pool rate-limit storm every candidate
+returned HTTP 429 within ~50ms (noema run 34758641142, strix run 34758679736:
+preflight `ready_count: 0`, 7x 429 across OpenRouter and NIM accounts), and the
+gateway simply failed the request. `ContextualWisdomLab/.github#2148`
+independently root-caused the same failure mode against a private-target ZDR
+pool of three OpenRouter `:free` routes on one account, wiped by a single 429
+burst; `#2165` shows `noema-review`/`strix` failing closed on the resulting
+429/502 with `attempts=1`, blocking unchanged consumer PRs. The owner's
+requirement across all three reports is the same: the gateway's job under a
+429 storm is to not fail.
+
+Fixed: `orchestrator.py` now parses `Retry-After` (delta-seconds or an
+HTTP-date; `provider_errors.parse_retry_after`) and falls back to a numeric
+`x-ratelimit-reset*` header when absent, recording a per-agent cooldown
+(`TaskOrchestrator._record_rate_limit`/`_rate_limit_remaining`) kept separate
+from the health circuit breaker -- a 429 is quota exhaustion, not a model
+health failure, and no longer trips `_circuit` (a direct 503 still does).
+`classify_provider_failure` now attaches `retry_after_seconds` to any 429/503
+classification's `extra_detail`, so both the passthrough transport and the
+chat transport used by `_invoke` (route_once/conduct's shared engine) can
+record the same cooldown from one `ProviderUpstreamError`.
+`_failover_candidates` (shared by every caller, including `route_once`/
+`conduct`) now skips a currently cooled-down candidate by default, falling
+back to the full list only when every candidate is limited so a caller with no
+wait logic of its own still gets one honest attempt.
+
+The wait-then-retry/honest-429 admission decision itself is one shared
+implementation, `TaskOrchestrator._await_rate_limit_recovery(candidates, *,
+deadline, transport)`: it computes the earliest known cooldown among
+currently rate-limited members of `candidates`, waits for it (one bounded
+`time.sleep`-backed call, never a busy-loop) and returns `True` when it fits
+the remaining budget against `deadline` -- resolved from the request's
+administrator-owned `model_timeout_seconds` deadline (issue #1053) when set,
+else the new `rate_limit_wait_seconds` constructor/CLI default (30s, a
+documented caller-contract bound, not a hidden product limit) -- or raises the
+honest `provider_rate_limited` error code (429, `retryable=True`) instead of
+misclassifying quota exhaustion as a `502 provider_connection_error` when
+waiting is impossible. Two callers reach it:
+
+- `proxy_completion`'s own passthrough failover loop calls it directly each
+  round its ranked candidates are exhausted.
+- `TaskOrchestrator._invoke_with_rate_limit_recovery` wraps `_invoke` (the one
+  shared engine both `route_once` and every `conduct` step, including the
+  worker step, call to reach a candidate): when `_invoke`'s own candidate
+  exhaustion raises a 429/503 `ProviderUpstreamError` AND every candidate
+  currently eligible for that call is rate-limited (a genuine storm, not a
+  mixed failure set), it calls the same helper and retries the whole
+  `_invoke` call instead of propagating the exhaustion. A mixed failure set
+  re-raises exactly as `_invoke` would have, unchanged.
+
+`server.py` answers a raised `provider_rate_limited` error with `429` and a
+`Retry-After` header (or the equivalent field in the terminal SSE error frame
+when headers are already flushed) regardless of which of the two callers
+raised it. `provider_readiness_report` now also reports `rate_limited_until`
+and `earliest_ready_seconds` per agent so an external preflight/readiness
+sidecar (the org sidecar's own `contextual-orchestrator-preflight.json`
+already reports `candidate`/`probed`/`rejected_count` and
+`account_skip_after_429` as its RED/GREEN evidence for this class of change)
+can wait instead of exiting.
+
+Coverage note: this closes the real `orchestrator/free` HTTP path.
+`route_once`/`conduct` (via `_invoke`) is the path CI review lanes actually hit
+over `/v1/chat/completions` for a virtual model, since a virtual model with
+tools deliberately stays on Fugu route / TRINITY-Conductor conduct rather than
+single-agent passthrough
+(`tests/test_actions_model_fallback.py::test_http_virtual_free_tools_stay_on_route`);
+`proxy_completion`'s own multi-candidate virtual-selector branch remains
+reachable over HTTP only through direct API use, but now shares the identical
+wait/honest-429 decision through `_await_rate_limit_recovery` rather than a
+separate implementation. Every conduct step (thinker/worker/verifier/
+synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
+site, so the worker step required by the owner's report gets the fix, and so
+do the other roles for free, without a second implementation.
+
+### Follow-up (same day): an omitted cooldown header must still count as cooling
+
+`_record_rate_limit(agent_id, None)` originally returned without recording
+anything, so a 429/503 whose provider omitted both `Retry-After` and
+`x-ratelimit-reset*` (RFC 9110 10.2.3 permits omitting it entirely; NIM and
+OpenRouter routinely do) was never marked cooling -- `_await_rate_limit_recovery`
+saw no candidate to wait for and the request failed exactly as if this whole
+feature did not exist. The 2026-09-13 production storm may well have been
+exactly this shape.
+
+Fixed: an unknown-duration 429 now records the new administrator-owned
+`rate_limit_unknown_cooldown_seconds` (constructor/CLI default 5s -- short by
+design, so an unknown cooldown is re-probed soon rather than parked) as an
+*assumed* cooldown instead of nothing, tagged `cooldown_source: "assumed"` in
+both `provider_readiness_report` and the honest-429 error detail (vs
+`"provider"` for a real header-derived value); the existing "cooldowns only
+extend forward" rule also protects the source label, so a later assumed
+cooldown can never shorten or relabel an active provider-stated one.
+
+Two scope refinements, both made after concrete regression evidence rather
+than by design intent alone:
+
+- **429 only, not 503.** Extending the assumption to a headerless 503
+  made several pre-existing exhaustion tests
+  (`test_mixed_failures_surface_the_final_classified_provider_failure`,
+  `test_default_mock_endpoint_represents_one_fixture_provider`) loop through
+  repeated assumed waits before finally raising the wrong (storm) error
+  identity for what was actually a permanent, unrelated failure double. A
+  503 ("service unavailable") is a genuine, possibly permanent availability
+  signal with no inherent quota-recovery semantics the way a 429 is, so it
+  keeps requiring an explicit provider-stated duration to be treated as
+  cooling at all.
+- **Two or more candidates required (superseded 2026-09-14, see the
+  follow-up entry below).** `_await_rate_limit_recovery` at this point in the
+  timeline returned `False` (nothing to wait for) whenever fewer than two
+  candidates were passed in, regardless of rate-limit state: a "storm" was
+  read as implying coordinated failure across a pool of alternatives, and a
+  single pinned/named candidate with no failover pool kept its pre-existing
+  immediate classified-error contract -- the client already sees
+  `retryable=true` and can retry on its own with no server-side latency
+  added. Without this guard, `tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+  (one named model, always 429, no headers) hung waiting out an assumed
+  cooldown and blew past its 5s client-side read timeout -- the same
+  regression shape the coordinator warned the 2026-09-13 storm might be, now
+  reproduced directly against a stability-guaranteeing pre-existing test. A
+  bug in the initial fix for this guard (`_invoke_with_rate_limit_recovery`
+  looping unconditionally regardless of whether the shared helper actually
+  found anything to wait for) was caught by the same test and closed by
+  checking the helper's return value before retrying. This candidate-count
+  threshold was itself later found to be the wrong discriminator: it
+  misclassified a virtual selector's pool wiped down to exactly one eligible
+  candidate by a 429 (a real, common production shape) identically to a
+  genuinely pinned concrete model. See "explicit-vs-virtual selector, not
+  candidate count" below for the fix.
+
+Two pre-existing tests in `tests/test_passthrough_provider_failover.py`
+(`test_all_candidates_chain_the_last_failure`,
+`test_free_virtual_model_never_fails_over_to_a_paid_agent`) used a bare 429
+purely incidentally, as a stand-in for "some transient failover-eligible
+failure" unrelated to rate-limiting itself, across two real candidates each
+(so the two-candidate guard above did not save them); both were switched to
+500 to keep their actual intent isolated from this feature.
+
+Tests: `tests/test_rate_limit_aware_admission.py` (20 tests) -- adds a
+no-header 429 storm across two candidates that still waits the assumed
+cooldown and is served, the same with zero budget returning
+429/`provider_rate_limited` with `Retry-After` equal to the ceiled assumed
+value and `cooldown_source: "assumed"` in the error detail, and confirmation
+that a provider-stated cooldown is never shortened or relabeled by a later
+assumed one -- on top of the 17 tests from the entry above.
+`python -m pytest tests/test_provider_error_taxonomy.py
+tests/test_rate_limit_aware_admission.py tests/test_passthrough_provider_failover.py
+-q` passed except the pre-existing local-only `openai` SDK version pin
+(`test_sdk_passthrough_unknown_outcome_never_replays`); the repository-wide
+suite passed 3704/3705 (1 skipped) with only that same SDK-pin failure and
+the separately known local-only `mcp.Client` privacy test failure, neither
+touched by this change. `python -m interrogate -v contextual_orchestrator/`
+reported 100% docstring coverage.
+
+## 2026-09-14 rate-limit-aware admission: explicit-vs-virtual selector, not candidate count
+
+The "two or more candidates" guard added earlier the same day was itself a
+defect, not just a narrow scope choice: `_await_rate_limit_recovery` opened
+with `if len(candidates) < 2: return False`, so a pool with exactly one
+eligible candidate never waited out a rate-limit storm -- it failed
+immediately, which is the behavior this whole feature exists to remove.
+
+Production evidence this case is real and common, not hypothetical:
+noema-review run 34772771262 (2026-09-14, sidecar pin `767e67fb`) on
+`contextual-orchestrator#1177`: preflight reported `ready_count: 1`, and the
+review call then failed after 562s with `HTTP Error 429` served by
+`google/gemma-4-31b-it:free`. `ContextualWisdomLab/.github#2148` records that
+the private-target ZDR pool is three OpenRouter `:free` routes on a single
+account, so one 429 wipes the whole pool and leaves at most one eligible
+route.
+
+The guard was added for a good reason that had to be preserved:
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+pins ONE named concrete model that always answers 429 with no headers; under
+the assumed-cooldown path that test hung past its client-side read timeout.
+The correct discriminator was never the candidate count -- it is whether the
+caller delegated selection at all: an explicit concrete model must fail fast
+with the honest 429 (unchanged), while a virtual selector
+(`FREE_MODEL`/`AUTO_MODEL`/`GATEWAY_DEFAULT_MODEL`/no model) must wait even
+when only one candidate remains.
+
+Fixed (smallest diff): the count guard was replaced with an explicit-selector
+guard. `_await_rate_limit_recovery` gained a required keyword-only
+`virtual_selector: bool` parameter; `if len(candidates) < 2: return False`
+became `if not virtual_selector: return False`. Both call sites now pass a
+value they already compute rather than re-deriving it:
+`proxy_completion`'s own passthrough failover loop computes
+`virtual_selector = requested_model in {None, GATEWAY_DEFAULT_MODEL,
+AUTO_MODEL, FREE_MODEL}` right where `requested_model` is read (the same set
+its own explicit-model early-return branch already used inline), and
+`_invoke_with_rate_limit_recovery` gained the identical required keyword-only
+parameter, threaded in by `route_once` and `conduct`, each of which computes
+`model_name in {GATEWAY_DEFAULT_MODEL, AUTO_MODEL, FREE_MODEL}` once from
+their own `model_name` parameter. `_invoke_with_rate_limit_recovery`'s own
+"not a genuine storm" guard changed from `len(candidates) < 2 or any(...)` to
+`not virtual_selector or any(...)`, preserving the untouched "some eligible
+candidate is not rate-limited -- a mixed, unrelated failure" branch.
+
+Tests added to `tests/test_rate_limit_aware_admission.py`: a virtual selector
+(`FREE_MODEL`) with exactly ONE eligible candidate that answers 429 with
+`Retry-After: 1` then succeeds on retry waits once and is served (the single
+candidate is called twice); the same single-candidate virtual case with no
+wait budget returns an honest 429/`provider_rate_limited` with
+`Retry-After`, not a generic failure; an explicit concrete model with a
+single candidate that always 429s fails fast with no wait (the injected
+sleep hook is asserted never called). Every pre-existing test in that file
+stays green, and
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+was re-run to confirm the original client-timeout regression does not
+return.
+
+`python -m pytest tests/test_rate_limit_aware_admission.py
+tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py
+tests/test_provider_reliability.py tests/test_api_contract.py
+tests/test_self_check.py -q` passed except the pre-existing local-only
+`openai` SDK version pin and the separately known local-only `mcp.Client`
+privacy test, neither touched by this change. `python -m interrogate -v
+contextual_orchestrator/` reported 100% docstring coverage.
+
 ## 2026-09-02 PR #971: main-merge conflict resolution, remaining ThreadPoolExecutor shutdown-blocks, and a verified false positive
 
 Observation time: 2026-09-02 Asia/Seoul, later the same day as the entries
