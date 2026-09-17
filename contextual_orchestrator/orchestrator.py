@@ -7935,8 +7935,6 @@ class TaskOrchestrator:
         updated: list[str] = []
         for agent in discovered_agents:
             index = existing_by_id.get(agent.id)
-            if index is not None and "discovered" not in updated_candidates[index].tags:
-                continue
             if index is None:
                 index = legacy_discovered.get(
                     (
@@ -7950,6 +7948,8 @@ class TaskOrchestrator:
                         (agent.provider_name, agent.credential_name, agent.model)
                     )
                 if index is not None:
+                    # Identity remapping is only for discovery-owned rows; never
+                    # overwrite an operator-managed agent that shares legacy id shape.
                     if "discovered" not in updated_candidates[index].tags:
                         continue
                     agent = replace(agent, id=updated_candidates[index].id)
