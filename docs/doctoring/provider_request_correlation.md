@@ -1,6 +1,78 @@
 # Provider request correlation
 
-Status: proposed in PR #1105; not deployed. Runtime owner: CO. Log collector
+## Test-handler completion investigation, 2026-09-13
+
+At source `45cc666f9fd52aedf6484b345f30857d7f9d72bf`, the default full
+suite passed 3,764 tests with 2 skipped in 178.26s but emitted an isolated
+`Message`/`Arguments` request-summary fragment. Its session hash matches the
+controlled session in `test_provider_attempts_share_http_error_identity`.
+No exception traceback survived in that log, so the exact logging failure is
+unresolved. Strict standalone telemetry passed 50 tests in 3.26s without
+reproducing the fragment; this does not erase the full-run observation.
+
+An event-controlled real HTTP probe blocked the final request summary after
+the client read its HTTP 502 response. Listener shutdown, serving-thread join
+and `server_close()` returned while the daemon request handler remained alive.
+The root rerun failed its completion assertion in 1.43s. A two-case control
+then observed the actual handler join: default daemon behavior returns early,
+whereas a test-owned non-daemon instance waits until summary release and handler
+exit. Both cases passed in 1.99s. No sleeps, provider calls, logging suppression
+or production-policy changes were used; all probe threads were released and
+joined in `finally`. This proves a test cleanup gap, not the original exception.
+
+The temporary diagnostic command was `uv run --no-sync python -m pytest
+/tmp/co-log-lifecycle-SbP4SD/test_handler_lifecycle.py -q -W error --tb=short`
+from `/tmp/co-decision-latency-export-20260913`, documentation head
+`0a2626867c0baa6a95ad40f3f00e40008359cca2`. The temporary file is not a
+released regression contract. Checked-in repair `3db143c4` passed 52 strict
+tests in 12.01s. Review found the standalone regression would miss reverting
+the nine real test instances and that response objects needed explicit closure
+on assertion failure. `9637162e` introduced a shared test-only start helper
+and response contexts, but its test run failed 5 cases with 47 passing after
+an over-broad import cleanup. Normal follow-up `87aa7177` restored the required
+time import; 52 strict tests passed in 1.58s. Root independently expanded to
+telemetry, lifecycle, debug logging and HTTP framing: 83 passed in 4.25s,
+exit 0, with warnings treated as errors. The native extension was built in
+this worktree from its locked source, not copied from another checkout.
+An independent temporary reverted-helper control failed in 6.37s with
+`server_close never joined the request handler`, establishing that the shared
+helper's regression detects removal of its non-daemon test setting. That
+mutation is diagnostic evidence, not a committed production change.
+
+Reproduce the expanded check with `uv run --no-sync python -m pytest
+tests/test_telemetry.py tests/test_telemetry_handler_lifecycle.py
+tests/test_orchestrator_debug_logging.py tests/test_request_framing.py -q -W error`.
+The default full regression at code/test source
+`87aa7177bf27e973a1195f1de7906b856018411f` passed 3,766 tests with 2 skipped
+in 150.27s, with process exit 0. Its captured log contained no matching
+`Message:`, `Arguments:`, logging-error, traceback or warning fragment. This
+was not a warnings-as-errors full run and does not identify the missing
+exception in the original log. Documentation-only revisions do not change
+that tested source.
+
+At documentation head `10e3db20759057181ee3db1af84cd9457ecad2fb`, actual
+GitHub screenshots at 1265 × 712, English locale, showed the complete added
+AGENTS.md and CLAUDE.md guidance with readable wrapping and no overlap or
+clipping. The investigation section was inspected at `72485aca`; a missing
+historical-section boundary was corrected and visually rechecked at `10e3db2`.
+The full code-diff visual audit remains incomplete. Hosted run
+[34709827004](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/34709827004)
+targets `10e3db2`; it is branch validation, not protected merge-result approval.
+Hosted acceptance and protected delivery remain pending.
+
+The repair boundary is the nine tests that start real servers, not the five
+handler-only instances or the production daemon policy. Close clients even on
+assertion failure before waiting for handlers; preserve two-request socket
+reuse. Keep final logging and joining inside the relevant capture level scope.
+Joining may replace fixed settling sleeps, but must not wait on an open
+keep-alive client. Current open-PR file inspection found #1132 at `961a7b24`
+and #1135 at `c7ed3939` alter only the later passthrough response double in this
+test module. Their valid Content-Length delta is disjoint and must be retained.
+The new repair worktree is based on #1158 rather than changing its live CI head.
+
+## Historical provider-correlation candidate
+
+Historical status: proposed in PR #1105; not deployed. Runtime owner: CO. Log collector
 owner: ContextualWisdomLab/.github.
 
 Central run 34299034731/job 102308769876 used trusted workflow revision
