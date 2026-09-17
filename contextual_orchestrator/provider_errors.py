@@ -343,6 +343,15 @@ class ProviderUpstreamError(RuntimeError):
             "retryable": self.retryable,
             "transport": self.transport,
         }
+        selected_candidate_ids = getattr(self, "selected_candidate_ids", None)
+        if isinstance(selected_candidate_ids, (list, tuple)) and selected_candidate_ids:
+            payload["selected_candidate_ids"] = list(selected_candidate_ids)
+        attempts = getattr(self, "attempts", None)
+        if isinstance(attempts, (list, tuple)) and attempts:
+            payload["attempts"] = [dict(item) for item in attempts if isinstance(item, dict)]
+        terminal_reason = getattr(self, "terminal_reason", None)
+        if isinstance(terminal_reason, str) and terminal_reason:
+            payload["terminal_reason"] = terminal_reason
         payload.update(self.extra_detail)
         return payload
 

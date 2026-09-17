@@ -179,6 +179,13 @@ _LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
 MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
+# RFC 9110 section 9.2.2 permits an automatic non-idempotent retry only when
+# the client knows the original request was never applied. These statuses
+# describe a request rejection; generic origin/gateway failures (500/502/504)
+# and the non-standard 529 do not provide that evidence and stay sticky.
+_PASSTHROUGH_REJECTED_STATUS = _PASSTHROUGH_UNAVAILABLE_STATUS | frozenset(
+    {408, 409, 425, 429, 503}
+)
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
@@ -2067,13 +2074,11 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
             return False
         seen.add(id(current))
         if isinstance(current, ProviderUpstreamError):
-            if current.provider_status in (
-                _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
-            ):
+            if current.provider_status in _PASSTHROUGH_REJECTED_STATUS:
                 return True
         if (
             isinstance(current, urllib.error.HTTPError)
-            and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+            and current.code in _PASSTHROUGH_REJECTED_STATUS
         ):
             return True
         if (
@@ -2201,6 +2206,54 @@ def _is_capability_mismatch_failover_error(exc: BaseException) -> bool:
         else:
             current = current.__context__
     return False
+
+
+def _passthrough_failure_phase(exc: ProviderUpstreamError) -> str:
+    """Map one classified passthrough failure onto a bounded lifecycle phase."""
+    if exc.error_code in {"tls_failure", "tls_verification_failed"}:
+        return "connecting"
+    if exc.error_code == "provider_connection_error":
+        return "transport"
+    if exc.error_code == "request_too_large":
+        return "request_validation"
+    return "provider_response"
+
+
+def _passthrough_attempt_record(
+    exc: ProviderUpstreamError,
+    *,
+    provider_name: str,
+    attempt_number: int,
+    failover_decision: str,
+) -> dict[str, Any]:
+    """Return the public attempt receipt for one classified passthrough failure."""
+    return {
+        "agent_id": exc.agent_id,
+        "model": exc.model,
+        "provider_name": provider_name,
+        "attempt_number": attempt_number,
+        "error_code": exc.error_code,
+        "client_status": exc.client_status,
+        "provider_status": exc.provider_status,
+        "retryable": exc.retryable,
+        "transport": exc.transport,
+        "phase": _passthrough_failure_phase(exc),
+        "failover_decision": failover_decision,
+    }
+
+
+def _set_passthrough_attempt_evidence(
+    exc: ProviderUpstreamError,
+    *,
+    selected_candidate_ids: list[str],
+    attempts: list[dict[str, Any]],
+    terminal_reason: str,
+) -> ProviderUpstreamError:
+    """Attach bounded request-scoped passthrough evidence to one final error."""
+    exc.selected_candidate_ids = tuple(selected_candidate_ids)
+    exc.attempts = tuple(dict(item) for item in attempts)
+    exc.terminal_reason = terminal_reason
+    return exc
 
 
 def _assistant_message_extras(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -3460,7 +3513,15 @@ class ModelClient:
             )
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, normalized_endpoint, payload)
-        destination = self._validate_provider(agent)  # pragma: no cover
+        try:
+            destination = self._validate_provider(agent)  # pragma: no cover
+        except ProviderUpstreamError as exc:
+            raise classify_provider_failure(
+                exc,
+                agent_id=agent.id,
+                model=agent.model,
+                transport="passthrough",
+            ) from None
         parsed_provider = urlparse(agent.base_url)
         operation_name = {
             "chat/completions": "chat",
@@ -3883,7 +3944,16 @@ class ModelClient:
             raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
         if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_connection_error",
+                message=f"{agent.id} provider host is not allowlisted",
+                client_status=502,
+                provider_status=None,
+                retryable=False,
+                transport="chat",
+            )
         addresses = self._resolve_addresses(hostname, parsed.port or 443)
         for _family, sockaddr in addresses:
             ip_address = ipaddress.ip_address(sockaddr[0])
@@ -6052,7 +6122,7 @@ class TaskOrchestrator:
                     self._record_failure(agent.id)
                     if agent.group_name:
                         self._group_router.observe_failure(agent.id)
-                    raise ProviderUpstreamError(
+                    unknown = ProviderUpstreamError(
                         agent_id=agent.id,
                         model=agent.model,
                         error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
@@ -6063,10 +6133,37 @@ class TaskOrchestrator:
                         client_status=502,
                         retryable=False,
                         transport="passthrough",
+                    )
+                    raise _set_passthrough_attempt_evidence(
+                        unknown,
+                        selected_candidate_ids=[agent.id],
+                        attempts=[
+                            _passthrough_attempt_record(
+                                unknown,
+                                provider_name=agent.provider_name.strip() or "unreported",
+                                attempt_number=1,
+                                failover_decision="sticky_candidate_failure",
+                            )
+                        ],
+                        terminal_reason="terminal_provider_failure",
                     ) from None
                 request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
                     self._group_router.observe_failure(agent.id)
+                if isinstance(exc, ProviderUpstreamError):
+                    raise _set_passthrough_attempt_evidence(
+                        exc,
+                        selected_candidate_ids=[agent.id],
+                        attempts=[
+                            _passthrough_attempt_record(
+                                exc,
+                                provider_name=agent.provider_name.strip() or "unreported",
+                                attempt_number=1,
+                                failover_decision="sticky_candidate_failure",
+                            )
+                        ],
+                        terminal_reason="terminal_provider_failure",
+                    ) from None
                 raise
             if measured:
                 self._group_router.observe_success(
@@ -6152,6 +6249,8 @@ class TaskOrchestrator:
         candidates, tool_loop_evidence = self._apply_tool_loop_route(candidates, messages)
         last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
+        selected_candidate_ids = [candidate.id for candidate in candidates]
+        attempt_receipts: list[dict[str, Any]] = []
         # Rate-limit-storm admission (evidence: noema run 34758641142, strix
         # run 34758679736 -- every candidate returned 429 within ~50ms;
         # ContextualWisdomLab/.github#2148, #2165). ``wait_deadline`` is
@@ -6192,7 +6291,19 @@ class TaskOrchestrator:
                     record_initial_selection([candidate.id], "automatic_proxy")
                     result = send_once(candidate, endpoint, candidate_payload)
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
-                    if not _is_passthrough_failover_error(exc):
+                    classified = classify_provider_failure(
+                        exc,
+                        agent_id=candidate.id,
+                        model=candidate.model,
+                        transport="passthrough",
+                    )
+                    failover_eligible = _is_passthrough_failover_error(exc)
+                    prior_attempted = {item["agent_id"] for item in attempt_receipts}
+                    has_remaining_candidates = any(
+                        other.id != candidate.id and other.id not in prior_attempted
+                        for other in candidates
+                    )
+                    if not failover_eligible:
                         if _is_ambiguous_passthrough_transport_failure(exc):
                             # This candidate's own outcome is unknown (the timeout
                             # or reset may follow provider acceptance), so it is
@@ -6216,28 +6327,74 @@ class TaskOrchestrator:
                             self._record_failure(candidate.id)
                             if candidate.group_name:
                                 self._group_router.observe_failure(candidate.id)
+                            attempt_receipts.append(
+                                _passthrough_attempt_record(
+                                    classified,
+                                    provider_name=(
+                                        candidate.provider_name.strip() or "unreported"
+                                    ),
+                                    attempt_number=len(attempt_receipts) + 1,
+                                    failover_decision=(
+                                        "advance_to_next_candidate"
+                                        if virtual_selector and has_remaining_candidates
+                                        else (
+                                            "eligible_candidates_exhausted"
+                                            if virtual_selector
+                                            else "sticky_candidate_failure"
+                                        )
+                                    ),
+                                )
+                            )
                             if virtual_selector:
-                                last_failure = (exc, candidate)
+                                last_failure = (classified, candidate)
                                 every_failure_was_request_too_large = False
                                 continue
-                            raise ProviderUpstreamError(
-                                agent_id=candidate.id,
-                                model=candidate.model,
-                                error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
-                                message="the provider request outcome is unknown; automatic replay is unsafe",
-                                client_status=502,
-                                retryable=False,
-                                transport="passthrough",
+                            raise _set_passthrough_attempt_evidence(
+                                ProviderUpstreamError(
+                                    agent_id=candidate.id,
+                                    model=candidate.model,
+                                    error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                                    message=(
+                                        "the provider request outcome is unknown; "
+                                        "automatic replay is unsafe"
+                                    ),
+                                    client_status=502,
+                                    retryable=False,
+                                    transport="passthrough",
+                                ),
+                                selected_candidate_ids=selected_candidate_ids,
+                                attempts=attempt_receipts,
+                                terminal_reason="terminal_provider_failure",
                             ) from None
-                        if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
-                            raise classify_provider_failure(
-                                exc,
-                                agent_id=candidate.id,
-                                model=candidate.model,
-                                transport="passthrough",
-                            ) from None
-                        raise
-                    last_failure = (exc, candidate)
+                        attempt_receipts.append(
+                            _passthrough_attempt_record(
+                                classified,
+                                provider_name=(
+                                    candidate.provider_name.strip() or "unreported"
+                                ),
+                                attempt_number=len(attempt_receipts) + 1,
+                                failover_decision="sticky_candidate_failure",
+                            )
+                        )
+                        raise _set_passthrough_attempt_evidence(
+                            classified,
+                            selected_candidate_ids=selected_candidate_ids,
+                            attempts=attempt_receipts,
+                            terminal_reason="terminal_provider_failure",
+                        ) from None
+                    attempt_receipts.append(
+                        _passthrough_attempt_record(
+                            classified,
+                            provider_name=candidate.provider_name.strip() or "unreported",
+                            attempt_number=len(attempt_receipts) + 1,
+                            failover_decision=(
+                                "advance_to_next_candidate"
+                                if has_remaining_candidates
+                                else "eligible_candidates_exhausted"
+                            ),
+                        )
+                    )
+                    last_failure = (classified, candidate)
                     request_too_large = _is_request_too_large_error(exc)
                     every_failure_was_request_too_large = (
                         every_failure_was_request_too_large
@@ -6320,16 +6477,26 @@ class TaskOrchestrator:
             ):
                 break
         if last_failure is not None and every_failure_was_request_too_large:
-            raise ProviderRequestTooLargeError(
-                "request body exceeds every eligible provider limit"
+            raise _set_passthrough_attempt_evidence(
+                ProviderRequestTooLargeError(
+                    "request body exceeds every eligible provider limit"
+                ),
+                selected_candidate_ids=selected_candidate_ids,
+                attempts=attempt_receipts,
+                terminal_reason="request_too_large_exhausted",
             ) from None
         if last_failure is not None:
             last_error, failed_candidate = last_failure
-            raise classify_provider_failure(
-                last_error,
-                agent_id=failed_candidate.id,
-                model=failed_candidate.model,
-                transport="passthrough",
+            raise _set_passthrough_attempt_evidence(
+                classify_provider_failure(
+                    last_error,
+                    agent_id=failed_candidate.id,
+                    model=failed_candidate.model,
+                    transport="passthrough",
+                ),
+                selected_candidate_ids=selected_candidate_ids,
+                attempts=attempt_receipts,
+                terminal_reason="eligible_candidates_exhausted",
             ) from None
         raise RuntimeError("passthrough has no eligible provider candidate")
 
@@ -19656,4 +19823,3 @@ def sse_stream_body(chunks: list[dict[str, Any]]) -> str:
     frames = [f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks]
     frames.append("data: [DONE]\n\n")
     return "".join(frames)
-
