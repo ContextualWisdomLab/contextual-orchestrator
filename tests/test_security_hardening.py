@@ -121,6 +121,48 @@ def test_external_principal_resolver_survives_bearer_rotation() -> None:
     assert security.principal_id(old_headers) == security.principal_id(rotated_headers)
 
 
+def test_single_token_mode_keeps_the_documented_trace_escape_hatch() -> None:
+    """With only auth_token configured, it still authorizes the trace purpose."""
+    security = SecurityConfig(auth_token="only-token")
+    headers = {"authorization": "Bearer only-token"}
+    assert security.authorize(headers, "trace", "127.0.0.1") == "trace.read"
+
+
+def test_split_token_mode_without_trace_token_fails_closed_for_trace() -> None:
+    """Split admin/inference mode has no verified trace claim without trace_token."""
+    security = SecurityConfig(admin_token="admin-token", inference_token="inference-token")
+    for token in ("admin-token", "inference-token"):
+        try:
+            security.authorize({"authorization": f"Bearer {token}"}, "trace", "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"{token} incorrectly authorized the trace scope")
+
+
+def test_split_token_mode_trace_token_authorizes_only_trace() -> None:
+    """A configured trace_token authorizes trace and nothing else."""
+    security = SecurityConfig(
+        admin_token="admin-token", inference_token="inference-token", trace_token="trace-token"
+    )
+    trace_headers = {"authorization": "Bearer trace-token"}
+    assert security.authorize(trace_headers, "trace", "127.0.0.1") == "trace.read"
+    for scope in ("admin", "inference"):
+        try:
+            security.authorize(trace_headers, scope, "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"trace_token incorrectly authorized the {scope} scope")
+    for token in ("admin-token", "inference-token"):
+        try:
+            security.authorize({"authorization": f"Bearer {token}"}, "trace", "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"{token} incorrectly authorized the trace scope")
+
+
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
     headers = {"content-type": "application/json", "connection": "close"}
     if token:
