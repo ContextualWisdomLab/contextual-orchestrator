@@ -243,6 +243,16 @@ push or open a PR.
   RMSE is computed from θ̂ versus known true parameters, not a rank
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
+- Request-scoped effort and evaluation policy must remain consistent across
+  execution, answer reuse, selection receipts, and saved runs. Preserve the
+  standalone single-role adapter contract; do not pad partial catalogs to hide
+  a validation regression. The implementation record remains Proposed until
+  protected delivery is verified.
+- Availability summaries may update transport evidence only, never judged
+  answer-quality priors. Preserved observation counts alone do not prove
+  unchanged posterior evidence; test subsequent judgment influence and member
+  order. See the Proposed availability-boundary record in
+  `docs/doctoring/measured-routing-evidence.md`.
 <!-- END cwl-agent-guidance -->
 
 ## Stacked quality checks
@@ -313,3 +323,23 @@ open, review-ready pull request iterating faster than the queue drains.
 Push immediately, without batching, when the change is a fix for a failing
 required check, a conflict resolution that unblocks a merge, or anything a
 reviewer is actively waiting on.
+
+## Loop-goal execution control (all repo PRs and issues)
+
+Work in structure → Gap → measurement/baseline → KPI → experiment/verification
+order; never finalize KPIs before structure is recorded. External CI and
+independent review approval are merge conditions for their PR only, never a
+reason to stop the whole run — hold only the dependent path and keep executing
+allowed work elsewhere.
+
+- Keep a ledger (`loop_id`, `parent_id`, goal, owner/scope, dependencies,
+  status, pass/retry/block conditions, evidence SHA, `next_action`, `return_to`)
+  plus a Todo list; a Todo/plan/memory/report line is not execution. Link
+  `RUNNING` to real tool results and call identifiers.
+- Scope waits: `CI_PENDING` / `PR_REVIEW_PENDING` are external-result waits.
+  Put only the node and its real `depends_on` path in `WAITING_DEPENDENCY` and
+  return to parent work selection. Never mutate a head under review to make
+  work; do independent work on a separate branch/worktree.
+- Reuse valid evidence; do not repeat full surveys or same-SHA completed tests.
+  Revert only your own rejected delta — no `reset --hard` / force-push on
+  shared branches.

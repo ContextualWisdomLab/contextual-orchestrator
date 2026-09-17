@@ -70,6 +70,7 @@ deadline, cancellation/drain provenance, and honest duplicate-cost evidence.
 - **KV, not env**: runtime config and provider secrets are resolved from the KV credential registry (`get_credential`), never `os.getenv` at request time. Env is only bootstrap transport into the KV (see `docs/kv-credentials.md`).
 - **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. As of 2026-08-18, OpenCode/Noema/Strix (the org's CI review pipeline in `ContextualWisdomLab/.github`) are being migrated onto this gateway as their shared backend — see AGENTS.md's "This repo: the org LLM gateway" section for the full policy and scope.
 - **Research grounding**: substantive feature/process PRs should attach the relevant papers (PDF when redistribution is permissible, otherwise cite + link + summary) under `docs/papers/` with full citations.
+- **Loop-goal execution control**: for all repo PRs and issues, follow AGENTS.md's "Loop-goal execution control" section (structure → Gap → baseline → KPI → experiment order, ledger + Todo discipline, scoped waits, separate branch/worktree for independent work).
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
 
@@ -184,7 +185,9 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 - **TDD from papers**: paper claims (Fugu, TRINITY, Conductor — see `docs/architecture.md`) become executable contracts in `tests/` *before* implementation changes. Many tests assert doc/API contracts, so behavior changes usually require updating the matching `docs/*.md` in the same PR.
 - **Naming**: configurable, API, and DB object names must be lower snake_case with **two or more semantic words** (`agent_pool`, `workflow_run`; never `agent` or `agentPool`). Enforced by `conventions.require_object_name()` and `tests/test_conventions.py`. Paper role values (`thinker`, `worker`, `verifier`, `synthesizer`) are deliberate exceptions.
 - **Ponytail design gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the stdlib or an already selected library covers the need; no interface or factory until a second real implementation exists.
+- **Request attribution**: preserve one effective policy and effort snapshot through execution, final synthesis, cache identity, and saved records. Direct single-role adapters remain compatible. See `docs/doctoring/reasoning-effort-profile.md`; its implementation evidence is Proposed, not a protected release.
 - **Honest metrics**: spend/analytics surfaces label estimates (`usage_source`, `measurement_status`) and never fabricate prices — preserve this when touching analytics.
+- **Quality boundary**: provider uptime is transport evidence, not answer correctness. Keep it out of quality priors; unchanged counters do not guarantee an unchanged posterior or member order. See the Proposed availability-boundary record in `docs/doctoring/measured-routing-evidence.md`.
 - **Fuzz seams**: untrusted-input parsers (request body, agent config, redaction, orchestration) share invariant checks in `fuzz/targets.py`, driven by both Hypothesis (`tests/fuzz/`) and Atheris (`fuzz/`). New parsing seams should get a target there (see `docs/fuzzing.md`).
 - **ADR location**: new product-planning decisions live in
   `docs/planning/adrs/NNNN-slug.md`; `docs/adr/` retains the earlier research
