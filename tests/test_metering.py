@@ -174,252 +174,273 @@ def test_duplicate_usage_record_is_not_counted_or_exported_twice() -> None:
 def test_billing_export_waits_for_caller_owned_sqlite_commit() -> None:
     """A rolled-back caller transaction must not leave a billing-only event."""
     connection = sqlite3.connect(":memory:")
-    store = SqlLedgerStore(connection, paramstyle="qmark")
-    sink = _RecordingUsageSink()
-    price_book = PriceBook(InMemoryConfigStore())
-    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
-    ledger = CostLedger(price_book, store=store, usage_sink=sink)
+    try:
+        store = SqlLedgerStore(connection, paramstyle="qmark")
+        sink = _RecordingUsageSink()
+        price_book = PriceBook(InMemoryConfigStore())
+        price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+        ledger = CostLedger(price_book, store=store, usage_sink=sink)
 
-    connection.execute("BEGIN")
-    ledger.record_usage(
-        provider="openai",
-        model="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        usage_record_id="usage_rolled_back",
-    )
+        connection.execute("BEGIN")
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_rolled_back",
+        )
 
-    assert sink.ids == []
-    connection.rollback()
-    assert ledger.flush() is True
-    assert ledger.telemetry_health()["records_stored"] == 0
-    assert ledger.telemetry_health()["records_dropped"] == 1
-    assert store.query() == []
+        assert sink.ids == []
+        connection.rollback()
+        assert ledger.flush() is True
+        assert ledger.telemetry_health()["records_stored"] == 0
+        assert ledger.telemetry_health()["records_dropped"] == 1
+        assert store.query() == []
 
-    connection.execute("BEGIN")
-    ledger.record_usage(
-        provider="openai",
-        model="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        usage_record_id="usage_committed",
-    )
-    assert sink.ids == []
-    connection.commit()
+        connection.execute("BEGIN")
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_committed",
+        )
+        assert sink.ids == []
+        connection.commit()
 
-    assert ledger.flush() is True
-    assert sink.ids == ["usage_committed"]
+        assert ledger.flush() is True
+        assert sink.ids == ["usage_committed"]
 
 
+    finally:
+        connection.close()
 def test_billing_export_flush_uses_record_id_lookup() -> None:
     """Deferred billing release must not scan the complete SQL ledger."""
     connection = sqlite3.connect(":memory:")
-    store = SqlLedgerStore(connection, paramstyle="qmark")
-    sink = _RecordingUsageSink()
-    price_book = PriceBook(InMemoryConfigStore())
-    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
-    ledger = CostLedger(price_book, store=store, usage_sink=sink)
-    statements: list[str] = []
-    connection.set_trace_callback(statements.append)
+    try:
+        store = SqlLedgerStore(connection, paramstyle="qmark")
+        sink = _RecordingUsageSink()
+        price_book = PriceBook(InMemoryConfigStore())
+        price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+        ledger = CostLedger(price_book, store=store, usage_sink=sink)
+        statements: list[str] = []
+        connection.set_trace_callback(statements.append)
 
-    connection.execute("BEGIN")
-    ledger.record_usage(
-        provider="openai",
-        model="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        usage_record_id="usage_targeted_lookup",
-    )
-    connection.commit()
+        connection.execute("BEGIN")
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_targeted_lookup",
+        )
+        connection.commit()
 
-    assert ledger.flush() is True
-    assert sink.ids == ["usage_targeted_lookup"]
-    assert not any("SELECT u.usage_record_id" in statement for statement in statements)
-    assert any(
-        "SELECT usage_record_id FROM llm_usage_records WHERE usage_record_id IN" in statement
-        for statement in statements
-    )
+        assert ledger.flush() is True
+        assert sink.ids == ["usage_targeted_lookup"]
+        assert not any("SELECT u.usage_record_id" in statement for statement in statements)
+        assert any(
+            "SELECT usage_record_id FROM llm_usage_records WHERE usage_record_id IN" in statement
+            for statement in statements
+        )
 
 
+    finally:
+        connection.close()
 def test_deferred_export_lookup_failure_does_not_fail_current_record() -> None:
     """A deferred-store read failure must not block a later usage write."""
     connection = sqlite3.connect(":memory:")
-    store = SqlLedgerStore(connection, paramstyle="qmark")
-    sink = _RecordingUsageSink()
-    price_book = PriceBook(InMemoryConfigStore())
-    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
-    ledger = CostLedger(price_book, store=store, usage_sink=sink)
+    try:
+        store = SqlLedgerStore(connection, paramstyle="qmark")
+        sink = _RecordingUsageSink()
+        price_book = PriceBook(InMemoryConfigStore())
+        price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+        ledger = CostLedger(price_book, store=store, usage_sink=sink)
 
-    connection.execute("BEGIN")
-    ledger.record_usage(
-        provider="openai",
-        model="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        usage_record_id="usage_deferred_read",
-    )
-    connection.commit()
-    original_lookup = store.existing_usage_record_ids
+        connection.execute("BEGIN")
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_deferred_read",
+        )
+        connection.commit()
+        original_lookup = store.existing_usage_record_ids
 
-    def fail_lookup(_usage_record_ids: list[str]) -> set[str]:
-        raise RuntimeError("temporary read failure")
+        def fail_lookup(_usage_record_ids: list[str]) -> set[str]:
+            raise RuntimeError("temporary read failure")
 
-    store.existing_usage_record_ids = fail_lookup  # type: ignore[method-assign]
-    current = ledger.record_usage(
-        provider="openai",
-        model="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        usage_record_id="usage_current_write",
-    )
+        store.existing_usage_record_ids = fail_lookup  # type: ignore[method-assign]
+        current = ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_current_write",
+        )
 
-    assert current.usage_record_id == "usage_current_write"
-    assert sink.ids == ["usage_current_write"]
-    assert ledger.telemetry_health()["store_failures"] == 1
+        assert current.usage_record_id == "usage_current_write"
+        assert sink.ids == ["usage_current_write"]
+        assert ledger.telemetry_health()["store_failures"] == 1
 
-    store.existing_usage_record_ids = original_lookup  # type: ignore[method-assign]
-    assert ledger.flush() is True
-    assert sink.ids == ["usage_current_write", "usage_deferred_read"]
+        store.existing_usage_record_ids = original_lookup  # type: ignore[method-assign]
+        assert ledger.flush() is True
+        assert sink.ids == ["usage_current_write", "usage_deferred_read"]
 
 
+    finally:
+        connection.close()
 def test_async_billing_export_preserves_caller_owned_sqlite_transaction() -> None:
     """A caller transaction persists before export and never bills a rollback."""
     connection = sqlite3.connect(":memory:", check_same_thread=False)
-    store = SqlLedgerStore(connection, paramstyle="qmark")
-    sink = _RecordingUsageSink()
-    price_book = PriceBook(InMemoryConfigStore())
-    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
-    ledger = CostLedger(
-        price_book,
-        store=store,
-        non_blocking_store=True,
-        usage_sink=sink,
-    )
+    try:
+        store = SqlLedgerStore(connection, paramstyle="qmark")
+        sink = _RecordingUsageSink()
+        price_book = PriceBook(InMemoryConfigStore())
+        price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+        ledger = CostLedger(
+            price_book,
+            store=store,
+            non_blocking_store=True,
+            usage_sink=sink,
+        )
 
-    connection.execute("BEGIN")
-    ledger.record_usage(
-        provider="openai",
-        model="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        usage_record_id="usage_async_rolled_back",
-    )
-    assert store.query()[0]["usage_record_id"] == "usage_async_rolled_back"
-    connection.rollback()
-    assert ledger.flush(timeout=5) is True
-    assert sink.ids == []
-    assert store.query() == []
-    assert ledger.telemetry_health()["records_dropped"] == 1
+        connection.execute("BEGIN")
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_async_rolled_back",
+        )
+        assert store.query()[0]["usage_record_id"] == "usage_async_rolled_back"
+        connection.rollback()
+        assert ledger.flush(timeout=5) is True
+        assert sink.ids == []
+        assert store.query() == []
+        assert ledger.telemetry_health()["records_dropped"] == 1
 
-    connection.execute("BEGIN")
-    ledger.record_usage(
-        provider="openai",
-        model="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        usage_record_id="usage_async_committed",
-    )
-    assert sink.ids == []
-    connection.commit()
-    assert ledger.flush(timeout=5) is True
-    assert sink.ids == ["usage_async_committed"]
-    assert ledger.telemetry_health()["records_stored"] == 1
+        connection.execute("BEGIN")
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_async_committed",
+        )
+        assert sink.ids == []
+        connection.commit()
+        assert ledger.flush(timeout=5) is True
+        assert sink.ids == ["usage_async_committed"]
+        assert ledger.telemetry_health()["records_stored"] == 1
 
 
+    finally:
+        connection.close()
 def test_targeted_wait_releases_only_confirmed_transaction_exports() -> None:
     """Confirmed batch IDs export without draining unrelated deferred records."""
     connection = sqlite3.connect(":memory:", check_same_thread=False)
-    backend = SqlLedgerStore(connection, paramstyle="qmark")
-    sink = _RecordingUsageSink()
-    ledger = CostLedger(
-        PriceBook(InMemoryConfigStore()),
-        store=backend,
-        non_blocking_store=True,
-        usage_sink=sink,
-    )
-
-    connection.execute("BEGIN")
-    for usage_record_id in ("usage_batch_target", "usage_unrelated"):
-        ledger.record_usage(
-            provider="openai",
-            model="gpt-x",
-            prompt_tokens=1,
-            completion_tokens=1,
-            usage_record_id=usage_record_id,
+    try:
+        backend = SqlLedgerStore(connection, paramstyle="qmark")
+        sink = _RecordingUsageSink()
+        ledger = CostLedger(
+            PriceBook(InMemoryConfigStore()),
+            store=backend,
+            non_blocking_store=True,
+            usage_sink=sink,
         )
-    connection.commit()
 
-    assert ledger.wait_for_usage_record_ids(["usage_batch_target"], timeout=0.1)
-    assert sink.ids == ["usage_batch_target"]
-    assert ledger.telemetry_health()["records_stored"] == 1
-    assert isinstance(ledger.store, NonBlockingLedgerStore)
-    assert [
-        record.usage_record_id for record in ledger.store._deferred_usage_exports
-    ] == ["usage_unrelated"]
+        connection.execute("BEGIN")
+        for usage_record_id in ("usage_batch_target", "usage_unrelated"):
+            ledger.record_usage(
+                provider="openai",
+                model="gpt-x",
+                prompt_tokens=1,
+                completion_tokens=1,
+                usage_record_id=usage_record_id,
+            )
+        connection.commit()
 
-    assert ledger.flush(timeout=1.0)
-    assert sink.ids == ["usage_batch_target", "usage_unrelated"]
-    assert ledger.telemetry_health()["records_stored"] == 2
+        assert ledger.wait_for_usage_record_ids(["usage_batch_target"], timeout=0.1)
+        assert sink.ids == ["usage_batch_target"]
+        assert ledger.telemetry_health()["records_stored"] == 1
+        assert isinstance(ledger.store, NonBlockingLedgerStore)
+        assert [
+            record.usage_record_id for record in ledger.store._deferred_usage_exports
+        ] == ["usage_unrelated"]
+
+        assert ledger.flush(timeout=1.0)
+        assert sink.ids == ["usage_batch_target", "usage_unrelated"]
+        assert ledger.telemetry_health()["records_stored"] == 2
 
 
+    finally:
+        connection.close()
 def test_async_open_transaction_duplicate_is_reported_as_dropped() -> None:
     """A duplicate in the synchronous caller-transaction path remains observable."""
     connection = sqlite3.connect(":memory:", check_same_thread=False)
-    store = SqlLedgerStore(connection, paramstyle="qmark")
-    telemetry = InMemoryUsageTelemetrySink()
-    price_book = PriceBook(InMemoryConfigStore())
-    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
-    ledger = CostLedger(
-        price_book,
-        store=store,
-        non_blocking_store=True,
-        telemetry_sink=telemetry,
-        usage_sink=_RecordingUsageSink(),
-    )
-
-    connection.execute("BEGIN")
-    for _ in range(2):
-        ledger.record_usage(
-            provider="openai",
-            model="gpt-x",
-            prompt_tokens=1,
-            completion_tokens=1,
-            usage_record_id="usage_open_transaction_duplicate",
+    try:
+        store = SqlLedgerStore(connection, paramstyle="qmark")
+        telemetry = InMemoryUsageTelemetrySink()
+        price_book = PriceBook(InMemoryConfigStore())
+        price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+        ledger = CostLedger(
+            price_book,
+            store=store,
+            non_blocking_store=True,
+            telemetry_sink=telemetry,
+            usage_sink=_RecordingUsageSink(),
         )
 
-    assert ledger.telemetry_health()["records_dropped"] == 1
-    assert telemetry.events()[-1].error_type == "duplicate"
-    connection.rollback()
+        connection.execute("BEGIN")
+        for _ in range(2):
+            ledger.record_usage(
+                provider="openai",
+                model="gpt-x",
+                prompt_tokens=1,
+                completion_tokens=1,
+                usage_record_id="usage_open_transaction_duplicate",
+            )
+
+        assert ledger.telemetry_health()["records_dropped"] == 1
+        assert telemetry.events()[-1].error_type == "duplicate"
+        connection.rollback()
 
 
+    finally:
+        connection.close()
 def test_non_blocking_store_preserves_transaction_without_billing_sink() -> None:
     """A caller transaction is never handed to the background worker."""
     connection = sqlite3.connect(":memory:")
-    store = SqlLedgerStore(connection, paramstyle="qmark")
-    wrapper = NonBlockingLedgerStore(store)
-    record = UsageRecord(
-        usage_record_id="usage_async_without_sink",
-        created_at=1,
-        workflow_run_id=None,
-        request_channel="sync",
-        route_mode=None,
-        provider_name="openai",
-        model_name="gpt-x",
-        prompt_tokens=1,
-        completion_tokens=1,
-        total_tokens=2,
-        cost_amount=0.0,
-        currency_code="USD",
-    )
+    try:
+        store = SqlLedgerStore(connection, paramstyle="qmark")
+        wrapper = NonBlockingLedgerStore(store)
+        record = UsageRecord(
+            usage_record_id="usage_async_without_sink",
+            created_at=1,
+            workflow_run_id=None,
+            request_channel="sync",
+            route_mode=None,
+            provider_name="openai",
+            model_name="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            cost_amount=0.0,
+            currency_code="USD",
+        )
 
-    connection.execute("BEGIN")
-    assert wrapper.append(record)
-    assert wrapper.flush(timeout=5)
-    assert store.query()[0]["usage_record_id"] == record.usage_record_id
-    connection.rollback()
-    assert store.query() == []
+        connection.execute("BEGIN")
+        assert wrapper.append(record)
+        assert wrapper.flush(timeout=5)
+        assert store.query()[0]["usage_record_id"] == record.usage_record_id
+        connection.rollback()
+        assert store.query() == []
 
 
+    finally:
+        connection.close()
 def test_async_billing_export_does_not_race_new_transaction() -> None:
     """A transaction opened after enqueue must defer export until it settles."""
     class _RaceBackend:

@@ -39,7 +39,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -96,6 +97,7 @@ def test_http_chat_accepts_user_int() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_user_float_whole() -> None:
@@ -110,6 +112,7 @@ def test_http_completions_accepts_user_float_whole() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_user_bool() -> None:
@@ -124,6 +127,7 @@ def test_http_responses_accepts_user_bool() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_user_int() -> None:
@@ -143,6 +147,7 @@ def test_http_embeddings_accepts_user_int() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_user_list() -> None:
@@ -162,6 +167,7 @@ def test_http_chat_rejects_user_list() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

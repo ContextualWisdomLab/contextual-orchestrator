@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_chat_accepts_store_false_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_store_true_string() -> None:
@@ -88,6 +90,7 @@ def test_http_chat_rejects_store_true_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_stream_false_string() -> None:
@@ -106,6 +109,7 @@ def test_http_chat_accepts_stream_false_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_parallel_false_string() -> None:
@@ -124,6 +128,7 @@ def test_http_chat_accepts_parallel_false_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_max_tokens_digit_string() -> None:
@@ -142,6 +147,7 @@ def test_http_chat_accepts_max_tokens_digit_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_temperature_numeric_string() -> None:
@@ -160,6 +166,7 @@ def test_http_chat_accepts_temperature_numeric_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_penalty_numeric_strings() -> None:
@@ -179,6 +186,7 @@ def test_http_chat_accepts_penalty_numeric_strings() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_echo_false_string() -> None:
@@ -193,6 +201,7 @@ def test_http_completions_accepts_echo_false_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

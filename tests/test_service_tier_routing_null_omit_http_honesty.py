@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_chat_accepts_service_tier_auto_default_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_service_tier_flex() -> None:
@@ -87,6 +89,7 @@ def test_http_chat_accepts_service_tier_flex() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_routing_null_optional_fields() -> None:
@@ -109,6 +112,7 @@ def test_http_chat_accepts_routing_null_optional_fields() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_routing_padded_channel_and_priority() -> None:
@@ -131,6 +135,7 @@ def test_http_chat_accepts_routing_padded_channel_and_priority() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_routing_latency_non_boolean() -> None:
@@ -150,6 +155,7 @@ def test_http_chat_rejects_routing_latency_non_boolean() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
