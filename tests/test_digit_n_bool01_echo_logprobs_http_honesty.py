@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -68,6 +69,7 @@ def test_http_chat_accepts_digit_string_n_one() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_digit_string_n_gt1() -> None:
@@ -87,6 +89,7 @@ def test_http_chat_rejects_digit_string_n_gt1() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_digit_string_n_and_best_of_one() -> None:
@@ -106,6 +109,7 @@ def test_http_completions_accepts_digit_string_n_and_best_of_one() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_digit_string_n_one() -> None:
@@ -124,6 +128,7 @@ def test_http_responses_accepts_digit_string_n_one() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_echo_zero_is_false_noop() -> None:
@@ -142,6 +147,7 @@ def test_http_completions_echo_zero_is_false_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_echo_one_rejects() -> None:
@@ -161,6 +167,7 @@ def test_http_completions_echo_one_rejects() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_background_zero_is_false_noop() -> None:
@@ -179,6 +186,7 @@ def test_http_chat_background_zero_is_false_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_background_one_rejects() -> None:
@@ -198,6 +206,7 @@ def test_http_chat_background_one_rejects() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_logprobs_zero_is_false_noop() -> None:
@@ -216,6 +225,7 @@ def test_http_chat_logprobs_zero_is_false_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_logprobs_one_rejects() -> None:
@@ -235,6 +245,7 @@ def test_http_chat_logprobs_one_rejects() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_top_logprobs_digit_zero_omits() -> None:
@@ -253,6 +264,7 @@ def test_http_chat_top_logprobs_digit_zero_omits() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_logprobs_zero_one() -> None:
@@ -283,3 +295,4 @@ def test_http_responses_logprobs_zero_one() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

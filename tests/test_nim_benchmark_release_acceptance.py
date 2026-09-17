@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import subprocess
@@ -22,10 +23,12 @@ from contextual_orchestrator.credentials import (
 )
 from contextual_orchestrator.orchestrator import ModelClient
 
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
 EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
 FAKE_ENDPOINT = "https://nim.example.test/v1"
+
 DECLARED_MAX_WORKFLOW_DEPTH = 5
 DECLARED_MAX_OUTPUT_TOKENS = 264
 DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
@@ -48,6 +51,29 @@ def _isolated_credentials() -> None:
         yield
     finally:
         set_backend(None)
+
+
+@pytest.fixture
+def current_actual_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in: keep the reviewed hosted-cost evidence window valid for one test.
+
+    ``nb.ACTUAL_COST_EVIDENCE["valid_until_date"]`` is a human-reviewed fact
+    about NVIDIA's published hosted-endpoint terms, not a test fixture, and
+    ``_require_current_actual_cost_evidence`` fails closed once that literal
+    calendar date lapses. This module's two pricing-scenario contract tests
+    need to get past that unrelated evidence-currency gate to reach the
+    ``validate_live_pricing_scenario`` assertions they actually exercise, so
+    they request this fixture by name rather than relying on the literal
+    production date staying valid (see the identically-named fixture in
+    ``test_nim_benchmark.py``, which owns the same pattern for that file).
+    """
+    today = datetime.date.today()
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", today.isoformat())
+    monkeypatch.setitem(
+        nb.ACTUAL_COST_EVIDENCE,
+        "valid_until_date",
+        (today + datetime.timedelta(days=1)).isoformat(),
+    )
 
 
 def _write_json(path: Path, payload: object) -> str:
@@ -96,10 +122,10 @@ def test_package_import_does_not_eagerly_load_optional_benchmark() -> None:
 
 
 def test_live_run_rejects_unreviewed_pricing_before_egress(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    current_actual_cost_evidence: None,
 ) -> None:
     """Schema-demo prices can support dry runs but can never drive a live policy."""
-    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
     scenario = json.loads(EXAMPLE_PRICING_PATH.read_text(encoding="utf-8"))
     scenario_path = _write_json(tmp_path / "unreviewed_pricing.json", scenario)
@@ -117,16 +143,15 @@ def test_live_run_rejects_unreviewed_pricing_before_egress(
             git_sha="a" * 40,
             workflow_run_id="123",
             transport=_unexpected_transport,
-            **DECLARED_RUN_KWARGS,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
 
 def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    current_actual_cost_evidence: None,
 ) -> None:
     """Live hypothetical prices need complete, current, independently reviewed evidence."""
-    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
     incomplete = _reviewed_pricing_scenario()
     del incomplete["reviewed_by"]
@@ -141,8 +166,8 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             git_sha="b" * 40,
             workflow_run_id="124",
             transport=_unexpected_transport,
-            **DECLARED_RUN_KWARGS,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
     expired_path = _write_json(
         tmp_path / "expired_pricing.json",
@@ -160,8 +185,8 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             git_sha="c" * 40,
             workflow_run_id="125",
             transport=_unexpected_transport,
-            **DECLARED_RUN_KWARGS,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
 
 def test_probe_concurrency_executes_the_complete_cartesian_plan() -> None:
@@ -326,8 +351,8 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
             max_total_requests=1923,
             max_eval_models=7,
             transport=transport,
-            **DECLARED_RUN_KWARGS,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
     assert calls == [("GET", "/v1/models")]
 
@@ -372,7 +397,7 @@ def test_exact_complete_request_boundary_runs_and_records_plan(tmp_path: Path) -
         max_total_requests=24,
         max_eval_models=1,
         transport=transport,
-        **DECLARED_RUN_KWARGS,
+        **DECLARED_RUN_KWARGS
     )
 
     assert report["request_budget"]["max_total_requests"] == 24
@@ -399,7 +424,7 @@ def test_video_probe_fixture_is_one_decodable_frame_with_stable_hash() -> None:
 
 
 def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> None:
-    """The smoke manifest produces review evidence, not an automatic decision."""
+    """A simulated run cannot label its cells as production-candidate evidence."""
     report = nb.run_benchmark(
         "dry_run",
         TASK_MANIFEST_PATH,
@@ -407,12 +432,12 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
         str(tmp_path),
         max_total_requests=600,
         max_eval_models=2,
-        **DECLARED_RUN_KWARGS,
+        **DECLARED_RUN_KWARGS
     )
     evaluation = report["evaluation"]
 
-    assert evaluation["evidence_status"] == "measurement_evidence_only"
-    assert evaluation["decision_use"] == "measurement_evidence_only"
+    assert evaluation["evidence_status"] == "synthetic_diagnostic_only"
+    assert evaluation["decision_use"] == "benchmark_smoke_only"
     assert evaluation["minimum_paired_task_count"] is None
     assert evaluation["required_completion_fraction"] is None
     assert evaluation["routing_recommendation"] is None
@@ -740,11 +765,11 @@ def test_actual_cost_evidence_validation_and_expiry_paths(
 
     wrong_source = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
     wrong_source["actual_cost_evidence"]["source_url"] = "https://example.test"
-    with pytest.raises(nb.BenchmarkContractError, match="General FAQ"):
+    with pytest.raises(nb.BenchmarkContractError, match="NVIDIA NIM access terms"):
         nb._validate_actual_cost_evidence(wrong_source)
 
     invalid_dates = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
-    invalid_dates["actual_cost_evidence"]["valid_until_date"] = "2026-09-04"
+    invalid_dates["actual_cost_evidence"]["reviewed_at_date"] = "2026-10-05"
     with pytest.raises(nb.BenchmarkContractError, match="validity precedes"):
         nb._validate_actual_cost_evidence(invalid_dates)
 
@@ -794,5 +819,5 @@ def test_live_run_requires_provenance_before_transport(tmp_path: Path) -> None:
             None,
             str(tmp_path),
             transport=_unexpected_transport,
-            **DECLARED_RUN_KWARGS,
-        )
+        **DECLARED_RUN_KWARGS
+    )

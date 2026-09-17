@@ -4,6 +4,7 @@ from contextual_orchestrator.model_discovery import (
     PROVIDER_MODEL_SOURCES,
     _parse_openai_compatible,
     agent_from_discovered,
+    discover_all_models,
     discover_provider_models,
 )
 from contextual_orchestrator.orchestrator import ModelClient
@@ -64,3 +65,55 @@ def test_go_chat_model_reuses_existing_responses_conversion() -> None:
         )
     assert send.call_args.args[1] == "chat/completions"
     assert result["output_text"] == "ok"
+
+
+def test_zen_credential_discovers_both_zen_and_go_catalogs() -> None:
+    """One OPENCODE_ZEN_API_KEY registration must query both OpenCode catalogs."""
+    fetched: list[str] = []
+    received_keys: list[tuple[str, str]] = []
+    sources = tuple(
+        source
+        for source in PROVIDER_MODEL_SOURCES
+        if source.provider_name in {"opencode_zen", "opencode_go"}
+    )
+    list_urls = {source.list_url: source.provider_name for source in sources}
+
+    def fetch_json(url, *, timeout, api_key="", auth_scheme="Bearer"):
+        del timeout, auth_scheme
+        provider_name = list_urls.get(url)
+        if provider_name is None:
+            return {}
+        fetched.append(provider_name)
+        received_keys.append((provider_name, api_key))
+        model_id = "glm-5.3" if provider_name == "opencode_go" else "glm-4.6"
+        return {"data": [{"id": model_id}]}
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.get_credential",
+            return_value="zen-key",
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json",
+            side_effect=fetch_json,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+            return_value=set(),
+        ),
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert set(fetched) == {"opencode_zen", "opencode_go"}
+    assert set(received_keys) == {
+        ("opencode_zen", "zen-key"),
+        ("opencode_go", "zen-key"),
+    }
+    assert {model.provider_name for model in discovered} == {
+        "opencode_zen",
+        "opencode_go",
+    }
+    assert {model.credential_name for model in discovered} == {"OPENCODE_ZEN_API_KEY"}
+    go_rows = [model for model in discovered if model.provider_name == "opencode_go"]
+    assert go_rows and go_rows[0].evidence_only is False

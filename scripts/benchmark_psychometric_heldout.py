@@ -774,6 +774,7 @@ def _validate_sequential_drift(
             "maximum": threshold_candidates[-1],
             "step": 0.1,
             "candidates": len(threshold_candidates),
+            "calibration_results": evaluated_candidates,
             "selection_rule": (
                 "minimum p95 delay, then p50 delay, then threshold among "
                 "calibration candidates whose declared-coverage false-alarm "

@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -58,6 +59,7 @@ def test_http_responses_accepts_without_stream_options() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_all_false_stream_options_as_omit() -> None:
@@ -76,6 +78,7 @@ def test_http_responses_accepts_all_false_stream_options_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_stream_options_true_flag() -> None:
@@ -96,6 +99,7 @@ def test_http_responses_rejects_stream_options_true_flag() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_stream_options_with_stream_false() -> None:
@@ -115,6 +119,7 @@ def test_http_responses_rejects_stream_options_with_stream_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

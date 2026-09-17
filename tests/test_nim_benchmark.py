@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import datetime
 import inspect
 import io
 import json
@@ -44,16 +45,67 @@ from contextual_orchestrator.orchestrator import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPO_ROOT / "examples" / "nim_task_manifest.json")
+
+
+DECLARED_MAX_WORKFLOW_DEPTH = 5
+DECLARED_MAX_OUTPUT_TOKENS = 264
+DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
+    DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
+)
+
+
+def _declared_policy_kwargs(**overrides: object) -> dict:
+    """Return explicit equal-budget envelopes for policy evaluation fixtures."""
+    payload: dict = {
+        "total_token_budget": DECLARED_POLICY_TOTAL_TOKEN_BUDGET,
+        "maximum_calls": DECLARED_MAX_WORKFLOW_DEPTH,
+    }
+    payload.update(overrides)
+    return payload
+
+
+DECLARED_RESAMPLE_COUNT = 2000
+DECLARED_CONFIDENCE_LEVEL = 0.95
+DECLARED_COMPARISON_PAIRS = (("conduct_bounded", "route_once"),)
+
+
+def _declared_run_kwargs(**overrides: object) -> dict:
+    """Return explicit measurement and workflow-budget declarations for runs."""
+    payload: dict = {
+        "resample_count": DECLARED_RESAMPLE_COUNT,
+        "confidence_level": DECLARED_CONFIDENCE_LEVEL,
+        "comparison_pairs": DECLARED_COMPARISON_PAIRS,
+        "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
+        "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
+    }
+    payload.update(overrides)
+    return payload
+
+
+CLI_MEASUREMENT_FLAGS = [
+    "--bootstrap-resample-count",
+    "2000",
+    "--confidence-level",
+    "0.95",
+    "--comparison-pair",
+    "conduct_bounded,route_once",
+]
+CLI_WORKFLOW_BUDGET_FLAGS = [
+    "--max-workflow-depth",
+    "5",
+    "--max-output-tokens",
+    "264",
+]
+CLI_RUN_FLAGS = [*CLI_MEASUREMENT_FLAGS, *CLI_WORKFLOW_BUDGET_FLAGS]
+
 PRICING_SCENARIO_PATH = str(REPO_ROOT / "examples" / "nim_pricing_scenario.json")
 FAKE_ENDPOINT = "https://nim.example.test/v1"
 
 
 @pytest.fixture(autouse=True)
-def _fresh_backend(monkeypatch: pytest.MonkeyPatch):
-    """Isolate credentials and keep offline contracts independent of wall time."""
+def _fresh_backend():
+    """Isolated in-memory KV and a clean benchmark env var for every test."""
     set_backend(InMemoryCredentialBackend())
-    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2000-01-01")
-    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2999-12-31")
     saved_env = os.environ.pop(nb.NIM_CREDENTIAL_NAME, None)
     try:
         yield
@@ -61,6 +113,35 @@ def _fresh_backend(monkeypatch: pytest.MonkeyPatch):
         set_backend(None)
         if saved_env is not None:
             os.environ[nb.NIM_CREDENTIAL_NAME] = saved_env
+
+
+@pytest.fixture
+def current_actual_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in: keep the reviewed hosted-cost evidence window valid for one test.
+
+    ``nb.ACTUAL_COST_EVIDENCE["valid_until_date"]`` is a human-reviewed fact
+    about NVIDIA's published hosted-endpoint terms, not a test fixture:
+    production ``run_mode="live"`` calls are meant to fail closed once that
+    literal calendar date lapses, until someone actually re-reviews the
+    official source (``_require_current_actual_cost_evidence``). That
+    review-cadence invariant itself is owned by
+    ``test_nim_benchmark_release_acceptance.py``, which injects an explicit
+    ``today`` alongside explicit reviewed/valid dates. A handful of tests in
+    this file exercise unrelated ``live``-path behavior (missing credential,
+    transport wiring, contract failures, ...) and only need to get past the
+    evidence gate to reach their own assertion — they request this fixture by
+    name. Deliberately **not** autouse: every other test in this file,
+    present or future, must keep observing the literal production evidence
+    dict by default so the fail-closed gate stays file-wide except where a
+    test explicitly opts out of it.
+    """
+    today = datetime.date.today()
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", today.isoformat())
+    monkeypatch.setitem(
+        nb.ACTUAL_COST_EVIDENCE,
+        "valid_until_date",
+        (today + datetime.timedelta(days=1)).isoformat(),
+    )
 
 
 def _ok_json(payload: object) -> tuple[int, bytes]:
@@ -72,11 +153,6 @@ def _fixed_transport(status: int, body: bytes):
         return status, body
 
     return transport
-
-
-def _assume_current_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep non-expiry tests focused after the reviewed evidence horizon passes."""
-    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
 
 
 def _mini_manifest(task_count: int = 2) -> dict:
@@ -368,8 +444,10 @@ def test_budgeted_evaluation_transport_failures_are_fail_closed() -> None:
         ((200, b"[]"), nb.BenchmarkContractError),
     ):
         client = client_for(result)
-        with pytest.raises(expected_error):
+        with pytest.raises(expected_error) as captured_error:
             client.proxy_send_once(agent, "responses", {})
+        if isinstance(captured_error.value, urllib.error.HTTPError):
+            captured_error.value.close()
 
 
 def test_structured_judge_uses_transport_and_both_request_limits() -> None:
@@ -1292,6 +1370,34 @@ def _task(task_id: str = "sample_task", expected: str = "zebra") -> dict:
     }
 
 
+@pytest.mark.parametrize("cleanup_error", [None, OSError, RuntimeError])
+def test_policy_cell_closes_consumed_error_preserving_outcome(cleanup_error, monkeypatch):
+    """A consumed error closes without replacing its declared failure outcome."""
+    response_error = urllib.error.HTTPError(
+        FAKE_ENDPOINT, 503, "down", {}, io.BytesIO(b"unavailable")
+    )
+    original_close = response_error.close
+
+    def close_response():
+        original_close()
+        if cleanup_error is not None:
+            raise cleanup_error("cleanup failed")
+
+    def fail_response():
+        raise response_error
+
+    monkeypatch.setattr(response_error, "close", close_response)
+    try:
+        outcome = nb.run_policy_cell(
+            "route_once", _task(), fail_response, {}, None, nb._deterministic_timer()
+        )
+        assert outcome["outcome_reason"] == "provider_http_error:503"
+        assert outcome["task_score"] is None
+        assert response_error.closed
+    finally:
+        original_close()
+
+
 def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
     agents_by_id = {"worker_one": "vendor/model-a"}
     ok = nb.run_policy_cell(
@@ -1763,17 +1869,7 @@ def test_pareto_frontier_excludes_dominated_rows() -> None:
     assert [row["name"] for row in frontier] == ["good_cheap", "bad_cheap"]
 
 
-# Fixture-declared measurement settings. These are not runtime defaults.
-DECLARED_RESAMPLE_COUNT = 2000
-DECLARED_CONFIDENCE_LEVEL = 0.95
-DECLARED_COMPARISON_PAIRS = (("conduct_bounded", "route_once"),)
-DECLARED_MAX_WORKFLOW_DEPTH = 5
-DECLARED_MAX_OUTPUT_TOKENS = 264
-DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
-    DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
-)
-
-
+# Fixture helper for paired comparison unit tests.
 def _declared_comparison_kwargs(**overrides: object) -> dict:
     """Return explicit comparison declarations for unit fixtures."""
     payload: dict = {
@@ -1785,45 +1881,6 @@ def _declared_comparison_kwargs(**overrides: object) -> dict:
     payload.update(overrides)
     return payload
 
-
-def _declared_policy_kwargs(**overrides: object) -> dict:
-    """Return explicit equal-budget envelopes for policy evaluation fixtures."""
-    payload: dict = {
-        "total_token_budget": DECLARED_POLICY_TOTAL_TOKEN_BUDGET,
-        "maximum_calls": DECLARED_MAX_WORKFLOW_DEPTH,
-    }
-    payload.update(overrides)
-    return payload
-
-
-def _declared_run_kwargs(**overrides: object) -> dict:
-    """Return explicit measurement declarations for benchmark runs."""
-    payload: dict = {
-        "resample_count": DECLARED_RESAMPLE_COUNT,
-        "confidence_level": DECLARED_CONFIDENCE_LEVEL,
-        "comparison_pairs": DECLARED_COMPARISON_PAIRS,
-        "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
-        "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
-    }
-    payload.update(overrides)
-    return payload
-
-
-CLI_MEASUREMENT_FLAGS = [
-    "--bootstrap-resample-count",
-    "2000",
-    "--confidence-level",
-    "0.95",
-    "--comparison-pair",
-    "conduct_bounded,route_once",
-]
-CLI_WORKFLOW_BUDGET_FLAGS = [
-    "--max-workflow-depth",
-    "5",
-    "--max-output-tokens",
-    "264",
-]
-CLI_RUN_FLAGS = [*CLI_MEASUREMENT_FLAGS, *CLI_WORKFLOW_BUDGET_FLAGS]
 
 
 def _synthetic_cell(
@@ -2361,10 +2418,9 @@ def test_report_renders_failed_delivery_and_rejects_legacy_estimand(tmp_path: Pa
 
 def test_evaluation_contract_failure_publishes_no_artifacts(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    current_actual_cost_evidence: None,
 ) -> None:
     """Publish nothing when evaluation becomes malformed after valid discovery."""
-    _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     dry_transport = nb.build_dry_run_transport()
     _, catalog_body = dry_transport(
@@ -2397,6 +2453,56 @@ def test_evaluation_contract_failure_publishes_no_artifacts(
         )
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_budgeted_client_delegates_validation_without_injected_transport() -> None:
+    """The ordinary ModelClient validation path remains intact without a seam."""
+    client = nb._BudgetedModelClient(nb.RequestBudget(1))
+    agent = ModelAgent(
+        "live_worker",
+        "provider/model",
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+    )
+    destination = (socket.AF_INET, ("93.184.216.34", 443))
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(ModelClient, "_validate_provider", lambda *_: destination)
+        assert client._validate_provider(agent) == destination
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "http://nim.example.test/v1",
+        "https://user@nim.example.test/v1",
+        "https://nim.example.test/v1?credential=secret",
+    ),
+)
+def test_injected_benchmark_transport_rejects_unsafe_provider_url(base_url: str) -> None:
+    """An injected transport bypasses DNS only after strict URL validation."""
+    client = nb._BudgetedModelClient(
+        nb.RequestBudget(1), transport=nb.build_dry_run_transport()
+    )
+    agent = ModelAgent("live_worker", "provider/model", base_url=base_url)
+
+    with pytest.raises(RuntimeError, match="base_url"):
+        client._validate_provider(agent)
+
+
+def test_injected_benchmark_transport_requires_kv_credential() -> None:
+    """The offline transport seam cannot bypass the runtime credential contract."""
+    client = nb._BudgetedModelClient(
+        nb.RequestBudget(1), transport=nb.build_dry_run_transport()
+    )
+    agent = ModelAgent(
+        "live_worker",
+        "provider/model",
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+    )
+
+    with pytest.raises(NotConfigured, match=nb.NIM_CREDENTIAL_NAME):
+        client._validate_provider(agent)
 
 
 def test_artifact_writer_refuses_secret_leak() -> None:
@@ -2523,7 +2629,13 @@ def test_deterministic_timer_advances_monotonically() -> None:
 
 def test_run_benchmark_rejects_unknown_mode() -> None:
     with pytest.raises(nb.BenchmarkContractError):
-        nb.run_benchmark("test", TASK_MANIFEST_PATH, None, "unused")
+        nb.run_benchmark(
+            "test",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            **_declared_run_kwargs(),
+        )
 
 
 def test_run_benchmark_rejects_output_cap_before_egress() -> None:
@@ -2670,26 +2782,57 @@ def test_dry_run_accepts_explicit_transport() -> None:
         )
 
 
-def test_live_run_fails_closed_without_credential(
+def test_live_run_without_evidence_fixture_still_fails_closed_on_expired_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A test that does not request ``current_actual_cost_evidence`` must still
+    observe the literal ``nb.ACTUAL_COST_EVIDENCE`` dict rather than some
+    other test's artificially-extended window -- proving the fixture above is
+    opt-in per test, not file-wide, even though this module also collects
+    tests that do request it. Deliberately expires the dict itself here
+    (rather than relying on real wall-clock time happening to be past
+    whatever the production ``valid_until_date`` currently is) so this
+    assertion stays stable across routine evidence refreshes such as #1073 --
+    a prior version of this test depended on that real-world timing and broke
+    the moment the production evidence was refreshed. A registered credential
+    is present so the run reaches the evidence gate (the first live-mode
+    check) rather than failing earlier for an unrelated reason.
+    """
+    register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2020-01-01")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2020-02-01")
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(nb.BenchmarkContractError, match="expired"):
+            nb.run_benchmark(
+                "live",
+                TASK_MANIFEST_PATH,
+                None,
+                tmp,
+                git_sha="f" * 40,
+                workflow_run_id="run-evidence-gate-regression",
+                **_declared_run_kwargs(),
+            )
+
+
+def test_live_run_fails_closed_without_credential(
+    current_actual_cost_evidence: None,
+) -> None:
     """Require a credential after isolating the reviewed-cost validity window."""
-    _assume_current_cost_evidence(monkeypatch)
-    with tempfile.TemporaryDirectory() as tmp, pytest.raises(NotConfigured):
-        nb.run_benchmark(
-            "live",
-            TASK_MANIFEST_PATH,
-            None,
-            tmp,
-            git_sha="a" * 40,
-            workflow_run_id="run-1",
-            **_declared_run_kwargs(),
-        )
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(NotConfigured):
+            nb.run_benchmark(
+                "live",
+                TASK_MANIFEST_PATH,
+                None,
+                tmp,
+                git_sha="a" * 40,
+                workflow_run_id="run-1",
+                **_declared_run_kwargs(),
+            )
 
 
-def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_run_end_to_end_offline(current_actual_cost_evidence: None) -> None:
     """Exercise live-mode report wiring with offline doubles, not provider evidence."""
-    _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_validate = ModelClient._validate_provider
     original_send = ModelClient._send
@@ -2721,10 +2864,9 @@ def test_live_run_end_to_end_offline(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_live_run_uses_default_transport_builder_when_none_given(
-    monkeypatch: pytest.MonkeyPatch,
+    current_actual_cost_evidence: None,
 ) -> None:
     """Exercise the default transport seam using an offline replacement builder."""
-    _assume_current_cost_evidence(monkeypatch)
     register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
     original_builder = nb.build_default_transport
     nb.build_default_transport = lambda timeout_seconds: nb.build_dry_run_transport()
@@ -2811,9 +2953,9 @@ def test_cli_fails_closed_on_missing_manifest() -> None:
     assert json.loads(stdout.getvalue())["benchmark_failed_closed"] is True
 
 
-def test_cli_live_fails_closed_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Report a missing credential through the CLI's structured failure result."""
-    _assume_current_cost_evidence(monkeypatch)
+def test_cli_live_fails_closed_without_secret(
+    current_actual_cost_evidence: None,
+) -> None:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = nb.run_benchmark_cli(

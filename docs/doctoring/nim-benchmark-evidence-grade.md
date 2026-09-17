@@ -1,5 +1,42 @@
 # Evidence-grade NVIDIA NIM benchmark: engineering decision record
 
+## Consumed NIM response ownership, 2026-09-13 — Proposed
+
+Successor source `dda57de36dcbd9254f2e4215279494fbaccfc03f` is based on
+#1090 `2bf856cdaa3756ba6e729479b0cbdc6109d065d9`. The open-PR audit found
+11 PRs touching the module. The only overlapping consumer change, #1000's
+token-usage-source field, is left unchanged; no competing closure owner was
+found for `run_policy_cell`. Shared ModelClient closure remains #1140's scope.
+
+RED `e2c06a32` failed both retained-response tests (2 failed, 135 deselected,
+1.54s, exit 1). Source `dda57de3` classifies the error before closing it at
+the common outcome consumer. Cleanup OSError cannot replace the provider
+classification; raw score remains null. Contract/budget/auth failures still
+propagate unchanged. The direct proxy test closes its caller-owned error.
+No classifier, score formula, timeout, retry or production policy changes.
+
+Using the primary checkout's shared Python 3.14 interpreter, run
+`-m pytest tests/test_nim_benchmark.py -q -W error`: **137 passed in 9.24s**,
+exit 0 (`/tmp/co-nim-owner-module-dda57de3.log`). The five-module strict run
+used in the restack still fails: **239 passed, 1 failed in 14.56s**, exit 1
+(`/tmp/co-nim-owner-green.log`; the filename is not an acceptance status).
+Independent static review found no actionable issue; it did not rerun suites.
+
+The remaining HTTPError500 originates in the release-acceptance client's
+fallback/error test and is consumed by inherited ModelClient classification.
+That test independently fails under warnings-as-errors; #1140 already owns
+its closure path. Do not duplicate that repair or suppress its warning here.
+Follow-up review found that the OSError-only handler could still mask the
+primary outcome with RuntimeError. RED `f67db9c2` produced 1 failed, 2 passed,
+135 deselected in 0.64s. Attempt `46ccd25e` had an indentation error and failed
+collection (0.94s); `7ff2c8e7` corrects it. The cleanup boundary now catches
+Exception, not BaseException, preserving cancellation and process-exit signals.
+Strict benchmark module at `7ff2c8e7`: 138 passed in 5.30s, terminal exit 0
+(`/tmp/co-nim-general-cleanup-fixed.log`).
+Injected OSError and RuntimeError occur after underlying closure; inability to
+close the underlying resource is not demonstrated. Full/hosted checks, protected
+delivery, and observed accuracy/decision-latency improvement remain unproven.
+
 ## Decision
 
 The NVIDIA NIM benchmark is an optional, provider-neutral evaluation adapter.
@@ -126,14 +163,14 @@ issuing five calls.
 Actual access cost and hypothetical production cost are separate fields and
 separate evidence classes.
 
-As reviewed on 2026-09-05, NVIDIA's NIM General FAQ states that NVIDIA Developer
+As reviewed on 2026-09-05, NVIDIA's Run NIM Anywhere page states that NVIDIA Developer
 Program members have free access to hosted NIM API endpoints for prototyping.
 The same source distinguishes development, testing, research, and evaluation
 from production and states that production requires NVIDIA AI Enterprise. The
 report therefore records `actual_cost_usd = 0.0` only for the reviewed hosted
 endpoint access context, includes the exact source, review date, validity
 horizon, program scope, production distinction, and uncertainty, and refuses a
-live run after 2026-10-05 until the source is reviewed again.
+live run after 2026-10-04 until the source is reviewed again.
 
 No NVIDIA model price is embedded or inferred. A live hypothetical pricing
 scenario is optional; absence means `unknown`. If supplied, it must be marked
@@ -711,6 +748,31 @@ succeed:
 No earlier head, local-only result, queued check, or stale approval is accepted as
 release evidence.
 
+## Synthetic classification verification, 2026-09-12
+
+Frozen head `07b95c9ab8e1c7b2f0031c39ea45349314079c34` passed the full source
+suite: **3,688 passed, 2 skipped, 170.85s**, process 12368, exit 0.
+Log: `/tmp/co-kpi-full-07b95c9a.log`. Reproduction from that checkout:
+
+```sh
+/Users/seonghobae/Documents/ChatGPT/contextual-orchestrator/.venv/bin/python -c 'import contextual_orchestrator; contextual_orchestrator.__path__.append("/tmp/co-export-native-acceptance-20260912/lib/python3.14/site-packages/contextual_orchestrator"); import pytest; raise SystemExit(pytest.main(["tests", "-q"]))'
+```
+
+This reused existing dependencies read-only and is source integration evidence.
+Separately, root process 40384 completed **126 passed, 18.44s** against the exact
+head's installed wheel, with `python -I` from `/tmp` and the benchmark import
+asserted under installed site-packages. Isolated package directory:
+`/tmp/co-diagnostic-wheel-07b95c9a.EWQ86S`; core wheel SHA-256:
+`24a3528f273a42e17700ea26173af4f3e2820bd6de65ac56ab304a00a627a036`.
+Runtime dependencies used hash-locked requirements; test tooling used pytest 9.1.1.
+
+Root process 56391 also generated a dry-run artifact and checked consistent
+classification in JSON evaluation, run provenance and Markdown. The root reviewer
+directly inspected the generated summary's top screenshot in an actual browser,
+English at 1265 × 712. This is a scoped visual check, not full-document or mobile
+inspection. These results validate synthetic evidence labeling, not customer
+accuracy, observed decision latency, production promotion, or a protected release.
+
 ## References
 
 Autio, C., Schwartz, R., Dunietz, J., Jain, S., Stanley, M., Tabassi, E., Hall,
@@ -752,8 +814,9 @@ Cosgrove, C., Manning, C. D., Ré, C., Acosta-Navas, D., Hudson, D. A., … Kore
 Y. (2023). Holistic evaluation of language models. *Transactions on Machine
 Learning Research*. https://doi.org/10.48550/arXiv.2211.09110
 
-NVIDIA Corporation. (n.d.). *General FAQ*. NVIDIA NIM Documentation. Retrieved
-August 5, 2026, from https://docs.api.nvidia.com/nim/docs/product
+NVIDIA Corporation. (n.d.). *Run NIM Anywhere*. NVIDIA NIM Documentation.
+Retrieved September 5, 2026, from
+https://docs.api.nvidia.com/nim/docs/run-anywhere
 
 NVIDIA Corporation. (2026, June 4). *NIM offerings*. NVIDIA NIM for Large
 Language Models. https://docs.nvidia.com/nim/large-language-models/2.0.5/about-nim-llm/nim-offerings.html
@@ -765,3 +828,31 @@ data. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665
 Weil, J., Kuarsingh, V., Donley, C., Liljenstolpe, C., & Azinger, M. (2012).
 *IANA-reserved IPv4 prefix for shared address space* (RFC 6598; BCP 153). RFC
 Editor. https://doi.org/10.17487/RFC6598
+
+
+### Declared workflow depth and token budgets (2026-09-07, proposed)
+
+The previous equal-budget cell used a hidden five-step workflow and a
+264-token per-call output cap. Those numbers allocated evaluation compute
+and shaped request planning without an operator declaration. Planning,
+evaluation, CLI, and provenance now require positive integer declarations.
+`None` is a fail-closed sentinel. The equal cell token budget is the product
+of the declared output cap and the declared workflow depth. Five and 264 in
+the workflow YAML are run choices, not code defaults.
+
+This slice does not change production route/conduct defaults. The held-out
+psychometric harness still uses a 2,000-sample 95% interval.
+
+```mermaid
+sequenceDiagram
+    participant Operator as Run declaration
+    participant Plan as Request plan
+    participant Cell as Equal-budget cell
+    participant Report as Schema 4 report
+    Operator->>Plan: Workflow depth and output-token cap
+    Plan->>Plan: Fail closed on missing or non-positive declarations
+    Plan->>Cell: Equal call envelope and token product
+    Cell->>Report: Configured budget and observed usage
+    Note over Operator,Report: Production route and conduct defaults stay locked
+```
+

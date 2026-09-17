@@ -2,7 +2,8 @@
   "schema_version": "1.0.0",
   "measurement_status": "unit_fixture_profile",
   "date": "2026-09-06",
-  "baseline_head": "bfeb73a6c58add7a23df052110593cdf43c0b0db",
+  "within_process_baseline_head": "bfeb73a6c58add7a23df052110593cdf43c0b0db",
+  "cross_process_baseline_head": "9207412ea8ac529d7d2622ab298989ef7899befb",
   "candidate_head": "2d1592af5c8df90733f6b1d5c66cd33976d02d15",
   "fixture": {
     "candidate_count": 50,

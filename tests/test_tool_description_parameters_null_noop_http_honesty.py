@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -76,6 +77,7 @@ def test_http_chat_accepts_tool_description_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_parameters_null() -> None:
@@ -101,6 +103,7 @@ def test_http_chat_accepts_tool_parameters_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_description_and_parameters_null() -> None:
@@ -128,6 +131,7 @@ def test_http_chat_accepts_tool_description_and_parameters_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_tool_description_non_string() -> None:
@@ -157,6 +161,7 @@ def test_http_chat_rejects_tool_description_non_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_tool_parameters_non_object() -> None:
@@ -183,6 +188,7 @@ def test_http_chat_rejects_tool_parameters_non_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

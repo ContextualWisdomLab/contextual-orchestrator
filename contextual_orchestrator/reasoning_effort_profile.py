@@ -1,13 +1,11 @@
-"""Provider-neutral reasoning-effort profiles and equal-budget ablation.
+"""Provider-neutral profiles with legacy synthetic diagnostics.
 
-Issue #568: each TRINITY/Conductor workflow role gets an explicit
-``reasoning_effort_profile``. Sampling temperature, top-p, and seed stay
-independent fields. This module cannot authorize production-default changes;
-its synthetic ablation is a unit-check fixture, not measured buyer evidence.
-
-Buyer next action: parse a versioned profile, bind it to thinker / worker /
-verifier / synthesizer / planner / judge, and compare route-versus-conduct
-variants under the same token budget before asking to change defaults.
+The compatibility ablation below transforms supplied true parameters directly;
+it does not fit observations or execute Fugu, TRINITY, or Conductor. Its fixed
+role/effort coefficients and token counts are not empirical model evidence.
+No report from this module can authorize a production default change. A future
+promotion path must validate an independently governed empirical evaluation,
+its exact policy/artifact identity, and separate deployment authorization.
 """
 
 from __future__ import annotations
@@ -20,6 +18,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 PROFILE_VERSION = "reasoning_effort_profile.v1"
+# Historical import compatibility only; this value has no authorization role.
+PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD = 0.55
 WORKFLOW_ROLES = (
     "thinker",
     "worker",
@@ -61,24 +61,35 @@ def apply_request_profile(
     payload: dict[str, Any],
     profile: ReasoningEffortProfile | None,
     *,
-    supports_reasoning_effort: bool,
-    default_max_output_tokens: int,
+    supports_reasoning_effort: bool | None,
+    default_max_output_tokens: int | None,
 ) -> dict[str, Any]:
     """Apply one validated profile to an upstream request body.
 
     Sampling controls remain separate from provider-native reasoning effort.
     When provider support is not proven, ``abstain`` and ``error`` fail closed;
     ``omit`` sends only the independently valid sampling and output-token
-    controls. The helper never writes prompts, credentials, or private
-    reasoning traces.
+    controls. Only literal ``True`` is positive capability evidence; ``None``
+    means unknown. Other types fail before mutation, without truth/equality
+    coercion or rendering caller-controlled values. The helper never writes
+    prompts, credentials, or private reasoning traces.
+
+    ``default_max_output_tokens`` is the caller-resolved output ceiling for the
+    selected model (the request-scoped/client cap, else the agent's published
+    maximum). ``None`` means no ceiling is known anywhere, so the caller's own
+    payload and the provider default are preserved instead of imposing a fixed
+    cap.
     """
     if profile is None:
-        payload.setdefault("max_tokens", default_max_output_tokens)
+        if default_max_output_tokens is not None:
+            payload.setdefault("max_tokens", default_max_output_tokens)
         return payload
     if not isinstance(profile, ReasoningEffortProfile):
         raise EffortProfileError("effort profile must be a ReasoningEffortProfile")
     validated = parse_reasoning_effort_profile(profile.as_dict())
-    if not supports_reasoning_effort and validated.unsupported_provider_fallback != "omit":
+    if supports_reasoning_effort is not None and type(supports_reasoning_effort) is not bool:
+        raise EffortProfileError("supports_reasoning_effort must be a boolean or null")
+    if supports_reasoning_effort is not True and validated.unsupported_provider_fallback != "omit":
         raise EffortProfileError(
             "provider reasoning_effort support is unproven; profile requested "
             f"{validated.unsupported_provider_fallback!r}"
@@ -88,8 +99,19 @@ def apply_request_profile(
     payload["top_p"] = validated.top_p
     if validated.seed is not None:
         payload["seed"] = validated.seed
-    if supports_reasoning_effort:
+    if supports_reasoning_effort is True:
         payload["reasoning_effort"] = validated.reasoning_effort
+    else:
+        # Remove both native spellings without mutating shared nested options.
+        payload.pop("reasoning_effort", None)
+        reasoning_options = payload.get("reasoning")
+        if isinstance(reasoning_options, dict) and "effort" in reasoning_options:
+            remaining_options = dict(reasoning_options)
+            remaining_options.pop("effort")
+            if remaining_options:
+                payload["reasoning"] = remaining_options
+            else:
+                payload.pop("reasoning", None)
     return payload
 
 
@@ -138,11 +160,10 @@ class EffortCatalogSnapshot:
 
 @dataclass(frozen=True)
 class ThetaEstimate:
-    """Deterministic θ̂ and its RMSE against known true parameters.
+    """Legacy synthetic output, not a fitted ability or model-quality estimate.
 
-    Buyer next action: compare ``estimated_theta`` to the true vector you
-    supplied. Error changes are imposed by a deterministic fixture; they are
-    not evidence of an effect of real model effort.
+    The true parameter enters the construction itself. The reported RMSE only
+    describes that construction; it cannot validate an actual learned policy.
     """
 
     estimated_theta: tuple[float, ...]
@@ -237,12 +258,12 @@ def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEf
 
 
 def default_role_effort_catalog() -> dict[str, ReasoningEffortProfile]:
-    """Return the issue #568 evaluation catalog, not a production default.
+    """Return the historical issue #568 example, not empirical routing evidence.
 
     Thinker, planner, verifier, and judge use high effort. Worker and synthesizer
     use medium effort under the same call/depth/token budget. Buyer next action:
-    run ``run_equal_budget_ablation`` before asking to install this catalog as
-    the live ``OrchestrationPolicy``.
+    obtain governed, observed evaluation evidence before using this example
+    as a live policy. The synthetic ablation cannot provide that evidence.
     """
     shared = {
         "max_output_tokens": 256,
@@ -340,7 +361,8 @@ def estimate_theta(
     ``θ̂_i = (1 − λ) θ_i`` where λ shrinks as effort, Conductor steps,
     recursion depth, and access-list scope increase. Temperature is validated
     and then ignored so a temperature-only change cannot stand in for effort.
-    Buyer next action: assert RMSE uses ``θ̂ − θ``, not a rank constant.
+    The shrinking error is built into this compatibility construction, not
+    evidence that a provider or coordination policy became more accurate.
     """
     theta: list[float] = []
     for value in true_theta:
@@ -381,10 +403,10 @@ def estimate_theta_rmse(
     """Return RMSE of a deterministic θ estimator against known true parameters.
 
     Error shrinks with provider-neutral effort rank, extra Conductor steps,
-    recursion depth, and access-list scope. Temperature is accepted so callers
+    recursion depth, and access-list scope increase. Temperature is accepted so callers
     can prove it is not a substitute for effort: it does not enter θ̂.
-    Buyer next action: use this only for unit checks. Lower RMSE is imposed by
-    the fixture and does not establish an effect of real reasoning effort.
+    Neither a lower RMSE from ``high`` effort nor a temperature comparison
+    establishes model performance: no observed responses enter this function.
     """
     return estimate_theta(
         true_theta,
@@ -407,7 +429,7 @@ def _ablation_arm(
     temperature: float,
     budget_tokens: int,
 ) -> dict[str, Any]:
-    """Build one synthetic arm with θ̂, RMSE, and estimated token use."""
+    """Build a legacy synthetic arm with constructed θ̂ and synthetic token use."""
     estimate = estimate_theta(
         theta,
         reasoning_effort=reasoning_effort,
@@ -533,12 +555,15 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
 
 
 def production_default_change_allowed(report: Mapping[str, Any]) -> bool:
-    """Keep default promotion unavailable for every supplied report.
+    """Keep this diagnostic-only API non-authorizing for every supplied report.
 
-    The report argument is retained for existing callers. Declared measurement
-    labels, RMSE improvements and robustness flags cannot grant authority.
-    A released decision contract bound to a prospective design, real held-out
-    outcomes and independent operational acceptance is still required by #86.
-    No such contract is implemented here; keep current route/conduct defaults.
+    The old implementation trusted editable labels and an arbitrary improvement
+    threshold. Neither establishes observed-data provenance, equal-budget study
+    validity, an exact learned-policy artifact, or deployment approval. A GitHub
+    release receipt also cannot stand in for that empirical evidence. Preserve
+    the boolean compatibility surface without parsing or executing caller-owned
+    mapping values. A separately reviewed empirical authorization contract is
+    required before any successor may return permission to change defaults.
     """
+    del report
     return False
