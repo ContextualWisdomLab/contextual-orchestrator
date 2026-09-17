@@ -172,21 +172,102 @@ unknown" = `_zdr_agent_allowed` (`orchestrator.py:4576`) requires the explicit
   attribution — no message content type exists on the record.
 - Verdict: **Clean, no change required.**
 
-### 3.7 Workflow-run trace persistence (in-memory / `--state-db`)
+### 3.7 Workflow-run trace persistence (in-memory / `--state-db`) — LEAK FOUND AND FIXED
 
-- Out of scope of the leak class this audit targeted (provider-facing ZDR
-  contract and this gateway's own cache/log retention), but noted for
-  follow-up: `_replace_workflow_run` persists `prompt_text`/`answer`/`trace`
-  into the in-memory run history and, when `--state-db PATH` is configured,
-  into sqlite, for every request regardless of `zdr_only`. This is a
-  distinct, pre-existing product behavior (operator-facing run history), not
-  the caches/logs surface named in this audit's task, and disabling it for
-  ZDR requests would remove operator visibility into exactly the requests
-  most likely to need incident review. **Recommendation, not fixed here:**
-  decide, as a follow-up product decision, whether `zdr_only` runs should be
-  redacted or excluded from `--state-db` persistence; flagging for a
-  maintainer decision rather than silently changing operator-facing
-  behavior in a security-audit PR.
+- **Before this follow-up:** `_replace_workflow_run` persisted
+  `prompt_text`/`answer`/`trace[].output`/`verification.verifier_output`/
+  `verification.judge_output_text` into the in-memory run history
+  (`self._workflow_runs`) and, when `--state-db PATH` is configured, into
+  sqlite (`orchestration_records` kind `workflow_run`), for every request
+  regardless of `zdr_only` — success, `pending_verification` batch rows, and
+  failed/`failure_code` records alike. `run_evaluation`'s `evaluation_run`
+  records carried the same gap via `results[].answer`. Maintainer decision
+  (this follow-up): a `zdr_only` request must not persist content in any
+  sink, including this one; only non-content metadata may survive.
+- **Fix:** `TaskOrchestrator._zdr_redact_workflow_record` now builds a
+  content-free copy — `prompt_text`/`answer`/`trace[].output`/
+  `tool_calls[].function.arguments`/`verification.verifier_output`/
+  `verification.judge_output_text` are each replaced by
+  `{"zdr_redacted": true, "sha256": ..., "byte_size": ...}` — whenever
+  `_REQUEST_ZDR_ONLY.get()` is true at the moment `_replace_workflow_run`
+  persists a record. Before any field is stripped, a step or judge call with
+  no provider-reported completion-token count gets one synthesized from its
+  raw text via the token counter, so budget/spend accounting stays exact
+  without the text itself ever reaching storage. `run_evaluation` applies the
+  same placeholder to each stored `results[].answer`. In every case the
+  **live response returned to the requesting caller is unaffected** — only
+  the copy that lands in `self._workflow_runs`/`self._evaluation_runs` and
+  the durable store is redacted; the redaction runs unconditionally at this
+  single sink regardless of whether the record represents success, a
+  `pending_verification` batch row, or a `failure_code` record, so no
+  future failure/retry code path can bypass it by construction. The five
+  duplicate `self._store.save("workflow_run", ...)` call sites were
+  consolidated into `_replace_workflow_run` itself as part of this fix.
+  RED tests: `tests/test_zdr_no_content_persistence.py` (in-memory,
+  `--state-db` sqlite, failure-record, and `evaluation_run` cases, plus a
+  non-ZDR control asserting no regression).
+- **Migration:** rows written under `zdr_only` before this fix landed are
+  not automatically identifiable (no `zdr_only` flag was ever stored on a
+  row). `scripts/scrub_zdr_workflow_traces.py` scrubs specific
+  operator-identified `--workflow-run-id`/`--evaluation-run-id` rows, or
+  candidates matched by an opt-in, imprecise `--bypass-cache-heuristic`
+  (`cache_status == "bypass"`, which every zdr_only run set per §3.4's fix,
+  but so does an unrelated caller-supplied `bypass_cache=True`). Dry-run by
+  default (reports counts only); `--apply` writes. See
+  `tests/test_scrub_zdr_workflow_traces.py`.
+- Verdict: **Fixed.** GREEN: `tests/test_zdr_no_content_persistence.py`,
+  `tests/test_scrub_zdr_workflow_traces.py`, plus the existing
+  `test_distributed_cache_truth_and_isolation.py`, `test_persistence.py`,
+  `test_workflow_run_object_authorization.py`, `test_budget_enforcement.py`,
+  `test_spend_analytics.py`, `test_batch_routing*.py`,
+  `test_cost_router*.py` (zdr/cache subset and full files),
+  `test_cost_review_server.py` (zdr/cache subset), `test_self_check.py`,
+  `test_psychometric_routing.py`, `test_analytics_runtime.py`,
+  `test_governance_runtime.py`, `test_release_authorization.py`,
+  `test_routing_eval.py`, `test_true_streaming.py`,
+  `test_orchestrated_responses_stream.py`,
+  `test_orchestrator_dispatch_boundaries.py`,
+  `test_structured_output_distinct_fallback.py`, and
+  `test_structured_output_malformed_synthesis_usage.py` all pass unchanged.
+
+### 3.8 Other candidate content sinks — confirmed clean, no change required
+
+Enumerated for this follow-up per the maintainer's request to cover every
+sink that can receive content for a `zdr_only` request:
+
+- **Response cache**: fixed in PR #1194 (§3.4 above).
+- **Debug/response logging** (`debug_logging.py`, `server.py`): confirmed
+  clean in §3.5 above; unaffected by this follow-up.
+- **Metering / cost ledger** (`cost_ledger.py`): confirmed clean in §3.6
+  above — `UsageEvent` has no content-typed field for any request.
+- **Audit/analytics event streams** (`_append_audit_event`,
+  `record_analytics_event`): every call site inspected (20 audit-event call
+  sites, plus `_record_tool_fallback`) passes only ids, mode/role labels,
+  counts, timings, and outcome/reason codes — never prompt or output text.
+  `record_analytics_event`'s own docstring states "without prompt or output
+  text," enforced structurally by every call site's literal `dict` shape.
+- **Psychometric routing observations** (`psychometric_routing.py`,
+  `_store.save("psychometric_observation", ...)`): `PsychometricRoutingEvidence.records()`
+  is documented and implemented as "prompt-free observations suitable for
+  durable state storage" — it stores a non-reversible SHA-256 `context_id`,
+  an embedding `vector`, and a dichotomous accept/IRT row, never raw prompt
+  or answer text.
+- **Retry / replay / dead-letter queues**: none exist in this codebase.
+  Batch failures and retries surface as in-memory `BatchResultItem`/
+  `EmbeddingBatchResultItem` error fields returned directly to the caller of
+  that request, or flow through the same `_finalize_batch_row` →
+  `_replace_workflow_run` path now covered by §3.7's fix — there is no
+  separate persisted retry/dead-letter store.
+- **Error payloads**: exception types raised on the request path
+  (`BudgetExceededError`, `ProviderRequestTooLargeError`, provider/upstream
+  errors) carry structured detail dicts (budget figures, HTTP status,
+  provider name) built from the same metadata-only shapes already audited
+  above; none embed prompt/answer text.
+- **Batch request JSONL bodies** (`batch_routing.py`): already covered in
+  §3.2 — `zdr_only` is explicitly excluded from the provider-facing
+  `to_jsonl_line` payload; irrelevant to gateway-side retention since the
+  JSONL body is the (content-bearing, by necessity) request sent to the
+  ZDR-eligible provider itself, not a gateway-side persistence sink.
 
 ## 4. Out-of-scope dependency
 

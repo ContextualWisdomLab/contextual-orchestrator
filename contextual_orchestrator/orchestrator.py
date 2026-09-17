@@ -355,6 +355,40 @@ def _cost_usd_decimal(output_tokens: int, price_per_million: float) -> Decimal:
     return Decimal(output_tokens) * Decimal(str(price_per_million)) / Decimal(1_000_000)
 
 
+def _zdr_content_placeholder(value: str) -> dict[str, Any]:
+    """Return a non-content stand-in for one persisted string under zdr_only.
+
+    Only a content hash and byte size survive -- enough to prove two stored
+    rows share (or differ in) content without ever storing the content
+    itself.
+    """
+    encoded = value.encode("utf-8")
+    return {
+        "zdr_redacted": True,
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "byte_size": len(encoded),
+    }
+
+
+def _zdr_redact_tool_calls(tool_calls: Any) -> Any:
+    """Redact function-call arguments in an assistant tool-call list."""
+    if not isinstance(tool_calls, list):
+        return tool_calls
+    redacted = []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            redacted.append(call)
+            continue
+        call = dict(call)
+        function = call.get("function")
+        if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+            function = dict(function)
+            function["arguments"] = _zdr_content_placeholder(function["arguments"])
+            call["function"] = function
+        redacted.append(call)
+    return redacted
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -5199,8 +5233,6 @@ class TaskOrchestrator:
             )
             self._replace_workflow_run(record)
             self._run_order.appendleft(workflow_run_id)
-            if self._store is not None:
-                self._store.save("workflow_run", workflow_run_id, record)
             self._append_audit_event(
                 "workflow_run_created",
                 {
@@ -5634,8 +5666,6 @@ class TaskOrchestrator:
             self._replace_workflow_run(record)
             if failure_code is None:
                 self._run_order.appendleft(workflow_run_id)
-            if self._store is not None:
-                self._store.save("workflow_run", workflow_run_id, record)
             self._append_audit_event(
                 event_name,
                 {
@@ -6443,8 +6473,6 @@ class TaskOrchestrator:
             record["owner_id"] = owner_id
         self._replace_workflow_run(record)
         self._run_order.appendleft(record["workflow_run_id"])
-        if self._store is not None:
-            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {
@@ -6797,8 +6825,6 @@ class TaskOrchestrator:
             }
         )
         self._replace_workflow_run(pending_record)
-        if self._store is not None:
-            self._store.save("workflow_run", run_id, pending_record)
         return row, run_id
 
     def _finalize_batch_row(
@@ -6860,8 +6886,6 @@ class TaskOrchestrator:
         )
         self._replace_workflow_run(record)
         self._run_order.appendleft(record["workflow_run_id"])
-        if self._store is not None:
-            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
@@ -6903,9 +6927,20 @@ class TaskOrchestrator:
         }
         if owner_id is not None:
             evaluation["owner_id"] = owner_id
-        self._evaluation_runs[evaluation_run_id] = evaluation
+        stored_evaluation = (
+            {
+                **evaluation,
+                "results": [
+                    {**result, "answer": _zdr_content_placeholder(result["answer"])}
+                    for result in results
+                ],
+            }
+            if _REQUEST_ZDR_ONLY.get()
+            else evaluation
+        )
+        self._evaluation_runs[evaluation_run_id] = stored_evaluation
         if self._store is not None:
-            self._store.save("evaluation_run", evaluation_run_id, evaluation)
+            self._store.save("evaluation_run", evaluation_run_id, stored_evaluation)
         self._append_audit_event(
             "evaluation_run_created",
             {
@@ -7855,8 +7890,6 @@ class TaskOrchestrator:
         )
         self._replace_workflow_run(record)
         self._run_order.appendleft(workflow_run_id)
-        if self._store is not None:
-            self._store.save("workflow_run", workflow_run_id, record)
         self._append_audit_event(
             "workflow_run_created",
             {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
@@ -9953,8 +9986,78 @@ class TaskOrchestrator:
                 )
         return output_by_model, True
 
+    def _zdr_redact_workflow_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Return a content-free copy of one workflow-run record for storage.
+
+        Called only while ``_REQUEST_ZDR_ONLY`` is true for the request that
+        produced ``record``. Every step lacking a provider-reported completion
+        token count first gets one synthesized from its raw output text via
+        the token counter -- so budget accounting stays exact -- and only then
+        is the raw prompt/answer/output/tool-argument text replaced by a
+        content hash and byte size. Non-content fields (ids, timings, usage
+        counts, outcome codes) are preserved unchanged.
+        """
+        redacted = copy.deepcopy(record)
+        for field in ("prompt_text", "answer"):
+            value = redacted.get(field)
+            if isinstance(value, str):
+                redacted[field] = _zdr_content_placeholder(value)
+        for step in redacted.get("trace", []):
+            output = step.get("output")
+            if not isinstance(output, str):
+                continue
+            usage = step.get("usage")
+            has_reported_tokens = isinstance(usage, dict) and any(
+                type(usage.get(key)) is int and usage.get(key) >= 0
+                for key in ("completion_tokens", "output_tokens")
+            )
+            if not has_reported_tokens:
+                model = step.get("model_name", "unknown")
+                try:
+                    count = self.token_counter.count_text(output, model)
+                except TokenCountUnavailable:
+                    count = None
+                if count is not None:
+                    step["usage"] = {**(usage or {}), "completion_tokens": count}
+            step["output"] = _zdr_content_placeholder(output)
+        if "tool_calls" in redacted:
+            redacted["tool_calls"] = _zdr_redact_tool_calls(redacted["tool_calls"])
+        verification = redacted.get("verification")
+        if isinstance(verification, dict):
+            judge_output = verification.get("judge_output_text")
+            if isinstance(judge_output, str):
+                judge_usage = verification.get("judge_usage")
+                has_reported_tokens = isinstance(judge_usage, dict) and any(
+                    type(judge_usage.get(key)) is int and judge_usage.get(key) >= 0
+                    for key in ("completion_tokens", "output_tokens")
+                )
+                if not has_reported_tokens:
+                    judge_model = verification.get("judge_model", "unknown")
+                    try:
+                        count = self.token_counter.count_text(judge_output, judge_model)
+                    except TokenCountUnavailable:
+                        count = None
+                    if count is not None:
+                        verification["judge_usage"] = {
+                            **(judge_usage or {}),
+                            "completion_tokens": count,
+                        }
+                verification["judge_output_text"] = _zdr_content_placeholder(judge_output)
+            verifier_output = verification.get("verifier_output")
+            if isinstance(verifier_output, str):
+                verification["verifier_output"] = _zdr_content_placeholder(verifier_output)
+        return redacted
+
     def _replace_workflow_run(self, record: dict[str, Any]) -> None:
-        """Store one run and update its constant-time budget meter atomically."""
+        """Store one run and update its constant-time budget meter atomically.
+
+        Budget accounting always runs against the real, unredacted ``record``
+        (it needs raw output text as a token-count fallback when no provider
+        usage was reported). Only the copy that lands in the in-memory run
+        table and the durable store is redacted, and only under an active
+        zdr_only request policy -- the caller's own returned ``record`` object
+        is never mutated, so the live response to the requester is unaffected.
+        """
         model_by_agent = {agent.id: agent.model for agent in self.candidates}
         for step in record.get("trace", []):
             if not step.get("model_name"):
@@ -9989,7 +10092,14 @@ class TaskOrchestrator:
                     else:
                         self._budget_model_output_tokens.pop(model, None)
                     self._budget_spent_output_tokens += sign * output_tokens
-            self._workflow_runs[run_id] = record
+            stored_record = (
+                self._zdr_redact_workflow_record(record)
+                if _REQUEST_ZDR_ONLY.get()
+                else record
+            )
+            self._workflow_runs[run_id] = stored_record
+        if self._store is not None:
+            self._store.save("workflow_run", run_id, stored_record)
 
     def _rebuild_budget_meter(self) -> None:
         """Reconcile the meter after a rare agent-pool identity change."""
