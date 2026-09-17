@@ -74,6 +74,34 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": ["measured", "unavailable"],
                     },
+                    "prompt_count_source": {
+                        "type": "string",
+                        "enum": ["provenance_exact"],
+                        "description": (
+                            "Present only when an authoritative prompt-message "
+                            "token count was obtained for this exact served "
+                            "request from token_counting.COUNTING_PROVENANCE_"
+                            "REGISTRY; omitted (never fabricated) otherwise."
+                        ),
+                    },
+                    "shared_context_budget": {
+                        "type": "object",
+                        "required": ["context_window", "prompt_tokens", "output_ceiling", "source"],
+                        "properties": {
+                            "context_window": {"type": "integer", "minimum": 1},
+                            "prompt_tokens": {"type": "integer", "minimum": 0},
+                            "output_ceiling": {"type": "integer"},
+                            "source": {"type": "string", "enum": ["exact"]},
+                        },
+                        "description": (
+                            "Present only when the served agent's context window, "
+                            "its published output ceiling, and an exact prompt-"
+                            "message token count were all authoritative for this "
+                            "exact request (see "
+                            "token_counting.shared_context_output_budget); "
+                            "omitted (never estimated) otherwise."
+                        ),
+                    },
                     "orchestration": {"type": "object"},
                 },
             },

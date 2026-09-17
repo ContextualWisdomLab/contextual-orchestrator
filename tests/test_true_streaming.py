@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 import threading
 import types
+from types import SimpleNamespace
 import urllib.request
 
 import pytest
@@ -20,7 +21,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator import orchestrator as orchestrator_module  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    ProviderResponseError,
+    _parse_model_judge_reply,
+)
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -125,6 +131,19 @@ def test_stream_send_parses_real_provider_sse() -> None:
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["Hello", " streamed", " world"]  # role delta skipped, [DONE] stops
     assert "".join(deltas) == "Hello streamed world"
+
+
+def test_stream_send_rejects_response_body_above_configured_limit() -> None:
+    frames = [_delta("x" * ((8 * 1024 * 1024) + 1))]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url)
+        try:
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+        except ProviderResponseError as exc:
+            assert str(exc) == "provider response exceeds the configured limit"
+        else:
+            raise AssertionError("oversized streaming provider response was accepted")
 
 
 def test_stream_send_ignores_empty_and_missing_choices() -> None:
@@ -613,6 +632,311 @@ def test_responses_stream_preserves_classified_provider_error_payload() -> None:
     assert payload["response"]["error"]["code"] == "rate_limit_exceeded"
     assert payload["response"]["error"]["detail"]["provider_status"] == 429
     assert payload["response"]["error"]["detail"]["retryable"] is True
+
+
+# -- Live route-stream shared-context output budget (issue #1157 follow-up) --
+# ModelClient._stream_send's decision (see tests/test_output_budget_model_max.py
+# for the unit-level a-d matrix) surfaced end to end through the true
+# streaming /v1/chat/completions route: the outbound provider payload, the
+# terminal SSE frame's evidence, and the pre-any-bytes error path.
+
+_STREAM_VERIFIED_MODEL = "gpt-4o-2024-08-06"
+
+
+def _stream_word_count_native_module():
+    """A deterministic stand-in for the optional native tokenizer extension."""
+    return types.SimpleNamespace(
+        count_cl100k=lambda text: len(text.split()),
+        count_o200k=lambda text: len(text.split()),
+        pack_cl100k=lambda *_args: ([], []),
+    )
+
+
+def _stream_stub_token_counter():
+    from contextual_orchestrator.token_counting import NativeExactTokenCounter
+
+    return NativeExactTokenCounter(_stream_word_count_native_module())
+
+
+def test_http_route_stream_carries_shared_context_budget_evidence_on_terminal_frame(
+    monkeypatch,
+) -> None:
+    """(a) No caller budget, all inputs known: terminal frame carries the evidence."""
+    # Isolate from the optional fast-mlsirm realtime route judge (see
+    # tests/test_spend_analytics.py's identical isolation): when installed,
+    # its own best-effort verification passthrough call shares this thread
+    # and would otherwise clear the served request's shared-context evidence
+    # before _stream_route_completion reads it back.
+    monkeypatch.setattr(orchestrator_module, "_resolve_fast_mlsirm_components", lambda: None)
+    frames = [_delta("hi"), "data: [DONE]\n\n"]
+    token = "shared_budget_stream_token"
+    with _CapturingSSEProvider([frames]) as provider:
+        orchestrator = TaskOrchestrator(
+            [
+                ModelAgent(
+                    "worker_agent",
+                    _STREAM_VERIFIED_MODEL,
+                    base_url=provider.base_url.replace("http://", "local://"),
+                    max_output_tokens=50,
+                    context_window=20,
+                )
+            ],
+            token_counter=_stream_stub_token_counter(),
+        )
+        server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                data=json.dumps(
+                    {
+                        "model": _STREAM_VERIFIED_MODEL,
+                        "messages": [{"role": "user", "content": "hello there"}],
+                        "mode": "route",
+                        "stream": True,
+                    }
+                ).encode("utf-8"),
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {token}",
+                    "connection": "close",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                body = response.read().decode("utf-8")
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    # remaining = 20 - 9 = 11; ceiling = min(50, 11) = 11 -- sent to the provider.
+    assert provider.payloads[0]["max_tokens"] == 11
+    payloads = [
+        json.loads(frame[len("data: "):])
+        for frame in body.split("\n\n")
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    stop_payload = next(
+        payload for payload in payloads if payload["choices"][0]["finish_reason"] == "stop"
+    )
+    assert stop_payload["shared_context_budget"] == {
+        "context_window": 20,
+        "prompt_tokens": 9,
+        "output_ceiling": 11,
+        "source": "exact",
+    }
+    assert all(
+        "shared_context_budget" not in payload for payload in payloads if payload is not stop_payload
+    )
+
+
+def test_http_route_stream_shared_context_budget_error_before_any_provider_bytes(
+    monkeypatch,
+) -> None:
+    """(b) Explicit caller budget over remaining: no provider call, terminal error frame."""
+    monkeypatch.setattr(orchestrator_module, "_resolve_fast_mlsirm_components", lambda: None)
+    token = "shared_budget_stream_reject_token"
+    with _CapturingSSEProvider([[_delta("unreachable"), "data: [DONE]\n\n"]]) as provider:
+        orchestrator = TaskOrchestrator(
+            [
+                ModelAgent(
+                    "worker_agent",
+                    _STREAM_VERIFIED_MODEL,
+                    base_url=provider.base_url.replace("http://", "local://"),
+                    max_output_tokens=50,
+                    context_window=20,
+                )
+            ],
+            token_counter=_stream_stub_token_counter(),
+        )
+        server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                data=json.dumps(
+                    {
+                        "model": _STREAM_VERIFIED_MODEL,
+                        "messages": [{"role": "user", "content": "hello there"}],
+                        "mode": "route",
+                        "stream": True,
+                        "max_tokens": 15,  # remaining is 11
+                    }
+                ).encode("utf-8"),
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {token}",
+                    "connection": "close",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                body = response.read().decode("utf-8")
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    # No provider bytes: the decision fires before ModelClient ever opens the
+    # connection, even though SSE response headers are already committed by
+    # the time it fires (the assistant-role frame is written first).
+    assert provider.payloads == []
+    payloads = [
+        json.loads(frame[len("data: "):])
+        for frame in body.split("\n\n")
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    assert not any(
+        payload.get("choices") and payload["choices"][0].get("delta", {}).get("content")
+        for payload in payloads
+    )
+    error_payload = next(payload for payload in payloads if "error_code" in payload)
+    assert error_payload["error_code"] == "request_too_large"
+    assert "context_window=20" in error_payload["error_message"]
+    assert "prompt_tokens=9" in error_payload["error_message"]
+    assert "requested_output_tokens=15" in error_payload["error_message"]
+
+
+class _JudgeSecondCallCriterion:
+    def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+        self.criterion_id = criterion_id
+        self.description = description
+        self.weight = weight
+
+
+class _JudgeSecondCallFastJudge:
+    """Real-time judge whose `.judge()` re-enters ModelClient with its own call.
+
+    Mirrors ``_ScriptedFastJudge`` from ``tests/test_model_judge.py``: routes
+    through ``adapter.complete()`` -> ``TaskOrchestrator._invoke`` ->
+    ``ModelClient.chat()`` -- the exact same thread ``stream_route`` just
+    served the caller's own request on. ``ModelClient.chat()`` unconditionally
+    clears (and may repopulate with *this* call's own evidence) the
+    thread-local shared-context-budget accessor at entry, which is the
+    ordering hazard under test: whatever this second call does to that
+    thread-local must not reach the terminal SSE frame, which belongs to the
+    already-served first call.
+    """
+
+    def __init__(self, adapter: object, *, mode: str, accept_threshold: float) -> None:
+        del accept_threshold
+        self.adapter = adapter
+        self.mode = mode
+
+    def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
+        del task, answer, criteria
+        accepted = False
+        reason = "judge call did not complete"
+        try:
+            completion = self.adapter.complete(
+                [{"role": "user", "content": "judge this answer now please"}],
+                mode=self.mode,
+            )
+            decision, reason = _parse_model_judge_reply(completion["answer"])
+            accepted = decision == "ACCEPT"
+        except Exception as exc:  # noqa: BLE001 - the judge's own call is allowed to fail
+            # It only needs to have been ATTEMPTED (and therefore to have
+            # re-entered ModelClient.chat() on this thread) -- whether it
+            # succeeds is irrelevant to the ordering hazard under test.
+            reason = f"judge call failed: {exc}"
+        return SimpleNamespace(
+            accepted=accepted,
+            rationale=reason,
+            criterion_scores={"evidence_quality": 1.0, "risk_signal": 1.0},
+            usage=None,
+            orchestration_mode=self.mode,
+            to_irt_row=lambda *, item_type: (int(accepted), int(accepted)),
+        )
+
+
+def test_http_route_stream_terminal_frame_survives_realtime_judge_second_call(
+    monkeypatch,
+) -> None:
+    """The terminal frame carries the SERVED request's evidence, not the judge's.
+
+    ``policy.realtime_judge`` defaults to True and fires *after* the content
+    stream ends (see ``TaskOrchestrator.stream_route``'s "Real-time judging
+    after the stream" comment). The judge issues its own provider call on the
+    same thread via ``_model_judge_verification`` -> ``_FastMLSIJudgeAdapter``,
+    which re-enters ``ModelClient.chat()`` -- the same call that records the
+    shared-context-budget evidence the terminal SSE frame reports. Unlike the
+    other two tests in this section, this one does NOT neutralize the judge
+    (no ``_resolve_fast_mlsirm_components`` -> None monkeypatch): it installs
+    a working judge that actually calls back into the client, so the ordering
+    hazard would reproduce here without the #1157 follow-up fix.
+    """
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        lambda: orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_JudgeSecondCallFastJudge,
+            criterion_cls=_JudgeSecondCallCriterion,
+            format_error=ValueError,
+        ),
+    )
+    frames = [_delta("hi"), "data: [DONE]\n\n"]
+    token = "judge_ordering_stream_token"
+    with _CapturingSSEProvider([frames]) as provider:
+        orchestrator = TaskOrchestrator(
+            [
+                ModelAgent(
+                    "worker_agent",
+                    _STREAM_VERIFIED_MODEL,
+                    base_url=provider.base_url.replace("http://", "local://"),
+                    max_output_tokens=50,
+                    context_window=20,
+                    tags=("reasoning", "writing"),
+                )
+            ],
+            token_counter=_stream_stub_token_counter(),
+        )
+        server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                data=json.dumps(
+                    {
+                        "model": _STREAM_VERIFIED_MODEL,
+                        "messages": [{"role": "user", "content": "hello there"}],
+                        "mode": "route",
+                        "stream": True,
+                    }
+                ).encode("utf-8"),
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {token}",
+                    "connection": "close",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                body = response.read().decode("utf-8")
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    # remaining = 20 - 9 = 11; ceiling = min(50, 11) = 11 -- the SERVED
+    # request's evidence, exactly as in the judge-isolated sibling test above.
+    payloads = [
+        json.loads(frame[len("data: "):])
+        for frame in body.split("\n\n")
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    stop_payload = next(
+        payload for payload in payloads if payload["choices"][0]["finish_reason"] == "stop"
+    )
+    assert stop_payload["shared_context_budget"] == {
+        "context_window": 20,
+        "prompt_tokens": 9,
+        "output_ceiling": 11,
+        "source": "exact",
+    }
+    # At least two provider calls happened on this thread: the served
+    # streamed answer, then the judge's own re-entrant call.
+    assert len(provider.payloads) >= 2
 
 
 if __name__ == "__main__":

@@ -743,9 +743,14 @@ def test_auto_virtual_model_fails_over_across_model_groups() -> None:
 
 def test_free_virtual_model_never_fails_over_to_a_paid_agent() -> None:
     """The free selector exhausts only explicitly zero-cost providers."""
+    # 500 here (not 429): this test is about the free/paid selection
+    # boundary, not rate-limiting -- a bare 429 with no Retry-After now
+    # assumes a short quota cooldown and waits/retries the single free
+    # candidate, which would make this test slow and flaky on call count
+    # instead of exercising the boundary it actually tests.
     client = SequencedProxyClient(
         {
-            "free_agent": _http_error(429),
+            "free_agent": _http_error(500),
             "paid_agent": {"model": "paid-model"},
         }
     )
@@ -880,6 +885,153 @@ def test_virtual_passthrough_fails_over_on_single_tool_call_limit() -> None:
         "primary_agent",
         "fallback_agent",
     ]
+
+
+def _free_pool_with_tool_call_evidence(
+    client: SequencedProxyClient, primary_tags: tuple[str, ...]
+) -> TaskOrchestrator:
+    """Build a free pool whose primary agent carries the given discovery evidence."""
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(
+            agent,
+            tags=(
+                *agent.tags,
+                "cost:free",
+                *(primary_tags if agent.id == "primary_agent" else ("tool_call:multi",)),
+            ),
+        )
+        for agent in orchestrator.agents
+    ]
+    return orchestrator
+
+
+def _two_tool_request(**extra: Any) -> dict[str, Any]:
+    """Return the request shape the discovery probe proved a single-call model rejects."""
+    return {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": [{"role": "user", "content": "use two tools at once"}],
+        "tools": [
+            {"type": "function", "function": {"name": "inspect", "description": "x"}},
+            {"type": "function", "function": {"name": "scan", "description": "y"}},
+        ],
+        **extra,
+    }
+
+
+def _one_tool_request(**extra: Any) -> dict[str, Any]:
+    """Return a single-tool request no provider evidence shows to be rejected."""
+    return {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": [{"role": "user", "content": "use one tool"}],
+        "tools": [
+            {"type": "function", "function": {"name": "inspect", "description": "x"}},
+        ],
+        **extra,
+    }
+
+
+def test_free_pool_skips_single_tool_call_agent_for_multi_tool_request() -> None:
+    """Positive single-call evidence removes an agent before the request is sent.
+
+    Issue #940: discovery already records ``tool_call:single`` when a provider
+    rejected the probe's two-tool ``parallel_tool_calls: true`` request, and
+    the passthrough path already fails over on that 400. Selection must use
+    the same evidence so the doomed provider round-trip never happens.
+    """
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+
+    result = orchestrator.proxy_completion(_two_tool_request())
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+
+
+def test_free_pool_skips_single_tool_call_agent_when_parallel_calls_requested() -> None:
+    """An explicit ``parallel_tool_calls: true`` needs multi-call capability even with one tool."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+
+    result = orchestrator.proxy_completion(_one_tool_request(parallel_tool_calls=True))
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _one_tool_request(),
+        _two_tool_request(parallel_tool_calls=False),
+    ],
+    ids=["single_tool_without_flag", "parallel_calls_disabled"],
+)
+def test_free_pool_keeps_single_tool_call_agent_for_single_call_shapes(
+    body: dict[str, Any],
+) -> None:
+    """Shapes no provider evidence rejects keep the single-call agent eligible."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+@pytest.mark.parametrize("tools", [None, []], ids=["no_tools_key", "empty_tools"])
+def test_free_pool_keeps_single_tool_call_agent_for_requests_without_tools(tools) -> None:
+    """A request that carries no tools never triggers the single-call exclusion."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+    body = {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": [{"role": "user", "content": "plain text"}],
+    }
+    if tools is not None:
+        body["tools"] = tools
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_free_pool_keeps_agent_without_tool_call_evidence() -> None:
+    """Absent evidence never excludes: ADR-0035 capability tags are positive declarations."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ())
+
+    result = orchestrator.proxy_completion(_two_tool_request())
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 @pytest.mark.parametrize(
@@ -1186,8 +1338,13 @@ def test_suppressed_transient_context_does_not_authorize_failover() -> None:
 def test_all_candidates_chain_the_last_failure() -> None:
     """Exhaustion reports one stable gateway error with the final provider cause."""
     final = _http_error(503)
+    # 500 here (not 429): this test is about which classified failure
+    # survives exhaustion, not rate-limiting -- a bare 429 with no
+    # Retry-After now assumes a short quota cooldown and waits, which would
+    # route this candidate's identity through the rate-limit-storm path
+    # instead of the plain exhaustion path this test actually exercises.
     orchestrator = _build(
-        SequencedProxyClient({"primary_agent": _http_error(429), "fallback_agent": final})
+        SequencedProxyClient({"primary_agent": _http_error(500), "fallback_agent": final})
     )
 
     with pytest.raises(ProviderUpstreamError) as caught:

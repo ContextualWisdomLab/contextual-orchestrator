@@ -8,11 +8,17 @@ import types
 import pytest
 
 from contextual_orchestrator.token_counting import (
+    COUNTING_PROVENANCE_REGISTRY,
+    FRAMING_SOURCE_UNVERIFIED,
+    MessageCountResult,
     NativeExactTokenCounter,
     PgTiktokenAdapter,
+    SharedContextBudget,
     TokenCountUnavailable,
     UnavailableTokenCounter,
     build_token_counter,
+    describe_message_count,
+    shared_context_output_budget,
 )
 
 
@@ -108,6 +114,102 @@ def test_native_counter_does_not_flatten_multimodal_chat_prompts() -> None:
         counter.count_messages(messages, "gpt-4o")
 
 
+def _stub_native_counter() -> NativeExactTokenCounter:
+    """A NativeExactTokenCounter over a deterministic stub encoder for behavior tests."""
+    module = types.SimpleNamespace(
+        count_cl100k=lambda text: len(text.split()),
+        count_o200k=lambda text: len(text.split()),
+        pack_cl100k=lambda *_args: ([], []),
+    )
+    return NativeExactTokenCounter(module)
+
+
+def test_registry_entries_carry_a_source_and_scope() -> None:
+    assert COUNTING_PROVENANCE_REGISTRY, "registry must not be empty"
+    for model, entry in COUNTING_PROVENANCE_REGISTRY.items():
+        assert entry.framing_source != FRAMING_SOURCE_UNVERIFIED
+        assert entry.framing_source_url.startswith("https://")
+        assert model in entry.framing_scope
+        assert entry.tokenizer in {"cl100k", "o200k"}
+        assert entry.supported_fields
+        assert entry.unsupported_fields
+
+
+def test_verified_family_counts_exactly_with_real_native_tokenizer() -> None:
+    counter = build_token_counter()
+    if not isinstance(counter, NativeExactTokenCounter):
+        pytest.skip("native tokenizer extension is not installed locally")
+    model = "gpt-4o-2024-08-06"
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Say hi.", "name": "alice"},
+    ]
+    result = counter.describe_messages(messages, model)
+    assert isinstance(result, MessageCountResult)
+    assert result.token_count > 0
+    assert result.tokenizer == "o200k"
+    assert result.count_source == "provenance_exact"
+    assert result.framing_source == COUNTING_PROVENANCE_REGISTRY[model].framing_source
+    assert result.token_count == counter.count_messages(messages, model)
+
+
+def test_supported_fields_count_exactly_with_stub_encoder() -> None:
+    counter = _stub_native_counter()
+    model = "gpt-4o-2024-08-06"
+    messages = [{"role": "user", "content": "one two three"}]
+    result = counter.describe_messages(messages, model)
+    entry = COUNTING_PROVENANCE_REGISTRY[model]
+    # tokens_per_message + role("user" -> 1 word) + content("one two three" -> 3 words)
+    # + reply priming, with the deterministic word-count stub encoder.
+    expected = entry.tokens_per_message + 1 + 3 + entry.reply_priming_tokens
+    assert result.token_count == expected
+    assert describe_message_count(counter, messages, model).token_count == expected
+
+
+def test_tools_field_raises_unavailable_naming_tools() -> None:
+    counter = _stub_native_counter()
+    messages = [{"role": "user", "content": "hello"}]
+    with pytest.raises(TokenCountUnavailable, match="tools"):
+        counter.describe_messages(messages, "gpt-4o-2024-08-06", tools=[{"type": "function"}])
+
+
+def test_unsupported_message_field_raises_naming_the_field() -> None:
+    counter = _stub_native_counter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "type": "function"}],
+        }
+    ]
+    with pytest.raises(TokenCountUnavailable, match="tool_calls"):
+        counter.count_messages(messages, "gpt-4o-2024-08-06")
+
+
+def test_non_text_content_part_raises_naming_content() -> None:
+    counter = _stub_native_counter()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}],
+        }
+    ]
+    with pytest.raises(TokenCountUnavailable, match="content"):
+        counter.count_messages(messages, "gpt-4o-2024-08-06")
+
+
+def test_model_outside_scope_raises_unavailable() -> None:
+    counter = _stub_native_counter()
+    messages = [{"role": "user", "content": "hello"}]
+    with pytest.raises(TokenCountUnavailable, match="outside the verified"):
+        counter.describe_messages(messages, "gpt-4o")
+
+
+def test_describe_message_count_is_unavailable_for_counters_without_describe_messages() -> None:
+    with pytest.raises(TokenCountUnavailable):
+        describe_message_count(UnavailableTokenCounter(), [{"role": "user", "content": "hi"}], "gpt-4o-2024-08-06")
+
+
 def test_factory_is_unavailable_when_backends_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     broken = types.ModuleType("pg_llm_batch")
     monkeypatch.setitem(sys.modules, "pg_llm_batch", broken)
@@ -119,3 +221,96 @@ def test_factory_is_unavailable_when_backends_fail(monkeypatch: pytest.MonkeyPat
     assert isinstance(counter, UnavailableTokenCounter)
     with pytest.raises(TokenCountUnavailable):
         counter.count_text("hello", "gpt-4")
+
+
+class _Agent:
+    """Minimal duck-typed stand-in for ModelAgent's fields the budget reads."""
+
+    def __init__(self, *, model="gpt-4o-2024-08-06", context_window=None, max_output_tokens=None):
+        self.model = model
+        self.context_window = context_window
+        self.max_output_tokens = max_output_tokens
+
+
+_MESSAGES = [{"role": "user", "content": "hello there"}]
+# tokens_per_message(3) + role(1) + content(2) + reply_priming(3) = 9.
+_EXACT_PROMPT_TOKENS = 9
+
+
+def test_shared_context_output_budget_is_none_without_a_counter() -> None:
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    assert (
+        shared_context_output_budget(agent, _MESSAGES, None, counter=None) is None
+    )
+
+
+def test_shared_context_output_budget_is_none_when_context_window_is_unknown() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=None, max_output_tokens=50)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+@pytest.mark.parametrize("invalid_window", [0, -1, 3.5, "20"])
+def test_shared_context_output_budget_is_none_for_an_invalid_context_window(invalid_window) -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=invalid_window, max_output_tokens=50)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+def test_shared_context_output_budget_is_none_when_max_output_tokens_is_unknown() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=None)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+def test_shared_context_output_budget_is_none_when_the_model_is_out_of_scope() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(model="mock-planner", context_window=20, max_output_tokens=50)
+    assert shared_context_output_budget(agent, _MESSAGES, None, counter=counter) is None
+
+
+def test_shared_context_output_budget_is_none_when_tools_make_the_count_unavailable() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    assert (
+        shared_context_output_budget(
+            agent, _MESSAGES, None, counter=counter, tools=[{"type": "function"}]
+        )
+        is None
+    )
+
+
+def test_shared_context_output_budget_computes_remaining_and_ceiling_from_exact_evidence() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    budget = shared_context_output_budget(agent, _MESSAGES, None, counter=counter)
+    assert budget == SharedContextBudget(
+        context_window=20,
+        prompt_tokens=_EXACT_PROMPT_TOKENS,
+        remaining=20 - _EXACT_PROMPT_TOKENS,
+        output_ceiling=min(50, 20 - _EXACT_PROMPT_TOKENS),
+        requested_output_tokens=None,
+        exceeds_remaining=False,
+    )
+    assert budget.as_evidence() == {
+        "context_window": 20,
+        "prompt_tokens": _EXACT_PROMPT_TOKENS,
+        "output_ceiling": 11,
+        "source": "exact",
+    }
+
+
+def test_shared_context_output_budget_flags_an_explicit_request_over_remaining() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=20, max_output_tokens=50)
+    budget = shared_context_output_budget(agent, _MESSAGES, 15, counter=counter)
+    assert budget.remaining == 11
+    assert budget.exceeds_remaining is True
+
+
+def test_shared_context_output_budget_flags_remaining_below_one_even_without_a_request() -> None:
+    counter = _stub_native_counter()
+    agent = _Agent(context_window=5, max_output_tokens=50)
+    budget = shared_context_output_budget(agent, _MESSAGES, None, counter=counter)
+    assert budget.remaining == 5 - _EXACT_PROMPT_TOKENS
+    assert budget.exceeds_remaining is True
