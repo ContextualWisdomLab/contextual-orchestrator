@@ -59,6 +59,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
+from .token_counting import TokenCountUnavailable, describe_message_count
 from .provider_errors import (
     PROVIDER_OUTCOME_UNKNOWN_CODE,
     PROVIDER_RATE_LIMITED_CODE,
@@ -5143,6 +5144,41 @@ def _strip_internal_fields(value: Any) -> Any:
     return value
 
 
+def _prompt_count_source(
+    orchestrator: "TaskOrchestrator", messages: list[dict[str, Any]], model_name: str
+) -> str | None:
+    """Return this request's prompt-count provenance, or ``None`` when unavailable.
+
+    Binds an authoritative message-token count to the exact served
+    request/model without touching candidate selection: it only asks the
+    already-resolved gateway ``token_counter`` whether ``messages``/``model_name``
+    fall inside a verified counting-provenance scope (see
+    ``token_counting.COUNTING_PROVENANCE_REGISTRY``). An unsupported field
+    (tools, non-text content, an out-of-scope model, ...) is explicit
+    unavailability, never a fabricated estimate.
+    """
+    try:
+        result = describe_message_count(orchestrator.token_counter, messages, model_name)
+    except TokenCountUnavailable:
+        return None
+    return result.count_source
+
+
+def _take_shared_context_budget(orchestrator: "TaskOrchestrator") -> dict[str, Any] | None:
+    """Return this request's shared-context output-budget evidence, or ``None``.
+
+    Reads and clears the ``ModelClient``-thread-local evidence the most
+    recent ``chat()`` call recorded (see
+    ``token_counting.shared_context_output_budget``): present only when the
+    served agent's context window, its output ceiling, and an exact prompt
+    count were all authoritative for this exact request.
+    """
+    take = getattr(orchestrator.client, "take_shared_context_budget", None)
+    if take is None:
+        return None
+    return take()
+
+
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
     if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -7304,7 +7340,12 @@ def build_server(
                         self._send_sse(sse_stream_body(chunks))
                         return
                     self._send(chat_completion_response(
-                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                        result,
+                        model=model_name,
+                        include_trace=include_trace,
+                        usage=result.get("usage"),
+                        prompt_count_source=_prompt_count_source(orchestrator, messages, model_name),
+                        shared_context_budget=_take_shared_context_budget(orchestrator),
                     ))
                     return
                 if path == "/v1/embeddings":
@@ -8773,11 +8814,18 @@ def build_server(
             completion_id = _new_chat_completion_id()
             created = int(time.time())
             stream_usage: dict[str, Any] | None = None
+            stream_shared_context_budget: dict[str, Any] | None = None
             stream_output_budget: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
                 nonlocal stream_usage
                 stream_usage = usage
+
+            def capture_shared_context_budget(
+                budget: dict[str, Any] | None,
+            ) -> None:
+                nonlocal stream_shared_context_budget
+                stream_shared_context_budget = budget
 
             def capture_output_budget(output_budget: dict[str, Any] | None) -> None:
                 nonlocal stream_output_budget
@@ -8787,6 +8835,7 @@ def build_server(
                 delta: dict[str, Any],
                 finish: str | None = None,
                 *,
+                shared_context_budget: dict[str, Any] | None = None,
                 orchestration: dict[str, Any] | None = None,
             ) -> str:
                 payload = {
@@ -8800,6 +8849,13 @@ def build_server(
                 }
                 if include_usage:
                     payload["usage"] = None
+                if shared_context_budget is not None:
+                    # Same shape/field name as the non-streaming response's
+                    # top-level `shared_context_budget` (see
+                    # chat_completion_response / _take_shared_context_budget):
+                    # present only when this run's served agent made an
+                    # authoritative shared-context output-budget decision.
+                    payload["shared_context_budget"] = shared_context_budget
                 if orchestration:
                     payload["orchestration"] = orchestration
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -8826,25 +8882,48 @@ def build_server(
                         "workflow_run_id": run_id,
                         "model_name": model_name,
                     }
-                    # ADR 0130: only pass this to a stream_route that actually
-                    # declares it -- a duck-typed stand-in (e.g. a test double
-                    # that only implements the plain positional/keyword shape)
-                    # must keep working exactly as before this evidence wiring.
+                    # ADR 0130 / #1157: only pass callbacks a stream_route that
+                    # actually declares them -- a duck-typed stand-in (e.g. a
+                    # test double that only implements the plain positional/
+                    # keyword shape) must keep working exactly as before.
                     try:
                         stream_route_params = inspect.signature(
                             orchestrator.stream_route
                         ).parameters
                     except (TypeError, ValueError):
                         stream_route_params = {}
+                    supports_shared_context_budget_callback = (
+                        "shared_context_budget_callback" in stream_route_params
+                        or any(
+                            param.kind is inspect.Parameter.VAR_KEYWORD
+                            for param in stream_route_params.values()
+                        )
+                    )
                     if "output_budget_callback" in stream_route_params:
                         stream_kwargs["output_budget_callback"] = capture_output_budget
                     if include_usage:
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
+                    if supports_shared_context_budget_callback:
+                        stream_kwargs["shared_context_budget_callback"] = (
+                            capture_shared_context_budget
+                        )
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
+                    # The served request's evidence is captured above, inside
+                    # stream_route, before its post-stream real-time judge
+                    # call re-enters ModelClient and can overwrite the
+                    # thread-local accessor (issue #1157 follow-up ordering
+                    # hazard). Only fall back to the post-hoc thread-local
+                    # read for a minimal test double whose stream_route does
+                    # not support the callback.
+                    terminal_shared_context_budget = (
+                        stream_shared_context_budget
+                        if supports_shared_context_budget_callback
+                        else _take_shared_context_budget(orchestrator)
+                    )
                     # ADR 0130: the clamp decision is only known once
                     # orchestrator.stream_route's final take_output_budget()
                     # runs above, after _begin_sse() has already flushed
@@ -8860,7 +8939,12 @@ def build_server(
                         else None
                     )
                     if not self._write_sse(
-                        frame({}, finish="stop", orchestration=final_orchestration)
+                        frame(
+                            {},
+                            finish="stop",
+                            shared_context_budget=terminal_shared_context_budget,
+                            orchestration=final_orchestration,
+                        )
                     ):
                         return
                     if (
