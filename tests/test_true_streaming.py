@@ -22,8 +22,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator import orchestrator as orchestrator_module  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
-from contextual_orchestrator.orchestrator import _parse_model_judge_reply  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    ProviderResponseError,
+    _parse_model_judge_reply,
+)
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -128,6 +131,19 @@ def test_stream_send_parses_real_provider_sse() -> None:
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["Hello", " streamed", " world"]  # role delta skipped, [DONE] stops
     assert "".join(deltas) == "Hello streamed world"
+
+
+def test_stream_send_rejects_response_body_above_configured_limit() -> None:
+    frames = [_delta("x" * ((8 * 1024 * 1024) + 1))]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url)
+        try:
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+        except ProviderResponseError as exc:
+            assert str(exc) == "provider response exceeds the configured limit"
+        else:
+            raise AssertionError("oversized streaming provider response was accepted")
 
 
 def test_stream_send_ignores_empty_and_missing_choices() -> None:

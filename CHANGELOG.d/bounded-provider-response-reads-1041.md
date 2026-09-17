@@ -1,0 +1,3 @@
+# Bounded provider response reads
+
+Bounded every remaining provider response read on `ModelClient`'s chat, passthrough, streaming, batch, binary and local-registry paths, and on the discovery tool-call probe, at an 8 MiB ceiling (`MAX_PROVIDER_RESPONSE_BYTES`). An oversized body now fails closed as `ProviderResponseError` instead of being buffered whole, and that error is preserved through the passthrough retry/classification wrappers rather than being rewritten or retried. This closes the response-size-bounding (CWE-400) gap tracked in #1041 and is independent of the EgressWeave transport adoption discussed in the same issue.
