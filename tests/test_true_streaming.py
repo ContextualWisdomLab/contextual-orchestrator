@@ -61,6 +61,8 @@ class _FakeSSEProvider:
 
     def __exit__(self, *exc: object) -> None:
         self._server.shutdown()
+        self._server.server_close()
+        self._thread.join()
 
     @property
     def base_url(self) -> str:
@@ -98,6 +100,8 @@ class _CapturingSSEProvider:
     def __exit__(self, *exc: object) -> None:
         del exc
         self._server.shutdown()
+        self._server.server_close()
+        self._thread.join()
 
     @property
     def base_url(self) -> str:
@@ -264,6 +268,7 @@ def test_http_route_stream_returns_provider_usage_without_stale_data() -> None:
             second = post()
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     first_frames = [frame for frame in first.split("\n\n") if frame]
@@ -402,6 +407,7 @@ def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
             raise AssertionError("a failed stream must raise a package-owned error")
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_stream_chat_mock_yields_chunks() -> None:
@@ -641,6 +647,7 @@ def test_http_route_stream_pipes_live_deltas() -> None:
         _, ref = post({"model": "m-model", "messages": [{"role": "user", "content": "stream this"}], "mode": "route"})
     finally:
         server.shutdown()
+        server.server_close()
 
     assert content_type.startswith("text/event-stream")
     assert sse.endswith("data: [DONE]\n\n")
