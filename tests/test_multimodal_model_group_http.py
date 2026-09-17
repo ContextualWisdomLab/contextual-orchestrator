@@ -144,6 +144,49 @@ def test_speech_endpoint_rejects_non_object_provider_routing() -> None:
         server.shutdown()
 
 
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/html",
+        "image/svg+xml",
+        "text/plain; charset=utf-8",
+        "text/plain; charset=utf-8\r\nContent-Type: text/html",
+        "audio/mpeg",
+        "video/mp4",
+        "image/png",
+        "application/pdf",
+        "application/jsonl",
+        "application/x-subrip; charset=utf-8",
+        "text/vtt; charset=utf-8",
+    ],
+)
+def test_speech_endpoint_sanitizes_active_provider_content_types(content_type: str) -> None:
+    """Preserve binary payloads while rejecting active or injected media headers."""
+    agent = ModelAgent("speech_member", "provider/speech", tags=("speech",), group_name="speech_group")
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send_bytes = lambda *_args: (b"payload", content_type)  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status_code, response_payload, response_type = _post(
+            server.server_address[1],
+            "/v1/audio/speech",
+            {"model": "speech-group", "input": "hello", "voice": "alloy"},
+        )
+        expected = (
+            "application/octet-stream"
+            if "\r" in content_type
+            or "\n" in content_type
+            or content_type in {"text/html", "image/svg+xml"}
+            else content_type.split(";", 1)[0]
+        )
+        assert status_code == 200
+        assert response_payload == b"payload"
+        assert response_type == expected
+    finally:
+        server.shutdown()
+
+
 def test_video_poll_and_content_use_the_submission_provider() -> None:
     """Async video follow-ups stay bound to the measured submission winner."""
     first = ModelAgent(

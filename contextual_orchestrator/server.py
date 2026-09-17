@@ -96,6 +96,32 @@ from .file_registry import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_SAFE_BINARY_CONTENT_TYPES = frozenset(
+    {
+        "application/octet-stream",
+        "application/jsonl",
+        "application/pdf",
+        "application/zip",
+        "application/x-subrip",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "text/plain",
+        "text/vtt",
+    }
+)
+
+
+def _safe_binary_content_type(content_type: str) -> str:
+    """Downgrade provider media types that browsers can execute as markup."""
+    if "\r" in content_type or "\n" in content_type:
+        return "application/octet-stream"
+    normalized_media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized_media_type in _SAFE_BINARY_CONTENT_TYPES or normalized_media_type.startswith(("audio/", "video/")):
+        return content_type
+    return "application/octet-stream"
+
 # OpenAI's image-input contract permits a 512 MB total request payload.  That
 # includes JSON requests carrying data-URL/base64 images, not only /files.
 DEFAULT_MAX_JSON_BODY_BYTES = 64 * 1024
@@ -8525,6 +8551,7 @@ def build_server(
 
         def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
             self._last_status = status
+            content_type = _safe_binary_content_type(content_type)
 
             def _write() -> None:
                 self.send_response(status)
