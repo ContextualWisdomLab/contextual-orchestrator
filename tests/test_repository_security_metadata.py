@@ -32,6 +32,7 @@ def test_readme_links_deepwiki_and_security_workflow_badges():
 
 
 def test_security_workflow_covers_core_repository_security_process():
+    """Assert the pinned runner image, required steps, and dedupe list."""
     workflow_text = read_text(".github/workflows/security.yml")
 
     expected_tokens = [
@@ -46,13 +47,22 @@ def test_security_workflow_covers_core_repository_security_process():
         "github/codeql-action/init@v4",
         "github/codeql-action/analyze@v4",
         "security:",
+        "rust:",
+        "Rust workspace gate",
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "cargo test --workspace --locked",
+        "cargo audit --file Cargo.lock",
+        "upload: never",
+        "wait-for-processing: false",
+        "codeql github upload-results",
         "actions/setup-python@v6",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "python -m pip install --require-hashes -r requirements.lock",
         "python -m pip install --no-deps -e .",
         "python -m pip_audit -r requirements.lock",
         "cyclonedx-py environment",
-        "actions/upload-artifact@v5",
+        "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
     for expected_token in expected_tokens:
@@ -68,24 +78,37 @@ def test_security_workflow_covers_core_repository_security_process():
     for duplicate_scanner in removed_duplicate_scanners:
         assert duplicate_scanner not in workflow_text
 
-    assert "local-quality-${{ github.repository }}-${{ github.event_name }}-${{" in workflow_text
-    assert "github.event.pull_request.number || github.event.schedule || github.ref" in workflow_text
-    assert "cancel-in-progress: true" in workflow_text
+    assert "${{ github.workflow }}-${{ github.repository }}-${{" in workflow_text
+    assert "github.event.pull_request.number || github.event.schedule || github.run_id" in workflow_text
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow_text
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]"
+        in workflow_text
+    )
+    assert workflow_text.count("github.event.pull_request.draft == false") == 4
+    assert workflow_text.count("github.event.action != 'closed'") == 4
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
-    assert workflow_text.count("runs-on: ubuntu-latest") == 3
+    assert workflow_text.count("runs-on: ubuntu-24.04") == 4
+    assert "runs-on: ubuntu-latest" not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines
     assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
 
 
-def test_local_quality_admits_stacked_pull_requests():
-    """Run the existing quality gate for PRs targeting an unmerged parent."""
+def test_security_workflow_supports_stacked_pull_requests():
+    """Keep stacked validation unfiltered without escalating event permissions."""
     workflow_text = read_text(".github/workflows/security.yml")
-    assert "\n  push:\n    branches: [main]\n" in workflow_text
-    assert "\n  pull_request:\n  schedule:\n" in workflow_text
+    pull_request_trigger = workflow_text.split("  pull_request:\n", 1)[1].split(
+        "  schedule:\n", 1
+    )[0]
+
+    for filter_name in ("branches", "branches-ignore", "paths", "paths-ignore"):
+        assert f"{filter_name}:" not in pull_request_trigger
+    assert "permissions:\n  contents: read\n" in workflow_text
+    assert "pull_request_target:" not in workflow_text
 
 
 def test_dependabot_tracks_actions_and_python_dependencies():
@@ -119,6 +142,22 @@ def test_atheris_lock_is_parseable_and_matches_shared_project_pins():
     for line_number, line in enumerate(lines):
         if line.lstrip().startswith("--hash="):
             assert line_number > 0 and lines[line_number - 1].rstrip().endswith("\\")
+
+
+def test_cryptography_pin_matches_every_install_path():
+    """Runtime, security, and both fuzz jobs must install the same release."""
+    lock_versions = [
+        re.search(r"(?m)^cryptography==([^ ;\\]+)", read_text(lock_path)).group(1)
+        for lock_path in (
+            "requirements.lock",
+            "fuzz/requirements-atheris.txt",
+            "fuzz/requirements-property.txt",
+        )
+    ]
+    runtime_version = re.search(
+        r'(?m)^name = "cryptography"\nversion = "([^"]+)"', read_text("uv.lock")
+    ).group(1)
+    assert lock_versions == [runtime_version] * len(lock_versions)
 
 
 def test_review_adr_requires_enforced_exact_head_merge_controls():
@@ -189,7 +228,7 @@ def test_database_design_avoids_plaintext_prompt_output_storage():
 def test_python_lockfile_uses_hash_pinning():
     lock_text = read_text("requirements.lock")
 
-    assert "pip-compile" in lock_text
+    assert "pip-compile" in lock_text or "uv pip compile" in lock_text
     assert "--hash=sha256:" in lock_text
     assert "fastapi==" in lock_text
     assert "uvicorn==" in lock_text
@@ -204,7 +243,10 @@ def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     assert re.search(r"@[0-9a-f]{40}(?:\s+#|$)", setup_uv_line)
     assert "# v" in setup_uv_line
     assert 'version: "0.12.5"' in workflow_text
-    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in workflow_text
+    locked_sync = "uv sync --locked --extra api --extra db --extra queue --group dev --group native-build"
+    native_build = "uv run --no-sync maturin develop --locked --release --features pyo3/extension-module"
+    full_tests = "uv run --no-sync python -m pytest -q -ra"
+    assert workflow_text.index(locked_sync) < workflow_text.index(native_build) < workflow_text.index(full_tests)
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():

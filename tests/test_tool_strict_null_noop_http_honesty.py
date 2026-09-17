@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -77,6 +78,7 @@ def test_http_chat_accepts_tool_function_strict_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_tool_function_strict_non_boolean() -> None:
@@ -107,6 +109,7 @@ def test_http_chat_rejects_tool_function_strict_non_boolean() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_json_schema_strict_null() -> None:
@@ -140,6 +143,7 @@ def test_http_chat_accepts_response_format_json_schema_strict_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_parallel_tool_calls_true_without_tools() -> None:
@@ -161,6 +165,7 @@ def test_http_responses_rejects_parallel_tool_calls_true_without_tools() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_parallel_tool_calls_false_without_tools() -> None:
@@ -179,6 +184,7 @@ def test_http_responses_accepts_parallel_tool_calls_false_without_tools() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import threading
 import urllib.request
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import orchestrator as orchestrator_module
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.token_counting import TokenCountUnavailable
 
@@ -28,7 +29,11 @@ def _orchestrator(*, price: float | None = None) -> TaskOrchestrator:
     )
 
 
-def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
+def test_exact_output_without_prompt_usage_is_explicitly_unavailable(monkeypatch) -> None:
+    # Isolate the optional fast-mlsirm judge so it cannot contribute a second
+    # usage source. With prompt tokens unmeasured, honest classification is
+    # "mixed" even when output tokens are fully exact-tokenizer counted.
+    monkeypatch.setattr(orchestrator_module, "_resolve_fast_mlsirm_components", lambda: None)
     orchestrator = _orchestrator()
     orchestrator.run([{"role": "user", "content": "account for this"}])
     report = orchestrator.spend_analytics()
@@ -41,6 +46,39 @@ def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
     assert row["usage_source"] == "mixed"
     assert row["cost_usd"] is None
     assert not any("estimated" in key for key in row | report["totals"])
+
+
+def test_usage_source_is_scoped_per_model_when_prompt_evidence_differs() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("known_agent", "known-model", tags=("reasoning",)),
+            ModelAgent("missing_agent", "missing-model", tags=("reasoning",)),
+        ]
+    )
+    orchestrator._workflow_runs["prompt-evidence-scope"] = {
+        "workflow_run_id": "prompt-evidence-scope",
+        "trace": [
+            {
+                "model_name": "known-model",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                "output": "known prompt and output usage",
+            },
+            {
+                "model_name": "missing-model",
+                "usage": {"completion_tokens": 11},
+                "output": "output usage only",
+            },
+        ],
+        "verification": None,
+    }
+
+    report = orchestrator.spend_analytics()
+    rows = {row["model"]: row for row in report["by_model"]}
+
+    assert report["measurement_status"] == "unavailable"
+    assert report["totals"]["prompt_tokens"] is None
+    assert rows["known-model"]["usage_source"] == "reported"
+    assert rows["missing-model"]["usage_source"] == "mixed"
 
 
 def test_exact_output_cost_uses_operator_price() -> None:
@@ -76,6 +114,7 @@ def test_http_spend_endpoint_preserves_unavailable_status() -> None:
             status, body = response.status, json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["measurement_status"] == "unavailable"
     assert body["totals"]["prompt_tokens"] is None

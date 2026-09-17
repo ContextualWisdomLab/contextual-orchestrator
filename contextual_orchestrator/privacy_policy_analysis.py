@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib.metadata
 import json
 import urllib.request
 from collections.abc import Callable, Sequence
@@ -125,11 +126,25 @@ def _wardnet_browser_proxy() -> dict[str, str]:
     }
 
 
+def _installed_mcp_sdk_version() -> str:
+    """Name the installed MCP Python SDK version for dependency diagnostics."""
+    try:
+        return "mcp " + importlib.metadata.version("mcp")
+    except importlib.metadata.PackageNotFoundError:
+        return "mcp not installed"
+
+
 async def _render_policy_document_with_camoufox(url: str) -> str:
     """Render one Wardnet-approved policy URL through the configured Camoufox MCP."""
-    from mcp import Client
-    from mcp.client.streamable_http import streamable_http_client
-    from mcp.shared._httpx_utils import create_mcp_http_client
+    try:
+        from mcp import Client
+        from mcp.client.streamable_http import streamable_http_client
+        from mcp.shared._httpx_utils import create_mcp_http_client
+    except ImportError as exc:
+        raise ImportError(
+            "Camoufox MCP transport requires MCP Python SDK >= 2.0 "
+            f"(installed: {_installed_mcp_sdk_version()})"
+        ) from exc
 
     mcp_url = get_credential(CAMOUFOX_MCP_URL_CREDENTIAL)
     token = get_credential(CAMOUFOX_MCP_TOKEN_CREDENTIAL)
@@ -176,7 +191,7 @@ async def _render_policy_document_with_camoufox(url: str) -> str:
 def crawl_policy_document(
     url: str,
     *,
-    timeout: float = 15.0,
+    timeout: float | None = None,
     camoufox_renderer: Callable[[str], str] | None = None,
 ) -> str:
     """Fetch one policy through Wardnet's DNS-pinned outbound boundary."""
@@ -214,7 +229,7 @@ def crawl_policy_document(
         },
         method="POST",
     )
-    client = ModelClient(timeout=max(1, int(timeout)), allowed_provider_hosts={wardnet.hostname})
+    client = ModelClient(timeout=timeout, allowed_provider_hosts={wardnet.hostname})
     if wardnet.scheme == "http":
         origin = urlunsplit(("local", wardnet.netloc, "", "", ""))
         agent = ModelAgent(
@@ -346,18 +361,17 @@ def _call_analyzer(
             for source_url, text in documents.items()
         ],
     }
-    response = client.proxy_send_once(
-        agent,
-        "chat/completions",
-        {
-            "model": agent.model,
-            "messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
-            "temperature": 0,
-            "max_tokens": 1600,
-            "response_format": _POLICY_SCHEMA,
-            "stream": False,
-        },
-    )
+    payload: dict[str, Any] = {
+        "model": agent.model,
+        "messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+        "temperature": 0,
+        "response_format": _POLICY_SCHEMA,
+        "stream": False,
+    }
+    output_cap = client.effective_max_output_tokens(agent)
+    if output_cap is not None:
+        payload["max_tokens"] = output_cap
+    response = client.proxy_send_once(agent, "chat/completions", payload)
     return json.loads(ModelClient._response_content(agent, response))
 
 
