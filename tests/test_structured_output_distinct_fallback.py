@@ -653,31 +653,36 @@ def test_failed_structured_run_stays_queryable_but_out_of_recent_completed_metri
     first = ModelAgent("first_agent", "first-model", "mock://first")
     state_db = tmp_path / "structured-failure.sqlite3"
     orchestrator = TaskOrchestrator([first], state_db=str(state_db))
+    try:
+        with (
+            patch.object(orchestrator, "conduct", return_value=_workflow()),
+            patch.object(orchestrator, "_select_agent", return_value=first),
+            patch.object(orchestrator, "_failover_candidates", return_value=[first]),
+            patch.object(
+                orchestrator.client,
+                "proxy_send_once",
+                return_value=_completion('{"input_count":6}', 1),
+            ),
+            pytest.raises(ProviderResponseError) as exc_info,
+        ):
+            orchestrator.proxy_completion(
+                _request(TaskOrchestrator.AUTO_MODEL),
+                single_agent=False,
+            )
 
-    with (
-        patch.object(orchestrator, "conduct", return_value=_workflow()),
-        patch.object(orchestrator, "_select_agent", return_value=first),
-        patch.object(orchestrator, "_failover_candidates", return_value=[first]),
-        patch.object(
-            orchestrator.client,
-            "proxy_send_once",
-            return_value=_completion('{"input_count":6}', 1),
-        ),
-        pytest.raises(ProviderResponseError) as exc_info,
-    ):
-        orchestrator.proxy_completion(
-            _request(TaskOrchestrator.AUTO_MODEL),
-            single_agent=False,
-        )
-
-    run_id = getattr(exc_info.value, "workflow_run_id", None)
-    assert isinstance(run_id, str)
-    assert orchestrator.get_workflow_run(run_id)["failure"]["code"] == "structured_output_exhausted"
-    assert orchestrator.list_recent_runs() == []
-    assert orchestrator.count_workflow_runs() == 0
+        run_id = getattr(exc_info.value, "workflow_run_id", None)
+        assert isinstance(run_id, str)
+        assert orchestrator.get_workflow_run(run_id)["failure"]["code"] == "structured_output_exhausted"
+        assert orchestrator.list_recent_runs() == []
+        assert orchestrator.count_workflow_runs() == 0
+    finally:
+        orchestrator.close()
 
     reloaded = TaskOrchestrator([first], state_db=str(state_db))
-    assert reloaded.get_workflow_run(run_id)["failure"]["code"] == "structured_output_exhausted"
-    assert reloaded.list_recent_runs() == []
-    assert reloaded.count_workflow_runs() == 0
-    assert reloaded.budget_status()["spent_output_tokens"] == 2
+    try:
+        assert reloaded.get_workflow_run(run_id)["failure"]["code"] == "structured_output_exhausted"
+        assert reloaded.list_recent_runs() == []
+        assert reloaded.count_workflow_runs() == 0
+        assert reloaded.budget_status()["spent_output_tokens"] == 2
+    finally:
+        reloaded.close()
