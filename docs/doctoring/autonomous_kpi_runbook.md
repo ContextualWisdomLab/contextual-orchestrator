@@ -434,7 +434,9 @@ experiments; never rebase or push another session's branch.
 
 Goal: USD 20,000,000,000 sale quality and customer-felt gap closure.
 Scope is chosen under `docs/analytics_spec.md`; no KPI-scope question was
-asked. Primary engineering metric is `open_pr_count` (lower is better,
+asked. Primary product metrics are observed delivered correctness and routing
+decision latency, with the acceptance criteria below. `open_pr_count` is a
+secondary delivery measure, not evidence of product improvement (lower is better,
 `gh pr list --state open --json number | jq length`): 85 at loop start,
 87 on recount (concurrent-session growth, not this change). PR 0 only via
 merge or verified-successor full-delta inheritance; no force-push and no

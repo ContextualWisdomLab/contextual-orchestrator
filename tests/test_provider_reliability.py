@@ -27,6 +27,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     ProviderRequestTooLargeError,
     ProviderResponseError,
+    _log_provider_attempt_failed,
     is_transient_error,
 )
 from contextual_orchestrator.provider_errors import (  # noqa: E402
@@ -38,6 +39,47 @@ from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
+
+
+@pytest.mark.parametrize("status", [425, 429, 503, None, 0, True, "429", 600])
+def test_attempt_log_preserves_only_valid_numeric_upstream_status(caplog, status) -> None:
+    """Logs distinguish missing status without reading bodies or exposing diagnostics."""
+    body = io.BytesIO(b"private_response_body")
+    failure = urllib.error.HTTPError(
+        "https://provider.example/private", status,
+        "https://provider.example/private private_failure_text", None, body,
+    )
+    agent = ModelAgent("local_worker", "mock-local")
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+        _log_provider_attempt_failed(agent, 0, failure, True)
+    expected = status if type(status) is int and 100 <= status <= 599 else None
+    assert f"provider_status={expected}" in caplog.text
+    assert "error_message=<omitted>" in caplog.text
+    assert "provider.example" not in caplog.text
+    assert "private_failure_text" not in caplog.text
+    assert "private_response_body" not in caplog.text
+    assert body.tell() == 0
+
+
+def test_attempt_log_handles_typed_and_non_http_failures_without_stringifying(caplog) -> None:
+    """A typed status survives; a non-HTTP failure remains explicitly unknown."""
+    class UnprintableFailure(RuntimeError):
+        def __str__(self):
+            raise AssertionError("failure text must not be evaluated")
+
+    failures = [
+        (ProviderUpstreamError(
+            agent_id="local_worker", model="mock-local", error_code="service_unavailable",
+            message="private_failure_text", client_status=503, provider_status=503,
+        ), 503),
+        (UnprintableFailure(), None),
+    ]
+    for failure, expected in failures:
+        caplog.clear()
+        with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+            _log_provider_attempt_failed(ModelAgent("local_worker", "mock-local"), 0, failure, True)
+        assert f"provider_status={expected}" in caplog.text
+        assert "private_failure_text" not in caplog.text
 
 
 def _stopped_http_error() -> urllib.error.HTTPError:
@@ -252,6 +294,34 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
     assert all(0.0 <= d <= client.retry_backoff_cap for d in delays)
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError("read timed out"), ConnectionResetError("connection reset")],
+)
+def test_ambiguous_post_send_failure_is_never_retried(failure: OSError) -> None:
+    """An unknown provider outcome must not be replayed by the transport loop."""
+
+    class AmbiguousClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=3, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            del agent, payload, destination
+            self.attempts += 1
+            raise failure
+
+    client = AmbiguousClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.retryable is False
+
+
 def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -> None:
     class LocalDownClient(ModelClient):
         def __init__(self) -> None:
@@ -273,7 +343,7 @@ def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -
     assert client.attempts == 1
 
 
-def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
+def test_local_retry_budget_never_replays_an_ambiguous_outcome() -> None:
     class LocalFlakyClient(ModelClient):
         def __init__(self) -> None:
             super().__init__(max_retries=5, local_max_retries=1, retry_backoff=0.0)
@@ -281,17 +351,17 @@ def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
 
         def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
-            if self.attempts == 1:
-                raise urllib.error.URLError("local server restarted")
-            return "recovered"
+            raise urllib.error.URLError("local server restarted")
 
     client = LocalFlakyClient()
     agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
-    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
-    assert client.attempts == 2
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
 
 
-def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
+def test_local_retry_budget_does_not_override_unknown_outcome_safety() -> None:
     class LocalFlakyClient(ModelClient):
         def __init__(self) -> None:
             super().__init__(max_retries=0, local_max_retries=2, retry_backoff=0.0)
@@ -299,14 +369,14 @@ def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
 
         def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
-            if self.attempts < 3:
-                raise urllib.error.URLError("local server is restarting")
-            return "recovered"
+            raise urllib.error.URLError("local server is restarting")
 
     client = LocalFlakyClient()
     agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
-    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
-    assert client.attempts == 3
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
 
 
 def test_local_passthrough_retry_budget_is_not_capped_by_remote_retry_default() -> None:

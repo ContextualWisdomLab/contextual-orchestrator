@@ -8,9 +8,11 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import inspect
 import ipaddress
 import json
 import logging
+import math
 import mmap
 import secrets
 import socket
@@ -59,7 +61,12 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
-from .provider_errors import ProviderUpstreamError
+from .token_counting import TokenCountUnavailable, describe_message_count
+from .provider_errors import (
+    PROVIDER_OUTCOME_UNKNOWN_CODE,
+    PROVIDER_RATE_LIMITED_CODE,
+    ProviderUpstreamError,
+)
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -90,6 +97,32 @@ from .file_registry import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_SAFE_BINARY_CONTENT_TYPES = frozenset(
+    {
+        "application/octet-stream",
+        "application/jsonl",
+        "application/pdf",
+        "application/zip",
+        "application/x-subrip",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "text/plain",
+        "text/vtt",
+    }
+)
+
+
+def _safe_binary_content_type(content_type: str) -> str:
+    """Downgrade provider media types that browsers can execute as markup."""
+    if "\r" in content_type or "\n" in content_type:
+        return "application/octet-stream"
+    normalized_media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized_media_type in _SAFE_BINARY_CONTENT_TYPES or normalized_media_type.startswith(("audio/", "video/")):
+        return content_type
+    return "application/octet-stream"
 
 # OpenAI's image-input contract permits a 512 MB total request payload.  That
 # includes JSON requests carrying data-URL/base64 images, not only /files.
@@ -287,7 +320,7 @@ ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
     "endpoint_equivalence", "stream_usage_supported", "max_output_tokens",
-    "context_window",
+    "context_window", "model_timeout_seconds",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -380,6 +413,7 @@ class SecurityConfig:
     auth_token: str = ""
     admin_token: str = ""
     inference_token: str = ""
+    trace_token: str = ""
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
     max_body_bytes: int = DEFAULT_MAX_JSON_BODY_BYTES
@@ -477,7 +511,13 @@ class SecurityConfig:
     ) -> str:
         """Validate a bearer token or an opaque admin session; return the authorized purpose."""
         effective_purpose = self.resolve_purpose(scope, purpose)
-        if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
+        if not (
+            self.auth_token
+            or self.admin_token
+            or self.inference_token
+            or self.trace_token
+            or self.bearer_verifier
+        ):
             raise RequestError(401, "unauthorized", "bearer token is required")
         if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
             # An active opaque session authorizes the admin role; the route-owned
@@ -499,9 +539,21 @@ class SecurityConfig:
             elif scope == "inference":
                 expected = self.inference_token or self.auth_token
             elif scope == "trace":
-                # Static single-token mode is a local escape hatch. Production
-                # deployments should use bearer_verifier for a separate purpose claim.
-                expected = self.auth_token
+                if self.trace_token:
+                    # A configured trace_token is the only credential that
+                    # authorizes the trace purpose once one is provisioned.
+                    expected = self.trace_token
+                elif not (self.admin_token or self.inference_token):
+                    # Static single-token mode is a local escape hatch: with no
+                    # split admin/inference credentials and no trace_token,
+                    # auth_token remains the only configured bearer, so it
+                    # authorizes trace as documented in ADR 0026.
+                    expected = self.auth_token
+                else:
+                    # Split admin/inference mode without a distinct trace_token
+                    # has no verified trace claim, so it fails closed rather
+                    # than letting admin_token or inference_token stand in.
+                    expected = ""
             else:
                 expected = ""
             valid = bool(expected) and secrets.compare_digest(token, expected)
@@ -725,6 +777,21 @@ def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
         exc.error_code, "Review the request or contact the operator."
     )
     return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
+
+
+def _provider_upstream_extra_headers(exc: ProviderUpstreamError) -> dict[str, str] | None:
+    """Emit ``Retry-After`` for the honest rate-limit-storm 429, else nothing.
+
+    Only ``PROVIDER_RATE_LIMITED_CODE`` (every candidate quota-limited past
+    the request's wait budget) carries this header; the ordinary single-
+    candidate ``rate_limit_exceeded`` surface is unaffected.
+    """
+    if exc.error_code != PROVIDER_RATE_LIMITED_CODE:
+        return None
+    retry_after = exc.extra_detail.get("retry_after_seconds")
+    if not isinstance(retry_after, (int, float)) or isinstance(retry_after, bool):
+        return None
+    return {"retry-after": str(max(math.ceil(retry_after), 0))}
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -1591,7 +1658,7 @@ def _validate_chat_model(body: dict[str, Any]) -> str:
     return model
 
 def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
-    """Legacy Completions ``max_tokens`` — positive integer capped at 1_048_576."""
+    """Validate legacy Completions ``max_tokens`` as a positive integer."""
     if "max_tokens" not in body:
         return None
     max_tokens = body.get("max_tokens")
@@ -1604,17 +1671,11 @@ def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
         return None
     if max_tokens < 1:
         raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
-    if max_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_tokens",
-            "max_tokens must be at most 1048576",
-        )
     body["max_tokens"] = max_tokens
     return max_tokens
 
 def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
-    """Chat Completions ``max_completion_tokens`` — positive integer capped at 1_048_576.
+    """Validate Chat Completions ``max_completion_tokens`` as a positive integer.
 
     OpenAI prefers this over legacy ``max_tokens`` for chat. When both are set,
     ``max_completion_tokens`` wins so clients get a single honest budget.
@@ -1635,12 +1696,6 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
             "invalid_max_completion_tokens",
             "max_completion_tokens must be a positive integer",
         )
-    if max_completion_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_completion_tokens",
-            "max_completion_tokens must be at most 1048576",
-        )
     body["max_completion_tokens"] = max_completion_tokens
     return max_completion_tokens
 
@@ -1651,32 +1706,28 @@ def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
     Official Responses clients send ``max_output_tokens`` rather than chat-era
     ``max_tokens``. Accept and type-check so the field is not opaque
     ``unknown_fields``; value is left on the body for provider passthrough.
-    Cap matches ``max_tokens`` (1_048_576). Digit strings and whole-number
-    floats (JS JSON) coerce.
+    Normalize aliases with precedence: native, completion, then legacy tokens.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
-    if "max_output_tokens" not in body:
-        return None
-    value = _coerce_optional_int(
+    output_token_limit = _coerce_optional_int(
         body.get("max_output_tokens"),
         error_code="invalid_max_output_tokens",
         message="max_output_tokens must be a positive integer",
     )
-    if value is None:
+    if output_token_limit is None:
+        output_token_limit = _validate_chat_max_completion_tokens(body)
+    if output_token_limit is None:
+        output_token_limit = _validate_completions_max_tokens(body)
+    if output_token_limit is None:
         return None
-    body["max_output_tokens"] = value
-    if value < 1:
+    body["max_output_tokens"] = output_token_limit
+    if output_token_limit < 1:
         raise RequestError(
             400,
             "invalid_max_output_tokens",
             "max_output_tokens must be a positive integer",
         )
-    if value > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_output_tokens",
-            "max_output_tokens must be at most 1048576",
-        )
-    return value
+    return output_token_limit
 
 
 
@@ -2334,6 +2385,8 @@ def _validate_mode(mode: Any) -> str:
 
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
+    if "provider" in body and not isinstance(body["provider"], dict):
+        raise RequestError(400, "invalid_provider", "provider must be an object")
     if "model" in body:
         model = body["model"]
         if not isinstance(model, str):
@@ -4977,6 +5030,28 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     return model
 
 
+# Terminal-failure batch document statuses that must never be treated as a
+# healthy completion for endpoint-health purposes. Mirrors the vocabulary
+# ``CostRoutingCoordinator.embeddings_batch_document`` (cost_router.py) uses
+# to stop polling a batch job: "failed"/"cancelled"/"rejected" are terminal
+# outcomes with no embeddings and no further transitions, distinct from
+# "completed" (success) and from in-flight statuses such as "queued",
+# "validating", or "running" (still eligible to become "completed" later).
+_TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES = frozenset({"failed", "cancelled", "rejected"})
+
+
+def _available_embedding_agents(orchestrator: Any, model_name: str) -> list[Any]:
+    """Map temporary embedding quarantine to the public availability contract."""
+    try:
+        return orchestrator._capability_agents("embedding", model_name)
+    except RuntimeError as exc:
+        raise RequestError(
+            503,
+            "embeddings_unavailable",
+            "all enabled embedding-capable model group members are temporarily unavailable",
+        ) from exc
+
+
 def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
     """OpenAI ``encoding_format`` — omit/null/empty, ``float``, or ``base64``.
 
@@ -5121,6 +5196,41 @@ def _strip_internal_fields(value: Any) -> Any:
     return value
 
 
+def _prompt_count_source(
+    orchestrator: "TaskOrchestrator", messages: list[dict[str, Any]], model_name: str
+) -> str | None:
+    """Return this request's prompt-count provenance, or ``None`` when unavailable.
+
+    Binds an authoritative message-token count to the exact served
+    request/model without touching candidate selection: it only asks the
+    already-resolved gateway ``token_counter`` whether ``messages``/``model_name``
+    fall inside a verified counting-provenance scope (see
+    ``token_counting.COUNTING_PROVENANCE_REGISTRY``). An unsupported field
+    (tools, non-text content, an out-of-scope model, ...) is explicit
+    unavailability, never a fabricated estimate.
+    """
+    try:
+        result = describe_message_count(orchestrator.token_counter, messages, model_name)
+    except TokenCountUnavailable:
+        return None
+    return result.count_source
+
+
+def _take_shared_context_budget(orchestrator: "TaskOrchestrator") -> dict[str, Any] | None:
+    """Return this request's shared-context output-budget evidence, or ``None``.
+
+    Reads and clears the ``ModelClient``-thread-local evidence the most
+    recent ``chat()`` call recorded (see
+    ``token_counting.shared_context_output_budget``): present only when the
+    served agent's context window, its output ceiling, and an exact prompt
+    count were all authoritative for this exact request.
+    """
+    take = getattr(orchestrator.client, "take_shared_context_budget", None)
+    if take is None:
+        return None
+    return take()
+
+
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
     if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -5252,22 +5362,13 @@ def _chat_response_sse_chunks(
         for normal_chunk in chunks:
             normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
-        prompt_tokens = (
-            reported_usage.get("prompt_tokens", reported_usage.get("input_tokens"))
-            if isinstance(reported_usage, dict)
-            else None
-        )
-        completion_tokens = (
-            reported_usage.get("completion_tokens", reported_usage.get("output_tokens"))
-            if isinstance(reported_usage, dict)
-            else None
-        )
-        if (
-            type(prompt_tokens) is int
-            and prompt_tokens >= 0
-            and type(completion_tokens) is int
-            and completion_tokens >= 0
+        cost = payload.get("cost")
+        if isinstance(cost, dict) and (
+            cost.get("measurement_status") != "measured"
+            or not isinstance(reported_usage, dict)
         ):
+            return chunks
+        if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}
             measurement_status = "measured"
         else:
@@ -6004,6 +6105,26 @@ def build_server(
                         raise ValueError("refresh must be true or false")
                     self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
                     return
+                if path == "/api/v1/request_outcome_exports":
+                    if not decision_receipts:
+                        raise RequestError(503, "export_unavailable", "Enable decision measurements before exporting observations.")
+                    if orchestrator._store is None:
+                        raise RequestError(503, "export_unavailable", "Export storage is unavailable.")
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if set(query) - {"page_size", "after_sequence", "high_water_sequence"}:
+                        raise ValueError("unsupported export parameter")
+                    if any(len(values) != 1 for values in query.values()):
+                        raise ValueError("duplicate export parameter")
+                    if any(values[0] == "" for values in query.values()):
+                        raise ValueError("export parameter must not be empty")
+                    page_size = self._parse_optional_int(query, "page_size")
+                    after_sequence = self._parse_optional_int(query, "after_sequence")
+                    self._send(orchestrator._store.export_request_outcomes(
+                        page_size=100 if page_size is None else page_size,
+                        after_sequence=0 if after_sequence is None else after_sequence,
+                        high_water_sequence=self._parse_optional_int(query, "high_water_sequence"),
+                    ))
+                    return
                 if path == "/api/v1/analytics_snapshots/latest":
                     snapshot = orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS)
                     if decision_receipts:
@@ -6270,6 +6391,27 @@ def build_server(
                     return
                 if path.startswith("/api/v1/agent_pools/"):
                     segments = [part for part in path.split("/") if part]
+                    if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6:] == ["timeout_policy", "history"]):
+                        page_size = self._parse_positive_int(
+                            (query.get("page_size") or [None])[0], "page_size", 20, 100,
+                        )
+                        before_revision = self._parse_optional_int(query, "before_revision")
+                        try:
+                            self._send(orchestrator.list_model_timeout_history(
+                                segments[3], segments[5], page_size=page_size,
+                                before_revision=before_revision,
+                            ))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
+                    if (len(segments) == 7 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6] == "timeout_policy"):
+                        try:
+                            self._send(orchestrator.get_model_timeout_policy(segments[3], segments[5]))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
@@ -6316,6 +6458,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -6332,7 +6475,12 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent patch path missing worker agent")
                     body = self._read_json()
                     _reject_unknown_keys(body, ALLOWED_AGENT_PATCH_KEYS)
-                    updated = orchestrator.patch_agent(segments[3], segments[-1], body)
+                    patch_kwargs: dict[str, Any] = {}
+                    if "model_timeout_seconds" in body:
+                        patch_kwargs["actor_id"] = security.principal_id(self.headers)
+                    updated = orchestrator.patch_agent(
+                        segments[3], segments[-1], body, **patch_kwargs
+                    )
                     self._send(updated, 200)
                     return
                 if path.startswith("/api/v1/model_groups/"):
@@ -6360,6 +6508,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -7021,14 +7170,10 @@ def build_server(
                         # unavailable otherwise; chat framing/tools are not reconstructed.
                         # response_format-only structured passthrough (conduct mode)
                         # is different: its usage comes from a multi-step workflow's
-                        # cost ledger, which may be unmeasured, so it keeps failing
-                        # closed when workflow-level usage is unavailable.
-                        if stream and include_usage and not tool_loop:
-                            raise RequestError(
-                                400,
-                                "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with response_format-only structured passthrough",
-                            )
+                        # cost ledger, which may be unmeasured. Conduct-mode payloads
+                        # carry cost.measurement_status; SSE usage is emitted only when
+                        # that ledger is measured, so there is nothing to fail closed on
+                        # here — the stream still succeeds with usage omitted.
                         if (
                             tool_loop
                             and "include_orchestration_trace" in body
@@ -7289,7 +7434,12 @@ def build_server(
                         self._send_sse(sse_stream_body(chunks))
                         return
                     self._send(chat_completion_response(
-                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                        result,
+                        model=model_name,
+                        include_trace=include_trace,
+                        usage=result.get("usage"),
+                        prompt_count_source=_prompt_count_source(orchestrator, messages, model_name),
+                        shared_context_budget=_take_shared_context_budget(orchestrator),
                     ))
                     return
                 if path == "/v1/embeddings":
@@ -7356,53 +7506,60 @@ def build_server(
                         attribution["service"] = "embeddings_api"
                     self._ensure_decision_measurement("validated_endpoint")
                     embedding_agents = coordinator._cost_ordered_capability_candidates(
-                        orchestrator._capability_agents(
-                            "embedding", TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name
+                        _available_embedding_agents(
+                            orchestrator,
+                            TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
                         )
                     )
                     started_at = time.perf_counter()
-                    configured_timeout = orchestrator.client.timeout
-                    embedding_deadline = (
-                        None
-                        if configured_timeout is None
-                        else time.monotonic() + float(configured_timeout)
-                    )
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
-                        remaining_timeout = (
-                            None
-                            if embedding_deadline is None
-                            else embedding_deadline - time.monotonic()
+                        wait_timeout = orchestrator.client._resolved_model_timeout(
+                            embedding_agent
                         )
-                        if remaining_timeout is not None and remaining_timeout <= 0:
-                            break
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent, wait_timeout=remaining_timeout: coordinator.complete_embeddings_batch(
-                                inputs,
-                                model=agent.model,
-                                attribution=attribution,
-                                metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
-                                zdr_only=zdr_only,
-                                agent_id=agent.id,
-                                wait_timeout=wait_timeout,
-                                owner_id=security.principal_id(self.headers),
-                            ))
+                            document = self._run(
+                                lambda agent=embedding_agent, wait_timeout=wait_timeout: coordinator.complete_embeddings_batch(
+                                    inputs,
+                                    model=agent.model,
+                                    attribution=attribution,
+                                    metadata={
+                                        "actor_scope": "inference",
+                                        "endpoint_alias": "embeddings",
+                                    },
+                                    zdr_only=zdr_only,
+                                    agent_id=agent.id,
+                                    wait_timeout=wait_timeout,
+                                    owner_id=security.principal_id(self.headers),
+                                )
+                            )
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/embeddings", exc
+                            )
                             continue
-                        if document.get("status") == "completed":
+                        if document.get("status") == "completed" and document.get("embeddings") is not None:
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
                             )
+                            orchestrator._record_success(embedding_agent.id)
                             break
                         last_embedding_error = RuntimeError(
                             f"embedding member ended with {document.get('status', 'unknown')}"
                         )
-                        orchestrator._group_router.observe_failure(embedding_agent.id)
+                        # Route a non-completed/embedding-less sync result through the
+                        # same failure recorder as a raised exception (above): a bare
+                        # ``observe_failure`` skips the circuit breaker and the
+                        # ``embedding_endpoint_failed`` analytics event, so a member
+                        # that keeps returning an incomplete document would never be
+                        # quarantined.
+                        orchestrator._record_embedding_failure(
+                            embedding_agent, "/v1/embeddings", last_embedding_error
+                        )
                         document = None
                     if document is None:
                         raise RequestError(
@@ -7473,8 +7630,9 @@ def build_server(
                         submit_metadata["endpoint_alias"] = endpoint_alias
                     self._ensure_decision_measurement("validated_endpoint")
                     embedding_agents = coordinator._cost_ordered_capability_candidates(
-                        orchestrator._capability_agents(
-                            "embedding", TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name
+                        _available_embedding_agents(
+                            orchestrator,
+                            TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
                         )
                     )
                     document = None
@@ -7493,13 +7651,32 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
-                            continue
-                        if document.get("status") == "completed":
-                            orchestrator._group_router.observe_success(
-                                embedding_agent.id,
-                                time.perf_counter() - attempt_started_at,
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/batch/embeddings", exc
                             )
+                            continue
+                        if document.get("status") in _TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES:
+                            # complete_embeddings_batch returned normally, but the
+                            # document itself is a terminal failure (no exception
+                            # was raised). Treat it exactly like a raised exception
+                            # for failover purposes: route it through the same
+                            # shared failure recorder used above so the endpoint's
+                            # circuit is not falsely cleared by observe_success
+                            # below, then try the next candidate instead of
+                            # breaking out with a failed document.
+                            last_embedding_error = RuntimeError(
+                                f"embedding batch member ended with {document.get('status')}"
+                            )
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/batch/embeddings", last_embedding_error
+                            )
+                            document = None
+                            continue
+                        orchestrator._group_router.observe_success(
+                            embedding_agent.id,
+                            time.perf_counter() - attempt_started_at,
+                        )
+                        orchestrator._record_success(embedding_agent.id)
                         break
                     if document is None:
                         raise RequestError(
@@ -7617,8 +7794,7 @@ def build_server(
                         _validate_completions_max_tokens(body)
                     if "max_completion_tokens" in body:
                         _validate_chat_max_completion_tokens(body)
-                    if "max_output_tokens" in body:
-                        _validate_responses_max_output_tokens(body)
+                    _validate_responses_max_output_tokens(body)
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
@@ -8091,6 +8267,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -8104,8 +8281,14 @@ def build_server(
         @staticmethod
         def _admin_purpose(path: str) -> str:
             """Select the least-privileged purpose for an admin GET route."""
+            segments = [part for part in path.split("/") if part]
+            if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                    and segments[4] == "worker_agents"
+                    and segments[6:] == ["timeout_policy", "history"]):
+                return "audit_replay"
             if (
                 path == "/admin/state"
+                or path == "/api/v1/request_outcome_exports"
                 or path == "/api/v1/workflow_runs"
                 or path.startswith("/api/v1/workflow_runs/")
                 or path.startswith("/api/v1/access_reports/")
@@ -8335,6 +8518,8 @@ def build_server(
             code: str,
             message: str,
             detail: dict[str, Any] | None = None,
+            *,
+            extra_headers: dict[str, str] | None = None,
         ) -> None:
             if decision_receipts and status >= 400:
                 measurement = self._decision_measurement
@@ -8343,10 +8528,18 @@ def build_server(
                     and self._decision_failure_reason == "unfinished"):
                     self._decision_failure_reason = "selection_failed"
             request_id = current_request_id() or uuid.uuid4().hex
+            error_detail = {**(detail or {}), "request_id": request_id}
             _LOGGER.warning(
                 "request_failed status=%s code=%s request_id=%s", status, code, request_id
             )
-            self._send(_error_payload(code, message, {**(detail or {}), "request_id": request_id}), status)
+            payload = _error_payload(code, message, error_detail)
+            if code in {TOOL_FALLBACK_STOPPED_CODE, PROVIDER_OUTCOME_UNKNOWN_CODE}:
+                # The SDK retries ordinary 409/5xx; explicit unsafe outcomes must not replay.
+                self._send(payload, status, extra_headers={"x-should-retry": "false"})
+            elif extra_headers:
+                self._send(payload, status, extra_headers=extra_headers)
+            else:
+                self._send(payload, status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
@@ -8465,6 +8658,7 @@ def build_server(
 
         def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
             self._last_status = status
+            content_type = _safe_binary_content_type(content_type)
 
             def _write() -> None:
                 self.send_response(status)
@@ -8819,12 +9013,30 @@ def build_server(
             completion_id = _new_chat_completion_id()
             created = int(time.time())
             stream_usage: dict[str, Any] | None = None
+            stream_shared_context_budget: dict[str, Any] | None = None
+            stream_output_budget: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
                 nonlocal stream_usage
                 stream_usage = usage
 
-            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+            def capture_shared_context_budget(
+                budget: dict[str, Any] | None,
+            ) -> None:
+                nonlocal stream_shared_context_budget
+                stream_shared_context_budget = budget
+
+            def capture_output_budget(output_budget: dict[str, Any] | None) -> None:
+                nonlocal stream_output_budget
+                stream_output_budget = output_budget
+
+            def frame(
+                delta: dict[str, Any],
+                finish: str | None = None,
+                *,
+                shared_context_budget: dict[str, Any] | None = None,
+                orchestration: dict[str, Any] | None = None,
+            ) -> str:
                 payload = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",
@@ -8836,6 +9048,15 @@ def build_server(
                 }
                 if include_usage:
                     payload["usage"] = None
+                if shared_context_budget is not None:
+                    # Same shape/field name as the non-streaming response's
+                    # top-level `shared_context_budget` (see
+                    # chat_completion_response / _take_shared_context_budget):
+                    # present only when this run's served agent made an
+                    # authoritative shared-context output-budget decision.
+                    payload["shared_context_budget"] = shared_context_budget
+                if orchestration:
+                    payload["orchestration"] = orchestration
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             def usage_frame(usage: dict[str, Any]) -> str:
@@ -8864,14 +9085,70 @@ def build_server(
                         "workflow_run_id": run_id,
                         "model_name": model_name,
                     }
+                    # ADR 0130 / #1157: only pass callbacks a stream_route that
+                    # actually declares them -- a duck-typed stand-in (e.g. a
+                    # test double that only implements the plain positional/
+                    # keyword shape) must keep working exactly as before.
+                    try:
+                        stream_route_params = inspect.signature(
+                            orchestrator.stream_route
+                        ).parameters
+                    except (TypeError, ValueError):
+                        stream_route_params = {}
+                    supports_shared_context_budget_callback = (
+                        "shared_context_budget_callback" in stream_route_params
+                        or any(
+                            param.kind is inspect.Parameter.VAR_KEYWORD
+                            for param in stream_route_params.values()
+                        )
+                    )
+                    if "output_budget_callback" in stream_route_params:
+                        stream_kwargs["output_budget_callback"] = capture_output_budget
                     if include_usage:
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
+                    if supports_shared_context_budget_callback:
+                        stream_kwargs["shared_context_budget_callback"] = (
+                            capture_shared_context_budget
+                        )
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
-                    if not self._write_sse(frame({}, finish="stop")):
+                    # The served request's evidence is captured above, inside
+                    # stream_route, before its post-stream real-time judge
+                    # call re-enters ModelClient and can overwrite the
+                    # thread-local accessor (issue #1157 follow-up ordering
+                    # hazard). Only fall back to the post-hoc thread-local
+                    # read for a minimal test double whose stream_route does
+                    # not support the callback.
+                    terminal_shared_context_budget = (
+                        stream_shared_context_budget
+                        if supports_shared_context_budget_callback
+                        else _take_shared_context_budget(orchestrator)
+                    )
+                    # ADR 0130: the clamp decision is only known once
+                    # orchestrator.stream_route's final take_output_budget()
+                    # runs above, after _begin_sse() has already flushed
+                    # headers -- so it rides the final content SSE chunk's
+                    # orchestration object, exactly like chat_completion_chunks.
+                    final_orchestration = (
+                        {
+                            key: value
+                            for key, value in stream_output_budget.items()
+                            if value is not None
+                        }
+                        if isinstance(stream_output_budget, dict)
+                        else None
+                    )
+                    if not self._write_sse(
+                        frame(
+                            {},
+                            finish="stop",
+                            shared_context_budget=terminal_shared_context_budget,
+                            orchestration=final_orchestration,
+                        )
+                    ):
                         return
                     if (
                         include_usage
@@ -8942,8 +9219,10 @@ def serve(
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
     release_authority: Mapping[str, Any] | None = None,
+    *,
+    decision_receipts: bool = False,
 ) -> None:
-    """Serve the API with an optional persisted release-authority snapshot."""
+    """Serve the API with optional release authority and opt-in decision receipts."""
     server = build_server(
         orchestrator,
         host=host,
@@ -8952,6 +9231,7 @@ def serve(
         clearfolio_url=clearfolio_url,
         coordinator=coordinator,
         release_authority=release_authority,
+        decision_receipts=decision_receipts,
     )
     print(f"listening on http://{host}:{port}")
     try:

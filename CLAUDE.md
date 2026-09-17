@@ -20,6 +20,11 @@ LaRT count-encoding work is owned by the [upstream patch and handoff](docs/docto
 Reuse its commands and distinguish scalar contract checks, real dataframe
 loading and unverified estimator integration; do not reapply a pseudocount.
 
+Decision receipt startup remains explicit opt-in; reuse builder validation and
+do not infer complete KPI coverage from the bounded export. See the
+[entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12)
+for the exact-head ownership audit and warning-sensitive test results.
+
 For title-only research citations, verify and register the persistent identifier
 in the source document and paper inventory. Passing DOI discovery does not prove
 full bibliography coverage; see the KPI runbook's citation reconciliation.
@@ -164,6 +169,13 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   Planning filenames use four digits and must be unique across current `main`
   and every open PR. A same-number collision is a rename, not a redesign; the
   executable uniqueness contract lands in PR #848.
+
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
 
 ## Tool-call handoffs
 
