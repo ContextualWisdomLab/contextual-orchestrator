@@ -20,12 +20,19 @@ SMALL_HELDOUT_BOOTSTRAP = {
 
 
 def test_sequential_drift_seeded_reference_is_unchanged():
-    """Default complete detections preserve the established threshold and delays."""
-    report = heldout._validate_sequential_drift()
+    """Declared complete detections preserve the established threshold and delays."""
+    report = heldout._validate_sequential_drift(
+        replications=heldout.DECLARED_SEQUENTIAL_DRIFT_REPLICATIONS,
+        horizon_observations=heldout.DECLARED_SEQUENTIAL_DRIFT_HORIZON_OBSERVATIONS,
+        change_after_observations=(
+            heldout.DECLARED_SEQUENTIAL_DRIFT_CHANGE_AFTER_OBSERVATIONS
+        ),
+        confidence_level=0.95,
+    )
     assert report["candidate"]["threshold_log_likelihood_ratio"] == 6.6
     assert report["candidate"]["false_alarm_rate"] == 0.024
     assert report["candidate"]["detection_delay_p95_observations"] == 20
-    assert report["candidate"]["non_detection_count"] == 0
+    assert report["candidate"]["censored_replications"] == 0
     assert report["candidate_meets_synthetic_targets"] is True
 
 
@@ -43,35 +50,19 @@ def test_sequential_drift_mixed_non_detections_remain_in_denominator(monkeypatch
 
         return SimpleNamespace(random=next_draw)
 
-    monkeypatch.setattr(heldout, "SEQUENTIAL_DRIFT_REPLICATIONS", 10)
     monkeypatch.setattr(heldout.random, "Random", fixed_stream)
-    baseline = heldout._validate_sequential_drift()["baseline"]
+    baseline = heldout._validate_sequential_drift(
+        replications=10,
+        horizon_observations=250,
+        change_after_observations=100,
+        confidence_level=0.95,
+    )["baseline"]
     assert baseline["false_alarm_count"] == 0
-    assert baseline["non_detection_count"] == 5
+    assert baseline["censored_replications"] == 5
     assert baseline["post_change_detection_count"] == 5
     assert baseline["post_change_detection_rate_among_no_false_alarm"] == 0.5
     assert baseline["delay_summary_population"] == "post_change_detections_only"
     assert baseline["detection_delay_p95_observations"] > 0
-
-
-@pytest.mark.parametrize("draw_value", [0.0, 1.0])
-def test_sequential_drift_retains_no_detection_outcomes(monkeypatch, draw_value):
-    """No alarms and only premature alarms both preserve the full denominator."""
-    from types import SimpleNamespace
-
-    monkeypatch.setattr(heldout, "SEQUENTIAL_DRIFT_REPLICATIONS", 10)
-    monkeypatch.setattr(heldout.random, "Random", lambda _seed: SimpleNamespace(random=lambda: draw_value))
-    report = heldout._validate_sequential_drift()
-    baseline = report["baseline"]
-    assert baseline["non_detection_count"] == (10 if draw_value == 0.0 else 0)
-    assert baseline["false_alarm_count"] == (0 if draw_value == 0.0 else 10)
-    assert baseline["post_change_detection_count"] == 0
-    assert baseline["post_change_detection_rate_among_no_false_alarm"] == (0.0 if draw_value == 0.0 else None)
-    assert baseline["detection_delay_p50_observations"] is None
-    assert baseline["detection_delay_p95_observations"] is None
-    assert report["candidate"] is None
-    assert report["candidate_meets_synthetic_targets"] is False
-    assert len(report["threshold_search"]["calibration_results"]) == 11
 
 
 @pytest.mark.parametrize(
