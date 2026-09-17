@@ -8,9 +8,11 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import inspect
 import ipaddress
 import json
 import logging
+import math
 import mmap
 import secrets
 import socket
@@ -32,15 +34,22 @@ from .cost_router import (
     CostRoutingCoordinator,
     InvalidBatchModelError,
 )
-from .batch_routing import BatchRequest
+from .batch_routing import BatchDownloadError, BatchRequest, RoutingHints
+from .debug_logging import (
+    redact_credential_shaped_keys,
+    response_metadata_for_log,
+    summarize_payload_for_log,
+    summarize_request_for_log,
+)
 from .orchestrator import (
     BudgetExceededError,
+    EndpointUnavailableError,
     MAX_LOCAL_CONCURRENCY,
     ProviderRequestTooLargeError,
     ProviderResponseError,
     ModelAgent,
     TaskOrchestrator,
-    estimate_tokens,
+    normalize_endpoint_selector,
     _new_chat_completion_id,
     _responses_to_chat_payload,
     chat_completion_chunks,
@@ -50,7 +59,11 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
-from .provider_errors import ProviderUpstreamError
+from .provider_errors import (
+    PROVIDER_OUTCOME_UNKNOWN_CODE,
+    PROVIDER_RATE_LIMITED_CODE,
+    ProviderUpstreamError,
+)
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -58,10 +71,14 @@ from .telemetry import (
     attach_trace_context,
     configure_telemetry,
     current_session_id,
+    current_request_id,
+    request_identity,
     detach_trace_context,
     reset_session_id,
     session_id_from_headers,
+    session_id_from_metadata,
     session_id_from_request,
+    session_id_hash,
     set_session_id,
 )
 from .video_jobs import (
@@ -158,6 +175,30 @@ class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
     """
 
     request_queue_size = socket.SOMAXCONN
+    embedding_batch_backend: Any = None
+    embedding_backend_closer: Any = None
+
+    def _close_embedding_backend(self) -> None:
+        if callable(self.embedding_backend_closer):
+            self.embedding_backend_closer()
+            return
+        close = getattr(self.embedding_batch_backend, "close", None)
+        if callable(close):
+            close()
+
+    def shutdown(self) -> None:
+        """Stop accepting requests and release embedding worker threads."""
+        try:
+            super().shutdown()
+        finally:
+            self._close_embedding_backend()
+
+    def server_close(self) -> None:
+        """Close the listener and workers on normal or abnormal serve exit."""
+        try:
+            self._close_embedding_backend()
+        finally:
+            super().server_close()
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -183,6 +224,7 @@ PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "function
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing", "zdr_only",
+    "session_id",
     # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
     "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
@@ -248,7 +290,8 @@ ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orches
 ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
-    "endpoint_equivalence", "stream_usage_supported",
+    "endpoint_equivalence", "stream_usage_supported", "max_output_tokens",
+    "context_window", "model_timeout_seconds",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -264,6 +307,8 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "group_name",
     "endpoint_equivalence",
     "stream_usage_supported",
+    "max_output_tokens",
+    "context_window",
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
@@ -339,6 +384,7 @@ class SecurityConfig:
     auth_token: str = ""
     admin_token: str = ""
     inference_token: str = ""
+    trace_token: str = ""
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
     max_body_bytes: int = DEFAULT_MAX_JSON_BODY_BYTES
@@ -436,7 +482,13 @@ class SecurityConfig:
     ) -> str:
         """Validate a bearer token or an opaque admin session; return the authorized purpose."""
         effective_purpose = self.resolve_purpose(scope, purpose)
-        if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
+        if not (
+            self.auth_token
+            or self.admin_token
+            or self.inference_token
+            or self.trace_token
+            or self.bearer_verifier
+        ):
             raise RequestError(401, "unauthorized", "bearer token is required")
         if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
             # An active opaque session authorizes the admin role; the route-owned
@@ -458,9 +510,21 @@ class SecurityConfig:
             elif scope == "inference":
                 expected = self.inference_token or self.auth_token
             elif scope == "trace":
-                # Static single-token mode is a local escape hatch. Production
-                # deployments should use bearer_verifier for a separate purpose claim.
-                expected = self.auth_token
+                if self.trace_token:
+                    # A configured trace_token is the only credential that
+                    # authorizes the trace purpose once one is provisioned.
+                    expected = self.trace_token
+                elif not (self.admin_token or self.inference_token):
+                    # Static single-token mode is a local escape hatch: with no
+                    # split admin/inference credentials and no trace_token,
+                    # auth_token remains the only configured bearer, so it
+                    # authorizes trace as documented in ADR 0026.
+                    expected = self.auth_token
+                else:
+                    # Split admin/inference mode without a distinct trace_token
+                    # has no verified trace claim, so it fails closed rather
+                    # than letting admin_token or inference_token stand in.
+                    expected = ""
             else:
                 expected = ""
             valid = bool(expected) and secrets.compare_digest(token, expected)
@@ -684,6 +748,21 @@ def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
         exc.error_code, "Review the request or contact the operator."
     )
     return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
+
+
+def _provider_upstream_extra_headers(exc: ProviderUpstreamError) -> dict[str, str] | None:
+    """Emit ``Retry-After`` for the honest rate-limit-storm 429, else nothing.
+
+    Only ``PROVIDER_RATE_LIMITED_CODE`` (every candidate quota-limited past
+    the request's wait budget) carries this header; the ordinary single-
+    candidate ``rate_limit_exceeded`` surface is unaffected.
+    """
+    if exc.error_code != PROVIDER_RATE_LIMITED_CODE:
+        return None
+    retry_after = exc.extra_detail.get("retry_after_seconds")
+    if not isinstance(retry_after, (int, float)) or isinstance(retry_after, bool):
+        return None
+    return {"retry-after": str(max(math.ceil(retry_after), 0))}
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -1550,7 +1629,7 @@ def _validate_chat_model(body: dict[str, Any]) -> str:
     return model
 
 def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
-    """Legacy Completions ``max_tokens`` — positive integer capped at 1_048_576."""
+    """Validate legacy Completions ``max_tokens`` as a positive integer."""
     if "max_tokens" not in body:
         return None
     max_tokens = body.get("max_tokens")
@@ -1563,17 +1642,11 @@ def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
         return None
     if max_tokens < 1:
         raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
-    if max_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_tokens",
-            "max_tokens must be at most 1048576",
-        )
     body["max_tokens"] = max_tokens
     return max_tokens
 
 def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
-    """Chat Completions ``max_completion_tokens`` — positive integer capped at 1_048_576.
+    """Validate Chat Completions ``max_completion_tokens`` as a positive integer.
 
     OpenAI prefers this over legacy ``max_tokens`` for chat. When both are set,
     ``max_completion_tokens`` wins so clients get a single honest budget.
@@ -1594,12 +1667,6 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
             "invalid_max_completion_tokens",
             "max_completion_tokens must be a positive integer",
         )
-    if max_completion_tokens > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_completion_tokens",
-            "max_completion_tokens must be at most 1048576",
-        )
     body["max_completion_tokens"] = max_completion_tokens
     return max_completion_tokens
 
@@ -1610,32 +1677,28 @@ def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
     Official Responses clients send ``max_output_tokens`` rather than chat-era
     ``max_tokens``. Accept and type-check so the field is not opaque
     ``unknown_fields``; value is left on the body for provider passthrough.
-    Cap matches ``max_tokens`` (1_048_576). Digit strings and whole-number
-    floats (JS JSON) coerce.
+    Normalize aliases with precedence: native, completion, then legacy tokens.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
-    if "max_output_tokens" not in body:
-        return None
-    value = _coerce_optional_int(
+    output_token_limit = _coerce_optional_int(
         body.get("max_output_tokens"),
         error_code="invalid_max_output_tokens",
         message="max_output_tokens must be a positive integer",
     )
-    if value is None:
+    if output_token_limit is None:
+        output_token_limit = _validate_chat_max_completion_tokens(body)
+    if output_token_limit is None:
+        output_token_limit = _validate_completions_max_tokens(body)
+    if output_token_limit is None:
         return None
-    body["max_output_tokens"] = value
-    if value < 1:
+    body["max_output_tokens"] = output_token_limit
+    if output_token_limit < 1:
         raise RequestError(
             400,
             "invalid_max_output_tokens",
             "max_output_tokens must be a positive integer",
         )
-    if value > 1_048_576:
-        raise RequestError(
-            400,
-            "invalid_max_output_tokens",
-            "max_output_tokens must be at most 1048576",
-        )
-    return value
+    return output_token_limit
 
 
 
@@ -3136,7 +3199,9 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     return cleaned or None
 
 
-def _validate_routing(routing: Any) -> dict[str, Any] | None:
+def _validate_routing(
+    routing: Any, *, allow_endpoint: bool = False
+) -> dict[str, Any] | None:
     """OpenAI-adjacent routing hints for sync vs batch channel selection.
 
     Fail closed on shape so callers cannot smuggle non-boolean latency flags or
@@ -3147,7 +3212,10 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(routing, dict):
         raise RequestError(400, "invalid_routing", "routing must be an object")
-    unknown = sorted(set(routing) - {"channel", "latency_tolerant", "priority"})
+    allowed = {"channel", "latency_tolerant", "priority"}
+    if allow_endpoint:
+        allowed.add("endpoint")
+    unknown = sorted(set(routing) - allowed)
     if unknown:
         raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
     channel = routing.get("channel")
@@ -3191,6 +3259,30 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         priority = routing.get("priority")
         if isinstance(priority, str) and priority.strip():
             cleaned["priority"] = priority.strip().lower()
+    if "endpoint" in routing:
+        endpoint = routing.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            )
+        try:
+            normalize_endpoint_selector(endpoint.strip())
+        except EndpointUnavailableError:
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            ) from None
+        cleaned["endpoint"] = endpoint.strip()
+    if "endpoint" in cleaned and (
+        cleaned.get("channel") == "batch"
+        or cleaned.get("latency_tolerant") is True
+    ):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.endpoint cannot be combined with deferred batch routing",
+        )
+    if "endpoint" in cleaned:
+        cleaned["channel"] = "sync"
     return cleaned if cleaned else {}
 
 
@@ -3755,13 +3847,18 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
         stripped = effort.strip().lower()
         if not stripped:
             return
+        if stripped == "auto":
+            # ``auto`` is the orchestrator-owned default used by consumers such
+            # as LineageWeave; it is not an OpenAI provider wire value.
+            body.pop("reasoning_effort", None)
+            return
         if stripped in _OPENAI_REASONING_EFFORT_LEVELS:
             body["reasoning_effort"] = stripped
             return
     raise RequestError(
         400,
         "invalid_reasoning_effort",
-        "reasoning_effort must be one of none, minimal, low, medium, high "
+        "reasoning_effort must be one of auto, none, minimal, low, medium, high "
         "on /v1/chat/completions",
     )
 
@@ -4904,6 +5001,16 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     return model
 
 
+# Terminal-failure batch document statuses that must never be treated as a
+# healthy completion for endpoint-health purposes. Mirrors the vocabulary
+# ``CostRoutingCoordinator.embeddings_batch_document`` (cost_router.py) uses
+# to stop polling a batch job: "failed"/"cancelled"/"rejected" are terminal
+# outcomes with no embeddings and no further transitions, distinct from
+# "completed" (success) and from in-flight statuses such as "queued",
+# "validating", or "running" (still eligible to become "completed" later).
+_TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES = frozenset({"failed", "cancelled", "rejected"})
+
+
 def _available_embedding_agents(orchestrator: Any, model_name: str) -> list[Any]:
     """Map temporary embedding quarantine to the public availability contract."""
     try:
@@ -5062,10 +5169,47 @@ def _strip_internal_fields(value: Any) -> Any:
 
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        # The DEBUG response-body summary logs only an allowlisted metadata
+        # shape (has_error/model/choice_count/usage) via
+        # response_metadata_for_log -- never the payload itself. redact_value
+        # only pattern-matches a secret's in-string *value* shape, and even
+        # the additional redact_credential_shaped_keys pass only masks
+        # *credential*-shaped JSON keys; neither ever masks ordinary response
+        # text (choices[].message.content, tool-call arguments, an
+        # error.message that can reflect caller-supplied input), which is not
+        # a credential but can still carry PII or business-sensitive content
+        # (CWE-532). redact_credential_shaped_keys is applied on top of the
+        # allowlist anyway, defense-in-depth, in case a future allowlist
+        # field ever collides with a credential-shaped key name.
+        log_safe_payload = redact_credential_shaped_keys(response_metadata_for_log(safe_payload))
+        _LOGGER.debug(summarize_payload_for_log("response", log_safe_payload))
     public_payload = _strip_internal_fields(safe_payload)
     if include_trace:
         return public_payload
     return _strip_trace(public_payload)
+
+
+def _chat_usage_measurement_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add gateway usage provenance without rewriting provider chat content."""
+    normalized = dict(payload)
+    usage = normalized.get("usage")
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    completion_tokens = (
+        usage.get("completion_tokens") if isinstance(usage, dict) else None
+    )
+    measured = (
+        type(prompt_tokens) is int
+        and prompt_tokens >= 0
+        and type(completion_tokens) is int
+        and completion_tokens >= 0
+    )
+    if not measured:
+        normalized["usage"] = None
+    normalized["usage_measurement_status"] = (
+        "measured" if measured else "unavailable"
+    )
+    return normalized
 
 
 def _chat_response_sse_chunks(
@@ -5073,7 +5217,6 @@ def _chat_response_sse_chunks(
     *,
     model: str,
     include_usage: bool,
-    prompt_text: str,
 ) -> list[dict[str, Any]]:
     """Frame a completed provider-shaped chat response as OpenAI SSE chunks."""
     completion_id = payload.get("id")
@@ -5155,21 +5298,35 @@ def _chat_response_sse_chunks(
         for normal_chunk in chunks:
             normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
-        if isinstance(reported_usage, dict):
+        prompt_tokens = (
+            reported_usage.get("prompt_tokens", reported_usage.get("input_tokens"))
+            if isinstance(reported_usage, dict)
+            else None
+        )
+        completion_tokens = (
+            reported_usage.get("completion_tokens", reported_usage.get("output_tokens"))
+            if isinstance(reported_usage, dict)
+            else None
+        )
+        if (
+            type(prompt_tokens) is int
+            and prompt_tokens >= 0
+            and type(completion_tokens) is int
+            and completion_tokens >= 0
+        ):
             usage = {**reported_usage, "usage_source": "reported"}
+            measurement_status = "measured"
         else:
-            completion_text = content if isinstance(content, str) else ""
-            if tool_calls:
-                completion_text += json.dumps(tool_calls, ensure_ascii=False)
-            prompt_tokens = estimate_tokens(prompt_text)
-            completion_tokens = estimate_tokens(completion_text)
-            usage = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                "usage_source": "estimated",
+            usage = None
+            measurement_status = "unavailable"
+        chunks.append(
+            {
+                **base,
+                "choices": [],
+                "usage": usage,
+                "usage_measurement_status": measurement_status,
             }
-        chunks.append({**base, "choices": [], "usage": usage})
+        )
     return chunks
 
 
@@ -5312,10 +5469,21 @@ def _orchestrated_response(
     *,
     reasoning_id: str | None = None,
     message_id: str | None = None,
+    reasoning_texts: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the OpenAI Responses shape for an orchestrated plain-text result."""
     reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
     message_id = message_id or f"msg_{uuid.uuid4().hex}"
+    reasoning_item: dict[str, Any] = {
+        "id": reasoning_id,
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [{"type": "summary_text", "text": text} for text in summaries],
+    }
+    if reasoning_texts:
+        reasoning_item["content"] = [
+            {"type": "reasoning_text", "text": text} for text in reasoning_texts
+        ]
     response = {
         "id": response_id,
         "object": "response",
@@ -5325,12 +5493,7 @@ def _orchestrated_response(
         "incomplete_details": None,
         "model": model,
         "output": [
-            {
-                "id": reasoning_id,
-                "type": "reasoning",
-                "status": "completed",
-                "summary": [{"type": "summary_text", "text": text} for text in summaries],
-            },
+            reasoning_item,
             {
                 "id": message_id,
                 "type": "message",
@@ -5443,18 +5606,89 @@ def build_server(
         # semantics: assume the connection closes until a request says keep-alive.
         close_connection = True
 
+        def send_response(self, code: int, message: str | None = None) -> None:
+            """Capture the response status for the per-request log, then delegate to stdlib.
+
+            `_last_status` (read by `_log_request_summary`) used to be set
+            only by this class's own `_send`/`_send_text`/`_send_bytes`/
+            `_send_sse` writers. A response the framework generates itself --
+            e.g. `BaseHTTPRequestHandler`'s built-in 501 for an unsupported
+            HTTP method, or a `send_error` call from `parse_request()` on a
+            malformed request line -- calls `send_response` directly and
+            bypasses all of those writers, so the INFO summary logged
+            `status=-` even though a real status was already sent to the
+            client. `send_response` is stdlib's own single choke point every
+            response path (including its own `send_error`) already goes
+            through, so overriding it here captures the status for every
+            current and future response path uniformly, not just this
+            module's own writers.
+            """
+            self._last_status = code
+            super().send_response(code, message)
+
+        def parse_request(self) -> bool:
+            """Timestamp the moment real request data starts being handled.
+
+            ``BaseHTTPRequestHandler.handle_one_request`` blocks on
+            ``self.rfile.readline()`` *before* calling this method -- on a
+            keep-alive connection that read waits on the client's idle time
+            between requests, not on any processing this server does.
+            Recording ``_request_started`` here, at the top of
+            ``parse_request`` (immediately after that blocking read has
+            already returned real request bytes), keeps
+            ``_log_request_summary``'s ``latency_ms`` scoped to actual
+            request handling instead of also counting the client's think
+            time.
+            """
+            self._request_started = time.monotonic()
+            return super().parse_request()
+
         def handle_one_request(self) -> None:
             """Reset per-request state before parsing each persistent request.
 
             Body-consumption tracking must restart per request so an unread
             declared body still closes the connection, and correlation/trace
             state must never leak across requests on a reused connection.
+
+            ``command``/``path`` are reset here too: stdlib's own
+            ``handle_one_request`` only assigns them when it actually parses a
+            request line, so on a keep-alive connection's *last* call --
+            triggered by the client closing the connection, where nothing is
+            read at all -- they would otherwise still hold the *previous*
+            request's values. Resetting them first lets
+            ``_log_request_summary``'s existing "nothing to report" guard
+            correctly recognize that no new request happened this call,
+            instead of logging the prior request a second time with a
+            statusless "phantom" entry.
+
+            ``_request_started`` is reset to ``None`` here too, ahead of the
+            blocking read: it is only ever set for real inside
+            ``parse_request`` above (once request data has actually
+            arrived), and a call that reads nothing at all (a closed
+            keep-alive connection) never reaches that point -- exactly the
+            case ``_log_request_summary``'s own guard already skips.
+
+            ``_response_headers_sent`` is reset to ``False`` here too: it is
+            the per-request marker ``_write_response`` reads to decide
+            whether a caught disconnect happened before or after the status
+            line/headers were actually flushed to the client (see
+            ``_write_response``'s docstring). Resetting it per request keeps
+            a prior request's successful delivery from leaking into this
+            one's disconnect classification on a reused keep-alive
+            connection.
             """
             self._request_body_consumed = False
-            try:
-                super().handle_one_request()
-            finally:
-                self._reset_session()
+            self._last_status = None
+            self._response_headers_sent = False
+            self.command = None
+            self.path = None
+            self._request_started = None
+            with request_identity():
+                try:
+                    super().handle_one_request()
+                finally:
+                    self._log_request_summary(self._request_started)
+                    self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
             # connection for the stdlib to reparse as the next request.
@@ -5467,6 +5701,61 @@ def build_server(
                 )
             ):
                 self.close_connection = True
+
+        def _log_request_summary(self, started: float | None) -> None:
+            """Emit one body-free INFO summary line per completed request.
+
+            Carries method, path, status, latency, and the bounded ADR 0122
+            correlation hash only -- never headers, a query string beyond the
+            raw path, or a request/response body. A connection that never
+            delivered any request bytes at all (the client simply closed a
+            reused keep-alive connection) has no method, no path, AND no
+            status, and is skipped -- there is nothing to report.
+
+            A request that *did* deliver bytes but whose request line
+            ``parse_request`` rejected as malformed (or that stdlib's
+            ``handle_one_request`` rejected outright as too long, before
+            ever calling our ``parse_request`` override) still gets a real
+            status sent to the client -- 400 or 414 -- via ``send_error``,
+            which flows through the ``send_response`` override above into
+            ``_last_status``, even though ``command``/``path`` stay unset
+            (stdlib's own ``parse_request`` explicitly resets ``self.command``
+            to ``None`` "in case of error on the first line" and never
+            reaches the later assignment that would set ``path``). Skipping
+            on method/path alone, as this used to, silently dropped that
+            entry even though a real response was sent. ``_last_status`` is
+            reset to ``None`` at the top of every ``handle_one_request`` call
+            and only ever (re)populated by ``send_response`` during this
+            call's own processing, so treating "some status was recorded"
+            as an equally valid reason to log -- not just "some
+            method/path was recorded" -- captures every request that
+            actually produced a response while still skipping a truly
+            byte-free keep-alive close.
+
+            ``started`` being ``None`` still means ``parse_request`` was
+            never entered (true of both the byte-free close above and the
+            too-long-request-line case, which stdlib rejects before ever
+            calling it); the ``or time.monotonic()`` fallback below keeps
+            that from ever raising on a future stdlib change.
+            """
+            if not _LOGGER.isEnabledFor(logging.INFO):
+                return
+            method = getattr(self, "command", None)
+            path = getattr(self, "path", None)
+            status = getattr(self, "_last_status", None)
+            if not method and not path and status is None:
+                return
+            _LOGGER.info(
+                "%s request_id=%s",
+                summarize_request_for_log(
+                    method=method or "-",
+                    path=path or "-",
+                    status=status,
+                    latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
+                    session_id_hash=session_id_hash(),
+                ),
+                current_request_id() or "-",
+            )
 
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
@@ -5579,7 +5868,11 @@ def build_server(
                     self._authorize("inference")
                     batch_id = path[len("/v1/batch/embeddings/"):]
                     try:
-                        self._send(coordinator.embeddings_batch_document(batch_id))
+                        self._send(
+                            coordinator.embeddings_batch_document(
+                                batch_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
@@ -6011,6 +6304,27 @@ def build_server(
                     return
                 if path.startswith("/api/v1/agent_pools/"):
                     segments = [part for part in path.split("/") if part]
+                    if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6:] == ["timeout_policy", "history"]):
+                        page_size = self._parse_positive_int(
+                            (query.get("page_size") or [None])[0], "page_size", 20, 100,
+                        )
+                        before_revision = self._parse_optional_int(query, "before_revision")
+                        try:
+                            self._send(orchestrator.list_model_timeout_history(
+                                segments[3], segments[5], page_size=page_size,
+                                before_revision=before_revision,
+                            ))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
+                    if (len(segments) == 7 and segments[:3] == ["api", "v1", "agent_pools"]
+                            and segments[4] == "worker_agents" and segments[6] == "timeout_policy"):
+                        try:
+                            self._send(orchestrator.get_model_timeout_policy(segments[3], segments[5]))
+                        except KeyError:
+                            self._send_error(404, "agent_not_found", "Model configuration was not found.")
+                        return
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
@@ -6057,6 +6371,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -6073,7 +6388,12 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent patch path missing worker agent")
                     body = self._read_json()
                     _reject_unknown_keys(body, ALLOWED_AGENT_PATCH_KEYS)
-                    updated = orchestrator.patch_agent(segments[3], segments[-1], body)
+                    patch_kwargs: dict[str, Any] = {}
+                    if "model_timeout_seconds" in body:
+                        patch_kwargs["actor_id"] = security.principal_id(self.headers)
+                    updated = orchestrator.patch_agent(
+                        segments[3], segments[-1], body, **patch_kwargs
+                    )
                     self._send(updated, 200)
                     return
                 if path.startswith("/api/v1/model_groups/"):
@@ -6101,6 +6421,7 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
@@ -6202,6 +6523,7 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             """Dispatch authenticated completion, agent, and simulation writes."""
             request_policy = None
+            endpoint_policy = None
             try:
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/admin/session":
@@ -6341,11 +6663,40 @@ def build_server(
                 zdr_only = _validate_zdr_only(body)
                 request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
+                if path in {"/v1/chat/completions", "/v1/responses"}:
+                    endpoint_routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
+                    endpoint_policy = orchestrator.routing_endpoint_scope(
+                        endpoint_routing.get("endpoint") if endpoint_routing else None,
+                        body.get("model"),
+                        model_was_provided="model" in body,
+                    )
+                    try:
+                        endpoint_policy.__enter__()
+                    except EndpointUnavailableError as exc:
+                        endpoint_policy = None
+                        raise RequestError(
+                            400,
+                            "endpoint_unavailable",
+                            "routing.endpoint is unavailable",
+                        ) from exc
                 metadata_values = [
                     value
                     for key in ("metadata", "client_metadata")
                     if isinstance((value := body.get(key)), dict)
                 ]
+                if "session_id" in body:
+                    normalized_session_id = session_id_from_metadata(
+                        {"session_id": body["session_id"]}
+                    )
+                    if normalized_session_id is None:
+                        raise RequestError(
+                            400,
+                            "invalid_session_id",
+                            "session_id must be a non-empty string of at most 128 characters",
+                        )
+                    metadata_values.append({"session_id": normalized_session_id})
                 request_session_id = session_id_from_request(self.headers, *metadata_values)
                 if request_session_id != current_session_id():
                     self._bind_session(request_session_id)
@@ -6632,8 +6983,13 @@ def build_server(
                         _validate_chat_response_format(body)
                     if "tools" in body:
                         _validate_chat_tools(body)
+                    normalized_tool_choice = None
                     if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                        normalized_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_tool_choice
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
@@ -6682,11 +7038,38 @@ def build_server(
                     presence_penalty = sampling["presence_penalty"]
                     frequency_penalty = sampling["frequency_penalty"]
                     include_usage = sampling["include_usage"]
+                    routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
+                    if tools_list:
+                        deferred_tool_request = routing and (
+                            coordinator.policy.decide(
+                                RoutingHints.from_mapping(routing)
+                            ).channel
+                            == "batch"
+                        )
+                        if deferred_tool_request:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "tool calls require synchronous routing",
+                            )
+                        routing = {**(routing or {}), "channel": "sync"}
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if body.get("response_format") or tools_list:
+                    # Virtual selectors stay on Fugu route / TRINITY-Conductor
+                    # conduct. Tools are a worker payload, not a reason to leave
+                    # the control plane. Concrete model ids may still passthrough
+                    # for debug pins.
+                    virtual_selector = model_name in {
+                        orchestrator.GATEWAY_DEFAULT_MODEL,
+                        orchestrator.AUTO_MODEL,
+                        orchestrator.FREE_MODEL,
+                    }
+                    named_tool_passthrough = bool(tools_list) and not virtual_selector
+                    if body.get("response_format") or named_tool_passthrough:
                         trace_audited = False
-                        tool_loop = bool(tools_list)
+                        tool_loop = named_tool_passthrough
                         # Single-agent tool passthrough (tool_loop) always makes one
                         # non-streaming upstream call (orchestrator.proxy_completion
                         # forces upstream["stream"] = False) and returns the provider's
@@ -6696,16 +7079,12 @@ def build_server(
                         # "usage" key, so a provider may still omit it.
                         # _chat_response_sse_chunks (below) already frames that payload
                         # into a correctly-shaped terminal SSE chunk alongside tool_call
-                        # deltas, honestly labeling usage "reported" when the provider
-                        # sent it and "estimated" (never fabricated as "reported")
-                        # otherwise — the same fallback already exercised for the
-                        # non-tools streaming path — so there is nothing to fail closed
-                        # on here.
+                        # deltas. Provider usage is measured when valid and explicitly
+                        # unavailable otherwise; chat framing/tools are not reconstructed.
                         # response_format-only structured passthrough (conduct mode)
                         # is different: its usage comes from a multi-step workflow's
                         # cost ledger, which may be unmeasured, so it keeps failing
-                        # closed rather than let _chat_response_sse_chunks synthesize
-                        # an estimated figure for a workflow-level answer.
+                        # closed when workflow-level usage is unavailable.
                         if stream and include_usage and not tool_loop:
                             raise RequestError(
                                 400,
@@ -6757,11 +7136,10 @@ def build_server(
                             )
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
-                            structured_routing = _validate_routing(body.get("routing"))
-                            if structured_routing and (
-                                structured_routing.get("channel") == "batch"
-                                or structured_routing.get("latency_tolerant") is True
-                            ):
+                            structured_routing = routing
+                            if structured_routing and coordinator.policy.decide(
+                                RoutingHints.from_mapping(structured_routing)
+                            ).channel == "batch":
                                 raise RequestError(
                                     400,
                                     "invalid_routing",
@@ -6781,6 +7159,9 @@ def build_server(
                                 top_p=top_p,
                                 presence_penalty=presence_penalty,
                                 frequency_penalty=frequency_penalty,
+                                tools=tools_list or None,
+                                tool_choice=body.get("tool_choice"),
+                                parallel_tool_calls=body.get("parallel_tool_calls"),
                             ):
                                 proxied = self._run(
                                     lambda: coordinator.complete(
@@ -6824,7 +7205,7 @@ def build_server(
                         if include_trace and not trace_audited:
                             self._audit_trace_disclosure("/v1/chat/completions")
                         response_payload = (
-                            proxied
+                            _chat_usage_measurement_payload(proxied)
                             if tool_loop
                             else _response_payload(proxied, include_trace)
                         )
@@ -6835,13 +7216,6 @@ def build_server(
                                         response_payload,
                                         model=model_name,
                                         include_usage=include_usage,
-                                        prompt_text=json.dumps(
-                                            {
-                                                "messages": body.get("messages", []),
-                                                "tools": body.get("tools"),
-                                            },
-                                            ensure_ascii=False,
-                                        ),
                                     )
                                 )
                             )
@@ -6850,8 +7224,13 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    # Tools on a virtual selector stay on route/conduct so
+                    # _invoke can re-select a worker before any SSE byte is
+                    # committed. True stream_route is the no-tools Fugu path.
                     route_stream = bool(
-                        stream and orchestrator.would_route(messages, mode, model_name)
+                        stream
+                        and not tools_list
+                        and orchestrator.would_route(messages, mode, model_name)
                     )
                     if route_stream:
                         if explicit_trace:
@@ -6865,7 +7244,6 @@ def build_server(
                         self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
-                    routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid
                     # which deployment the caller selected on the chat Completions path.
                     # The pool was validated before the structured/passthrough
@@ -6886,13 +7264,20 @@ def build_server(
                         _validate_openai_metadata(body)
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
-                    with model_client.request_settings(
-                        max_output_tokens=max_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        presence_penalty=presence_penalty,
-                        frequency_penalty=frequency_penalty,
-                    ):
+                    request_settings = {
+                        "max_output_tokens": max_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "presence_penalty": presence_penalty,
+                        "frequency_penalty": frequency_penalty,
+                    }
+                    if tools_list:
+                        request_settings["tools"] = tools_list
+                        if normalized_tool_choice is not None:
+                            request_settings["tool_choice"] = normalized_tool_choice
+                        if body.get("parallel_tool_calls") is not None:
+                            request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
+                    with model_client.request_settings(**request_settings):
                         if route_stream:
                             self._stream_route_completion(
                                 orchestrator,
@@ -6920,7 +7305,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass,
+                            cache_bypass=cache_bypass or bool(tools_list),
                             cache_partition=cache_partition,
                             owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
@@ -6972,13 +7357,20 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
+                    model_was_omitted = "model" not in body
                     model_name = _validate_embeddings_model(body, orchestrator)
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    embedding_agents = _available_embedding_agents(orchestrator, model_name)
+                    embedding_agents = _available_embedding_agents(
+                        orchestrator,
+                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
+                    )
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        embedding_agents
+                    )
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -7032,16 +7424,26 @@ def build_server(
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
+                        wait_timeout = orchestrator.client._resolved_model_timeout(
+                            embedding_agent
+                        )
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
-                                inputs,
-                                model=agent.model,
-                                attribution=attribution,
-                                metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
-                                zdr_only=zdr_only,
-                                agent_id=agent.id,
-                            ))
+                            document = self._run(
+                                lambda agent=embedding_agent, wait_timeout=wait_timeout: coordinator.complete_embeddings_batch(
+                                    inputs,
+                                    model=agent.model,
+                                    attribution=attribution,
+                                    metadata={
+                                        "actor_scope": "inference",
+                                        "endpoint_alias": "embeddings",
+                                    },
+                                    zdr_only=zdr_only,
+                                    agent_id=agent.id,
+                                    wait_timeout=wait_timeout,
+                                    owner_id=security.principal_id(self.headers),
+                                )
+                            )
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
                             orchestrator._record_embedding_failure(
@@ -7054,7 +7456,20 @@ def build_server(
                                 time.perf_counter() - attempt_started_at,
                             )
                             orchestrator._record_success(embedding_agent.id)
-                        break
+                            break
+                        last_embedding_error = RuntimeError(
+                            f"embedding member ended with {document.get('status', 'unknown')}"
+                        )
+                        # Route a non-completed/embedding-less sync result through the
+                        # same failure recorder as a raised exception (above): a bare
+                        # ``observe_failure`` skips the circuit breaker and the
+                        # ``embedding_endpoint_failed`` analytics event, so a member
+                        # that keeps returning an incomplete document would never be
+                        # quarantined.
+                        orchestrator._record_embedding_failure(
+                            embedding_agent, "/v1/embeddings", last_embedding_error
+                        )
+                        document = None
                     if document is None:
                         raise RequestError(
                             503,
@@ -7082,7 +7497,16 @@ def build_server(
                     self._send(
                         _openai_embeddings_response(
                             document,
-                            model=model_name,
+                            # Devin follow-up: an omitted model can resolve to a
+                            # different (cheaper or failed-over) member than the
+                            # pre-failover, price-blind ``model_name`` validation
+                            # picked, so report the completed document's own
+                            # served model instead — it already carries the
+                            # actually-used agent's model (see
+                            # ``embeddings_batch_document``). An explicit model
+                            # (a concrete pool model or a group alias) still
+                            # reports exactly what the client asked for.
+                            model=document.get("model") if model_was_omitted else model_name,
                             encoding_format=encoding_format,
                         )
                     )
@@ -7090,11 +7514,18 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
+                    model_was_omitted = "model" not in body
                     model_name = _validate_embeddings_model(body, orchestrator)
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
-                    embedding_agents = _available_embedding_agents(orchestrator, model_name)
+                    embedding_agents = _available_embedding_agents(
+                        orchestrator,
+                        TaskOrchestrator.AUTO_MODEL if model_was_omitted else model_name,
+                    )
+                    embedding_agents = coordinator._cost_ordered_capability_candidates(
+                        embedding_agents
+                    )
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -7125,12 +7556,30 @@ def build_server(
                                 metadata=submit_metadata,
                                 zdr_only=zdr_only,
                                 agent_id=agent.id,
+                                owner_id=security.principal_id(self.headers),
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
                             orchestrator._record_embedding_failure(
                                 embedding_agent, "/v1/batch/embeddings", exc
                             )
+                            continue
+                        if document.get("status") in _TERMINAL_EMBEDDING_BATCH_FAILURE_STATUSES:
+                            # complete_embeddings_batch returned normally, but the
+                            # document itself is a terminal failure (no exception
+                            # was raised). Treat it exactly like a raised exception
+                            # for failover purposes: route it through the same
+                            # shared failure recorder used above so the endpoint's
+                            # circuit is not falsely cleared by observe_success
+                            # below, then try the next candidate instead of
+                            # breaking out with a failed document.
+                            last_embedding_error = RuntimeError(
+                                f"embedding batch member ended with {document.get('status')}"
+                            )
+                            orchestrator._record_embedding_failure(
+                                embedding_agent, "/v1/batch/embeddings", last_embedding_error
+                            )
+                            document = None
                             continue
                         orchestrator._group_router.observe_success(
                             embedding_agent.id,
@@ -7249,8 +7698,7 @@ def build_server(
                         _validate_completions_max_tokens(body)
                     if "max_completion_tokens" in body:
                         _validate_chat_max_completion_tokens(body)
-                    if "max_output_tokens" in body:
-                        _validate_responses_max_output_tokens(body)
+                    _validate_responses_max_output_tokens(body)
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
@@ -7309,7 +7757,11 @@ def build_server(
                     if "tools" in body:
                         _validate_chat_tools(body)
                     if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                        normalized_responses_tool_choice = _validate_chat_tool_choice(body)
+                        if normalized_responses_tool_choice is None:
+                            body.pop("tool_choice")
+                        else:
+                            body["tool_choice"] = normalized_responses_tool_choice
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "modalities" in body:
@@ -7329,7 +7781,9 @@ def build_server(
                     if "metadata" in body:
                         _validate_openai_metadata(body)
                     if "routing" in body:
-                        routing = _validate_routing(body.get("routing"))
+                        routing = _validate_routing(
+                            body.get("routing"), allow_endpoint=True
+                        )
                         # Responses passthrough has no batch channel plane yet.
                         if routing and routing.get("channel") == "batch":
                             raise RequestError(
@@ -7497,7 +7951,9 @@ def build_server(
                         responses_attribution.setdefault("model_name", body["model"])
                         responses_attribution.setdefault("service", "responses_api")
                         responses_routing = dict(
-                            _validate_routing(body.get("routing")) or {}
+                            _validate_routing(
+                                body.get("routing"), allow_endpoint=True
+                            ) or {}
                         )
                         # Responses has no batch job envelope on this path;
                         # force the coordinator's synchronous contract even
@@ -7587,13 +8043,18 @@ def build_server(
                         top_p=body.get("top_p"),
                         presence_penalty=body.get("presence_penalty"),
                         frequency_penalty=body.get("frequency_penalty"),
+                        tools=tools_list or None,
+                        tool_choice=body.get("tool_choice"),
+                        parallel_tool_calls=body.get("parallel_tool_calls"),
                     ):
                         proxied = self._run(
                             lambda: coordinator.complete(
                                 responses_messages,
                                 mode="conduct",
                                 attribution=responses_attribution,
-                                hints=_validate_routing(body.get("routing")),
+                                hints=_validate_routing(
+                                    body.get("routing"), allow_endpoint=True
+                                ),
                                 model_name=body["model"],
                                 provider_request=body,
                                 provider_endpoint="responses",
@@ -7680,11 +8141,19 @@ def build_server(
                     "batch_model_unavailable",
                     "no eligible model-group member is available for this batch request",
                 )
-            except ProviderResponseError:
+            except BatchDownloadError as exc:
+                self._send_error(
+                    502,
+                    "batch_download_failed",
+                    f"batch result download failed for job {exc.job_id}",
+                    {"job_id": exc.job_id, "reason": exc.reason},
+                )
+            except ProviderResponseError as exc:
                 self._send_error(
                     502,
                     "invalid_structured_output",
                     "The selected model could not satisfy the requested response schema.",
+                    getattr(exc, "detail", None),
                 )
             except FileContractError:
                 self._send_error(
@@ -7702,17 +8171,25 @@ def build_server(
                     exc.error_code,
                     _provider_upstream_message(exc),
                     exc.detail,
+                    extra_headers=_provider_upstream_extra_headers(exc),
                 )
             except Exception:
                 traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
             finally:
+                if endpoint_policy is not None:
+                    endpoint_policy.__exit__(None, None, None)
                 if request_policy is not None:
                     request_policy.__exit__(None, None, None)
 
         @staticmethod
         def _admin_purpose(path: str) -> str:
             """Select the least-privileged purpose for an admin GET route."""
+            segments = [part for part in path.split("/") if part]
+            if (len(segments) == 8 and segments[:3] == ["api", "v1", "agent_pools"]
+                    and segments[4] == "worker_agents"
+                    and segments[6:] == ["timeout_policy", "history"]):
+                return "audit_replay"
             if (
                 path == "/admin/state"
                 or path == "/api/v1/workflow_runs"
@@ -7895,9 +8372,22 @@ def build_server(
             code: str,
             message: str,
             detail: dict[str, Any] | None = None,
+            *,
+            extra_headers: dict[str, str] | None = None,
         ) -> None:
-            _LOGGER.warning("request_failed status=%s code=%s", status, code)
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            request_id = current_request_id() or uuid.uuid4().hex
+            error_detail = {**(detail or {}), "request_id": request_id}
+            _LOGGER.warning(
+                "request_failed status=%s code=%s request_id=%s", status, code, request_id
+            )
+            payload = _error_payload(code, message, error_detail)
+            if code in {TOOL_FALLBACK_STOPPED_CODE, PROVIDER_OUTCOME_UNKNOWN_CODE}:
+                # The SDK retries ordinary 409/5xx; explicit unsafe outcomes must not replay.
+                self._send(payload, status, extra_headers={"x-should-retry": "false"})
+            elif extra_headers:
+                self._send(payload, status, extra_headers=extra_headers)
+            else:
+                self._send(payload, status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
@@ -7912,6 +8402,25 @@ def build_server(
             socket and raises again -- uncaught this time, crashing the
             request-handling thread (visible as a second, unhandled
             BrokenPipeError in server logs after the first).
+
+            A caught disconnect can strike in two different places, and only
+            one of them means the client received nothing:
+
+            * Before the status line/headers were flushed (``end_headers()``
+              itself raises, or an earlier ``send_response``/``send_header``
+              call does). The client has no real response at all.
+            * After ``end_headers()`` already completed -- a later body
+              write in the same call, or a later ``_write_sse`` frame on an
+              SSE stream ``_begin_sse`` already opened successfully. The
+              client DID receive the real status line and headers; only the
+              body (or a later chunk of it) was cut short.
+
+            Every ``_send*``/``_begin_sse`` writer sets
+            ``self._response_headers_sent = True`` immediately after its own
+            ``end_headers()`` call returns, so that flag -- reset to
+            ``False`` once per request by ``handle_one_request`` -- tells
+            this shared choke point which of the two cases just happened,
+            without each writer needing its own disconnect-handling logic.
             """
             # A rejection can happen before _read_json (authentication, rate
             # limiting, or media type). Reusing that HTTP/1.1 connection would
@@ -7928,6 +8437,27 @@ def build_server(
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
                 _LOGGER.debug("client_disconnected")
+                # `_send*`/`_begin_sse` writers record their *intended*
+                # status in `self._last_status` before calling this method
+                # (and `send_response`'s override above does the same for
+                # whatever status the writer itself sends) -- but a dead
+                # peer before headers were ever flushed means that status
+                # was never actually delivered. Left uncorrected in that
+                # case, `_log_request_summary` reads `_last_status` straight
+                # into the per-request INFO summary, falsely reporting a
+                # completed 200/4xx/5xx response for a request whose write
+                # failed before anything reached the client. Clear it back
+                # to the same `None` this module already uses for "a
+                # response was never sent" ONLY then -- a disconnect that
+                # struck after `_response_headers_sent` was already set
+                # means the client genuinely received that status, so
+                # clearing it here would instead falsely report "no status"
+                # for a request that was, in fact, answered.
+                # `hasattr`/`getattr` guard against tests that call this
+                # method directly against a bare `object()` stand-in for
+                # `self`, which has no instance `__dict__` to assign into.
+                if hasattr(self, "_last_status") and not getattr(self, "_response_headers_sent", False):
+                    self._last_status = None
                 return False
 
         def _send(
@@ -7937,6 +8467,7 @@ def build_server(
             *,
             extra_headers: dict[str, str] | None = None,
         ) -> None:
+            self._last_status = status
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
             def _write() -> None:
@@ -7947,11 +8478,17 @@ def build_server(
                 for name, value in (extra_headers or {}).items():
                     self.send_header(name, value)
                 self.end_headers()
+                # Marks that the status line/headers were actually flushed
+                # to the client -- see `_write_response`'s docstring. Must
+                # be set only after `end_headers()` returns without raising,
+                # and only before the body write that might still fail.
+                self._response_headers_sent = True
                 self.wfile.write(raw)
 
             self._write_response(_write)
 
         def _send_text(self, payload: str, content_type: str, status: int = 200) -> None:
+            self._last_status = status
             raw = payload.encode("utf-8")
 
             def _write() -> None:
@@ -7960,22 +8497,27 @@ def build_server(
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(raw)
 
             self._write_response(_write)
 
         def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+            self._last_status = status
+
             def _write() -> None:
                 self.send_response(status)
                 self.send_header("content-type", content_type)
                 self.send_header("content-length", str(len(payload)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(payload)
 
             self._write_response(_write)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
+            self._last_status = status
             raw = body.encode("utf-8")
 
             def _write() -> None:
@@ -7985,12 +8527,14 @@ def build_server(
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(raw)
 
             self._write_response(_write)
 
         def _begin_sse(self) -> bool:
             # Incremental SSE: no content-length; the connection close delimits the body.
+            self._last_status = 200
             self.close_connection = True
 
             def _write() -> None:
@@ -7999,10 +8543,21 @@ def build_server(
                 self.send_header("cache-control", "no-cache")
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
 
             return self._write_response(_write)
 
         def _write_sse(self, frame: str) -> bool:
+            """Write one SSE frame; relies on a prior successful `_begin_sse`.
+
+            Never touches `self._response_headers_sent` itself: a caller
+            only ever reaches this after `_begin_sse` already returned
+            `True`, so that flag is already set from the initial headers
+            flush. If a *later* frame's write fails here, `_write_response`
+            correctly sees the flag still set and preserves the 200 that was
+            genuinely already delivered, instead of erasing it.
+            """
+
             def _write() -> None:
                 self.wfile.write(frame.encode("utf-8"))
                 self.wfile.flush()
@@ -8019,13 +8574,14 @@ def build_server(
             coordinator: Any = None,
             attribution: dict[str, Any] | None = None,
         ) -> bool:
-            """Stream orchestration as native Responses reasoning-summary events."""
+            """Stream Fugu/TRINITY/Conductor work as Responses reasoning events."""
             response_id = f"resp_{uuid.uuid4().hex}"
             reasoning_id = f"rs_{uuid.uuid4().hex}"
             message_id = f"msg_{uuid.uuid4().hex}"
             created_at = int(time.time())
             sequence = 0
             summaries: list[str] = []
+            reasoning_texts: list[str] = []
             open_parts: dict[str, list[tuple[int, str]]] = {}
 
             def emit(event_type: str, **values: Any) -> None:
@@ -8037,7 +8593,7 @@ def build_server(
                 ):
                     raise ConnectionAbortedError("Responses stream disconnected")
 
-            def progress(role: str, status: str) -> None:
+            def progress(role: str, status: str, output: str = "") -> None:
                 text = _REASONING_STAGE_SUMMARIES.get(role, "Processing the request.")
                 if status == "started":
                     index = len(summaries)
@@ -8057,8 +8613,9 @@ def build_server(
                         summary_index=index,
                         delta=text,
                     )
-                elif open_parts.get(role):
-                    index, text = open_parts[role].pop(0)
+                    return
+                if open_parts.get(role):
+                    index, summary_text = open_parts[role].pop(0)
                     if not open_parts[role]:
                         del open_parts[role]
                     emit(
@@ -8066,14 +8623,48 @@ def build_server(
                         item_id=reasoning_id,
                         output_index=0,
                         summary_index=index,
-                        text=text,
+                        text=summary_text,
                     )
                     emit(
                         "response.reasoning_summary_part.done",
                         item_id=reasoning_id,
                         output_index=0,
                         summary_index=index,
-                        part={"type": "summary_text", "text": text},
+                        part={"type": "summary_text", "text": summary_text},
+                    )
+                # Paper-role process output (TRINITY thinker/worker/verifier,
+                # Conductor step work) is Responses reasoning_text, not the
+                # final message. The synthesizer answer stays output_text.
+                if status == "completed" and output and role != "synthesizer":
+                    content_index = len(reasoning_texts)
+                    reasoning_texts.append(output)
+                    emit(
+                        "response.content_part.added",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        part={"type": "reasoning_text", "text": ""},
+                    )
+                    emit(
+                        "response.reasoning_text.delta",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        delta=output,
+                    )
+                    emit(
+                        "response.reasoning_text.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        text=output,
+                    )
+                    emit(
+                        "response.content_part.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        content_index=content_index,
+                        part={"type": "reasoning_text", "text": output},
                     )
 
             security.acquire_run_slot()
@@ -8132,7 +8723,7 @@ def build_server(
                         "error": _error_payload(
                             exc.error_code,
                             _provider_upstream_message(exc),
-                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                            {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                         )["error"],
                     }
                     emit("response.failed", response=failed)
@@ -8174,6 +8765,10 @@ def build_server(
                     **reasoning_item,
                     "status": "completed",
                     "summary": [{"type": "summary_text", "text": text} for text in summaries],
+                    "content": [
+                        {"type": "reasoning_text", "text": text}
+                        for text in reasoning_texts
+                    ],
                 }
                 emit("response.output_item.done", output_index=0, item=reasoning_done)
                 message_item = {
@@ -8228,6 +8823,7 @@ def build_server(
                     summaries,
                     reasoning_id=reasoning_id,
                     message_id=message_id,
+                    reasoning_texts=reasoning_texts,
                 )
                 emit("response.completed", response=completed)
                 self._write_sse("data: [DONE]\n\n")
@@ -8251,12 +8847,22 @@ def build_server(
             completion_id = _new_chat_completion_id()
             created = int(time.time())
             stream_usage: dict[str, Any] | None = None
+            stream_output_budget: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
                 nonlocal stream_usage
                 stream_usage = usage
 
-            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+            def capture_output_budget(output_budget: dict[str, Any] | None) -> None:
+                nonlocal stream_output_budget
+                stream_output_budget = output_budget
+
+            def frame(
+                delta: dict[str, Any],
+                finish: str | None = None,
+                *,
+                orchestration: dict[str, Any] | None = None,
+            ) -> str:
                 payload = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",
@@ -8268,6 +8874,8 @@ def build_server(
                 }
                 if include_usage:
                     payload["usage"] = None
+                if orchestration:
+                    payload["orchestration"] = orchestration
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             def usage_frame(usage: dict[str, Any]) -> str:
@@ -8292,6 +8900,18 @@ def build_server(
                         "workflow_run_id": run_id,
                         "model_name": model_name,
                     }
+                    # ADR 0130: only pass this to a stream_route that actually
+                    # declares it -- a duck-typed stand-in (e.g. a test double
+                    # that only implements the plain positional/keyword shape)
+                    # must keep working exactly as before this evidence wiring.
+                    try:
+                        stream_route_params = inspect.signature(
+                            orchestrator.stream_route
+                        ).parameters
+                    except (TypeError, ValueError):
+                        stream_route_params = {}
+                    if "output_budget_callback" in stream_route_params:
+                        stream_kwargs["output_budget_callback"] = capture_output_budget
                     if include_usage:
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
@@ -8299,7 +8919,23 @@ def build_server(
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
-                    if not self._write_sse(frame({}, finish="stop")):
+                    # ADR 0130: the clamp decision is only known once
+                    # orchestrator.stream_route's final take_output_budget()
+                    # runs above, after _begin_sse() has already flushed
+                    # headers -- so it rides the final content SSE chunk's
+                    # orchestration object, exactly like chat_completion_chunks.
+                    final_orchestration = (
+                        {
+                            key: value
+                            for key, value in stream_output_budget.items()
+                            if value is not None
+                        }
+                        if isinstance(stream_output_budget, dict)
+                        else None
+                    )
+                    if not self._write_sse(
+                        frame({}, finish="stop", orchestration=final_orchestration)
+                    ):
                         return
                     if (
                         include_usage
@@ -8309,8 +8945,8 @@ def build_server(
                         return
                 except ToolFallbackStoppedError as exc:
                     detail = {
-                        "request_id": uuid.uuid4().hex,
                         **_tool_fallback_error_detail(exc),
+                        "request_id": current_request_id() or uuid.uuid4().hex,
                     }
                     payload = _error_payload(
                         TOOL_FALLBACK_STOPPED_CODE,
@@ -8327,7 +8963,7 @@ def build_server(
                     payload = _error_payload(
                         exc.error_code,
                         _provider_upstream_message(exc),
-                        {"request_id": uuid.uuid4().hex, **exc.detail},
+                        {**exc.detail, "request_id": current_request_id() or uuid.uuid4().hex},
                     )
                     if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -8350,7 +8986,10 @@ def build_server(
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
 
-    return ResponsiveThreadingHTTPServer((host, port), Handler)
+    server = ResponsiveThreadingHTTPServer((host, port), Handler)
+    server.embedding_batch_backend = coordinator.embedding_batch_backend
+    server.embedding_backend_closer = coordinator.close_embedding_backends
+    return server
 
 
 def serve(
@@ -8373,4 +9012,7 @@ def serve(
         release_authority=release_authority,
     )
     print(f"listening on http://{host}:{port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()

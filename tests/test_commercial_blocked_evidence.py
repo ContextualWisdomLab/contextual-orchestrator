@@ -60,8 +60,8 @@ REPORT_NAMES = [
     "commercial_launch_readiness_report",
     "commercial_completion_scorecard_report",
     "commercial_buyer_acceptance_workflow_report",
-    "buyer_evidence_manifest_report",
-    "buyer_handoff_bundle_report",
+    "commercial_evidence_manifest_report",
+    "commercial_handoff_bundle_report",
     "saleability_decision_report",
 ]
 

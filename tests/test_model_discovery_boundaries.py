@@ -8,6 +8,8 @@ happy-path tests cannot reach.
 
 from __future__ import annotations
 
+import io
+import json
 import ssl
 import urllib.error
 from dataclasses import replace
@@ -33,9 +35,9 @@ from contextual_orchestrator.model_discovery import (
     _valid_price_component,
     agent_from_discovered,
     discover_provider_models,
+    probe_discovered_model_tool_call_capability,
     refresh_price_book,
     select_bootstrap_discovered_agents,
-    select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
 from tests.test_model_discovery import (
@@ -60,13 +62,13 @@ def test_http_error_maps_to_stable_status_code_without_provider_text() -> None:
     """An HTTP 429 from a provider becomes ``http_status_429`` evidence."""
     register_credential("OPENAI_API_KEY", "sk-openai")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         raise urllib.error.HTTPError(
             request.full_url, 429, "rate limited", hdrs=None, fp=None
         )
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         with pytest.raises(ProviderDiscoveryError) as excinfo:
@@ -79,11 +81,11 @@ def test_timeout_maps_to_stable_timeout_code() -> None:
     """A socket-level timeout never leaks as an unclassified failure."""
     register_credential("OPENAI_API_KEY", "sk-openai")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         raise TimeoutError("timed out")
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         with pytest.raises(ProviderDiscoveryError) as excinfo:
@@ -169,7 +171,7 @@ def test_fixed_provider_ca_failure_retries_with_certifi_verification() -> None:
         return _Response({"data": []})
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         assert _fetch_json("https://provider.example/v1/models", timeout=1) == {
@@ -178,6 +180,190 @@ def test_fixed_provider_ca_failure_retries_with_certifi_verification() -> None:
     assert "context" not in calls[0]
     assert calls[1]["context"].verify_mode == ssl.CERT_REQUIRED
     assert calls[1]["context"].check_hostname is True
+
+
+def test_fetch_json_rejects_oversized_response_body() -> None:
+    """An oversized provider body is rejected before JSON parsing, not buffered whole.
+
+    Regression for the unbounded ``response.read()`` in ``_fetch_json``: a
+    large or malicious/misbehaving provider response (an outage page dumped
+    as an unbounded body, or a compromised endpoint) must not be read fully
+    into memory. The bounded-read call must request at most
+    ``MAX_DISCOVERY_RESPONSE_BYTES + 1`` bytes -- exactly enough to detect an
+    overage -- never the full oversized body.
+    """
+    oversized = b"0" * (MAX_DISCOVERY_RESPONSE_BYTES + 1024)
+    reads: list[int | None] = []
+
+    class OversizedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, amt: int | None = None) -> bytes:
+            reads.append(amt)
+            return oversized if amt is None else oversized[:amt]
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        return_value=OversizedResponse(),
+    ):
+        with pytest.raises(ValueError, match="model discovery response exceeds maximum size"):
+            _fetch_json("https://provider.example/v1/models", timeout=1)
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def _tool_call_probe_model() -> DiscoveredModel:
+    return DiscoveredModel(
+        provider_name="openrouter",
+        model_id="probe-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.example/v1",
+        auth_scheme="Bearer",
+    )
+
+
+def test_tool_call_probe_caps_success_body_read() -> None:
+    """The capability probe reads the success body through the shared size bound.
+
+    Regression for the unbounded ``response.read()`` in
+    :func:`probe_discovered_model_tool_call_capability`: a compromised or
+    misbehaving provider could stream an arbitrarily large body into memory
+    before JSON parsing ever runs. The probe must request at most
+    ``MAX_DISCOVERY_RESPONSE_BYTES + 1`` bytes, exactly like its sibling
+    fetches, and still return its evidence on a normal body.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    reads: list[int | None] = []
+    response = _Response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {"type": "function", "function": {"name": "probe_a"}},
+                            {"type": "function", "function": {"name": "probe_b"}},
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    original_read = response.read
+
+    def bounded_read(amt: int | None = None) -> bytes:
+        reads.append(amt)
+        return original_read(amt)
+
+    response.read = bounded_read  # type: ignore[method-assign]
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            return_value=response,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is True
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_tool_call_probe_rejects_oversized_success_body_without_buffering_it() -> None:
+    """An oversized probe body is fail-closed to ``None``, never fully buffered."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    oversized = b"0" * (MAX_DISCOVERY_RESPONSE_BYTES + 1024)
+    reads: list[int | None] = []
+
+    class OversizedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, amt: int | None = None) -> bytes:
+            reads.append(amt)
+            return oversized if amt is None else oversized[:amt]
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            return_value=OversizedResponse(),
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is None
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_tool_call_probe_caps_single_call_rejection_body_read() -> None:
+    """A 400 body is read through the same bound before the negative verdict.
+
+    The explicit single-tool-call rejection is the one 400 the probe trusts;
+    its body is still untrusted network input and must not be buffered whole.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    oversized = b"0" * (MAX_DISCOVERY_RESPONSE_BYTES + 1024)
+    reads: list[int | None] = []
+
+    class OversizedHTTPError(urllib.error.HTTPError):
+        def read(self, amt: int | None = None) -> bytes:
+            reads.append(amt)
+            return oversized if amt is None else oversized[:amt]
+
+    error = OversizedHTTPError(
+        "https://openrouter.example/v1/chat/completions",
+        400,
+        "bad request",
+        None,
+        None,
+    )
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            side_effect=error,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is None
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_tool_call_probe_still_maps_in_budget_single_call_rejection_to_false() -> None:
+    """The new read bound must not swallow a normal explicit rejection body."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    error = urllib.error.HTTPError(
+        "https://openrouter.example/v1/chat/completions",
+        400,
+        "bad request",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {"error": {"message": "this model only supports a single tool call"}}
+            ).encode()
+        ),
+    )
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            side_effect=error,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is False
 
 
 def test_malformed_json_maps_to_invalid_response_code() -> None:
@@ -191,11 +377,14 @@ def test_malformed_json_maps_to_invalid_response_code() -> None:
         def __exit__(self, *_args):
             return False
 
-        def read(self) -> bytes:
-            return b"<html>not json</html>"
+        def read(self, amt: int | None = None) -> bytes:
+            # _fetch_json now caps its read (MAX_DISCOVERY_RESPONSE_BYTES + 1);
+            # accept the optional amt like http.client.HTTPResponse.read does.
+            body = b"<html>not json</html>"
+            return body if amt is None else body[:amt]
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=GarbageResponse(),
     ):
         with pytest.raises(ProviderDiscoveryError) as excinfo:
@@ -213,7 +402,7 @@ def test_insecure_discovery_url_is_refused_before_any_network_call() -> None:
     )
     register_credential("INSECURE_API_KEY", "secret-value")
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen"
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request"
     ) as urlopen:
         with pytest.raises(ProviderDiscoveryError) as excinfo:
             discover_provider_models(source)
@@ -246,7 +435,7 @@ def test_openai_rows_that_are_not_objects_are_skipped() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     payload = {"data": ["junk-string", 42, None, {"id": "meta/llama-3.3"}]}
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
@@ -258,7 +447,7 @@ def test_bytez_rows_that_are_not_objects_are_skipped() -> None:
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     payload = {"output": [7, "bad", {"modelId": "0-hero/Matter-0.1-Slim-7B-C"}]}
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(BYTEZ_SOURCE)
@@ -327,8 +516,8 @@ def test_hostile_price_books_degrade_to_unknown_ranking(book) -> None:
     priced = _chat_model("openrouter", "priced-model")
     other = _chat_model("bytez", "other-model")
 
-    cheapest = select_cheapest_discovered_agent([priced, other], book)
-    assert cheapest is not None
+    cheapest = select_top_n_cheapest_discovered_agents([priced, other], book, 1)
+    assert cheapest != []
 
     top = select_top_n_cheapest_discovered_agents([priced, other], book, 2)
     assert [m.model_id for m in top] == sorted(["priced-model", "other-model"])
@@ -412,7 +601,7 @@ def test_bootstrap_rejects_non_positive_limits_and_empty_catalogs() -> None:
     ]
     assert select_bootstrap_discovered_agents(ineligible, book, 5) == []
     assert select_top_n_cheapest_discovered_agents(ineligible, book, 5) == []
-    assert select_cheapest_discovered_agent([], book) is None
+    assert select_top_n_cheapest_discovered_agents([], book, 1) == []
 
 
 def test_bootstrap_rejects_explicit_non_chat_capabilities() -> None:
@@ -444,18 +633,90 @@ def test_bootstrap_fills_remainder_from_deferred_same_family_models() -> None:
     assert all(m.provider_name == "nvidia_nim" for m in selected[2:])
 
 
-def test_bootstrap_early_return_stops_at_limit_within_loop() -> None:
-    """A limit below the distinct-family count returns without a second pass."""
+def test_bootstrap_selection_fails_closed_at_unpriced_boundary() -> None:
+    """A capacity boundary cannot admit lexically chosen unpriced candidates."""
     book = PriceBook(InMemoryConfigStore())
     models = [
         _chat_model("openai", "openai-model"),
         _chat_model("openrouter", "openrouter-model"),
         _chat_model("bytez", "bytez-model"),
     ]
-    selected = select_bootstrap_discovered_agents(models, book, 2)
-    # Unpriced ties rank by provider name: bytez < openai < openrouter.
-    assert len(selected) == 2
-    assert [m.provider_name for m in selected] == ["bytez", "openai"]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
+def test_bootstrap_selection_fails_closed_at_equal_known_price_boundary() -> None:
+    """Equal comparable cost cannot be resolved by provider/model names."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model(provider, f"{provider}-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        )
+        for provider in ("openai", "openrouter", "bytez")
+    ]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
+def test_bootstrap_selection_rejects_unmodeled_cost_displacement() -> None:
+    """Provider diversity cannot displace cheaper evidence without a utility model."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model("openrouter", "cheap-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("openrouter", "next-cheapest-model"),
+            prompt_price_per_1k=0.75,
+            completion_price_per_1k=0.75,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("bytez", "expensive-model"),
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=1.0,
+            currency_code="USD",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="decision model"):
+        select_bootstrap_discovered_agents(models, book, 2)
+
+
+def test_bootstrap_selection_rejects_unmodeled_full_pool_reordering() -> None:
+    """Admitting every candidate cannot make diversity an implicit route order."""
+    book = PriceBook(InMemoryConfigStore())
+    models = [
+        replace(
+            _chat_model("openrouter", "cheap-model"),
+            prompt_price_per_1k=0.5,
+            completion_price_per_1k=0.5,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("openrouter", "next-cheapest-model"),
+            prompt_price_per_1k=0.75,
+            completion_price_per_1k=0.75,
+            currency_code="USD",
+        ),
+        replace(
+            _chat_model("bytez", "expensive-model"),
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=1.0,
+            currency_code="USD",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="decision model"):
+        select_bootstrap_discovered_agents(models, book, 3)
 
 
 if __name__ == "__main__":  # pragma: no cover

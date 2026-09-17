@@ -28,6 +28,30 @@ from contextual_orchestrator.telemetry import (
 )
 
 
+def _wait_for_caplog(caplog, predicate, *, timeout: float = 1.0, interval: float = 0.02) -> None:
+    """Poll ``predicate(caplog.text)`` until true or ``timeout`` elapses.
+
+    The per-request INFO summary is logged by a real server thread strictly
+    *after* it has already flushed the HTTP response back to the client
+    (`server.py`'s ``handle_one_request`` logs in its ``finally`` block,
+    which runs after ``super().handle_one_request()`` -- and therefore the
+    response write -- completes). A test that asserts on this log line
+    immediately after its client call returns has no guarantee the server
+    thread has reached that ``finally`` block yet; bounded polling closes
+    that race deterministically and quickly in the common case, rather than
+    a fixed sleep that is either too short (still flaky) or wastefully long.
+    Call this while the relevant ``caplog.at_level(...)`` scope is still
+    open, so a late record is not filtered out by the time it arrives.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not predicate(caplog.text):
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(interval)
+
+
 def test_session_id_accepts_lineageweave_header_and_metadata():
     """The two compatible transport forms identify the same processing session."""
     assert (
@@ -59,6 +83,8 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
         assert telemetry_module._normalize_session_id(value) is None
     assert session_id_from_metadata(None) is None
     assert telemetry_module._safe_attributes({"server.port": object()}) == {}
+    assert telemetry_module._safe_attributes({"server.address": "10.0.0.9"}) == {}
+    assert telemetry_module._safe_attributes({"server.address": "fd00::9"}) == {}
 
     token = set_session_id("session-safe")
     try:
@@ -90,6 +116,20 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
                 b"session-safe"
             ).hexdigest(),
         }
+    finally:
+        reset_session_id(token)
+
+
+def test_session_id_hash_matches_safe_attributes_convention():
+    """The shared correlation-hash helper agrees with _safe_attributes' own hashing."""
+    assert telemetry_module.session_id_hash() is None
+    token = set_session_id("session-safe")
+    try:
+        assert telemetry_module.session_id_hash() == hashlib.sha256(b"session-safe").hexdigest()
+        assert (
+            telemetry_module._safe_attributes({})["contextual_orchestrator.session_id_hash"]
+            == telemetry_module.session_id_hash()
+        )
     finally:
         reset_session_id(token)
 
@@ -269,6 +309,45 @@ def test_handler_resets_session_after_each_keep_alive_request(monkeypatch):
         server.server_close()
 
 
+def test_handle_one_request_resets_command_and_path_before_each_call(monkeypatch):
+    """Deterministic unit-level counterpart to
+    test_keep_alive_close_does_not_log_phantom_request below, which proves
+    the same property end to end through a real socket but can occasionally
+    flake on unrelated threaded-server teardown timing.
+
+    Simulates stdlib's own `handle_one_request`: the first call "parses" a
+    request (setting `command`/`path`, as `parse_request` would), the second
+    call reads nothing at all (an empty `raw_requestline` -- a closed
+    keep-alive connection) and touches neither attribute, matching real
+    stdlib behavior on that path. Without resetting them first, the second
+    call would leave the *first* call's `command`/`path` in place, causing
+    `_log_request_summary`'s "nothing to report" guard to never fire.
+    """
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    call_count = {"n": 0}
+
+    def fake_super_handle_one_request(self):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            self.command = "GET"
+            self.path = "/healthz"
+        # Second call: nothing read, nothing touched (matches stdlib on a
+        # closed connection).
+
+    monkeypatch.setattr(BaseHTTPRequestHandler, "handle_one_request", fake_super_handle_one_request)
+    try:
+        handler.handle_one_request()
+        assert handler.command == "GET"
+        assert handler.path == "/healthz"
+
+        handler.handle_one_request()
+        assert handler.command is None
+        assert handler.path is None
+    finally:
+        server.server_close()
+
+
 def test_handler_replaces_trace_context_on_reauthorization(monkeypatch):
     """A second authorization cannot leave the first trace context attached."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
@@ -305,17 +384,232 @@ def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
     handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
     handler.path = "/v1/chat/completions"
-    monkeypatch.setattr(handler, "_send", lambda *_args, **_kwargs: None)
+    captured_send = MagicMock()
+    monkeypatch.setattr(handler, "_send", captured_send)
     token = set_session_id("session-secret")
     try:
         with caplog.at_level("WARNING"):
-            handler._send_error(401, "unauthorized", "not authorized")
+            handler._send_error(
+                401, "unauthorized", "not authorized",
+                {"request_id": "untrusted\nlog-injection", "reason": "private-detail"},
+            )
     finally:
         reset_session_id(token)
         server.server_close()
 
     assert "request_failed" in caplog.text
+    response_payload = captured_send.call_args.args[0]
+    response_request_id = response_payload["error"]["detail"]["request_id"]
+    warning_messages = [
+        record.getMessage() for record in caplog.records
+        if record.name == "contextual_orchestrator.server"
+        and record.getMessage().startswith("request_failed ")
+    ]
+    assert warning_messages == [
+        f"request_failed status=401 code=unauthorized request_id={response_request_id}"
+    ]
+    assert response_request_id != "untrusted\nlog-injection"
+    assert len(response_request_id) == 32
+    assert all(character in "0123456789abcdef" for character in response_request_id)
+    assert response_payload["error"]["detail"]["reason"] == "private-detail"
+    assert "untrusted" not in caplog.text
+    assert "private-detail" not in caplog.text
     assert "session-secret" not in caplog.text
+
+
+def test_http_error_ids_correlate_over_real_connections(caplog):
+    """Separate HTTP errors carry distinct IDs matching their server warnings."""
+    import http.client
+    import threading
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    request_ids = []
+    try:
+        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+            for _request_index in range(2):
+                connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+                try:
+                    connection.request("GET", "/v1/models")
+                    response = connection.getresponse()
+                    assert response.status == 401
+                    payload = json.loads(response.read())
+                    request_id = payload["error"]["detail"]["request_id"]
+                    request_ids.append(request_id)
+                    expected_message = (
+                        f"request_failed status=401 code={payload['error']['code']} "
+                        f"request_id={request_id}"
+                    )
+                    assert expected_message in [record.getMessage() for record in caplog.records]
+                finally:
+                    connection.close()
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+    assert len(set(request_ids)) == 2
+
+
+def test_provider_diagnostic_events_preserve_request_identity(caplog):
+    """Every retry outcome keeps trusted identity before untrusted error text."""
+    agent = ModelAgent("diagnostic_agent", "mock-model")
+    failure = RuntimeError("controlled error")
+    with caplog.at_level("DEBUG"), telemetry_module.request_identity() as request_id:
+        orchestrator_module._log_provider_attempt(agent, 0, 1)
+        orchestrator_module._log_provider_attempt_failed(agent, 0, failure, False)
+        orchestrator_module._log_provider_backoff(agent, 0, 0.0)
+        orchestrator_module._log_provider_exhausted(agent, 2, failure)
+        orchestrator_module._log_provider_no_retry_budget(agent, 1, failure, transient=False)
+        orchestrator_module._log_provider_one_shot_call_failed(agent, 1, failure, transient=False)
+        orchestrator_module._log_provider_rejected_permanent(agent, 1, failure)
+    messages = [row.getMessage() for row in caplog.records if row.name == orchestrator_module.__name__]
+    assert len(messages) == 7
+    assert all(f"request_id={request_id}" in message for message in messages)
+    assert f"request_id={request_id} error_message=" in messages[1]
+
+
+def test_request_identity_restores_context_across_threads_and_failure():
+    """Copied work inherits identity; reused workers and failed scopes do not leak it."""
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+
+    assert telemetry_module.current_request_id() is None
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with telemetry_module.request_identity() as outer_id:
+            assert executor.submit(copy_context().run, telemetry_module.current_request_id).result() == outer_id
+            assert executor.submit(telemetry_module.current_request_id).result() is None
+            with pytest.raises(RuntimeError):
+                with telemetry_module.request_identity() as inner_id:
+                    assert inner_id != outer_id
+                    raise RuntimeError("controlled failure")
+            assert telemetry_module.current_request_id() == outer_id
+        assert telemetry_module.current_request_id() is None
+        assert executor.submit(telemetry_module.current_request_id).result() is None
+
+
+def test_provider_attempts_share_http_error_identity(monkeypatch, caplog):
+    """Same-session HTTP requests need distinct identities before provider failure."""
+    import http.client
+    import threading
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.server import SecurityConfig
+
+    model_agent = ModelAgent("correlation_agent", "mock-model")
+    model_client = ModelClient(max_retries=0)
+    router = TaskOrchestrator([model_agent], client=model_client)
+
+    def reject_send(*args, **kwargs):
+        raise RuntimeError("controlled provider failure")
+
+    def fail_completion(*args, **kwargs):
+        return model_client._send_with_retry(model_agent, {})
+
+    monkeypatch.setattr(model_client, "_send", reject_send)
+    monkeypatch.setattr(router, "complete", fail_completion)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="test-correlation-token"))
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+    request_ids = []
+    first_socket = None
+    try:
+        with caplog.at_level("DEBUG"):
+            for request_index in range(2):
+                first_record = len(caplog.records)
+                connection.request("POST", "/v1/chat/completions", json.dumps({
+                    "model": "mock-model", "messages": [{"role": "user", "content": "unit request"}],
+                }), {
+                    "Content-Type": "application/json", "Authorization": "Bearer test-correlation-token",
+                    "X-LineageWeave-Session-Id": "shared-private-session",
+                })
+                if first_socket is None:
+                    first_socket = connection.sock
+                    assert first_socket is not None
+                else:
+                    assert connection.sock is first_socket
+                response = connection.getresponse()
+                assert response.status >= 400
+                assert not response.will_close
+                response_body = json.loads(response.read())
+                request_id = response_body["error"]["detail"]["request_id"]
+                request_ids.append(request_id)
+                attempt_logs = [record.getMessage() for record in caplog.records[first_record:]
+                                if record.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
+                assert len(attempt_logs) == 2, (request_index, attempt_logs)
+                assert all(f"request_id={request_id}" in message for message in attempt_logs)
+        assert len(set(request_ids)) == 2
+        assert "shared-private-session" not in "\n".join(attempt_logs)
+    finally:
+        connection.close()
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+        router.close()
+
+
+def test_concurrent_http_provider_identity_isolation(monkeypatch, caplog):
+    """Overlapping same-session requests keep their own provider/error identities."""
+    import http.client
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.server import SecurityConfig
+
+    rendezvous = threading.Barrier(2, timeout=10)
+    overlapping_threads = set()
+    overlap_lock = threading.Lock()
+    model_agent = ModelAgent("parallel_agent", "mock-model")
+    model_client = ModelClient(max_retries=0)
+    router = TaskOrchestrator([model_agent], client=model_client)
+
+    def reject_send(*args, **kwargs):
+        rendezvous.wait()
+        with overlap_lock:
+            overlapping_threads.add(threading.get_ident())
+        raise RuntimeError("controlled overlapping failure")
+
+    def fail_completion(*args, **kwargs):
+        return model_client._send_with_retry(model_agent, {})
+
+    monkeypatch.setattr(model_client, "_send", reject_send)
+    monkeypatch.setattr(router, "complete", fail_completion)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="parallel-test-token"))
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    def send_request():
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "mock-model", "messages": [{"role": "user", "content": "unit request"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer parallel-test-token",
+                 "X-LineageWeave-Session-Id": "same-private-session"})
+            response = connection.getresponse()
+            assert response.status == 502
+            return json.loads(response.read())["error"]["detail"]["request_id"]
+        finally:
+            connection.close()
+
+    try:
+        with caplog.at_level("DEBUG"), ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(send_request) for _ in range(2)]
+            request_ids = [future.result(timeout=20) for future in futures]
+        assert len(overlapping_threads) == 2
+        assert len(set(request_ids)) == 2
+        provider_logs = [row.getMessage() for row in caplog.records
+                         if row.getMessage().startswith(("provider_attempt ", "provider_attempt_failed "))]
+        assert len(provider_logs) == 4
+        for request_id in request_ids:
+            matching = [message for message in provider_logs if f"request_id={request_id}" in message]
+            assert len(matching) == 2
+            assert sum(message.startswith("provider_attempt ") for message in matching) == 1
+        assert "same-private-session" not in "\n".join(provider_logs)
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+        router.close()
 
 
 def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeypatch, caplog):
@@ -347,6 +641,359 @@ def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeyp
     assert "client_disconnected" in caplog.text
     assert "private-record" not in caplog.text
     server.server_close()
+
+
+def test_response_payload_debug_log_reuses_redacted_payload_never_raw_secret(caplog):
+    """The DEBUG response summary never carries a secret from an error message.
+
+    Superseded mechanism, same property: this used to prove the secret was
+    caught by redact_value and replaced with "[REDACTED]" in an otherwise
+    logged error message. It now logs only allowlisted metadata
+    (response_metadata_for_log) and never the error message text at all --
+    a strictly stronger guarantee, since the secret (and the rest of the
+    message) is absent rather than merely masked.
+    """
+    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    payload = {
+        "choices": [{"message": {"content": "ok"}}],
+        "error": {"message": f"upstream rejected request: api_key={fake_secret}"},
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert "has_error" in caplog.text
+    assert fake_secret not in caplog.text
+
+
+def test_response_payload_debug_log_redacts_credential_shaped_json_keys(caplog):
+    """A secret under a credential-shaped key never reaches the response summary.
+
+    `redact_value`/`redact_text` only pattern-match the literal in-string
+    shape `(api[_-]?key|token|secret|password)[:=]<value>` or `bearer
+    <value>` -- they never inspect the JSON *key name* a string value is
+    nested under. A response payload shaped like `{"private_key": "..."}`,
+    `{"key": "..."}`, `{"auth": "..."}`, or `{"credential": "..."}` is now
+    caught structurally: the response summary logs only an allowlisted
+    metadata shape that never includes these fields at all (see
+    `response_metadata_for_log`), with the key-name-based
+    `redact_credential_shaped_keys` pass applied on top as a second,
+    defense-in-depth layer in case a future allowlist field ever collides
+    with a credential-shaped key name.
+    """
+    fake_private_key = "-----BEGIN PRIVATE KEY-----\nMIIFAKEFAKEFAKE\n-----END PRIVATE KEY-----"
+    fake_api_key = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE12"
+    fake_auth = "sk-live-FAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+    fake_credential = "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+    payload = {
+        "choices": [{"message": {"content": "ok"}}],
+        "metadata": {
+            "private_key": fake_private_key,
+            "key": fake_api_key,
+            "auth": fake_auth,
+        },
+        "credential": fake_credential,
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert fake_private_key not in caplog.text
+    assert fake_api_key not in caplog.text
+    assert fake_auth not in caplog.text
+    assert fake_credential not in caplog.text
+
+
+def test_response_payload_debug_log_never_includes_ordinary_response_content(caplog):
+    """CWE-532 (CodeRabbit): the DEBUG summary must never carry response *content*.
+
+    `redact_value`/`redact_credential_shaped_keys` only mask credential-shaped
+    content -- ordinary response text (`choices[].message.content`, tool-call
+    arguments, an `error.message` that can echo caller-supplied input) is not
+    a credential, so it was never masked and reached DEBUG output verbatim.
+    That text can carry PII or business-sensitive content that has nothing to
+    do with secrets. The summary now logs only an allowlisted metadata shape
+    (whether the response is error-shaped, the model name, the choice count,
+    and numeric usage counts) and never the payload's actual text.
+    """
+    sensitive_content = "My SSN is 123-45-6789 and I live at 42 Example Lane."
+    sensitive_tool_argument = "wire $50000 to account 000111222 routing 333444555"
+    sensitive_error_text = "rejected request containing patient record MRN-778899"
+    payload = {
+        "id": "chatcmpl-abc123",
+        "model": "gpt-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": sensitive_content,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "wire_transfer", "arguments": sensitive_tool_argument},
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
+        "error": {"message": sensitive_error_text},
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert sensitive_content not in caplog.text
+    assert sensitive_tool_argument not in caplog.text
+    assert sensitive_error_text not in caplog.text
+    # The allowlisted metadata itself is still present.
+    assert "gpt-test" in caplog.text
+    assert "choice_count" in caplog.text
+    assert "46" in caplog.text  # total_tokens, allowlisted numeric usage
+
+
+def test_response_payload_debug_log_is_silent_without_debug(caplog):
+    payload = {"choices": [{"message": {"content": "ok"}}]}
+
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" not in caplog.text
+
+
+def test_per_request_info_summary_reports_method_path_and_status(caplog):
+    """One body-free INFO line per completed request, using method/path/status/latency."""
+    import threading
+    import time
+    import urllib.request
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
+                assert response.status == 200
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        # ThreadingHTTPServer's per-connection handler threads are daemon
+        # threads server_close() does not wait for; a brief settle avoids a
+        # straggler's own _log_request_summary call landing inside a *later*
+        # test's caplog window instead of being filtered out here at the
+        # default WARNING level once this test's own caplog.at_level scope
+        # has already exited.
+        time.sleep(0.2)
+
+    assert "http_request" in caplog.text
+    assert "method=GET" in caplog.text
+    assert "path=/healthz" in caplog.text
+    assert "status=200" in caplog.text
+    import re
+    summary_lines = [row.getMessage() for row in caplog.records
+                     if row.getMessage().startswith("http_request ")]
+    assert len(summary_lines) == 1
+    assert re.search(r" request_id=[0-9a-f]{32}$", summary_lines[0])
+
+
+def test_per_request_info_summary_never_includes_query_string(caplog):
+    """The INFO per-request summary logs the bare path only, never a query string.
+
+    A caller could plausibly put a token in a query parameter (a common
+    client habit) even though this server's own auth is header-only; the
+    summary line's own docstring already claims to be body-free and never
+    carry "a query string beyond the raw path", so the raw query string
+    (and anything in it) must never reach this log line.
+    """
+    import threading
+    import time
+    import urllib.request
+
+    fake_token = "sk-FAKEFAKEFAKEFAKEFAKEQUERYSTRING123"
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/healthz?api_key={fake_token}", timeout=5
+            ) as response:
+                assert response.status == 200
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "path=/healthz" in caplog.text
+    assert fake_token not in caplog.text
+    assert "?" not in caplog.text
+
+
+def test_keep_alive_close_does_not_log_phantom_request(caplog):
+    """A keep-alive connection closing without a second request logs nothing extra.
+
+    `handle_one_request` never reset `self.command`/`self.path` before each
+    call, so when a persistent connection's next read returns nothing (the
+    client closed it), those attributes were still whatever the *previous*
+    real request left them as. The per-request summary's own "nothing to
+    report" guard (`if not method and not path: return`) therefore never
+    fired, and the prior request got logged a second time with a statusless
+    "phantom" entry.
+    """
+    import http.client
+    import threading
+    import time as time_module
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("GET", "/healthz")
+            response = connection.getresponse()
+            assert response.status == 200
+            response.read()
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+            connection.close()  # keep-alive connection closed with no second request
+            time_module.sleep(0.3)  # let the server's connection thread observe the close
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time_module.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert caplog.text.count("http_request") == 1
+    assert "path=/healthz" in caplog.text
+
+
+def test_framework_generated_error_status_is_captured_in_log(caplog):
+    """A status the framework sends itself (not via our own writers) is still logged.
+
+    `_last_status` used to be updated only by this module's own
+    `_send`/`_send_text`/`_send_bytes`/`_send_sse` writers.
+    `BaseHTTPRequestHandler`'s own machinery -- e.g. its built-in 501 for an
+    HTTP method with no matching `do_*` handler -- calls `send_response`
+    directly and bypasses all of those writers, so the INFO per-request
+    summary logged `status=-` even though a real status (501) was already
+    sent to the client.
+    """
+    import http.client
+    import threading
+    import time
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("PUT", "/healthz")  # no do_PUT -- stdlib's own 501 path
+            response = connection.getresponse()
+            assert response.status == 501
+            response.read()
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "status=501" in caplog.text
+
+
+def test_malformed_request_line_is_captured_in_log(caplog):
+    """A malformed request line that still got a real response is not silently skipped.
+
+    ``BaseHTTPRequestHandler.parse_request`` rejects an unparsable request
+    line via ``send_error`` -- captured by the ``send_response`` override
+    into ``_last_status`` -- *before* ``self.command``/``self.path`` are
+    ever assigned: stdlib's own ``parse_request`` explicitly resets
+    ``self.command`` to ``None`` "in case of error on the first line" and
+    only reaches the later assignment that would set ``path`` once parsing
+    succeeds. The per-request summary's old "nothing to report" guard only
+    checked method/path, so a connection that *did* deliver real bytes and
+    *did* get a real 400 response left no log trace at all -- indistinguishable,
+    from the log's perspective, from a keep-alive connection closing with
+    zero bytes (see ``test_keep_alive_close_does_not_log_phantom_request``,
+    which must stay silent).
+    """
+    import socket
+    import threading
+    import time
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+                # A single-token request line: too few words for
+                # parse_request's `2 <= len(words) <= 3` shape check, so it
+                # calls send_error(400, ...) without ever assigning
+                # self.command/self.path. A request line this malformed never
+                # reaches the branch that promotes `self.request_version`
+                # past stdlib's own "HTTP/0.9" default, so `send_error`'s
+                # underlying `send_response_only`/`send_header` calls
+                # deliberately write no status line or headers at all (a
+                # documented stdlib quirk for an unparsable first line) --
+                # only the HTML error body reaches the wire. The 400 is still
+                # real: it is what `send_response` records into
+                # `_last_status`, which is what this test is actually about.
+                connection.sendall(b"GARBAGE\r\n\r\n")
+                response = b""
+                while True:
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+            assert b"400" in response
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "status=400" in caplog.text
+
+
+def test_per_request_info_summary_absent_below_info(caplog):
+    import threading
+    import time
+    import urllib.request
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
+                assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" not in caplog.text
 
 
 def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):
@@ -422,6 +1069,37 @@ def test_stream_and_passthrough_provider_calls_create_client_spans(monkeypatch):
     ]
 
 
+def test_readiness_probe_uses_separate_operation_telemetry(monkeypatch):
+    """A startup readiness probe cannot masquerade as a caller request attempt."""
+    captured = []
+
+    @contextmanager
+    def capture(name, attributes):
+        captured.append((name, attributes))
+        yield None
+
+    client = ModelClient()
+    agent = ModelAgent(
+        "provider_agent",
+        "model-x",
+        base_url="https://provider.example/v1",
+        credential_key="",
+        provider_name="openai",
+        group_name="model-family-x",
+    )
+    monkeypatch.setattr(orchestrator_module, "traced", capture)
+    monkeypatch.setattr(client, "_validate_provider", lambda unused_agent: None)
+    monkeypatch.setattr(
+        client, "_send_raw_with_retry", lambda *_args, **_kwargs: {"ok": True}
+    )
+
+    assert client.probe_structured_chat(agent, {"messages": []}) == {"ok": True}
+    assert captured[0][0] == "capability_probe.chat model-x"
+    assert captured[0][1]["contextual_orchestrator.operation_kind"] == "capability_probe"
+    assert captured[0][1]["contextual_orchestrator.model_group"] == "model_family_x"
+    assert captured[0][1]["contextual_orchestrator.fallback_outcome"] == "not_attempted"
+
+
 def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(monkeypatch, caplog):
     """Failures remain classifiable without recording raw exception or session data."""
     tracer = MagicMock()
@@ -453,7 +1131,11 @@ def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(mon
     span.record_exception.assert_not_called()
     # Failures record the CLASSIFIED cause family (network timeout here), not
     # the Python exception class, and never the exception text.
-    span.set_attribute.assert_called_once_with("error.type", "provider_connection_error")
+    span.set_attribute.assert_any_call("error.type", "provider_connection_error")
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary",
+        "provider_connection_error",
+    )
     assert "provider-response-secret" not in caplog.text
     assert "session-secret" not in caplog.text
 
@@ -476,6 +1158,129 @@ def test_traced_records_upstream_status_for_http_failures(monkeypatch):
     span.set_attribute.assert_any_call(
         "contextual_orchestrator.provider_status_code", 429
     )
+
+
+def test_traced_logs_actionable_bounded_failure_evidence(monkeypatch, caplog):
+    """Operators get a safe cause, model group, status, and fallback outcome."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    message = (
+        "'messages' must contain the word 'json' in some form, to use "
+        "'response_format' of type 'json_object'.No fallback model group found; "
+        "customer-private-text"
+    )
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced(
+            "capability_probe.chat gpt-4.1",
+            {
+                "contextual_orchestrator.model_group": "gpt-4.1",
+                "contextual_orchestrator.fallback_outcome": "not_attempted",
+            },
+        ):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call("error.type", "invalid_request_error")
+    span.set_attribute.assert_any_call("contextual_orchestrator.provider_status_code", 400)
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary",
+        "messages must mention json when response_format is json_object",
+    )
+    assert "provider_status=400" in caplog.text
+    assert "model_group=gpt-4.1" in caplog.text
+    assert "fallback_outcome=not_attempted" in caplog.text
+    assert "messages must mention json when response_format is json_object" in caplog.text
+    assert "No fallback model group" not in caplog.text
+    assert "customer-private-text" not in caplog.text
+    assert "private.example" not in caplog.text
+
+
+def test_traced_recognizes_litellm_prefixed_json_object_diagnostic(
+    monkeypatch, caplog
+):
+    """A gateway prefix cannot hide Azure's actionable JSON-object contract."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    message = (
+        "AzureException BadRequestError - 'messages' must contain the word 'json' "
+        "in some form, to use 'response_format' of type 'json_object'."
+        "No fallback model group found; customer-private-text"
+    )
+    body = io.BytesIO(json.dumps({"error": {"message": message}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced(
+            "capability_probe.chat gpt-4.1",
+            {"contextual_orchestrator.model_group": "gpt-4.1"},
+        ):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary",
+        "messages must mention json when response_format is json_object",
+    )
+    assert "provider_status=400" in caplog.text
+    assert "model_group=gpt-4.1" in caplog.text
+    assert "AzureException" not in caplog.text
+    assert "No fallback model group" not in caplog.text
+    assert "customer-private-text" not in caplog.text
+    assert "private.example" not in caplog.text
+
+
+def test_traced_does_not_export_natural_language_provider_echo(monkeypatch, caplog):
+    """Unstructured provider prose is never evidence that request text is absent."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    echoed = "The supplied phrase customer-private-text is not valid JSON"
+    body = io.BytesIO(json.dumps({"error": {"message": echoed}}).encode())
+
+    with pytest.raises(urllib.error.HTTPError):
+        with traced("capability_probe.chat model-x"):
+            raise urllib.error.HTTPError("https://private.example", 400, "bad", None, body)
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary", "invalid_request_error"
+    )
+    assert echoed not in caplog.text
+    assert "customer-private-text" not in caplog.text
+
+
+def test_traced_does_not_export_classified_provider_prose(monkeypatch, caplog):
+    """A previously classified provider error cannot bypass the summary allowlist."""
+    from contextual_orchestrator.provider_errors import ProviderUpstreamError
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+    echoed = "The supplied phrase customer-private-text is invalid"
+    error = ProviderUpstreamError(
+        agent_id="provider_agent",
+        model="model-x",
+        error_code="invalid_request_error",
+        message=echoed,
+        client_status=400,
+        provider_status=400,
+    )
+
+    with pytest.raises(ProviderUpstreamError):
+        with traced("chat model-x"):
+            raise error
+
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.error_summary", "invalid_request_error"
+    )
+    assert echoed not in caplog.text
+    assert "customer-private-text" not in caplog.text
 
 
 def test_annotate_and_usage_helpers_filter_to_allowed_genai_attributes():
@@ -637,9 +1442,16 @@ def test_passthrough_response_records_provider_telemetry(monkeypatch) -> None:
         credential_key="",
     )
 
+    class FakePassthroughResponse(io.BytesIO):
+        """Faithful HTTP-response double: bytes plus a real Content-Length."""
+
+        @property
+        def headers(self) -> dict[str, str]:
+            return {"content-length": str(len(self.getvalue()))}
+
     @contextmanager
     def fake_open(request, destination):  # noqa: ARG001
-        yield io.BytesIO(
+        yield FakePassthroughResponse(
             json.dumps(
                 {
                     "model": "gpt-x-served",

@@ -35,13 +35,77 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
+import time
+import weakref
 from collections.abc import MutableMapping
+from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
 # Registry entries expire after this many seconds so abandoned jobs do
 # not accumulate forever. Seven days comfortably outlives every batch
 # backend's own completion window.
 DEFAULT_RETENTION_SECONDS = 7 * 24 * 3600
+
+
+def _claim_renewal_interval_seconds(lease_seconds: float) -> float:
+    """Return the cadence the durable registry uses to observe claim ownership."""
+    return max(0.05, min(lease_seconds / 3, 1.0))
+
+
+class ClaimNotAcquired(RuntimeError):
+    """Another worker owns a non-blocking durable job claim."""
+
+
+class _ClaimLease:
+    def __init__(
+        self,
+        claim: Any = None,
+        *,
+        lease_seconds: float | None = None,
+        lost_ownership: threading.Event | None = None,
+    ) -> None:
+        self._claim = claim
+        self._lease_seconds = lease_seconds
+        self._lost_ownership = lost_ownership or threading.Event()
+
+    def mark_lost(self) -> None:
+        """Record that this worker can no longer prove claim ownership."""
+        self._lost_ownership.set()
+
+    def ensure_owned(self, *, refresh: bool = False) -> None:
+        """Fail closed unless this worker still owns the durable claim."""
+        if self._claim is None:
+            return
+        if self._lost_ownership.is_set():
+            raise ClaimNotAcquired("durable job claim ownership was lost")
+        try:
+            if refresh:
+                if self._lease_seconds is None:
+                    raise ClaimNotAcquired("durable job claim lease is unavailable")
+                retained = self._claim.extend(
+                    self._lease_seconds,
+                    replace_ttl=True,
+                )
+            else:
+                retained = self._claim.owned()
+        except Exception as exc:  # noqa: BLE001 - redis is optional.
+            self.mark_lost()
+            raise ClaimNotAcquired("durable job claim ownership is unavailable") from exc
+        if not retained:
+            self.mark_lost()
+            raise ClaimNotAcquired("durable job claim ownership was lost")
+
+    def atomic_identity(self) -> tuple[str, Any]:
+        """Return the Valkey lock key and token for one atomic fenced write."""
+        if self._claim is None:
+            raise ClaimNotAcquired("durable job claim identity is unavailable")
+        token = getattr(getattr(self._claim, "local", None), "token", None)
+        name = getattr(self._claim, "name", None)
+        if not name or token is None:
+            self.mark_lost()
+            raise ClaimNotAcquired("durable job claim identity is unavailable")
+        return str(name), token
 
 
 def _encode(value: Any) -> str:
@@ -130,11 +194,216 @@ class JobRegistryFactory:
     def __init__(self, client: Any = None, *, retention_seconds: int = DEFAULT_RETENTION_SECONDS) -> None:
         self._client = client
         self._retention_seconds = retention_seconds
+        self._local_locks: weakref.WeakValueDictionary[str, threading.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._local_locks_guard = threading.Lock()
+
+    def lock(
+        self,
+        name: str,
+        key: str,
+        *,
+        lease_seconds: float | None = None,
+        renew_until_epoch: float | None = None,
+    ):
+        """Return an atomic shard claim with bounded lease and acquisition wait."""
+        lock_name = f"batch_job_registry:{name}:claim:{key}"
+        if self._client is not None:
+            if lease_seconds is None or lease_seconds <= 0:
+                raise ValueError("durable claim lease_seconds must be positive")
+            claim = self._client.lock(
+                lock_name,
+                timeout=lease_seconds,
+                blocking=True,
+                blocking_timeout=lease_seconds,
+                thread_local=False,
+            )
+
+            @contextmanager
+            def acquired_claim():
+                if not claim.acquire():
+                    raise ClaimNotAcquired(lock_name)
+                stop_renewal = threading.Event()
+                lost_ownership = threading.Event()
+                lease = _ClaimLease(
+                    claim,
+                    lease_seconds=lease_seconds,
+                    lost_ownership=lost_ownership,
+                )
+                renewal_thread = None
+                if renew_until_epoch is not None:
+
+                    def renew_claim() -> None:
+                        interval = _claim_renewal_interval_seconds(lease_seconds)
+                        while not stop_renewal.wait(interval):
+                            remaining = renew_until_epoch - time.time()
+                            if remaining <= 0:
+                                lease.mark_lost()
+                                return
+                            try:
+                                # redis-py's Lock.extend script checks the
+                                # claim token before replacing the TTL (CAS).
+                                renewed = claim.extend(
+                                    max(0.05, min(lease_seconds, remaining)),
+                                    replace_ttl=True,
+                                )
+                                if not renewed:
+                                    lease.mark_lost()
+                                    return
+                            except Exception:  # noqa: BLE001 - redis is optional.
+                                lease.mark_lost()
+                                return
+
+                    renewal_thread = threading.Thread(
+                        target=renew_claim,
+                        name="job-claim-renewal",
+                        daemon=True,
+                    )
+                    renewal_thread.start()
+                try:
+                    yield lease
+                finally:
+                    stop_renewal.set()
+                    if renewal_thread is not None:
+                        renewal_thread.join()
+                    try:
+                        claim.release()
+                    except Exception as exc:  # noqa: BLE001 - redis is optional.
+                        if renew_until_epoch is None or type(exc).__name__ != "LockNotOwnedError":
+                            raise
+
+            return acquired_claim()
+        with self._local_locks_guard:
+            lock = self._local_locks.get(lock_name)
+            if lock is None:
+                lock = threading.Lock()
+                self._local_locks[lock_name] = lock
+
+            @contextmanager
+            def acquired_local_claim():
+                with lock:
+                    yield _ClaimLease()
+
+        return acquired_local_claim()
+
+    def publish_provider_embedding_terminal(
+        self,
+        claim: _ClaimLease,
+        job_id: str,
+        *,
+        status: str,
+        results: Any = None,
+        usage: Any = None,
+        error: Any = None,
+    ) -> None:
+        """Atomically publish one durable terminal state while its claim is owned."""
+        if self._client is None:
+            raise RuntimeError("atomic terminal publication requires a durable registry")
+        if status not in {"completed", "failed"}:
+            raise ValueError("terminal status must be completed or failed")
+        lock_name, token = claim.atomic_identity()
+        script = """
+        if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+        local current = redis.call('hget', KEYS[2], ARGV[2])
+        if current ~= ARGV[3] and current ~= ARGV[4] then return 0 end
+        if ARGV[6] ~= '' then redis.call('hset', KEYS[3], ARGV[2], ARGV[6]) end
+        if ARGV[7] ~= '' then redis.call('hset', KEYS[4], ARGV[2], ARGV[7]) end
+        if ARGV[8] ~= '' then redis.call('hset', KEYS[5], ARGV[2], ARGV[8]) end
+        redis.call('hset', KEYS[2], ARGV[2], ARGV[5])
+        for index = 2, 5 do redis.call('expire', KEYS[index], ARGV[9]) end
+        return 1
+        """
+        published = self._client.eval(
+            script,
+            5,
+            lock_name,
+            "batch_job_registry:provider_embedding_states",
+            "batch_job_registry:provider_embedding_results",
+            "batch_job_registry:provider_embedding_usage",
+            "batch_job_registry:provider_embedding_errors",
+            token,
+            job_id,
+            _encode("running"),
+            _encode("queued"),
+            _encode(status),
+            "" if results is None else _encode(results),
+            "" if usage is None else _encode(usage),
+            "" if error is None else _encode(error),
+            self._retention_seconds,
+        )
+        if not published:
+            claim.mark_lost()
+            raise ClaimNotAcquired("durable job claim ownership was lost before publication")
+
+    def mark_provider_embedding_running(self, claim: _ClaimLease, job_id: str) -> None:
+        """Atomically retain a pending job and mark it running under its claim."""
+        if self._client is None:
+            raise RuntimeError("atomic state transition requires a durable registry")
+        lock_name, token = claim.atomic_identity()
+        script = """
+        if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+        local current = redis.call('hget', KEYS[2], ARGV[2])
+        if current ~= ARGV[3] and current ~= ARGV[4] then return 0 end
+        redis.call('hset', KEYS[2], ARGV[2], ARGV[4])
+        redis.call('expire', KEYS[2], ARGV[5])
+        return 1
+        """
+        transitioned = self._client.eval(
+            script,
+            2,
+            lock_name,
+            "batch_job_registry:provider_embedding_states",
+            token,
+            job_id,
+            _encode("queued"),
+            _encode("running"),
+            self._retention_seconds,
+        )
+        if not transitioned:
+            claim.mark_lost()
+            raise ClaimNotAcquired("durable job was cancelled or claim ownership was lost")
+
+    def cancel_provider_embedding(self, job_id: str, *, reason: str) -> bool:
+        """Atomically cancel a durable job unless terminal publication won."""
+        if self._client is None:
+            raise RuntimeError("atomic cancellation requires a durable registry")
+        script = """
+        local current = redis.call('hget', KEYS[1], ARGV[1])
+        if current ~= ARGV[2] and current ~= ARGV[3] and current ~= ARGV[4] then
+            return 0
+        end
+        redis.call('hset', KEYS[2], ARGV[1], ARGV[5])
+        redis.call('hset', KEYS[1], ARGV[1], ARGV[6])
+        redis.call('expire', KEYS[1], ARGV[7])
+        redis.call('expire', KEYS[2], ARGV[7])
+        return 1
+        """
+        return bool(
+            self._client.eval(
+                script,
+                2,
+                "batch_job_registry:provider_embedding_states",
+                "batch_job_registry:provider_embedding_cancellations",
+                job_id,
+                _encode("reserved"),
+                _encode("queued"),
+                _encode("running"),
+                _encode({"reason": reason}),
+                _encode("cancelled"),
+                self._retention_seconds,
+            )
+        )
 
     @property
     def durable(self) -> bool:
         """True when registries survive a process restart."""
         return self._client is not None
+
+    @property
+    def retention_seconds(self) -> int:
+        """Return the configured terminal-result retention contract."""
+        return self._retention_seconds
 
     def mapping(self, name: str, *, decode: Optional[Callable[[Any], Any]] = None) -> MutableMapping:
         """Return the registry called ``name`` — a dict unless Valkey is configured."""

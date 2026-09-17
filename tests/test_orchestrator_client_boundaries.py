@@ -15,6 +15,7 @@ import pytest
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     ModelClient,
+    ProviderResponseError,
     TaskOrchestrator,
     _FastMLSIJudgeAdapter,
     _coerce_input_text,
@@ -140,6 +141,36 @@ def test_judge_adapter_validates_mode_and_response_format() -> None:
     assert structured["trace"][0]["agent_id"] == "planner_agent"
 
 
+def test_judge_adapter_preserves_accounting_on_malformed_structured_response() -> None:
+    """A billed but malformed structured response must not erase its spend.
+
+    Devin review on #961: complete_structured() only stored served_agent_id/
+    served_model/served_usage via _completion_payload, which runs *after*
+    _response_content validates the response has assistant content. If that
+    validation raises (a real provider response with no usable content --
+    e.g. reasoning-only, or missing message content), the provider call
+    already happened and billed real usage, but the adapter never recorded
+    it. Accounting is now captured immediately once proxy_send returns,
+    before content validation runs.
+    """
+    orch = _orch(_agent())
+    adapter = _FastMLSIJudgeAdapter(orchestrator=orch, text="task", judge="planner_agent")
+    malformed_but_billed = {
+        "choices": [{"message": {}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+    }
+    with patch.object(orch.client, "proxy_send", return_value=malformed_but_billed):
+        with pytest.raises(ProviderResponseError, match="did not contain assistant content"):
+            adapter.complete_structured(
+                [{"role": "user", "content": "hi"}],
+                mode="route",
+                response_format={"type": "json_object"},
+            )
+    assert adapter.served_agent_id == "planner_agent"
+    assert adapter.served_model == "mock-model"
+    assert adapter.served_usage == {"prompt_tokens": 5, "completion_tokens": 2}
+
+
 # -- agent and policy validation -----------------------------------------------
 
 
@@ -148,6 +179,38 @@ def test_model_agent_rejects_bad_local_credential_key_and_effort_flag() -> None:
         ModelAgent(id="agent_two", model="m", local_credential_key=123)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="reasoning_effort_supported must be"):
         ModelAgent(id="agent_two", model="m", reasoning_effort_supported="yes")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="max_output_tokens must be"):
+        ModelAgent(id="agent_two", model="m", max_output_tokens=0)
+    with pytest.raises(TypeError, match="max_output_tokens must be"):
+        ModelAgent(id="agent_two", model="m", max_output_tokens=9_223_372_036_854_775_808)
+    with pytest.raises(TypeError, match="context_window must be"):
+        ModelAgent(id="agent_two", model="m", context_window="128000")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="context_window must be"):
+        ModelAgent(id="agent_two", model="m", context_window=9_223_372_036_854_775_808)
+
+
+def test_client_clamps_known_provider_output_ceiling() -> None:
+    agent = ModelAgent(
+        id="remote_agent",
+        model="remote-model",
+        base_url="https://provider.example/v1",
+        credential_key="REMOTE_API_KEY",
+        max_output_tokens=64,
+    )
+    payload = {
+        "max_tokens": 256,
+        "max_completion_tokens": 128,
+        "max_output_tokens": 96,
+    }
+
+    clamped = ModelClient._clamp_agent_token_budget(agent, payload)
+
+    assert clamped == {
+        "max_tokens": 64,
+        "max_completion_tokens": 64,
+        "max_output_tokens": 64,
+    }
+    assert payload["max_tokens"] == 256
 
 
 def test_batch_results_must_be_a_mapping() -> None:
@@ -157,6 +220,86 @@ def test_batch_results_must_be_a_mapping() -> None:
 
 
 # -- local provider slot concurrency ------------------------------------------
+
+
+def test_default_model_timeout_is_unbounded() -> None:
+    """Model and repair requests inherit no application wall-clock cap."""
+    assert ModelClient().timeout is None
+    assert ModelClient().timeout not in {90, 900, 10800}
+
+
+def test_chat_applies_only_the_selected_model_timeout(monkeypatch) -> None:
+    """A configured model limit is per-agent; other models stay unbounded."""
+    limited = ModelAgent(
+        id="limited_chat_agent",
+        model="limited-chat-model",
+        base_url="https://limited.example/v1",
+        credential_key="LIMITED_CHAT_KEY",
+        model_timeout_seconds=12,
+    )
+    unbounded = ModelAgent(
+        id="open_chat_agent",
+        model="open-chat-model",
+        base_url="https://open.example/v1",
+        credential_key="OPEN_CHAT_KEY",
+    )
+    client = ModelClient()
+    slot_timeouts: list[float | None] = []
+    open_timeouts: list[float | None] = []
+    real_slot = _local_provider_slot
+
+    def capture_slot(agent, capacity, timeout):
+        slot_timeouts.append(timeout)
+        return real_slot(agent, capacity, timeout)
+
+    class _ProviderResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return (
+                b'{"choices":[{"message":{"content":"ok"}}],'
+                b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+            )
+
+    def open_provider(request, destination=None, timeout=None):
+        del request, destination
+        open_timeouts.append(timeout)
+        return _ProviderResponse()
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator._local_provider_slot", capture_slot
+    )
+    monkeypatch.setattr(client, "_validate_provider", lambda agent: None)
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator._provider_credential",
+        lambda agent: "test-token",
+    )
+    monkeypatch.setattr(client, "_open_provider", open_provider)
+
+    assert client.chat(limited, [{"role": "user", "content": "x"}]) == "ok"
+    assert client.chat(unbounded, [{"role": "user", "content": "x"}]) == "ok"
+    assert slot_timeouts == [12.0, None]
+    assert open_timeouts[0] is not None
+    assert 0 < open_timeouts[0] <= 12.0
+    assert open_timeouts[1] is None
+    assert 90 not in slot_timeouts + open_timeouts
+    assert 900 not in slot_timeouts + open_timeouts
+    assert 10800 not in slot_timeouts + open_timeouts
+
+
+def test_local_slot_accepts_unbounded_waits() -> None:
+    """The local-agent coordinator preserves the shared unbounded default."""
+    agent = ModelAgent(
+        id="unbounded_slot_agent",
+        model="unbounded-slot-model",
+        base_url="local://127.0.0.1:59343/v1",
+    )
+    with _local_provider_slot(agent, 1, None):
+        pass
 
 
 def test_slot_shrinks_capacity_for_same_model_and_resets_when_empty() -> None:
@@ -381,6 +524,28 @@ def test_stream_survives_noise_and_stream_without_done_marker() -> None:
     ):
         deltas = list(client._stream_send(agent, {}))
     assert deltas == ["hel", "lo"]
+
+
+def test_stream_send_clamps_known_provider_output_ceiling() -> None:
+    agent = ModelAgent(
+        id="stream_limited_agent",
+        model="remote-chat-model",
+        base_url="https://stream.example/v1",
+        credential_key="STREAM_API_KEY",
+        max_output_tokens=32,
+    )
+    client = ModelClient()
+    lines = [b'data: {"choices":[{"delta":{"content":"ok"}}]}', b"data: [DONE]"]
+    seen_payload: dict[str, object] = {}
+
+    def open_provider(request, destination=None, timeout=None):
+        del destination, timeout
+        seen_payload.update(json.loads(request.data.decode("utf-8")))
+        return _StreamResponse(lines)
+
+    with patch.object(client, "_open_provider", side_effect=open_provider):
+        assert list(client._stream_send(agent, {"max_tokens": 64})) == ["ok"]
+    assert seen_payload["max_tokens"] == 32
 
 
 def test_stream_preserves_tool_stop_contract_mid_stream() -> None:
@@ -861,6 +1026,48 @@ def test_batch_run_pins_openrouter_zdr_in_uploaded_jsonl() -> None:
             _REQUEST_ZDR_ONLY.reset(token)
 
     assert captured["line"]["body"]["provider"] == {"zdr": True}
+
+
+def test_batch_run_clamps_known_provider_output_ceiling() -> None:
+    client = ModelClient(max_output_tokens=256)
+    agent = ModelAgent(
+        id="batch_limited_agent",
+        model="remote-chat-model",
+        base_url="https://remote.example/v1",
+        credential_key="REMOTE_API_KEY",
+        max_output_tokens=32,
+    )
+    uploaded_lines: list[dict[str, object]] = []
+    raw = (
+        b'{"custom_id": "task_0", "response": {"body": '
+        b'{"choices": [{"message": {"content": "ok"}}]}}}\n'
+    )
+
+    def batch_upload(_agent, payload, destination=None):
+        del _agent, destination
+        uploaded_lines.extend(json.loads(line) for line in payload.decode("utf-8").splitlines())
+        return "file_1"
+
+    def batch_json(_agent, method, _path, payload=None, destination=None):
+        del destination
+        if method == "POST":
+            assert payload["endpoint"] == "/v1/chat/completions"
+            return {"id": "batch_1"}
+        return {"status": "completed", "output_file_id": "file_9"}
+
+    with patch.object(client, "_batch_upload", side_effect=batch_upload), patch.object(
+        client, "_batch_json", side_effect=batch_json
+    ), patch.object(client, "_batch_raw", return_value=raw):
+        results = client._batch_run(
+            agent,
+            {"task_0": [{"role": "user", "content": "hi"}]},
+            None,
+            0.01,
+            5.0,
+        )
+
+    assert results["task_0"]["content"] == "ok"
+    assert uploaded_lines[0]["body"]["max_tokens"] == 32
 
 
 # -- Responses input coercion shapes -------------------------------------------------

@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.debug_logging import summarize_request_for_log  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "http_response_write_disconnect_safety_token"  # noqa: S105
@@ -302,7 +303,191 @@ def test_binary_response_swallows_a_disconnect() -> None:
         server.server_close()
 
 
+def test_disconnected_write_does_not_report_intended_status_as_delivered() -> None:
+    """Case (a): a dead-peer write BEFORE headers ever go out clears `_last_status`.
+
+    Regression for: `_send`/`_send_text`/`_send_bytes`/`_send_sse` all set
+    `self._last_status = status` *before* calling `_write_response`, and
+    ignored its boolean return value. `_write_response` deliberately
+    swallows `BrokenPipeError`/`ConnectionError`/`OSError` from a
+    disconnected peer -- but the caller's pre-set `_last_status` survived
+    that failure untouched, so `_log_request_summary` (via
+    `summarize_request_for_log`) went on to log the *intended* status
+    (e.g. 200) as if delivery had actually completed.
+
+    The disconnect here strikes in `end_headers()` itself -- before the
+    status line/headers were ever flushed -- so `_response_headers_sent`
+    stays unset and `_write_response` clears `_last_status` back to `None`,
+    this module's existing "response was never sent" value. The body write
+    must never even be attempted in this case (asserted below), matching
+    what a real dead socket would do: nothing written after headers fail.
+    """
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    handler_cls = server.RequestHandlerClass
+
+    class DisconnectedBeforeHeadersHandler:
+        wfile = None
+        _last_status = "unset-before-send"
+        _request_body_consumed = True
+
+        def send_response(self, _status):
+            return None
+
+        def send_header(self, _name, _value):
+            return None
+
+        def _send_security_headers(self):
+            return None
+
+        def end_headers(self):
+            raise BrokenPipeError("simulated client disconnect before headers were delivered")
+
+        def write(self, _payload):
+            raise AssertionError("body write must not be attempted once end_headers fails")
+
+        _write_response = handler_cls._write_response
+
+    try:
+        handler = DisconnectedBeforeHeadersHandler()
+        handler.wfile = handler
+        handler_cls._send_bytes(handler, b"audio", "audio/mpeg")
+
+        assert handler._last_status != 200
+        assert handler._last_status is None
+
+        summary = summarize_request_for_log(
+            method="POST",
+            path="/v1/audio/speech",
+            status=handler._last_status,
+            latency_ms=1.0,
+        )
+        assert "status=200" not in summary
+        assert "status=-" in summary
+    finally:
+        server.server_close()
+
+
+def test_disconnected_body_write_after_headers_preserves_delivered_status() -> None:
+    """Case (b): a dead-peer write AFTER headers already went out preserves the status.
+
+    Regression for a follow-up bug in the case-(a) fix above: clearing
+    `_last_status` on *every* caught disconnect was too broad. Once
+    `end_headers()` has actually completed, the client genuinely received
+    the real status line and headers -- only the body write that follows
+    (in the same `_write()` closure) failed. Reporting `status=-` for that
+    request would be just as dishonest as the original bug, in the other
+    direction: it would hide a response the client truly got.
+    """
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    handler_cls = server.RequestHandlerClass
+
+    class DisconnectedAfterHeadersHandler:
+        wfile = None
+        _last_status = "unset-before-send"
+        _request_body_consumed = True
+
+        def send_response(self, _status):
+            return None
+
+        def send_header(self, _name, _value):
+            return None
+
+        def _send_security_headers(self):
+            return None
+
+        def end_headers(self):
+            return None  # succeeds: the status line/headers really went out
+
+        def write(self, _payload):
+            raise BrokenPipeError("simulated client disconnect mid-body, after headers")
+
+        _write_response = handler_cls._write_response
+
+    try:
+        handler = DisconnectedAfterHeadersHandler()
+        handler.wfile = handler
+        handler_cls._send_bytes(handler, b"audio", "audio/mpeg")
+
+        assert handler._response_headers_sent is True
+        assert handler._last_status == 200
+
+        summary = summarize_request_for_log(
+            method="POST",
+            path="/v1/audio/speech",
+            status=handler._last_status,
+            latency_ms=1.0,
+        )
+        assert "status=200" in summary
+        assert "status=-" not in summary
+    finally:
+        server.server_close()
+
+
+def test_sse_frame_disconnect_after_headers_preserves_delivered_status() -> None:
+    """A later SSE frame failing must not erase the status `_begin_sse` already sent.
+
+    `_begin_sse` successfully flushes the real 200 status line and headers
+    -- the client DID receive it -- before any frame write is attempted.
+    A disconnect on a LATER `_write_sse` frame must not clear that
+    already-confirmed status; only a disconnect striking before headers
+    ever completed should do that (covered by the "before headers" test
+    above).
+    """
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    handler_cls = server.RequestHandlerClass
+
+    class SseHandler:
+        wfile = None
+        _last_status = "unset-before-send"
+        _request_body_consumed = True
+
+        def send_response(self, _status):
+            return None
+
+        def send_header(self, _name, _value):
+            return None
+
+        def _send_security_headers(self):
+            return None
+
+        def end_headers(self):
+            return None  # succeeds: headers/status genuinely delivered
+
+        def write(self, _payload):
+            raise BrokenPipeError("simulated disconnect mid-stream, after headers")
+
+        def flush(self):
+            return None
+
+        _write_response = handler_cls._write_response
+        _begin_sse = handler_cls._begin_sse
+        _write_sse = handler_cls._write_sse
+
+    try:
+        handler = SseHandler()
+        handler.wfile = handler
+        assert handler_cls._begin_sse(handler) is True
+        assert handler._last_status == 200
+        assert handler._response_headers_sent is True
+
+        assert handler_cls._write_sse(handler, "data: frame\n\n") is False
+        assert handler._last_status == 200  # preserved, not cleared
+
+        summary = summarize_request_for_log(
+            method="POST",
+            path="/v1/chat/completions",
+            status=handler._last_status,
+            latency_ms=1.0,
+        )
+        assert "status=200" in summary
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":
     test_write_response_swallows_a_broken_pipe_from_a_disconnected_client()
     test_write_response_still_propagates_unrelated_errors()
+    test_disconnected_write_does_not_report_intended_status_as_delivered()
+    test_disconnected_body_write_after_headers_preserves_delivered_status()
+    test_sse_frame_disconnect_after_headers_preserves_delivered_status()
     print("ok")

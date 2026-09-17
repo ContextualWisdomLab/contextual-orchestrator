@@ -10,19 +10,19 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from pathlib import Path
 import sys
 import tempfile
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
 
 
 def _seed() -> list[ModelAgent]:
@@ -36,6 +36,8 @@ NEW_AGENT = {
     "credential_key": "OPENAI_API_KEY",
     "tags": ["coding", "reasoning"],
     "priority": 2,
+    "max_output_tokens": 4096,
+    "context_window": 128000,
     "stream_usage_supported": True,
 }
 
@@ -151,6 +153,74 @@ def test_stream_usage_capability_patch_survives_restart() -> None:
 
         restored = TaskOrchestrator([agent], agents_db=db)
         assert restored._agent(agent.id).stream_usage_supported is True
+
+
+def test_agent_pool_persists_limit_metadata_across_restart() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        first = TaskOrchestrator(_seed(), agents_db=db)
+        created = first.add_agent(
+            "default",
+            {
+                "id": "persisted_agent",
+                "model": "model-x",
+                "base_url": "https://api.openai.com/v1",
+                "credential_key": "OPENAI_API_KEY",
+                "max_output_tokens": 4096,
+                "context_window": 128000,
+            },
+        )
+        assert created["max_output_tokens"] == 4096
+        assert created["context_window"] == 128000
+
+        restored = TaskOrchestrator(_seed(), agents_db=db)
+        assert restored._agent("persisted_agent").max_output_tokens == 4096
+        assert restored._agent("persisted_agent").context_window == 128000
+
+
+def test_add_agent_rejects_unpersistable_limit_without_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        orchestrator = TaskOrchestrator(_seed(), agents_db=db)
+
+        with pytest.raises(TypeError, match="max_output_tokens must be"):
+            orchestrator.add_agent(
+                "default",
+                {
+                    "id": "overflow_agent",
+                    "model": "model-x",
+                    "base_url": "https://api.openai.com/v1",
+                    "credential_key": "OPENAI_API_KEY",
+                    "max_output_tokens": 9_223_372_036_854_775_808,
+                },
+            )
+
+        assert [agent.id for agent in orchestrator.candidates] == ["general_agent"]
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM agent_pool WHERE agent_id = ?",
+                ("overflow_agent",),
+            ).fetchone() == (0,)
+
+
+def test_patch_agent_rejects_unpersistable_limit_without_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        orchestrator = TaskOrchestrator(_seed(), agents_db=db)
+
+        with pytest.raises(TypeError, match="context_window must be"):
+            orchestrator.patch_agent(
+                "default",
+                "general_agent",
+                {"context_window": 9_223_372_036_854_775_808},
+            )
+
+        assert orchestrator._agent("general_agent").context_window is None
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT context_window FROM agent_pool WHERE agent_id = ?",
+                ("general_agent",),
+            ).fetchone() is None
 
 
 def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
@@ -383,6 +453,124 @@ def _call(url: str, method: str, token: str, payload: dict | None = None) -> tup
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def test_http_unrelated_admin_edit_preserves_newer_timeout_policy(tmp_path) -> None:
+    """Authenticated priority edits preserve policy without relaxing access gates."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    writer = TaskOrchestrator(seeds, agents_db=database_path)
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(auth_token="pool_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    before = list(serving.candidates)
+    try:
+        writer.patch_agent("default", "general_agent", {"model_timeout_seconds": 7200})
+        status, _ = _call(url, "PATCH", "wrong_token", {"priority": 7})
+        assert status == 401
+        assert serving.candidates == before
+        status, _ = _call(url, "PATCH", "pool_token", {"priority": 7})
+        assert status == 200
+        assert serving._agent("general_agent").priority == 7
+        after_priority_edit = list(serving.candidates)
+        status, body = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": 3600})
+        assert status == 400
+        assert "reload before updating" in body.get("error", {}).get("message", body.get("message", ""))
+        assert serving.candidates == after_priority_edit
+        restored = TaskOrchestrator(seeds, agents_db=database_path)
+        assert restored._agent("general_agent").priority == 7
+        assert restored._agent("general_agent").model_timeout_seconds == 7200
+        assert restored._agent("general_agent").model_timeout_revision == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_http_timeout_policy_reads_durable_state_without_activation(tmp_path) -> None:
+    """Operators can distinguish stored policy from a stale serving snapshot."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    writer = TaskOrchestrator(seeds, agents_db=database_path)
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(
+        admin_token="pool_token", inference_token="inference_token",
+    ))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    try:
+        assert _call(base + "/timeout_policy", "GET", "wrong_token")[0] == 401
+        assert _call(base + "/timeout_policy", "GET", "inference_token")[0] == 401
+        status, initial = _call(base + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert initial["configured_seconds"] is None
+        assert initial["revision"] == 0
+        writer.patch_agent("default", "general_agent", {"model_timeout_seconds": 7200})
+        status, policy = _call(base + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert policy == {
+            "configured_seconds": 7200.0, "revision": 1, "unit": "seconds",
+            "serving_snapshot_seconds": None, "serving_snapshot_revision": 0,
+            "enforcement_available": True,
+        }
+        assert serving._agent("general_agent").model_timeout_revision == 0
+        missing = base.replace("general_agent", "missing_agent")
+        assert _call(missing + "/timeout_policy", "GET", "pool_token")[0] == 404
+        from contextual_orchestrator.api_contract import OPENAPI_SPEC
+        operation = OPENAPI_SPEC["paths"][
+            "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy"
+        ]["get"]
+        assert operation["security"] == [{"admin_bearer_auth": []}]
+        schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        assert set(schema["required"]) == set(policy)
+        assert schema["properties"]["enforcement_available"] == {"const": True}
+        history_url = base + "/timeout_policy/history"
+        assert _call(history_url, "GET", "inference_token")[0] == 401
+        status, history = _call(history_url + "?page_size=1", "GET", "pool_token")
+        assert status == 200
+        assert history["history_available"] is True
+        assert history["items"][0]["configured_seconds"] == 7200
+        assert history["items"][0]["revision"] == 1
+        assert history["next_before_revision"] is None
+        for query in ("page_size=0", "page_size=101", "before_revision=-1", "before_revision=9223372036854775808"):
+            assert _call(history_url + "?" + query, "GET", "pool_token")[0] == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_http_timeout_policy_write_applies_on_serving_process(tmp_path) -> None:
+    """Authenticated timeout-only writes update the serving snapshot and persist."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(auth_token="pool_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    try:
+        status, payload = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": 12})
+        assert status == 200
+        assert payload["model_timeout_seconds"] == 12
+        assert serving._agent("general_agent").model_timeout_seconds == 12
+        status, policy = _call(url + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert policy["configured_seconds"] == 12
+        assert policy["serving_snapshot_seconds"] == 12
+        assert policy["enforcement_available"] is True
+        status, cleared = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": None})
+        assert status == 200
+        assert cleared["model_timeout_seconds"] is None
+        restored = TaskOrchestrator(seeds, agents_db=database_path)
+        assert restored._agent("general_agent").model_timeout_seconds is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def test_http_create_and_delete_worker_agents() -> None:
     token = "pool_token"
     orchestrator = TaskOrchestrator(_seed())
@@ -412,7 +600,7 @@ def test_http_create_and_delete_worker_agents() -> None:
         status, read = _call(f"{base}/general_agent", "GET", token)
         assert status == 200 and read["stream_usage_supported"] is True
 
-        status, dup = _call(base, "POST", token, NEW_AGENT)
+        status, _ = _call(base, "POST", token, NEW_AGENT)
         assert status == 400  # duplicate rejected
 
         status, wrong_pool = _call(

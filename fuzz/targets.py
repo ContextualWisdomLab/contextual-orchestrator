@@ -37,6 +37,13 @@ consume untrusted bytes/JSON:
     ``opencode_zen``/``nvidia_nim``/``nvidia_nim_sub``/``openai`` rows
     (ADR 0041). Must never raise and must never return ``True`` unless every
     present monetary value is a valid non-negative finite zero.
+11. ``rater_observation.RaterInvocation.from_mapping`` -- the governed rater
+    observation boundary. Arbitrary JSON must fail closed or round-trip to the
+    same bounded published-language payload.
+12. ``web_search._parse_results`` -- an untrusted SearXNG (or SearXNG-API-
+    compatible) JSON response body. Must raise only ``TypeError`` on a
+    malformed envelope, silently skip malformed individual rows, and never
+    return more than the caller's ``max_results`` bound.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -55,6 +62,7 @@ from contextual_orchestrator.model_discovery import (
     _parse_openai_compatible,
 )
 from contextual_orchestrator.orchestrator import (
+    EndpointUnavailableError,
     ModelAgent,
     TaskOrchestrator,
     _parse_model_judge_reply,
@@ -62,6 +70,7 @@ from contextual_orchestrator.orchestrator import (
     chat_completion_chunks,
     redact_text,
     redact_value,
+    normalize_endpoint_selector,
     sse_stream_body,
 )
 from contextual_orchestrator.pii_protection import PiiProtectionError, _decode_secret
@@ -73,10 +82,26 @@ from contextual_orchestrator.reasoning_effort_profile import (
     production_default_change_allowed,
     run_equal_budget_ablation,
 )
+from contextual_orchestrator.rater_observation import (
+    MAX_RATER_OBSERVATIONS,
+    RaterInvocation,
+    RaterObservationError,
+)
+from contextual_orchestrator.web_search import WebSearchResult, _parse_results
 
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
 # raise; everything else below is a legitimate stdlib decode/parse failure.
 RequestError = server.RequestError
+
+
+def exercise_endpoint_selector(value: str) -> None:
+    """Normalize arbitrary endpoint text or reject it with the stable error."""
+    try:
+        normalized = normalize_endpoint_selector(value)
+    except EndpointUnavailableError:
+        return
+    assert normalized == normalize_endpoint_selector(normalized)
+    assert normalized.startswith(("http://", "https://"))
 
 # Malformed bytes/JSON must surface only as these.
 _EXPECTED_BODY_EXC = (
@@ -126,7 +151,9 @@ def exercise_request_body(raw: bytes) -> None:
 
     # Unknown-key rejection must never raise anything but RequestError.
     try:
-        server._reject_unknown_keys(body, {"prompt_text", "run_mode", "messages", "mode"})
+        server._reject_unknown_keys(
+            body, {"prompt_text", "run_mode", "messages", "mode"}
+        )
     except RequestError:
         pass
 
@@ -319,7 +346,12 @@ def exercise_redaction(text: str) -> None:
     assert once == twice, "redaction is not idempotent"
 
     # ``redact_value`` must preserve container shape while redacting leaves.
-    payload = {"trace": [text, {"nested": text}], "count": 3, "flag": True, "none": None}
+    payload = {
+        "trace": [text, {"nested": text}],
+        "count": 3,
+        "flag": True,
+        "none": None,
+    }
     out = redact_value(payload)
     assert isinstance(out, dict)
     assert isinstance(out["trace"], list)
@@ -329,12 +361,27 @@ def exercise_redaction(text: str) -> None:
 
 def _mock_orchestrator() -> TaskOrchestrator:
     agents = [
-        ModelAgent(id="general_agent", model="mock-generalist", base_url="mock://generalist",
-                   tags=("reasoning", "writing", "planning"), priority=1),
-        ModelAgent(id="builder_agent", model="mock-builder", base_url="mock://builder",
-                   tags=("coding", "debugging", "implementation"), priority=2),
-        ModelAgent(id="reviewer_agent", model="mock-reviewer", base_url="mock://reviewer",
-                   tags=("verification", "security", "review"), priority=3),
+        ModelAgent(
+            id="general_agent",
+            model="mock-generalist",
+            base_url="mock://generalist",
+            tags=("reasoning", "writing", "planning"),
+            priority=1,
+        ),
+        ModelAgent(
+            id="builder_agent",
+            model="mock-builder",
+            base_url="mock://builder",
+            tags=("coding", "debugging", "implementation"),
+            priority=2,
+        ),
+        ModelAgent(
+            id="reviewer_agent",
+            model="mock-reviewer",
+            base_url="mock://reviewer",
+            tags=("verification", "security", "review"),
+            priority=3,
+        ),
     ]
     return TaskOrchestrator(agents)
 
@@ -368,7 +415,7 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
         if not frame or frame == "data: [DONE]":
             continue
         assert frame.startswith("data: ")
-        json.loads(frame[len("data: "):])
+        json.loads(frame[len("data: ") :])
 
 
 def exercise_reasoning_effort_profile(value: Any) -> None:
@@ -385,7 +432,9 @@ def exercise_reasoning_effort_profile(value: Any) -> None:
     try:
         # ``true_theta`` belongs to the ablation input, not the profile schema.
         # Keep the two trust-boundary payloads separate so this branch is reachable.
-        profile_value = {key: item for key, item in value.items() if key != "true_theta"}
+        profile_value = {
+            key: item for key, item in value.items() if key != "true_theta"
+        }
         profile = parse_reasoning_effort_profile(profile_value)
     except (EffortProfileError, TypeError, ValueError):
         return
@@ -422,3 +471,84 @@ def exercise_structured_output_error(content: str, schema: Any) -> None:
     }
     result = _structured_output_error(content, response_format)
     assert result in {None, "invalid_json", "schema_missing", "schema_violation"}
+
+
+def exercise_rater_observation(value: Any) -> None:
+    """Drive arbitrary JSON through the governed rater observation boundary."""
+    try:
+        invocation = RaterInvocation.from_mapping(value)
+    except RaterObservationError:
+        return
+    payload = invocation.to_payload()
+    assert 1 <= len(payload["observations"]) <= MAX_RATER_OBSERVATIONS
+    assert RaterInvocation.from_mapping(payload).to_payload() == payload
+
+
+def exercise_web_search_results(value: Any, max_results: int) -> None:
+    """Drive the SearXNG result parser over an arbitrary decoded JSON envelope.
+
+    ``_parse_results`` consumes an untrusted provider response body. Invariant
+    for arbitrary input: a malformed envelope (not a dict, or a non-list
+    ``results`` field) raises only ``TypeError``; a well-formed envelope never
+    raises, skips malformed individual rows rather than failing the whole
+    parse, and never returns more than ``max_results`` well-typed rows.
+    """
+    try:
+        results = _parse_results(value, max_results)
+    except TypeError:
+        return
+    assert isinstance(results, list)
+    assert len(results) <= max_results
+    for result in results:
+        assert isinstance(result, WebSearchResult)
+        assert isinstance(result.url, str) and result.url
+        assert isinstance(result.title, str)
+        assert isinstance(result.content, str)
+        assert isinstance(result.engine, str)
+        assert result.score is None or (
+            isinstance(result.score, (int, float)) and not isinstance(result.score, bool)
+        )
+        assert result.published_date is None or isinstance(result.published_date, str)
+
+
+def exercise_nim_catalog(raw: bytes) -> None:
+    """Drive the NIM benchmark model-catalog parser over arbitrary bytes.
+
+    ``parse_model_catalog_body`` consumes an untrusted provider response
+    (``GET /v1/models``). Invariants for arbitrary input: structural failures
+    surface only as ``CatalogDiscoveryError`` (or a plain json RecursionError on
+    attacker-depth nesting); successful parses are deduplicated, sorted (immune
+    to provider response-order drift), machine-readably annotated, and stable
+    under reparse.
+    """
+    from contextual_orchestrator.nim_benchmark import (
+        CatalogDiscoveryError,
+        parse_model_catalog_body,
+    )
+
+    try:
+        catalog = parse_model_catalog_body(raw)
+    except CatalogDiscoveryError:
+        return
+    except RecursionError:
+        # json depth blowups mirror the request-body parser's accepted failure.
+        return
+
+    assert set(catalog) == {"models", "duplicate_model_ids", "invalid_entries"}
+    model_ids = [row["model_id"] for row in catalog["models"]]
+    assert model_ids == sorted(model_ids), "catalog must be order-drift immune"
+    assert len(model_ids) == len(set(model_ids)), "catalog must be deduplicated"
+    for row in catalog["models"]:
+        assert isinstance(row["model_id"], str) and row["model_id"].strip()
+        assert isinstance(row["owned_by"], str)
+    for entry in catalog["invalid_entries"]:
+        assert entry["invalid_reason"] in {"entry_not_an_object", "missing_model_id"}
+    assert catalog["duplicate_model_ids"] == sorted(catalog["duplicate_model_ids"])
+
+    # The whole result must be JSON-serialisable, and reparsing the surviving
+    # models must be a fixed point (parse . serialize . parse == parse).
+    reserialized = json.dumps(
+        {"data": [{"id": row["model_id"], "owned_by": row["owned_by"]} for row in catalog["models"]]}
+    ).encode("utf-8")
+    if catalog["models"]:
+        assert parse_model_catalog_body(reserialized)["models"] == catalog["models"]

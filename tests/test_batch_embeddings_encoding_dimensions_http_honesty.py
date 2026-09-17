@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "batch_embeddings_encoding_dimensions_http_honesty_token"  # noqa: S105
@@ -42,7 +42,9 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
 
 
 def _server():
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    orchestrator = build()
+    counter = type("ExactSyntheticCounter", (), {"count_text": lambda self, text, model="": len(text)})()
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN), coordinator=CostRoutingCoordinator(orchestrator, embedding_token_counter=counter))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]

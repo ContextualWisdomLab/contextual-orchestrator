@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, wait
 from contextvars import copy_context
 from dataclasses import dataclass
+import threading
 import time
 from typing import Callable, Generic, TypeVar
 
@@ -104,27 +105,68 @@ def race_first_valid(
         raise ValueError("endpoint identifiers must be unique")
 
     started = time.monotonic()
-    pool = ThreadPoolExecutor(
-        max_workers=min(max_concurrency, len(attempts)),
-        thread_name_prefix="equivalent_endpoint_race",
-    )
-    def execute(attempt: EndpointAttempt[T]) -> T:
+
+    def execute(attempt: EndpointAttempt[T], future: Future[T]) -> None:
+        if not future.set_running_or_notify_cancel():
+            # Cancelled before this worker got a chance to start: the
+            # provider was never called, preserving duplicate-cost honesty.
+            return
         try:
             value = attempt.call()
             if not validate(value):
                 raise ValueError("endpoint returned an invalid completed response")
         except BaseException as exc:
+            reported_exc = exc
             if on_attempt_complete is not None:
-                on_attempt_complete(attempt.endpoint_id, None, exc)
-            raise
+                try:
+                    on_attempt_complete(attempt.endpoint_id, None, exc)
+                except BaseException as callback_exc:
+                    # ThreadPoolExecutor used to settle its Future with an
+                    # exception raised by the worker callback. Preserve that
+                    # contract explicitly now that raw daemon workers drive
+                    # bare Futures: an observer failure must never strand a
+                    # Future in RUNNING state under an unbounded race.
+                    reported_exc = callback_exc
+            future.set_exception(reported_exc)
+            return
         if on_attempt_complete is not None:
-            on_attempt_complete(attempt.endpoint_id, value, None)
-        return value
+            try:
+                on_attempt_complete(attempt.endpoint_id, value, None)
+            except BaseException as callback_exc:
+                future.set_exception(callback_exc)
+                return
+        future.set_result(value)
 
-    futures: dict[Future[T], tuple[int, EndpointAttempt[T]]] = {
-        pool.submit(copy_context().run, execute, attempt): (index, attempt)
-        for index, attempt in enumerate(attempts)
-    }
+    # Bare `concurrent.futures.Future` objects driven by raw `daemon=True`
+    # threads -- never `ThreadPoolExecutor`. `ThreadPoolExecutor` registers
+    # every worker it starts with `concurrent.futures.thread`'s own
+    # interpreter-exit hook, which unconditionally *joins* each
+    # still-running worker at shutdown regardless of that worker thread's
+    # own daemon flag (mirrors the verified fix and rationale documented on
+    # `model_discovery._openrouter_free_model_endpoints`). Combined with
+    # this org's default no-deadline `ModelClient.timeout=None`, a losing
+    # race participant blocked in an unbounded provider call that never
+    # returns would make that join -- and therefore process shutdown --
+    # hang forever, even though the winner already answered the caller. A
+    # raw daemon thread carries no such registration and is safely
+    # abandoned at interpreter exit if still running. Building on bare
+    # `Future` objects (the documented mechanism for custom executors)
+    # keeps every coordination primitive below -- `wait()`,
+    # `future.cancel()`, `future.result()`, `future.exception()`, and
+    # `set_running_or_notify_cancel()`'s "cancelled-before-start never
+    # calls the provider" guarantee -- byte-for-byte identical to the
+    # prior executor-backed futures.
+    futures: dict[Future[T], tuple[int, EndpointAttempt[T]]] = {}
+    for index, attempt in enumerate(attempts):
+        future: Future[T] = Future()
+        futures[future] = (index, attempt)
+        ctx = copy_context()
+        threading.Thread(
+            target=ctx.run,
+            args=(execute, attempt, future),
+            name=f"equivalent_endpoint_race_{index}",
+            daemon=True,
+        ).start()
     pending = set(futures)
     last_error: BaseException | None = None
     cancellation_outcomes: dict[Future[T], str] = {}
@@ -132,8 +174,10 @@ def race_first_valid(
     def cancel_loser(future: Future[T], attempt: EndpointAttempt[T]) -> str:
         if future in cancellation_outcomes:
             return cancellation_outcomes[future]
-        if future.done():
-            outcome = "completed"
+        if future.cancelled():
+            outcome = "queued_cancelled"
+        elif future.done():
+            outcome = "failed" if future.exception() is not None else "completed"
         elif future.cancel():
             outcome = "queued_cancelled"
         elif (
@@ -177,7 +221,6 @@ def race_first_valid(
                         continue
                     outcome = cancel_loser(loser_future, loser)
                     cancellations.append((loser.endpoint_id, outcome))
-                pool.shutdown(wait=False, cancel_futures=True)
                 return RaceOutcome(
                     value=value,
                     winner_endpoint_id=winner.endpoint_id,
@@ -188,5 +231,4 @@ def race_first_valid(
     finally:
         for future in pending:
             cancel_loser(future, futures[future][1])
-        pool.shutdown(wait=False, cancel_futures=True)
     raise RuntimeError("all equivalent endpoints failed validation") from last_error

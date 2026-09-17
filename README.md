@@ -74,6 +74,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 HTTP serving is hardened for local lab use:
 
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one local token. Explicit `--auth-token`/split-token values are local-development escape hatches; `--production` and `--allow-public-bind` reject single-token mode and insecure admin-session cookies, and the CLI never reads auth secrets from environment variables.
+- The `trace` purpose (orchestration-trace-bearing responses, ADR 0026) is authorized separately: in single-token mode `--auth-token` still covers it as a local escape hatch, but in split admin/inference mode neither the admin nor the inference token authorizes `trace` — configure `--trace-token`/`--trace-token-key` (KV name `CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN` by default), or trace responses fail closed with `401`.
 - A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
 - Binding to a non-loopback address requires `--allow-public-bind`; loopback
   addresses and `localhost` remain available for local development.
@@ -131,7 +132,7 @@ Run an evaluation against that server with `--temperature 0` for repeatable judg
 Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](docs/planning/adrs/0001-fail-closed-model-judgment.md).
 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
-Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez, and an allowlisted OpenAI-compatible gateway) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
+Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez, and an allowlisted OpenAI-compatible gateway) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. Bytez discovery queries only the documented `chat` and `text-generation` task catalogs, in that order; an empty or failed refresh is not accepted as a healthy zero-model catalog, and an existing last-known-good catalog remains available. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
 
 Seed the credential into the KV once at bootstrap:
 
@@ -154,7 +155,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** �
 One public interface:
 
 - `contextual-orchestrator` is the model-like control-plane candidate exposed to callers. `/v1/models` lists it first, followed by every configured worker candidate, including disabled candidates with their status.
-- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a usage-only chunk after the terminal stop chunk, labeled `usage_source: reported` when the provider returned usage or `usage_source: estimated` (never mislabeled `reported`) otherwise; single-agent `tools` passthrough accepts it the same way from the one non-streaming upstream call — the provider's own usage field when present, an honest estimate when the provider omits it; `response_format`-only structured passthrough (conduct mode) still rejects the combination before provider execution, since its usage comes from a multi-step workflow's cost ledger and may be unmeasured. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
+- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a usage-only chunk after the terminal stop chunk. Valid provider counts carry `usage_source: reported` and `usage_measurement_status: measured`; missing or malformed counts carry `usage: null` and `usage_measurement_status: unavailable`. Single-agent `tools` passthrough follows the same rule and never reconstructs tool or multimodal framing. `response_format`-only structured passthrough (conduct mode) still rejects the combination before provider execution when workflow-level usage is unavailable. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline — per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
@@ -162,7 +163,7 @@ One public interface:
 - The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged.
 - `/api/v1/provider_readiness/latest` and `/v1/provider_readiness` report provider liveness separately from an explicit chat readiness probe. Before the first refresh they return `unprobed`; `?refresh=true` performs one probe without a wall-clock deadline and seeds the latest cached result for later reads on both routes.
 - `/api/v1/analytics_snapshots/latest` returns source-backed local KPI definitions (trace completeness, policy-safe run rate, successful chat requests, and related event-derived counts) from in-memory runtime state, localized via the same locale bundles as the admin console.
-- `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. See [Observability & spend](#observability--spend).
+- `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Valid provider usage is authoritative; declared model IDs may use the packaged Rust tokenizer for exact raw textual output. Prompt framing, tools, multimodal input, unknown tokenizers, and missing native code remain unavailable. Cost is computed only when every required count and operator-supplied price is available. See [Observability & spend](#observability--spend).
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
 - `/api/v1/commercial_evidence_manifests/latest` shows the evidence gaps to resolve before commercial due diligence. The former `/api/v1/buyer_evidence_manifests/latest` route remains a deprecated compatibility alias.
@@ -201,15 +202,15 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 
 ## Observability & spend
 
-Local spend observability, aggregated from in-memory workflow runs. It is honest by construction — estimates are labeled, and cost is only reported when a price is configured.
+Local spend observability, aggregated from in-memory workflow runs. It is honest by construction: counts are authoritative or explicitly unavailable, and cost is reported only when its required counts and prices are available.
 
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
   -H "authorization: Bearer $local_token" | jq '.totals, .by_model, .budget'
 ```
 
-- **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.
-- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated.
+- **Tokens.** `by_model[].output_tokens` uses provider-reported completion/output tokens first. For exact full model IDs declared by ADR 0006, a missing output count may use the packaged Rust tokenizer over raw textual output only. Rows carry `usage_source: reported | tokenizer | mixed | unavailable`; unavailable rows return `output_tokens: null`. Prompt tokens are provider-reported or null because chat framing is not reconstructed.
+- **Cost.** Supply a price table to turn authoritative output tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models`; `cost_usd` remains null when a price or required token count is unavailable. No prices or token counts are assumed.
 - **Budget cap.** Set an operator cap to refuse runaway spend (default: no cap):
 
   ```bash
@@ -217,7 +218,7 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
     --budget-max-output-tokens 2000000 --budget-max-cost-usd 50
   ```
 
-  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). Cost caps require a price table; token caps do not.
+  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. An enabled budget also fails closed when a required count or price is unavailable. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, nullable `spent_*`/`remaining_*`, `measurement_status`, `enforcement_status`, `exceeded`). Cost caps require a complete price table; token caps require authoritative output counts.
 - **Admin.** The `/admin` **Observability** view renders the totals and the per-model table (unpriced models show an `unpriced` chip).
 
 These are process-local measured signals for a stdlib lab, not a billing system or production compliance data.
@@ -240,7 +241,9 @@ is read from a **KV config store**, never `os.getenv`.
   first-class dimensions catalogued in `cost_attribution_dimensions`: **account,
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
-  configured, and fall back to a deterministic heuristic otherwise.
+  configured. Valid provider usage is authoritative; missing chat framing,
+  tool, multimodal, or unknown-tokenizer counts remain explicitly unavailable
+  instead of falling back to a deterministic heuristic.
 - **Canonical Billing export.** Install the published `metering_billing`
   producer SDK, create its durable outbox, and pass
   `CanonicalUsageRecordSink(event_builder=build_contextual_usage_event,
@@ -297,8 +300,34 @@ is read from a **KV config store**, never `os.getenv`.
   `pg_tiktoken` counting, and the production batch backend without adding a
   repository split here.
 
-Grounding papers (LLM cost, routing, load balancing) live in
+Grounding papers (LLM cost, routing, load balancing, evaluation) live in
 [docs/papers](docs/papers/README.md) with citations.
+
+### NIM cost-quality benchmark (optional harness)
+
+Evidence-grade benchmark of the routing policies against a **dynamically
+discovered** NVIDIA NIM catalog. It probes chat, completions, Responses,
+embeddings, image/video/audio understanding, transcription, and speech; compares
+direct, route-once, and bounded-conduct cells under one equal total-token and
+call budget; records paired uncertainty and Pareto frontiers; and keeps reviewed
+actual endpoint-access evidence separate from optional hypothetical paid rates.
+The bundled manifest is smoke-sized and reports `evidence_review_required` only
+after its paired cells complete; `routing_recommendation` remains null and no
+benchmark artifact automatically changes production routing.
+
+The adapter is lazy and optional: ordinary `import contextual_orchestrator` does
+not import or mutate it. Deterministic `--dry-run` receives no network access or
+NVIDIA secret. Live execution resolves `NVIDIA_NIM_API_KEY` from the credential
+registry, pins HTTPS connections to validation-time public addresses, rejects
+redirects and proxy routing, and fails closed on missing/expired evidence. See
+[docs/nim_benchmark.md](docs/nim_benchmark.md) and the
+[engineering decision record](docs/doctoring/nim-benchmark-evidence-grade.md).
+
+```bash
+python -m contextual_orchestrator nim-benchmark --dry-run \
+  --pricing-scenario examples/nim_pricing_scenario.json \
+  --output-dir benchmark_artifacts
+```
 
 ## Design Artifacts
 
@@ -364,6 +393,7 @@ python -m pytest -q tests/test_reasoning_effort_profile.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
+python tests/test_nim_benchmark.py
 python tests/test_security_hardening.py
 python tests/test_chat_model_capability_isolation.py
 python tests/test_chat_transport_role_separation.py
@@ -373,8 +403,10 @@ python tests/test_discovery_bootstrap_selection.py
 python tests/test_chat_capability.py
 python tests/test_review_gateway.py
 python tests/test_provider_bootstrap.py
+python tests/test_provider_bootstrap_report_identity.py
 python tests/test_provider_bootstrap_secret_normalization.py
 python tests/test_provider_catalog_bootstrap.py
+python tests/test_provider_catalog_bootstrap_report_identity.py
 python tests/test_provider_catalog_credential_promotion.py
 python tests/test_provider_catalog_store.py
 python tests/test_tool_execution_fallback.py

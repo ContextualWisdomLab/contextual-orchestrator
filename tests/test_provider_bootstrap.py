@@ -145,6 +145,71 @@ def test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free()
     ]
 
 
+def test_diverse_selection_prefers_provider_declared_free_over_unknown() -> None:
+    """Exact free evidence wins a same-provider slot without token-price fiction."""
+    unknown = _model("bytez", "BYTEZ_API_KEY", "a-unknown", None)
+    free = replace(
+        _model("bytez", "BYTEZ_API_KEY", "z-free", None),
+        is_free=True,
+    )
+
+    assert provider_bootstrap.select_model_group_diverse_models(
+        [unknown, free], limit=1
+    ) == [free]
+
+
+def test_diverse_selection_fails_closed_at_unpriced_boundary() -> None:
+    """A bounded pool cannot admit one of two equally unsupported candidates."""
+    models = [
+        _model("bytez", "BYTEZ_API_KEY", "bytez-unknown", None),
+        _model("openrouter", "OPENROUTER_API_KEY", "router-unknown", None),
+    ]
+
+    with pytest.raises(provider_bootstrap.ProviderBootstrapError, match="ambiguous"):
+        provider_bootstrap.select_model_group_diverse_models(models, limit=1)
+
+
+def test_diverse_selection_fails_closed_at_equal_known_price_boundary() -> None:
+    """Equal comparable cost cannot be resolved by provider/model names."""
+    models = [
+        _model("bytez", "BYTEZ_API_KEY", "bytez-priced", 1.0),
+        _model("openrouter", "OPENROUTER_API_KEY", "router-priced", 1.0),
+    ]
+
+    with pytest.raises(provider_bootstrap.ProviderBootstrapError, match="ambiguous"):
+        provider_bootstrap.select_model_group_diverse_models(models, limit=1)
+
+
+def test_diverse_selection_rejects_unmodeled_cost_displacement() -> None:
+    """Model-group diversity cannot displace cheaper evidence without a utility model."""
+    models = [
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "shared-model", 1.0),
+        _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "shared-model", 1.5),
+        _model("openrouter", "OPENROUTER_API_KEY", "distinct-model", 2.0),
+    ]
+
+    with pytest.raises(
+        provider_bootstrap.ProviderBootstrapError,
+        match="decision model",
+    ):
+        provider_bootstrap.select_model_group_diverse_models(models, limit=2)
+
+
+def test_diverse_selection_rejects_unmodeled_full_pool_reordering() -> None:
+    """Admitting every candidate cannot make diversity an implicit route order."""
+    models = [
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "shared-model", 1.0),
+        _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "shared-model", 1.5),
+        _model("openrouter", "OPENROUTER_API_KEY", "distinct-model", 2.0),
+    ]
+
+    with pytest.raises(
+        provider_bootstrap.ProviderBootstrapError,
+        match="decision model",
+    ):
+        provider_bootstrap.select_model_group_diverse_models(models, limit=3)
+
+
 def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
     """A missing prompt or completion price cannot become an invented zero."""
     partial = replace(

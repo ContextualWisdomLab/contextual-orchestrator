@@ -68,12 +68,22 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         for event in events
         if event["type"] == "response.reasoning_summary_text.delta"
     ]
-    assert summaries == [
-        "Planning the approach.",
-        "Executing the selected approach.",
-        "Checking the result for errors and unsupported claims.",
-        "Preparing the final answer.",
-    ]
+    # orchestrator/free's auto mode always stays on the single-step route
+    # path regardless of workflow need, even for this workflow-needing
+    # prompt (#9173923b); only orchestrator/auto still reaches the full
+    # 4-phase conduct workflow here. /v1/responses streaming has no
+    # per-request mode override, so this reflects the free-tier model's
+    # real HTTP-reachable behavior, not a test gap.
+    expected_mode = "route" if model == "orchestrator/free" else "conduct"
+    if expected_mode == "conduct":
+        assert summaries == [
+            "Planning the approach.",
+            "Executing the selected approach.",
+            "Checking the result for errors and unsupported claims.",
+            "Preparing the final answer.",
+        ]
+    else:
+        assert summaries == ["Executing the selected approach."]
     assert all("[" not in summary for summary in summaries)
     assert any(
         event["event_name"] == "responses_orchestrated"
@@ -84,7 +94,7 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
     runs = list(orchestrator._workflow_runs.values())
     assert len(runs) == 1
     run = runs[0]
-    assert run["mode"] == "conduct"
+    assert run["mode"] == expected_mode
     assert run["prompt_text"] == "Research, implement, and verify a safe design."
     assert run["policy_snapshot"] == orchestrator.policy.as_dict()
     assert orchestrator.get_access_report(run["workflow_run_id"])["policy_snapshot"] == run[
@@ -143,7 +153,10 @@ def test_streamed_responses_records_unavailable_usage_without_estimating_answer(
     assert len({row["workflow_run_id"] for row in rows}) == 2
     assert all(row["request_channel"] == "stream" for row in rows)
     assert all(row["measurement_status"] == "unavailable" for row in rows)
-    assert all(row["prompt_tokens"] == row["completion_tokens"] == 0 for row in rows)
+    assert all(
+        row["prompt_tokens"] is None and row["completion_tokens"] is None
+        for row in rows
+    )
 
 
 def test_conduct_preserves_responses_instructions_for_every_stage() -> None:
@@ -470,10 +483,17 @@ def test_http_virtual_responses_preserves_message_array_and_sampling_controls() 
         thread.join(timeout=5)
 
     assert observed_messages
+    # orchestrator/free's auto mode always stays on the single-step route
+    # path now (#9173923b), which passes the original message array through
+    # without conduct's leading workflow-instruction message -- so assert
+    # the input order survives as a contiguous run wherever it lands,
+    # rather than pinning it to conduct's specific offset.
+    expected_roles = ["system", "user", "assistant"]
     assert any(
-        [message.get("role") for message in messages][1:4]
-        == ["system", "user", "assistant"]
+        [message.get("role") for message in messages][start : start + len(expected_roles)]
+        == expected_roles
         for messages in observed_messages
+        for start in range(len(messages))
     )
     assert observed_settings
     assert all(
@@ -523,7 +543,11 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
     ])
-    orchestrator.conduct = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
+    # orchestrator/free's auto mode always stays on the single-step route
+    # path now (#9173923b), so the failure this test simulates must come
+    # from stream_route (the route path's own call), not conduct -- which
+    # is never reached for this model/mode combination any more.
+    orchestrator.stream_route = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -578,3 +602,50 @@ def test_stream_usage_failure_remains_inside_the_started_sse_protocol(monkeypatc
     assert events[-1]["response"]["error"]["code"] == "usage_recording_failed"
     assert all(event["type"] != "response.completed" for event in events)
     assert stream.rstrip().endswith("data: [DONE]")
+
+
+def test_conduct_stream_emits_openai_reasoning_text_for_paper_roles() -> None:
+    """TRINITY/Conductor process output uses Responses reasoning_text events.
+
+    Stage labels stay on reasoning_summary_*; the synthesizer answer stays
+    output_text. The user-facing 'think block' is this official event pair.
+    """
+    token = "reasoning_text_stream_token"
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
+            ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "review")),
+        ]
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        stream = _post(server, token, "orchestrator/auto")
+    finally:
+        server.shutdown()
+
+    events = [
+        json.loads(line[6:])
+        for line in stream.splitlines()
+        if line.startswith("data: {")
+    ]
+    types = [event["type"] for event in events]
+    assert "response.reasoning_text.delta" in types
+    assert "response.reasoning_text.done" in types
+    reasoning = [
+        event["delta"]
+        for event in events
+        if event["type"] == "response.reasoning_text.delta"
+    ]
+    assert any(":thinker]" in text for text in reasoning)
+    assert any(":worker]" in text for text in reasoning)
+    assert any(":verifier]" in text for text in reasoning)
+    completed = next(event for event in events if event["type"] == "response.completed")
+    reasoning_item = completed["response"]["output"][0]
+    assert reasoning_item["type"] == "reasoning"
+    assert reasoning_item["content"]
+    assert all(part["type"] == "reasoning_text" for part in reasoning_item["content"])
+    message_item = completed["response"]["output"][1]
+    assert message_item["type"] == "message"
+    assert message_item["content"][0]["type"] == "output_text"

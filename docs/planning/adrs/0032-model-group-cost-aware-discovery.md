@@ -1,6 +1,6 @@
 # ADR 0032: Measured model groups and cost-aware discovery
 
-- Status: Accepted on PR #834; protected-main delivery pending
+- Status: Proposed on PR #971; protected-main delivery and exact-head verification pending
 - Date: 2026-08-25
 - Figma file ID: `vsZMd8WAv42HDRgcZuNcWk`; this change reuses the existing Agent Pool table rather than introducing a new visual pattern.
 - Product/technical specification: [`docs/model-group-product-technical-spec.md`](../../model-group-product-technical-spec.md)
@@ -21,7 +21,13 @@ Stability uses the posterior mean of a Bernoulli success probability under a uni
 
 Each group member also reports the maximum completed requests and provider-reported total tokens observed in any trailing 60-second window as `max_observed_rpm` and `max_observed_tpm`. These are achieved lower bounds from real gateway traffic, not inferred provider quotas or promises of sustainable capacity. Requests with absent total-token usage still count toward RPM but add nothing to TPM; the gateway never estimates missing tokens for this evidence. The counters reset with the existing process-local routing ledger and never cause probe traffic.
 
-OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery intersects its documented `/zen/v1/models` availability response with the `opencode` catalog in Models.dev, which OpenCode documents as a source for its own model catalog. Only structured cost records whose declared monetary components are all exactly zero are classified free. A missing, malformed, unmatched, or temporarily unavailable metadata record remains unknown; model-name suffixes are never treated as price evidence. All available models remain discoverable for later policy decisions.
+OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery intersects its documented `/zen/v1/models` availability response with the `opencode` catalog in Models.dev, which OpenCode documents as a source for its own model catalog. Only structured cost records whose declared monetary components are all exactly zero are classified free. A missing, malformed, unmatched, or temporarily unavailable metadata record remains unknown; model-name suffixes are never treated as price evidence. All available models remain discoverable for later policy decisions. A bounded
+bootstrap selection never treats lexical provider/model ordering as decision
+evidence: when the capacity boundary splits candidates with the same comparable
+cost state, including unknown price, it fails closed until the operator supplies
+evidence or includes the complete tied class. Exact model-group spread remains
+the direct provider-bootstrap contract; provider spread is an additional
+discovery-CLI availability constraint, documented for consumer migration.
 
 Privacy discovery is also model-specific rather than inferred from price. The
 OpenRouter ZDR endpoint inventory is joined to every paid and free catalog row;

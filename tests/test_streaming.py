@@ -135,7 +135,6 @@ def test_structured_sse_tool_call_deltas_include_indices() -> None:
         },
         model="tool-model",
         include_usage=False,
-        prompt_text="tool call",
     )
 
     tool_deltas = [
@@ -173,7 +172,6 @@ def test_structured_sse_tool_call_deltas_coexist_with_reported_usage() -> None:
         },
         model="tool-model",
         include_usage=True,
-        prompt_text="tool call",
     )
 
     tool_deltas = [
@@ -221,7 +219,6 @@ def test_structured_sse_normal_chunks_carry_null_usage_when_include_usage() -> N
         },
         model="tool-model",
         include_usage=True,
-        prompt_text="hi",
     )
 
     normal_chunks = [chunk for chunk in chunks if chunk["choices"] != []]

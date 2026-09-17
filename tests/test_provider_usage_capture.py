@@ -1,18 +1,20 @@
-"""Real provider-reported usage capture — prefer reported tokens over the estimate.
+"""Provider-reported usage capture and explicit unavailable fallbacks.
 
 A gateway that already sees provider `usage` should bill on it, not a char heuristic.
 These assert reported completion_tokens flow into spend_analytics and are labeled,
-while the mock path stays estimated.
+while the mock path stays unavailable.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
@@ -52,8 +54,8 @@ def test_reported_usage_preferred_and_labeled() -> None:
     row = next(r for r in orchestrator.spend_analytics()["by_model"] if r["model"] == "priced-model")
 
     assert row["usage_source"] == "reported"
-    assert row["output_tokens"] == 50  # reported completion tokens, not the char estimate
-    assert row["estimated_cost_usd"] == round(50 / 1_000_000 * 10.0, 6)  # cost from reported tokens
+    assert row["output_tokens"] == 50
+    assert row["cost_usd"] == round(50 / 1_000_000 * 10.0, 6)
 
 
 def test_reported_prompt_tokens_surface_in_totals() -> None:
@@ -63,31 +65,37 @@ def test_reported_prompt_tokens_surface_in_totals() -> None:
     orchestrator.run([{"role": "user", "content": "route once"}])
     totals = orchestrator.spend_analytics()["totals"]
     assert totals["prompt_tokens_source"] == "reported"
-    assert totals["reported_prompt_tokens"] == 5  # provider-reported prompt tokens, one route step
+    assert totals["prompt_tokens"] == 5
 
 
-def test_mock_prompt_tokens_source_is_estimated() -> None:
+def test_mock_prompt_tokens_source_is_unavailable() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "free-model", tags=("reasoning",))])
-    orchestrator.run([{"role": "user", "content": "no usage here"}])
+    # Isolate mock worker accounting from the optional model-judge extra,
+    # whose real invocation has its own reported prompt-token evidence.
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "no usage here"}])
     totals = orchestrator.spend_analytics()["totals"]
-    assert totals["prompt_tokens_source"] == "estimated"
-    assert totals["reported_prompt_tokens"] == 0
-    assert totals["estimated_prompt_tokens"] > 0
+    assert totals["prompt_tokens_source"] == "unavailable"
+    assert totals["prompt_tokens"] is None
 
 
-def test_mock_path_stays_estimated() -> None:
+def test_mock_path_stays_unavailable() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "free-model", tags=("reasoning",))])
-    orchestrator.run([{"role": "user", "content": "do the work"}])
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "do the work"}])
     row = next(r for r in orchestrator.spend_analytics()["by_model"] if r["model"] == "free-model")
 
-    assert row["usage_source"] == "estimated"
-    assert row["output_tokens"] == row["estimated_output_tokens"]  # falls back to the estimate
+    assert row["usage_source"] == "unavailable"
+    assert row["output_tokens"] is None
 
 
 def test_conduct_all_steps_reported() -> None:
     client = _ReportingClient(completion_tokens=12)
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))], client=client)
-    orchestrator.run([{"role": "user", "content": "big task"}], mode="conduct")
+    # The assertion below covers the four conduct workflow steps; model-judge
+    # accounting has dedicated tests and, when installed, is a fifth call.
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        orchestrator.run([{"role": "user", "content": "big task"}], mode="conduct")
     row = next(r for r in orchestrator.spend_analytics()["by_model"] if r["model"] == "priced-model")
     assert row["usage_source"] == "reported"
     assert row["step_count"] == 4  # thinker/worker/verifier/synthesizer

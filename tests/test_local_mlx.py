@@ -477,7 +477,8 @@ def test_local_provider_serializes_model_switches_and_bounds_explicit_waiters() 
     max_active = 0
     counter_lock = threading.Lock()
 
-    def slow_open(_request, _destination=None):
+    def slow_open(_request, _destination=None, *, timeout=None):
+        del timeout
         nonlocal active, max_active
         with counter_lock:
             active += 1

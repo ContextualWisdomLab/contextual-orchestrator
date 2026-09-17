@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+_AGENT_POOL_INTEGER_MAX = 9_223_372_036_854_775_807
+
 OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
@@ -20,6 +22,61 @@ OPENAPI_SPEC = {
             },
         },
         "schemas": {
+            "AuthoritativeUsage": {
+                "type": ["object", "null"],
+                "required": ["prompt_tokens", "completion_tokens"],
+                "properties": {
+                    "prompt_tokens": {"type": "integer", "minimum": 0},
+                    "completion_tokens": {"type": "integer", "minimum": 0},
+                    "total_tokens": {"type": "integer", "minimum": 0},
+                },
+            },
+            "UsageCost": {
+                "type": "object",
+                "required": ["cost_amount", "currency_code", "measurement_status"],
+                "properties": {
+                    "cost_amount": {"type": ["number", "null"]},
+                    "currency_code": {"type": "string"},
+                    "measurement_status": {
+                        "type": "string",
+                        "enum": ["measured", "unavailable"],
+                    },
+                },
+            },
+            "ChatCompletionResponse": {
+                "type": "object",
+                "required": ["id", "object", "created", "model", "choices", "usage", "usage_measurement_status"],
+                "oneOf": [
+                    {
+                        "properties": {
+                            "usage_measurement_status": {"const": "measured"},
+                            "usage": {
+                                "type": "object",
+                                "required": ["prompt_tokens", "completion_tokens"],
+                            },
+                        }
+                    },
+                    {
+                        "properties": {
+                            "usage_measurement_status": {"const": "unavailable"},
+                            "usage": {"type": "null"},
+                        }
+                    },
+                ],
+                "properties": {
+                    "id": {"type": "string"},
+                    "object": {"type": "string"},
+                    "created": {"type": "integer"},
+                    "model": {"type": "string"},
+                    "choices": {"type": "array", "items": {"type": "object"}},
+                    "usage": {"$ref": "#/components/schemas/AuthoritativeUsage"},
+                    "usage_measurement_status": {
+                        "type": "string",
+                        "enum": ["measured", "unavailable"],
+                    },
+                    "orchestration": {"type": "object"},
+                },
+            },
             "ModelGroupWrite": {
                 "type": "object",
                 "required": ["group_name", "member_agent_ids"],
@@ -181,7 +238,15 @@ OPENAPI_SPEC = {
                     },
                 },
                 "responses": {
-                    "200": {"description": "Chat completion or SSE response"},
+                    "200": {
+                        "description": "Chat completion or SSE response; missing provider usage is explicitly unavailable",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ChatCompletionResponse"}
+                            },
+                            "text/event-stream": {"schema": {"type": "string"}},
+                        },
+                    },
                     "400": {"description": "Invalid request"},
                 },
             }
@@ -420,6 +485,78 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Agent pool collection"}},
             }
         },
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy/history": {
+            "get": {
+                "operationId": "list_model_timeout_history",
+                "summary": "Read older model timeout changes with a stable revision cursor",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": "agent_pool_id", "in": "path", "required": True, "schema": {"type": "string"}},
+                    {"name": "worker_agent_id", "in": "path", "required": True, "schema": {"type": "string"}},
+                    {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
+                    {"name": "before_revision", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": _AGENT_POOL_INTEGER_MAX}},
+                ],
+                "responses": {
+                    "200": {"description": "Descending revisions; changed_at is Unix seconds, actor_id is an opaque digest or null",
+                            "content": {"application/json": {"schema": {
+                                "type": "object", "additionalProperties": False,
+                                "required": ["items", "next_before_revision", "history_available"],
+                                "properties": {
+                                    "history_available": {"type": "boolean"},
+                                    "next_before_revision": {"type": ["integer", "null"], "minimum": 1},
+                                    "items": {"type": "array", "maxItems": 100, "items": {
+                                        "type": "object", "additionalProperties": False,
+                                        "required": ["revision", "previous_seconds", "configured_seconds", "changed_at", "actor_id", "restored_from_revision"],
+                                        "properties": {
+                                            "revision": {"type": "integer", "minimum": 1},
+                                            "previous_seconds": {"type": ["number", "null"]},
+                                            "configured_seconds": {"type": ["number", "null"]},
+                                            "changed_at": {"type": "number"},
+                                            "actor_id": {"type": ["string", "null"]},
+                                            "restored_from_revision": {"type": ["integer", "null"], "minimum": 1},
+                                        },
+                                    }},
+                                },
+                            }}}},
+                    "400": {"description": "Invalid page size or revision cursor"},
+                    "401": {"description": "Administrator authentication required"},
+                    "404": {"description": "Model configuration not found"},
+                },
+            },
+        },
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy": {
+            "get": {
+                "operationId": "get_model_timeout_policy",
+                "summary": "Read configured timeout and whether serving applies that model wait",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
+                    for name in ("agent_pool_id", "worker_agent_id")
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Stored policy and local snapshot; serving applies the selected model wait",
+                        "content": {"application/json": {"schema": {
+                            "type": "object", "additionalProperties": False,
+                            "required": ["configured_seconds", "revision", "unit",
+                                         "serving_snapshot_seconds", "serving_snapshot_revision",
+                                         "enforcement_available"],
+                            "properties": {
+                                "configured_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                                "revision": {"type": "integer", "minimum": 0},
+                                "unit": {"const": "seconds"},
+                                "serving_snapshot_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                                "serving_snapshot_revision": {"type": "integer", "minimum": 0},
+                                "enforcement_available": {"const": True},
+                            },
+                        }}},
+                    },
+                    "401": {"description": "Authentication required"},
+                    "403": {"description": "Administrator scope required"},
+                    "404": {"description": "Model configuration not found"},
+                },
+            },
+        },
         "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}": {
             "patch": {
                 "operationId": "patch_worker_agent",
@@ -451,7 +588,37 @@ OPENAPI_SPEC = {
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "provider_exclusions": {"type": "array", "items": {"type": "string"}},
                                     "group_name": {"type": "string"},
+                                    "max_output_tokens": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": _AGENT_POOL_INTEGER_MAX,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
+                                    "context_window": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": _AGENT_POOL_INTEGER_MAX,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
                                     "stream_usage_supported": {"type": "boolean"},
+                                    "model_timeout_seconds": {
+                                        "anyOf": [
+                                            {
+                                                "type": "number",
+                                                "exclusiveMinimum": 0,
+                                                "maximum": 2_147_483_647,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
                                 },
                             },
                         },
@@ -977,7 +1144,13 @@ OPENAPI_SPEC = {
                             "input_part_counts, map_reduce}"
                         )
                     },
-                    "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
+                    "202": {
+                        "description": (
+                            "Batch accepted with registry-owned job_retention_ms and "
+                            "backend-owned poll_after_ms; poll GET "
+                            "/v1/batch/embeddings/{batch_id}"
+                        )
+                    },
                     "503": {"description": "No enabled embedding-capable agent is available"},
                 },
             }

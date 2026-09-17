@@ -42,7 +42,9 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
 
 
 def _server():
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    orchestrator = build()
+    counter = type("ExactSyntheticCounter", (), {"count_text": lambda self, text, model="": len(text)})()
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN), coordinator=CostRoutingCoordinator(orchestrator, embedding_token_counter=counter))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]
@@ -176,7 +178,18 @@ def test_explicit_embedding_model_returns_503_while_all_circuits_are_open() -> N
 
 
 def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() -> None:
-    """Stop selecting one repeatedly rejected endpoint and retain safe diagnostics."""
+    """Stop selecting one repeatedly rejected endpoint and retain safe diagnostics.
+
+    The `/v1/embeddings` failover order is now cost-ordered (see
+    `CostRoutingCoordinator._cost_ordered_capability_candidates`): a single
+    recorded failure already drops the failing member's measured health
+    below the healthy threshold, demoting it behind every still-healthy
+    candidate on the very next request -- a strictly faster, price-aware
+    replacement for the older fixed `circuit_failure_threshold`-strikes
+    breaker this test originally pinned. The endpoint is still quarantined
+    (never selected again once a healthy alternative exists) and the
+    recorded failure evidence stays exception-message-free either way.
+    """
     first = ModelAgent(
         "rejected_embedding", "embed-v1", tags=("embedding",), priority=1
     )
@@ -215,23 +228,84 @@ def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() 
             )
             assert status == 200, body
 
-        assert attempted == [
-            first.id,
-            second.id,
-            first.id,
-            second.id,
-            first.id,
-            second.id,
-            second.id,
-        ]
+        # The first request attempts the rejected member once (demoting it),
+        # then falls back to the healthy member; every later request in this
+        # loop selects only the now-healthier member and never retries the
+        # quarantined one.
+        assert attempted == [first.id] + [second.id] * (orchestrator.circuit_failure_threshold + 1)
         failures = [
             event
             for event in orchestrator._analytics_events
             if event["event_name"] == "embedding_endpoint_failed"
         ]
-        assert len(failures) == orchestrator.circuit_failure_threshold
+        assert len(failures) == 1
         assert all(event["event_detail"]["provider_status"] == 400 for event in failures)
         assert all("provider.invalid" not in json.dumps(event) for event in failures)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_quarantines_repeated_incomplete_document_with_failure_evidence() -> None:
+    """A non-completed/embedding-less sync result must quarantine too.
+
+    Only a *raised* member exception previously reached
+    ``orchestrator._record_embedding_failure``; a synchronous document that
+    comes back without raising (``status`` not ``completed``, or
+    ``embeddings`` is ``None``) bypassed it, so the circuit breaker never
+    opened and no ``embedding_endpoint_failed`` analytics event was ever
+    recorded for that failure mode -- a repeatedly incomplete member would
+    be retried forever. Mirrors
+    ``test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence``
+    but fails the first member by returning an incomplete document instead
+    of raising.
+    """
+    first = ModelAgent(
+        "incomplete_embedding", "embed-v1", tags=("embedding",), priority=1
+    )
+    second = ModelAgent("healthy_embedding", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([first, second])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    attempted: list[str] = []
+
+    def complete_embeddings_batch(_inputs, *, agent_id, **_kwargs):
+        attempted.append(agent_id)
+        if agent_id == first.id:
+            return {"status": "failed", "embeddings": None}
+        return {
+            "status": "completed",
+            "embeddings": [{"index": 0, "embedding": [0.25]}],
+            "total_tokens": 1,
+        }
+
+    coordinator.complete_embeddings_batch = complete_embeddings_batch
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for _ in range(orchestrator.circuit_failure_threshold + 1):
+            status, body = _post(
+                server.server_address[1],
+                "/v1/embeddings",
+                {"model": "embed-v1", "input": "invoice search chunk"},
+            )
+            assert status == 200, body
+
+        # Same demotion contract as the raised-exception case: one recorded
+        # failure already drops the failing member behind the healthy one.
+        assert attempted == [first.id] + [second.id] * (orchestrator.circuit_failure_threshold + 1)
+        failures = [
+            event
+            for event in orchestrator._analytics_events
+            if event["event_name"] == "embedding_endpoint_failed"
+        ]
+        assert len(failures) == 1
+        assert failures[0]["event_detail"]["agent_id"] == first.id
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -310,6 +384,57 @@ def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
         status, body = _post(port, "/v1/embeddings", {"input": "invoice search chunk"})
         assert status == 200, body
         assert body.get("model") == "mock-planner"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_uses_selected_model_timeout_policy() -> None:
+    """Sync embeddings inherit the selected model policy, not a client-wide timeout."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "embedding_agent",
+                "embedding-model",
+                tags=("embedding",),
+                model_timeout_seconds=17,
+            )
+        ]
+    )
+    orchestrator.client.timeout = 2
+    observed: list[float | None] = []
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    def complete(inputs, *, model, wait_timeout=None, **kwargs):
+        del kwargs
+        observed.append(wait_timeout)
+        return {
+            "status": "completed",
+            "model": model,
+            "embeddings": [
+                {"object": "embedding", "index": index, "embedding": [0.5]}
+                for index, _item in enumerate(inputs)
+            ],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        }
+
+    coordinator.complete_embeddings_batch = complete  # type: ignore[method-assign]
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            "/v1/embeddings",
+            {"model": "embedding-model", "input": "invoice search chunk"},
+        )
+        assert status == 200, body
+        assert observed == [17.0]
     finally:
         server.shutdown()
         thread.join(timeout=5)

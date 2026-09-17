@@ -80,6 +80,22 @@ def test_auto_route_follows_structured_triage_verdict() -> None:
     assert not orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
 
 
+def test_orchestrator_free_auto_stays_on_route_even_when_triage_wants_conduct() -> None:
+    orchestrator = _orch()
+    orchestrator._triage_fn = lambda text: True
+    prompt = "review this diff and verify the regression" * 100
+    assert orchestrator.would_route(
+        [{"role": "user", "content": prompt}],
+        mode="auto",
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+    assert not orchestrator.would_route(
+        [{"role": "user", "content": prompt}],
+        mode="auto",
+        model_name=TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+    )
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -17,11 +17,19 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import optimize_orchestration, _pareto_front  # noqa: E402
 
 
+class _ExactCounter:
+    """Exact synthetic output counter for optimizer accounting."""
+
+    def count_text(self, text: str, model: str) -> int:
+        return len(text.encode("utf-8"))
+
+
 def _candidate(name: str, agent_id: str, price: float) -> dict:
     # Distinct agent id shows up in the mock answer, so quality_fn can differentiate configs.
     orchestrator = TaskOrchestrator(
         [ModelAgent(agent_id, "model-x", tags=("reasoning", "writing"))],
         price_per_million={"model-x": price},
+        token_counter=_ExactCounter(),
     )
     return {"name": name, "orchestrator": orchestrator, "mode": "route"}
 

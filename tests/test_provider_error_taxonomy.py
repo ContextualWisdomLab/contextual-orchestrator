@@ -7,6 +7,7 @@ retry can help — instead of collapsing into a generic ``internal_error``.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import socket
@@ -20,11 +21,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pytest  # noqa: E402
+import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
+    ProviderResponseError,
     _REQUEST_ZDR_ONLY,
     is_transient_error,
 )
@@ -53,6 +55,22 @@ def _body_http_error(code: int, payload: dict) -> urllib.error.HTTPError:
 # -- message redaction --------------------------------------------------------
 
 
+def test_reclassification_preserves_failure_and_updates_boundary_transport() -> None:
+    original = classify_provider_failure(
+        _http_error(404), agent_id="synthetic-agent", model="synthetic-model", transport="passthrough"
+    )
+    classified = classify_provider_failure(
+        original,
+        agent_id="synthetic-agent",
+        model="synthetic-model",
+        transport="structured_synthesis",
+    )
+    assert classified is not original
+    assert classified.error_code == original.error_code
+    assert classified.provider_status == original.provider_status
+    assert classified.transport == "structured_synthesis"
+
+
 def test_safe_message_prefers_nested_provider_error_fields() -> None:
     """``error.message`` / ``error.code`` / top-level fields are the only pass-through."""
     nested = safe_provider_message(_body_http_error(400, {"error": {"message": "max_tokens too large"}}))
@@ -65,6 +83,31 @@ def test_safe_message_prefers_nested_provider_error_fields() -> None:
     assert top_level == "rate limit reached"
     detail = safe_provider_message(_body_http_error(422, {"detail": "validation failed"}))
     assert detail == "validation failed"
+
+
+def test_safe_message_keeps_actionable_schema_diagnostics_without_payloads() -> None:
+    """Schema field names are useful; field values and request bodies remain private."""
+    actionable = "'messages' must contain the word 'json' to use json_object"
+    assert safe_provider_message(
+        _body_http_error(400, {"error": {"message": actionable}})
+    ) == "messages must mention json when response_format is json_object"
+    for diagnostic in (
+        "messages=[{'role':'user','content':'customer secret'}]",
+        '"messages": [{"role":"user","content":"customer secret"}]',
+        "'content': 'customer secret'",
+        "prompt=customer secret",
+        "input: customer secret",
+    ):
+        assert safe_provider_message(
+            _body_http_error(400, {"error": {"message": diagnostic}})
+        ) is None
+
+    assert safe_provider_message(
+        _body_http_error(
+            400,
+            {"error": {"message": "messages rejected; customer-private-text"}},
+        )
+    ) is None
 
 
 def test_safe_message_hides_unparseable_bodies_and_urls() -> None:
@@ -298,6 +341,60 @@ def test_speech_passthrough_rejects_malformed_zdr_provider_routing() -> None:
         _REQUEST_ZDR_ONLY.reset(token)
 
 
+def test_binary_passthrough_rejects_oversized_provider_body() -> None:
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent("audio_agent", "audio-model", base_url="https://provider.example/v1")
+
+    class Headers:
+        def get(self, name: str) -> str | None:
+            assert name == "content-length"
+            return None
+
+        def get_content_type(self) -> str:
+            return "audio/mpeg"
+
+    class Response:
+        headers = Headers()
+
+        def read(self, _limit: int) -> bytes:
+            return b"x" * ((8 * 1024 * 1024) + 1)
+
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_open_provider"
+    ) as open_provider:
+        open_provider.return_value.__enter__.return_value = Response()
+        try:
+            client.proxy_send_bytes(agent, "audio/speech", {"input": "hello"})
+        except ProviderResponseError as raised:
+            assert str(raised) == "provider response exceeds the configured limit"
+        else:
+            raise AssertionError("oversized binary provider response was accepted")
+
+
+def test_batch_raw_rejects_oversized_provider_body() -> None:
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent("batch_agent", "gpt-x", base_url="https://provider.example/v1")
+
+    class Headers:
+        def get(self, _name: str) -> None:
+            return None
+
+    class Response:
+        headers = Headers()
+
+        def read(self, _limit: int) -> bytes:
+            return b"x" * ((8 * 1024 * 1024) + 1)
+
+    with patch.object(client, "_open_provider") as open_provider:
+        open_provider.return_value.__enter__.return_value = Response()
+        try:
+            client._batch_raw(agent, "/files/output/content")
+        except ProviderResponseError as raised:
+            assert str(raised) == "provider response exceeds the configured limit"
+        else:
+            raise AssertionError("oversized batch provider response was accepted")
+
+
 def test_detail_and_transport_are_preserved_for_callers() -> None:
     """The structured detail names agent/model/status/retryability/transport."""
     classified = classify_provider_failure(
@@ -517,3 +614,26 @@ def test_safe_message_discards_sensitive_provider_diagnostics() -> None:
         classified = classify_provider_failure(error, agent_id="a", model="m")
         assert diagnostic not in str(classified)
         assert str(classified) == "provider rejected the request with HTTP 400"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [http.client.IncompleteRead(b""), http.client.BadStatusLine("")],
+    ids=["incomplete-read", "bad-status-line"],
+)
+def test_truncated_read_classifies_as_provider_connection_error(failure: Exception) -> None:
+    """A connection dropped mid-read is a connection failure, not the opaque default.
+
+    ``http.client.IncompleteRead`` and ``BadStatusLine`` are not ``OSError``
+    subclasses, so they fell through to ``api_error`` (retryable=False) while
+    the same event surfacing as ``ConnectionResetError`` was classified as a
+    retryable ``provider_connection_error`` -- ``provider_error_body``'s own
+    note already treats them as transport failures.
+    """
+    classified = classify_provider_failure(
+        failure, agent_id="worker_agent", model="gpt-x", transport="passthrough"
+    )
+    assert classified.error_code == "provider_connection_error"
+    assert classified.client_status == 502
+    assert classified.provider_status is None
+    assert classified.retryable is True

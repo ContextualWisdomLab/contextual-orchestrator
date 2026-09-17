@@ -13,6 +13,7 @@ from contextual_orchestrator.model_discovery import (
     ModelUnitPrice,
     ProviderModelSource,
     _currency_is_comparable,
+    _parse_openai_compatible,
 )
 from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
 from contextual_orchestrator.provider_catalog_store import (
@@ -107,6 +108,148 @@ def test_model_normalization_rejects_cross_account_rows_and_bad_prices() -> None
     assert normalized.currency_code == "USD"
 
 
+def test_model_normalization_withholds_non_positive_limit_metadata() -> None:
+    source = _source()
+    normalized = normalize_discovered_model(
+        source,
+        replace(_model(source, "model-a"), max_output_tokens=0, context_window=-1),
+    )
+
+    assert normalized.max_output_tokens is None
+    assert normalized.context_window is None
+    assert normalized.max_output_tokens_conflicted is True
+    assert normalized.context_window_conflicted is True
+
+
+def test_successful_refresh_clears_known_limits_after_invalid_metadata() -> None:
+    source = _source()
+    known = replace(
+        _model(source, "model-a", 1.0),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [known],
+        eligible_model_ids={known.model_id},
+        serving_tags={known.model_id: ("discovered", "chat")},
+    )
+
+    invalid = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": known.model_id,
+                    "max_output_tokens": 0,
+                    "context_window": -1,
+                }
+            ]
+        },
+        source,
+    )[0]
+    store.record_success(
+        source,
+        [invalid],
+        eligible_model_ids={invalid.model_id},
+        serving_tags={invalid.model_id: ("discovered", "chat")},
+    )
+
+    refreshed = store.serving_models(source)[0]
+    assert refreshed.max_output_tokens is None
+    assert refreshed.context_window is None
+
+
+def test_model_normalization_preserves_signed_64_bit_limit_metadata() -> None:
+    source = _source()
+    normalized = normalize_discovered_model(
+        source,
+        replace(
+            _model(source, "model-a"),
+            max_output_tokens=2_147_483_648,
+            context_window=Decimal("2147483648"),
+        ),
+    )
+
+    assert normalized.max_output_tokens == 2_147_483_648
+    assert normalized.context_window == 2_147_483_648
+
+
+def test_model_normalization_withholds_limits_above_signed_64_bit() -> None:
+    source = _source()
+    normalized = normalize_discovered_model(
+        source,
+        replace(
+            _model(source, "model-a"),
+            max_output_tokens=9_223_372_036_854_775_808,
+            context_window=Decimal("9223372036854775808"),
+        ),
+    )
+
+    assert normalized.max_output_tokens is None
+    assert normalized.context_window is None
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [(True, True), (False, False), ("true", None), (1, None)],
+)
+def test_model_normalization_withholds_non_boolean_tool_call_evidence(
+    evidence: object, expected: bool | None
+) -> None:
+    normalized = normalize_discovered_model(
+        _source(),
+        replace(_model(_source(), "model-a"), supports_parallel_tool_calls=evidence),
+    )
+
+    assert normalized.supports_parallel_tool_calls is expected
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "supports_zero_data_retention",
+        "supports_no_training",
+        "supports_no_prompt_retention",
+    ],
+)
+def test_model_normalization_withholds_non_boolean_privacy_evidence(
+    field_name: str,
+) -> None:
+    model = replace(_model(_source(), "model-a"), **{field_name: "false"})
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert getattr(normalized, field_name) is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "malformed", "expected"),
+    [
+        ("is_free", "false", False),
+        ("is_free", 1, False),
+        ("spend_admitted", "true", False),
+        ("spend_admitted", 0, False),
+    ],
+)
+def test_model_normalization_fails_closed_on_malformed_economic_flags(
+    field_name: str, malformed: object, expected: bool
+) -> None:
+    model = replace(_model(_source(), "model-a"), **{field_name: malformed})
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert getattr(normalized, field_name) is expected
+
+
+def test_model_normalization_fails_closed_on_malformed_zdr_capability() -> None:
+    model = replace(_model(_source(), "model-a"), zdr_capable="false")
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert normalized.zdr_capable is False
+
+
 def test_underflowing_positive_price_is_rejected_not_treated_as_free() -> None:
     """A nonzero price that underflows to 0.0 in float must stay unknown."""
     source = _source()
@@ -176,6 +319,29 @@ def test_success_replaces_current_rows_and_failure_keeps_last_known_good() -> No
     ]
 
 
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "http_status_500",
+        "http_status_429",
+        "timeout",
+        "transport_error",
+        "invalid_response",
+        "empty_provider_catalog",
+    ],
+)
+def test_refresh_evidence_retains_only_allowlisted_discovery_codes(
+    error_code: str,
+) -> None:
+    """Operators get actionable failure classes without provider response text."""
+    store = InMemoryProviderCatalogStore()
+    source = _source(provider="bytez", credential="BYTEZ_API_KEY")
+
+    store.record_failure(source, error_code=error_code)
+
+    assert store.refresh_evidence()[-1].error_code == error_code
+
+
 def test_last_known_good_restores_free_and_modality_evidence() -> None:
     """A catalog round trip cannot silently turn a free multimodal model unknown."""
     source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
@@ -184,6 +350,8 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
         capabilities=("chat", "text"),
         input_modalities=("text", "image"),
         output_modalities=("text",),
+        max_output_tokens=4096,
+        context_window=128000,
         currency_code="USD",
         is_free=True,
         supports_zero_data_retention=True,
@@ -216,6 +384,77 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
     )
 
     assert store.serving_models(source) == [model]
+
+
+def test_successful_refresh_retains_known_limits_when_metadata_is_unknown() -> None:
+    source = _source()
+    known = replace(
+        _model(source, "model-a", 1.0),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [known],
+        eligible_model_ids={known.model_id},
+        serving_tags={known.model_id: ("discovered", "chat")},
+    )
+
+    unknown = replace(
+        known,
+        max_output_tokens=None,
+        context_window=None,
+        prompt_price_per_1k=2.0,
+        completion_price_per_1k=2.0,
+    )
+    store.record_success(
+        source,
+        [unknown],
+        eligible_model_ids={unknown.model_id},
+        serving_tags={unknown.model_id: ("discovered", "chat")},
+    )
+
+    refreshed = store.serving_models(source)[0]
+    assert (refreshed.max_output_tokens, refreshed.context_window) == (4096, 128000)
+    assert (
+        refreshed.prompt_price_per_1k,
+        refreshed.completion_price_per_1k,
+    ) == (2.0, 2.0)
+
+
+def test_successful_refresh_clears_known_limits_after_fresh_conflict() -> None:
+    source = _source()
+    known = replace(
+        _model(source, "model-a", 1.0),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [known],
+        eligible_model_ids={known.model_id},
+        serving_tags={known.model_id: ("discovered", "chat")},
+    )
+
+    conflicted = replace(
+        known,
+        max_output_tokens=8192,
+        context_window=256000,
+        max_output_tokens_conflicted=True,
+        context_window_conflicted=True,
+    )
+    store.record_success(
+        source,
+        [conflicted],
+        eligible_model_ids={conflicted.model_id},
+        serving_tags={conflicted.model_id: ("discovered", "chat")},
+    )
+
+    refreshed = store.serving_models(source)[0]
+    assert refreshed.max_output_tokens is None
+    assert refreshed.context_window is None
 
 
 def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
@@ -445,6 +684,8 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert "UPDATE provider_model SET enabled_flag = false" in success_sql
     assert "INSERT INTO model_serving_tag" in success_sql
     assert "INSERT INTO model_policy_source" in success_sql
+    assert "max_output_tokens = CASE WHEN %s THEN NULL ELSE COALESCE" in success_sql
+    assert "context_window = CASE WHEN %s THEN NULL ELSE COALESCE" in success_sql
     assert connections[-1].commits >= 1
 
     store.record_failure(source, error_code="provider_timeout: secret-token")
@@ -454,6 +695,75 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert "UPDATE provider_model SET enabled_flag = false" not in failure_sql
     assert "INSERT INTO catalog_refresh_run" in failure_sql
     assert store.refresh_evidence()[-1].error_code == "unknown_error"
+
+
+def test_postgres_success_clears_limits_marked_as_conflicting() -> None:
+    source = _source()
+    connection = _FakeConnection()
+    store = PostgresProviderCatalogStore(
+        "postgresql://catalog.example/db",
+        connection_factory=lambda: connection,
+    )
+    conflicted = replace(
+        _model(source, "model-a"),
+        max_output_tokens=8192,
+        context_window=256000,
+        max_output_tokens_conflicted=True,
+        context_window_conflicted=True,
+    )
+
+    store.record_success(
+        source,
+        [conflicted],
+        eligible_model_ids={conflicted.model_id},
+        serving_tags={conflicted.model_id: ("discovered", "chat")},
+    )
+
+    statement, params = next(
+        call
+        for call in connection.cursor_object.calls
+        if "INSERT INTO provider_model" in call[0]
+    )
+    assert "CASE WHEN %s THEN NULL" in statement
+    assert params[3:5] == (None, None)
+    assert params[-2:] == (True, True)
+
+
+def test_postgres_success_clears_invalid_limit_metadata() -> None:
+    source = _source()
+    connection = _FakeConnection()
+    store = PostgresProviderCatalogStore(
+        "postgresql://catalog.example/db",
+        connection_factory=lambda: connection,
+    )
+    invalid = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "model-a",
+                    "max_output_tokens": 0,
+                    "context_window": -1,
+                }
+            ]
+        },
+        source,
+    )[0]
+
+    store.record_success(
+        source,
+        [invalid],
+        eligible_model_ids={invalid.model_id},
+        serving_tags={invalid.model_id: ("discovered", "chat")},
+    )
+
+    statement, params = next(
+        call
+        for call in connection.cursor_object.calls
+        if "INSERT INTO provider_model" in call[0]
+    )
+    assert "CASE WHEN %s THEN NULL" in statement
+    assert params[3:5] == (None, None)
+    assert params[-2:] == (True, True)
 
 
 def test_postgres_success_clears_tags_account_wide_not_per_current_model() -> None:
@@ -494,6 +804,8 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
                 "model-b",
                 source.chat_base_url,
                 "Bearer",
+                None,
+                None,
                 Decimal("0.25"),
                 Decimal("0.50"),
                 "usd",

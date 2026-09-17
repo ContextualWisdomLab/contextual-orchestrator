@@ -26,12 +26,23 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "No model groups yet. Create one to route a logical model across providers.",
         "group_saved": "Group saved. Send requests with this group name to use measured routing.",
         "group_deleted": "Group deleted. Its provider models remain available.",
+        "audit_refresh_warning": "The change was saved, but the Audit view could not be refreshed. Reload to see the latest event.",
+        "model_groups_refresh_warning": "The change was saved, but the model group list could not be refreshed. Reload to see the latest groups.",
         "search_agents": "Search models",
         "all_statuses": "All statuses",
         "no_agents_match": "No models match these filters. Clear a filter to see more models.",
         "models_table_scroll_hint": "Model details table. Scroll horizontally to review latency and success.",
         "no_agents_configured": "Add a model connection to start routing requests.",
         "no_audit_events": "Run a workflow to create your first audit event.",
+        "audit_timeout_changed": "Model time limit updated",
+        "audit_timeout_restored": "Model time limit restored",
+        "audit_model_reference": "Model",
+        "audit_revision_reference": "Revision",
+        "audit_restored_reference": "Restored from revision",
+        "audit_date_unknown": "Date unavailable",
+        "audit_event_heading": "Event",
+        "audit_detail_heading": "Detail",
+        "audit_created_heading": "Created",
         "no_policy_evidence": "No policy evidence is loaded. Open Audit to review recorded events.",
         "no_recent_errors": "No current alerts. Open Audit to review recent changes.",
         "prompt_placeholder": "Describe the task you want to route, then run the trace.",
@@ -55,10 +66,10 @@ ADMIN_TRANSLATIONS = {
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
-        "spend_output_tokens": "Est. output tokens",
-        "spend_prompt_tokens": "Est. prompt tokens",
+        "spend_output_tokens": "Output tokens",
+        "spend_prompt_tokens": "Prompt tokens",
         "spend_steps": "Steps",
-        "spend_cost": "Est. cost",
+        "spend_cost": "Cost (USD)",
         "spend_runs": "Runs",
         "settings_title": "Settings",
         "session_title": "Operator session",
@@ -81,13 +92,15 @@ ADMIN_TRANSLATIONS = {
         "readiness_summary_text": "Sales and commercial criteria passed: {pass}. Need attention: {warn}. Failed: {fail}. See the rows below to fix what failed.",
         "readiness_source": "Readiness source",
         "readiness_measurement_status": "Measurement status",
-        "measurement_local_runtime_estimate": "Estimated on this server",
+        "measurement_measured": "Provider measured",
+        "measurement_exact_tokenizer": "Exact tokenizer",
+        "measurement_unavailable": "Unavailable",
         "measurement_local_runtime_snapshot": "Measured on this server",
         "measurement_local_runtime": "Generated locally on this server",
         "measurement_estimate": "Estimated",
         "measurement_unknown": "Unknown",
         "spend_no_price": "No price set",
-        "spend_no_price_action": "Add provider pricing to estimate cost.",
+        "spend_no_price_action": "Add provider pricing to calculate cost.",
         "readiness_remediation_label": "Remediation",
         "sales_readiness": "Sales readiness",
         "sales_readiness_title": "Sales Readiness",
@@ -285,12 +298,23 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "모델 그룹이 없습니다. 논리 모델을 여러 공급자로 라우팅하려면 그룹을 만드세요.",
         "group_saved": "그룹을 저장했습니다. 측정 기반 라우팅에는 이 그룹 이름으로 요청하세요.",
         "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
+        "audit_refresh_warning": "변경 사항은 저장했지만 감사 화면을 새로 고치지 못했습니다. 최신 이벤트를 보려면 새로 고침하세요.",
+        "model_groups_refresh_warning": "변경 사항은 저장했지만 모델 그룹 목록을 새로 고치지 못했습니다. 최신 그룹을 보려면 새로 고침하세요.",
         "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
         "models_table_scroll_hint": "모델 상세 표입니다. 지연 시간과 성공률을 보려면 가로로 스크롤하세요.",
         "no_agents_configured": "요청 라우팅을 시작하려면 모델 연결을 추가하세요.",
         "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
+        "audit_timeout_changed": "모델 시간 제한 변경",
+        "audit_timeout_restored": "모델 시간 제한 복원",
+        "audit_model_reference": "모델",
+        "audit_revision_reference": "변경 버전",
+        "audit_restored_reference": "복원한 버전",
+        "audit_date_unknown": "날짜 확인 불가",
+        "audit_event_heading": "변경 내용",
+        "audit_detail_heading": "상세",
+        "audit_created_heading": "기록 시각",
         "no_policy_evidence": "불러온 정책 근거가 없습니다. 기록된 이벤트를 검토하려면 감사를 여세요.",
         "no_recent_errors": "현재 알림이 없습니다. 최근 변경 사항을 검토하려면 감사를 여세요.",
         "prompt_placeholder": "라우팅할 작업을 설명한 다음 트레이스를 실행하세요.",
@@ -314,10 +338,10 @@ ADMIN_TRANSLATIONS = {
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
-        "spend_output_tokens": "추정 출력 토큰",
-        "spend_prompt_tokens": "추정 입력 토큰",
+        "spend_output_tokens": "출력 토큰",
+        "spend_prompt_tokens": "입력 토큰",
         "spend_steps": "단계",
-        "spend_cost": "추정 비용",
+        "spend_cost": "비용 (USD)",
         "spend_runs": "실행",
         "settings_title": "설정",
         "session_title": "운영자 세션",
@@ -340,13 +364,15 @@ ADMIN_TRANSLATIONS = {
         "readiness_summary_text": "판매 및 상용 기준 통과 {pass}개, 주의 {warn}개, 실패 {fail}개. 아래 행에서 실패 항목을 해결하세요.",
         "readiness_source": "준비 근거",
         "readiness_measurement_status": "측정 상태",
-        "measurement_local_runtime_estimate": "이 서버에서 추정됨",
+        "measurement_measured": "공급자 측정값",
+        "measurement_exact_tokenizer": "정확 토크나이저",
+        "measurement_unavailable": "사용 불가",
         "measurement_local_runtime_snapshot": "이 서버에서 측정됨",
         "measurement_local_runtime": "이 서버에서 생성됨",
         "measurement_estimate": "추정값",
         "measurement_unknown": "알 수 없음",
         "spend_no_price": "가격 미설정",
-        "spend_no_price_action": "비용을 추정하려면 공급자 가격을 추가하세요.",
+        "spend_no_price_action": "비용을 계산하려면 공급자 가격을 추가하세요.",
         "readiness_remediation_label": "보완 조치",
         "sales_readiness": "판매 준비도",
         "sales_readiness_title": "판매 준비도",
@@ -871,6 +897,9 @@ ADMIN_HTML = r"""<!doctype html>
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; }
     }
+    .audit-table { min-width: 0; table-layout: fixed; }
+    .audit-table th, .audit-table td { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+    .audit-table th:nth-child(2) { width: 45%; }
   </style>
 </head>
 <body>
@@ -1052,14 +1081,14 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="spend_title">Spend</h1><span class="chip" id="spendStatus">estimate</span></div>
           <div class="kpis" id="spendTotals"></div>
-          <table><thead><tr><th data-i18n="spend_model">Model</th><th data-i18n="spend_output_tokens">Est. output tokens</th><th data-i18n="spend_steps">Steps</th><th>$/1M</th><th data-i18n="spend_cost">Est. cost</th></tr></thead><tbody id="spendRows"></tbody></table>
+          <table><thead><tr><th data-i18n="spend_model">Model</th><th data-i18n="spend_output_tokens">Output tokens</th><th data-i18n="spend_steps">Steps</th><th>$/1M</th><th data-i18n="spend_cost">Cost (USD)</th></tr></thead><tbody id="spendRows"></tbody></table>
           <p class="muted" id="spendNote"></p>
         </section>
       </section>
       <section class="detail-grid view" data-view="audit" hidden>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="audit_compliance">Audit &amp; Compliance</h1><span class="chip">Evidence</span></div>
-          <table><thead><tr><th>Event</th><th>Detail</th><th>Created</th></tr></thead><tbody id="auditRows"></tbody></table>
+          <table class="audit-table"><thead><tr><th data-i18n="audit_event_heading">Event</th><th data-i18n="audit_detail_heading">Detail</th><th data-i18n="audit_created_heading">Created</th></tr></thead><tbody id="auditRows"></tbody></table>
         </section>
       </section>
       <section class="detail-grid view" data-view="settings" hidden>
@@ -1182,12 +1211,54 @@ Summarize this research thread and verify claims.</textarea>
       renderModelGroups();
     }
 
+    async function refreshAuditEvents() {
+      try {
+        const response = await apiFetch("/admin/state");
+        if (!response.ok) {
+          throw new Error("Audit state request failed with HTTP " + response.status);
+        }
+        const payload = await response.json();
+        state.recent_audit_events = payload.recent_audit_events || [];
+        renderAudit();
+        return true;
+      } catch (error) {
+        console.warn("Could not refresh audit events after model-group mutation", error);
+        return false;
+      }
+    }
+
+    function showModelGroupRefreshWarning(message) {
+      const current = els.modelGroupFeedback.textContent.trim();
+      els.modelGroupFeedback.textContent = [current, message].filter(Boolean).join(" ");
+      els.modelGroupFeedback.style.color = "var(--amber)";
+    }
+
+    async function refreshModelGroupViews() {
+      let modelGroupsRefreshed = true;
+      try {
+        await refreshModelGroups();
+      } catch (error) {
+        modelGroupsRefreshed = false;
+        console.warn("Could not refresh model groups after mutation", error);
+      }
+      const auditRefreshed = await refreshAuditEvents();
+      if (!modelGroupsRefreshed) {
+        showModelGroupRefreshWarning(t("model_groups_refresh_warning"));
+      }
+      if (!auditRefreshed) {
+        showModelGroupRefreshWarning(t("audit_refresh_warning"));
+      }
+    }
+
     async function saveModelGroup(event) {
       event.preventDefault();
       const groupName = els.modelGroupName.value.trim();
       const memberIds = Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value);
       const exists = state.modelGroups.some(group => group.group_name === groupName.replaceAll("-", "_").toLowerCase());
-      const response = await fetch(exists ? `/api/v1/model_groups/${encodeURIComponent(groupName)}` : "/api/v1/model_groups", {
+      const endpoint = exists
+        ? "/api/v1/model_groups/" + encodeURIComponent(groupName)
+        : "/api/v1/model_groups";
+      const response = await fetch(endpoint, {
         method: exists ? "PATCH" : "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify(exists ? {member_agent_ids: memberIds} : {group_name: groupName, member_agent_ids: memberIds})
@@ -1195,7 +1266,8 @@ Summarize this research thread and verify claims.</textarea>
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
       els.modelGroupFeedback.textContent = t("group_saved");
-      await refreshModelGroups();
+      els.modelGroupFeedback.style.color = "var(--green)";
+      await refreshModelGroupViews();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -1289,7 +1361,9 @@ Summarize this research thread and verify claims.</textarea>
       renderReadiness();
     }
     const MEASUREMENT_STATUS_KEYS = {
-      local_runtime_estimate: "measurement_local_runtime_estimate",
+      measured: "measurement_measured",
+      exact_tokenizer: "measurement_exact_tokenizer",
+      unavailable: "measurement_unavailable",
       local_runtime_snapshot: "measurement_local_runtime_snapshot",
       estimate: "measurement_estimate",
       unknown: "measurement_unknown"
@@ -1307,20 +1381,20 @@ Summarize this research thread and verify claims.</textarea>
       if (statusEl) statusEl.textContent = statusLabel(spend.measurement_status);
       const totalsEl = document.getElementById("spendTotals");
       if (totalsEl) {
-        const cost = totals.estimated_cost_usd == null ? "—" : ("$" + totals.estimated_cost_usd);
+        const cost = totals.cost_usd == null ? "—" : ("$" + totals.cost_usd);
         totalsEl.innerHTML = [
           [t("spend_runs") || "Runs", totals.run_count ?? 0],
-          [t("spend_output_tokens") || "Est. output tokens", totals.estimated_output_tokens ?? 0],
-          [t("spend_prompt_tokens") || "Est. prompt tokens", totals.estimated_prompt_tokens ?? 0],
-          [t("spend_cost") || "Est. cost (USD)", cost]
+          [t("spend_output_tokens") || "Output tokens", totals.output_tokens ?? "—"],
+          [t("spend_prompt_tokens") || "Prompt tokens", totals.prompt_tokens ?? "—"],
+          [t("spend_cost") || "Cost (USD)", cost]
         ].map(([l, v]) => `<div class="kpi"><span>${escapeHtml(l)}</span><strong>${escapeHtml(v)}</strong></div>`).join("");
       }
       const rowsEl = document.getElementById("spendRows");
       if (rowsEl) {
         rowsEl.innerHTML = (spend.by_model || []).map(row => {
           const price = row.price_per_million_usd == null ? "&mdash;" : escapeHtml(row.price_per_million_usd);
-          const cost = row.estimated_cost_usd == null ? `<span class="chip" title="${escapeHtml(t("spend_no_price_action"))}">${escapeHtml(t("spend_no_price"))}</span>` : ("$" + escapeHtml(row.estimated_cost_usd));
-          return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.estimated_output_tokens)}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
+          const cost = row.cost_usd == null ? `<span class="chip" title="${escapeHtml(t("spend_no_price_action"))}">${escapeHtml(t("spend_no_price"))}</span>` : ("$" + escapeHtml(row.cost_usd));
+          return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.output_tokens ?? "—")}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
         }).join("") || `<tr><td colspan="5">${t("no_trace")}</td></tr>`;
       }
       const noteEl = document.getElementById("spendNote");
@@ -1563,9 +1637,24 @@ Summarize this research thread and verify claims.</textarea>
     }
     function renderAudit() {
       const events = state.recent_audit_events || [];
-      els.auditRows.innerHTML = events.map(event => `
-        <tr><td>${escapeHtml(event.event_type)}</td><td><pre>${escapeHtml(JSON.stringify(event.event_detail))}</pre></td><td>${escapeHtml(event.created_at)}</td></tr>
-      `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
+      els.auditRows.innerHTML = events.map(event => {
+        let label = event.event_type;
+        let detail = JSON.stringify(event.event_detail);
+        if (event.event_type === "model_timeout_policy_changed") {
+          const data = event.event_detail || {};
+          const restored = Number.isSafeInteger(data.restored_from_revision) && data.restored_from_revision > 0;
+          label = t(restored ? "audit_timeout_restored" : "audit_timeout_changed");
+          const references = [];
+          if (typeof data.worker_agent_id === "string") references.push(`${t("audit_model_reference")}: ${data.worker_agent_id}`);
+          if (Number.isSafeInteger(data.revision) && data.revision > 0) references.push(`${t("audit_revision_reference")}: ${data.revision}`);
+          if (restored) references.push(`${t("audit_restored_reference")}: ${data.restored_from_revision}`);
+          detail = references.join(" · ");
+        }
+        const date = typeof event.created_at === "number" && Number.isFinite(event.created_at)
+          ? new Date(event.created_at * 1000) : new Date(NaN);
+        const created = Number.isNaN(date.getTime()) ? t("audit_date_unknown") : date.toLocaleString(currentLang);
+        return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(detail)}</td><td>${escapeHtml(created)}</td></tr>`;
+      }).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
     }
     function renderSecondaryViews() {
       if (!state.policy) return;
@@ -1742,17 +1831,25 @@ Summarize this research thread and verify claims.</textarea>
     els.registerAgent.addEventListener("click", () => showView("integrations"));
     els.modelGroupForm.addEventListener("submit", event => saveModelGroup(event).catch(error => {
       els.modelGroupFeedback.textContent = error.message;
+      els.modelGroupFeedback.style.color = "var(--red)";
     }));
+    async function deleteModelGroup(groupName) {
+      const endpoint = "/api/v1/model_groups/" + encodeURIComponent(groupName);
+      const response = await fetch(endpoint, {method: "DELETE"});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not delete model group");
+      els.modelGroupFeedback.textContent = t("group_deleted");
+      els.modelGroupFeedback.style.color = "var(--green)";
+      await refreshModelGroupViews();
+    }
+
     els.modelGroups.addEventListener("click", event => {
       const name = event.target.dataset?.deleteGroup;
       if (!name) return;
-      fetch(`/api/v1/model_groups/${encodeURIComponent(name)}`, {method: "DELETE"})
-        .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
-        .then(() => {
-          els.modelGroupFeedback.textContent = t("group_deleted");
-          return refreshModelGroups();
-        })
-        .catch(error => { els.modelGroupFeedback.textContent = error.message; });
+      deleteModelGroup(name).catch(error => {
+        els.modelGroupFeedback.textContent = error.message;
+        els.modelGroupFeedback.style.color = "var(--red)";
+      });
     });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));

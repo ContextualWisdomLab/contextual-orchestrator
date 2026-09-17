@@ -18,7 +18,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import (  # noqa: E402
+    ModelAgent,
+    TaskOrchestrator,
+    default_role_effort_catalog,
+)
 import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
@@ -43,12 +47,23 @@ class _PlannerClient(ModelClient):
         super().__init__()
         self.plan_text = plan_text
         self.calls: list[list[dict]] = []
+        self.tool_settings: list[object] = []
 
     def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
         self.calls.append(messages)
+        self.tool_settings.append(self.request_settings_snapshot().get("tools"))
         if len(self.calls) == 1:
             return self.plan_text
         return f"step-output({len(self.calls) - 1})"
+
+
+class _LegacyPlannerClient(_PlannerClient):
+    """Model client predating the optional request-tool suppression scope."""
+
+    def __getattribute__(self, name: str):
+        if name == "suppress_request_tools":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
 
 
 def _orch(plan_text: str) -> tuple[TaskOrchestrator, _PlannerClient]:
@@ -72,6 +87,33 @@ def test_generated_plan_executes_with_natural_language_subtasks() -> None:
     assert len(client.calls) == 5  # 1 planner call + 4 steps; missing fast-mlsirm fails closed
 
 
+def test_generated_planner_does_not_receive_caller_tools() -> None:
+    """Only generated workflow workers may receive caller tool controls."""
+    orchestrator, client = _orch(json.dumps(PLAN))
+    tools = [{"type": "function", "function": {"name": "inspect_repo"}}]
+
+    with client.request_settings(tools=tools, tool_choice="required"):
+        orchestrator.conduct([{"role": "user", "content": "solve it"}])
+
+    assert client.tool_settings[0] is None
+    assert client.tool_settings[1:3] == [tools, tools]
+    assert client.tool_settings[3:] == [None, None]
+
+
+def test_generated_planner_supports_legacy_model_clients() -> None:
+    """Generated planning remains available to clients without the optional scope."""
+    client = _LegacyPlannerClient(json.dumps(PLAN))
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
+        client=client,
+    )
+    orchestrator.policy = replace(orchestrator.policy, workflow_planning="generated")
+
+    result = orchestrator.conduct([{"role": "user", "content": "solve it"}])
+
+    assert result["plan_source"] == "generated"
+
+
 def test_access_lists_actually_isolate_context() -> None:
     orchestrator, client = _orch(json.dumps(PLAN))
     orchestrator.conduct([{"role": "user", "content": "solve the hard problem"}])
@@ -81,9 +123,51 @@ def test_access_lists_actually_isolate_context() -> None:
     step3_prompt = client.calls[4][-1]["content"]
 
     assert "step-output(1)" not in step1_prompt  # access [] -> sees no prior output
-    assert "step-output(1)" in step2_prompt and "step-output(2)" in step2_prompt  # access [0,1]
+    assert step2_prompt.count("step-output(1)") == 1  # access [0,1], copied once
+    assert step2_prompt.count("step-output(2)") == 1
     assert "step-output(1)" not in step3_prompt  # access [1,2] excludes step 0
     assert "step-output(2)" in step3_prompt and "step-output(3)" in step3_prompt
+
+
+def test_workflow_step_carries_current_task_and_source_context_once() -> None:
+    """Workers receive one canonical copy of task and source-bearing history."""
+    orchestrator, client = _orch(json.dumps(PLAN))
+    orchestrator.conduct(
+        [
+            {"role": "system", "content": "CALLER_POLICY_SENTINEL"},
+            {"role": "user", "content": "EARLIER_TURN_SENTINEL"},
+            {"role": "assistant", "content": "EARLIER_ANSWER_SENTINEL"},
+            {"role": "user", "content": "CURRENT_TASK_SENTINEL"},
+        ]
+    )
+
+    step_messages = client.calls[1]
+    serialized = json.dumps(step_messages)
+    assert serialized.count("CURRENT_TASK_SENTINEL") == 1
+    assert serialized.count("EARLIER_TURN_SENTINEL") == 1
+    assert serialized.count("EARLIER_ANSWER_SENTINEL") == 1
+    assert "Caller instructions:\nCALLER_POLICY_SENTINEL" in step_messages[0]["content"]
+    assert sum(
+        message.get("role") == "user" and message.get("content") == "CURRENT_TASK_SENTINEL"
+        for message in step_messages
+    ) == 1
+    assert "CURRENT_TASK_SENTINEL" not in step_messages[-1]["content"]
+
+
+def test_workflow_step_reasserts_multipart_caller_instructions() -> None:
+    """Text content parts retain system authority in every worker stage."""
+    orchestrator, client = _orch(json.dumps(PLAN))
+    orchestrator.conduct(
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "MULTIPART_POLICY_SENTINEL"}],
+            },
+            {"role": "user", "content": "solve it"},
+        ]
+    )
+
+    assert "Caller instructions:\nMULTIPART_POLICY_SENTINEL" in client.calls[1][0]["content"]
 
 
 def test_planner_prompt_lists_the_agent_pool() -> None:
@@ -112,6 +196,43 @@ def test_zdr_planner_prompt_lists_only_zdr_agents() -> None:
     assert "non_zdr_agent" not in planner_system
     assert "model=gpt-4o," not in planner_system
     assert "zdr_agent" in planner_system
+
+
+def test_planner_advertises_and_validates_role_effort_eligibility() -> None:
+    unsupported = ModelAgent(
+        "unsupported_agent", "model-u", priority=10, reasoning_effort_supported=False
+    )
+    supported = ModelAgent(
+        "supported_agent",
+        "model-s",
+        reasoning_effort_supported=True,
+        provider_exclusions=("verifier",),
+    )
+    orchestrator = TaskOrchestrator(
+        [unsupported, supported], role_effort_catalog=default_role_effort_catalog()
+    )
+    raw_plan = json.dumps(
+        {
+            "steps": [
+                {"id": 0, "role": "worker", "agent_id": unsupported.id, "subtask": "work", "access": []},
+                {"id": 1, "role": "synthesizer", "agent_id": unsupported.id, "subtask": "answer", "access": [0]},
+            ]
+        }
+    )
+    calls: list[list[dict]] = []
+
+    def scripted_chat(agent, messages, **kwargs):
+        del agent, kwargs
+        calls.append(messages)
+        return raw_plan
+
+    with patch.object(orchestrator.client, "chat", side_effect=scripted_chat):
+        steps = orchestrator._plan_generated("solve")
+
+    prompt = calls[0][0]["content"]
+    assert "unsupported_agent" not in prompt
+    assert "supported_agent: model=model-s, roles=thinker,worker,synthesizer" in prompt
+    assert [step.agent_id for step in steps] == [supported.id, supported.id]
 
 
 def test_generated_plan_stops_before_next_call_when_budget_is_spent() -> None:

@@ -33,6 +33,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    discovery_tool_call_tags,
     privacy_tags_for_discovered,
     is_routable_discovered_model,
     legacy_agent_id_for,
@@ -71,7 +72,14 @@ class ProviderBootstrapError(RuntimeError):
 
 @dataclass(frozen=True)
 class ProviderBootstrapReport:
-    """Secret-free evidence emitted after one provider bootstrap run."""
+    """Secret-free evidence emitted after one provider bootstrap run.
+
+    When a durable agent pool is requested, ``selected_agent_ids`` uses the
+    resolved persisted identities and therefore names the same agents as
+    ``enabled_agent_ids``. This keeps legacy-ID migration from exposing two
+    identifier generations for one selected endpoint. Ephemeral runs have no
+    persisted identities, so ``selected_agent_ids`` uses the generated IDs.
+    """
 
     registered_credentials: tuple[str, ...]
     discovered_model_count: int
@@ -191,6 +199,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *(("cost:free",) if model.is_free else ()),
                 *(("spend:blocked",) if not model.spend_admitted else ()),
                 *privacy_tags_for_discovered(model),
+                *discovery_tool_call_tags(model),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
@@ -211,18 +220,62 @@ def _known_cost_sort_key(
     prices = (model.prompt_price_per_1k, model.completion_price_per_1k)
     prompt_price, completion_price = prices
     if (
-        prompt_price is None
-        or completion_price is None
-        or not _currency_is_comparable(model.currency_code, "USD")
+        prompt_price is not None
+        and completion_price is not None
+        and _currency_is_comparable(model.currency_code, "USD")
     ):
-        return (1, float("inf"), model.provider_name, model.model_id)
-    return (0, prompt_price + completion_price, model.provider_name, model.model_id)
+        return (0, prompt_price + completion_price, model.provider_name, model.model_id)
+    if model.is_free:
+        return (0, 0.0, model.provider_name, model.model_id)
+    return (1, float("inf"), model.provider_name, model.model_id)
+
+
+def _require_unambiguous_model_group_boundary(
+    ordered: Sequence[DiscoveredModel],
+    selected: Sequence[DiscoveredModel],
+) -> None:
+    """Reject a cutoff decided by identity or unmodeled diversity preference."""
+    selected_identities = [
+        (model.provider_name, model.credential_name, model.model_id)
+        for model in selected
+    ]
+    ranked_prefix = [
+        (model.provider_name, model.credential_name, model.model_id)
+        for model in ordered[: len(selected)]
+    ]
+    if selected_identities != ranked_prefix:
+        raise ProviderBootstrapError(
+            "provider bootstrap diversity would displace lower-cost evidence "
+            "without an explicit decision model"
+        )
+    if len(selected) >= len(ordered):
+        return
+    selected_identity_set = set(selected_identities)
+    selected_evidence = {_known_cost_sort_key(model)[:2] for model in selected}
+    excluded_evidence = {
+        _known_cost_sort_key(model)[:2]
+        for model in ordered
+        if (model.provider_name, model.credential_name, model.model_id)
+        not in selected_identity_set
+    }
+    if selected_evidence & excluded_evidence:
+        raise ProviderBootstrapError(
+            "provider bootstrap admission is ambiguous at the capacity boundary; "
+            "provide comparable price evidence or increase the limit to include "
+            "the tied candidates"
+        )
 
 
 def select_model_group_diverse_models(
     discovered: Sequence[DiscoveredModel], *, limit: int
 ) -> list[DiscoveredModel]:
-    """Choose a bounded compatible pool with one first-pass endpoint per model group."""
+    """Choose a bounded pool, rejecting diversity that changes priced admission.
+
+    Consumer migration: selection favors exact ``model_group`` identity and
+    known cost over provider spread. Consumers relying on provider-level
+    diversity must review migration (price-evidenced admission is
+    authoritative; provider spread alone does not displace cheaper evidence).
+    """
     if limit < 1:
         raise ValueError("provider bootstrap model limit must be positive")
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
@@ -240,6 +293,7 @@ def select_model_group_diverse_models(
         selected.append(model)
         seen_model_groups.add(model_group)
         if len(selected) >= limit:
+            _require_unambiguous_model_group_boundary(ordered, selected)
             return selected
     selected_keys = {
         (item.provider_name, item.credential_name, item.model_id)
@@ -252,6 +306,7 @@ def select_model_group_diverse_models(
         selected.append(model)
         if len(selected) >= limit:
             break
+    _require_unambiguous_model_group_boundary(ordered, selected)
     return selected
 
 
@@ -288,9 +343,9 @@ def _synchronize_durable_agent_pool(
             raise ProviderBootstrapError(
                 "selected discovered models conflict with operator-managed agent identities"
             )
-        selected_ids = {agent.id for agent in agents}
         bootstrap.sync_discovered_agents(agents)
-        selected_ids = set()
+        selected_ids: set[str] = set()
+        ordered_selected_ids: list[str] = []
         for agent in agents:
             matches = [
                 candidate
@@ -302,9 +357,12 @@ def _synchronize_durable_agent_pool(
             ]
             if not matches:
                 continue
-            selected_ids.add(
-                next((item.id for item in matches if item.id == agent.id), matches[-1].id)
+            selected_id = next(
+                (item.id for item in matches if item.id == agent.id),
+                matches[-1].id,
             )
+            selected_ids.add(selected_id)
+            ordered_selected_ids.append(selected_id)
         if len(selected_ids) != len(agents):
             raise ProviderBootstrapError(
                 "selected discovered models conflict with operator-managed agent identities"
@@ -317,14 +375,12 @@ def _synchronize_durable_agent_pool(
                 if not candidate.disabled:
                     bootstrap.remove_agent("default", candidate.id)
 
-        for agent_id in selected_ids:
+        for agent_id in ordered_selected_ids:
             bootstrap.patch_agent("default", agent_id, {"status": "active"})
 
         # The patch loop above raises KeyError if any selected agent is missing from
-        # the pool, so the enabled set equals selected_ids by construction here.
-        return tuple(
-            sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
-        )
+        # the pool. Preserve the selector's cost/model-group order in the report.
+        return tuple(ordered_selected_ids)
     finally:
         bootstrap.close()
 
@@ -359,12 +415,13 @@ def bootstrap_provider_runtime(
     # input with a positive limit and raises ValueError for a non-positive one,
     # so the selection here is never empty.
     selected = select_model_group_diverse_models(eligible, limit=model_limit)
-    selected_ids = tuple(agent_id_for(model) for model in selected)
+    generated_selected_ids = tuple(agent_id_for(model) for model in selected)
     enabled_ids = (
         _synchronize_durable_agent_pool(agents_db, selected)
         if agents_db
         else ()
     )
+    selected_ids = enabled_ids if agents_db else generated_selected_ids
 
     return ProviderBootstrapReport(
         registered_credentials=registered,

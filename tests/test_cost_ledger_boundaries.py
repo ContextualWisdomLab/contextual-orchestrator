@@ -268,9 +268,10 @@ def test_corrupt_price_component_text_is_rejected_not_parsed() -> None:
     )
     book = PriceBook(config)
     assert book.get_price("openai", "corrupt-model") is None
-    cost, currency = book.compute_cost("openai", "corrupt-model", 1000, 1000)
+    cost, currency, price_known = book.compute_cost("openai", "corrupt-model", 1000, 1000)
     assert cost == 0.0
     assert currency == "USD"
+    assert price_known is False
 
 
 def test_working_background_store_marks_records_stored() -> None:

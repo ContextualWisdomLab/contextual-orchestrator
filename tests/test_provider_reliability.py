@@ -27,6 +27,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     ProviderRequestTooLargeError,
     ProviderResponseError,
+    _log_provider_attempt_failed,
     is_transient_error,
 )
 from contextual_orchestrator.provider_errors import (  # noqa: E402
@@ -38,6 +39,47 @@ from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
+
+
+@pytest.mark.parametrize("status", [425, 429, 503, None, 0, True, "429", 600])
+def test_attempt_log_preserves_only_valid_numeric_upstream_status(caplog, status) -> None:
+    """Logs distinguish missing status without reading bodies or exposing diagnostics."""
+    body = io.BytesIO(b"private_response_body")
+    failure = urllib.error.HTTPError(
+        "https://provider.example/private", status,
+        "https://provider.example/private private_failure_text", None, body,
+    )
+    agent = ModelAgent("local_worker", "mock-local")
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+        _log_provider_attempt_failed(agent, 0, failure, True)
+    expected = status if type(status) is int and 100 <= status <= 599 else None
+    assert f"provider_status={expected}" in caplog.text
+    assert "error_message=<omitted>" in caplog.text
+    assert "provider.example" not in caplog.text
+    assert "private_failure_text" not in caplog.text
+    assert "private_response_body" not in caplog.text
+    assert body.tell() == 0
+
+
+def test_attempt_log_handles_typed_and_non_http_failures_without_stringifying(caplog) -> None:
+    """A typed status survives; a non-HTTP failure remains explicitly unknown."""
+    class UnprintableFailure(RuntimeError):
+        def __str__(self):
+            raise AssertionError("failure text must not be evaluated")
+
+    failures = [
+        (ProviderUpstreamError(
+            agent_id="local_worker", model="mock-local", error_code="service_unavailable",
+            message="private_failure_text", client_status=503, provider_status=503,
+        ), 503),
+        (UnprintableFailure(), None),
+    ]
+    for failure, expected in failures:
+        caplog.clear()
+        with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+            _log_provider_attempt_failed(ModelAgent("local_worker", "mock-local"), 0, failure, True)
+        assert f"provider_status={expected}" in caplog.text
+        assert "private_failure_text" not in caplog.text
 
 
 def _stopped_http_error() -> urllib.error.HTTPError:
@@ -252,6 +294,34 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
     assert all(0.0 <= d <= client.retry_backoff_cap for d in delays)
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError("read timed out"), ConnectionResetError("connection reset")],
+)
+def test_ambiguous_post_send_failure_is_never_retried(failure: OSError) -> None:
+    """An unknown provider outcome must not be replayed by the transport loop."""
+
+    class AmbiguousClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=3, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            del agent, payload, destination
+            self.attempts += 1
+            raise failure
+
+    client = AmbiguousClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.retryable is False
+
+
 def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -> None:
     class LocalDownClient(ModelClient):
         def __init__(self) -> None:
@@ -273,7 +343,7 @@ def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -
     assert client.attempts == 1
 
 
-def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
+def test_local_retry_budget_never_replays_an_ambiguous_outcome() -> None:
     class LocalFlakyClient(ModelClient):
         def __init__(self) -> None:
             super().__init__(max_retries=5, local_max_retries=1, retry_backoff=0.0)
@@ -281,17 +351,17 @@ def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
 
         def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
-            if self.attempts == 1:
-                raise urllib.error.URLError("local server restarted")
-            return "recovered"
+            raise urllib.error.URLError("local server restarted")
 
     client = LocalFlakyClient()
     agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
-    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
-    assert client.attempts == 2
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
 
 
-def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
+def test_local_retry_budget_does_not_override_unknown_outcome_safety() -> None:
     class LocalFlakyClient(ModelClient):
         def __init__(self) -> None:
             super().__init__(max_retries=0, local_max_retries=2, retry_backoff=0.0)
@@ -299,14 +369,14 @@ def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
 
         def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
-            if self.attempts < 3:
-                raise urllib.error.URLError("local server is restarting")
-            return "recovered"
+            raise urllib.error.URLError("local server is restarting")
 
     client = LocalFlakyClient()
     agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
-    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
-    assert client.attempts == 3
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
 
 
 def test_local_passthrough_retry_budget_is_not_capped_by_remote_retry_default() -> None:
@@ -363,6 +433,45 @@ def test_provider_request_hides_raw_error_text_and_cause() -> None:
         assert error.__cause__ is None
     else:  # pragma: no cover
         raise AssertionError("a failed provider request must raise")
+
+
+def test_response_content_classifies_reasoning_without_content() -> None:
+    agent = ModelAgent("worker_agent", "gpt")
+
+    with pytest.raises(ProviderResponseError) as error:
+        ModelClient._response_content(
+            agent,
+            {
+                "choices": [
+                    {"message": {"content": "", "reasoning": "thinking only"}}
+                ]
+            },
+        )
+
+    assert error.value.detail["provider_response_failure_kind"] == "reasoning_without_content"
+    assert "thinking only" not in str(error.value)
+
+
+def test_response_content_classifies_missing_assistant_content() -> None:
+    agent = ModelAgent("worker_agent", "gpt")
+
+    with pytest.raises(ProviderResponseError) as error:
+        ModelClient._response_content(
+            agent,
+            {"choices": [{"message": {"tool_calls": []}}]},
+        )
+
+    assert error.value.detail["provider_response_failure_kind"] == "assistant_content_missing"
+
+    with pytest.raises(ProviderResponseError) as empty_error:
+        ModelClient._response_content(
+            agent,
+            {"choices": [{"message": {"content": ""}}]},
+        )
+    assert (
+        empty_error.value.detail["provider_response_failure_kind"]
+        == "assistant_content_missing"
+    )
 
 
 class _AgentDownClient(ModelClient):
@@ -474,7 +583,7 @@ def test_structural_provider_response_stays_inside_explicit_pool_failover() -> N
 
     orchestrator = TaskOrchestrator(agents, client=MalformedPrimaryClient())
 
-    answer, served_id, _usage = orchestrator._invoke(
+    answer, served_id, _served_model, _usage = orchestrator._invoke(
         agents[0],
         [{"role": "user", "content": "route this"}],
         text="route this",
@@ -541,7 +650,7 @@ def test_circuit_breaker_opens_then_skips_dead_agent() -> None:
 
     # Each invoke fails on primary then succeeds on backup; primary accrues failures.
     for _ in range(orchestrator.circuit_failure_threshold):
-        output, served, _usage = orchestrator._invoke(
+        _output, served, _served_model, _usage = orchestrator._invoke(
             primary, [{"role": "system", "content": "Role: worker"}], text="task", role="worker"
         )
         assert served == "backup_worker"
@@ -853,6 +962,83 @@ def test_auto_model_still_fails_over_on_retryable_5xx_without_change() -> None:
     assert result["answer"] == "[auto_backup] answer"
     assert result["trace"][0]["served_agent_id"] == "auto_backup"
     assert client.calls == ["auto_primary", "auto_backup"]
+
+
+def test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_agent() -> None:
+    """One flaky free route must not sink more than its own _invoke-level retry
+    budget of *real* network attempts before failover reaches a ready sibling.
+
+    Regression for the ContextualWisdomLab/.github PR #1912 ``noema-review``
+    incident: preflight found ``nvidia_nim_sub_deepseek_ai_deepseek_v4_flash_0731``
+    "escalated" (needed a retry to become ready) alongside two cleanly ready
+    siblings (``nvidia_nim_deepseek_ai_deepseek_v4_pro_0813`` and
+    ``nvidia_nim_sub_deepseek_ai_deepseek_v4_pro_0813``); the real
+    ``orchestrator/free`` chat/completions request that followed then spent
+    1655.2s and still surfaced ``served_model=deepseek-ai/deepseek-v4-flash-0731``
+    -- the flaky route's own model -- in its final 503, never reaching either
+    ready sibling
+    (https://github.com/ContextualWisdomLab/.github/actions/runs/33993267732/job/101388341942).
+
+    ``test_free_model_advances_through_the_free_pool_on_retryable_5xx`` already
+    proves failover happens *eventually*, but it mocks ``ModelClient.chat()``
+    directly, which bypasses ``_send_with_retry``'s own internal
+    transient-retry-with-backoff entirely. This test overrides only ``_send``
+    (real transport boundary), so ``_send_with_retry``'s own retry loop and
+    ``_invoke``'s agent-level retry-then-failover loop both actually run
+    together, the way production does -- the interaction the incident exposed.
+    """
+    send_calls: list[str] = []
+
+    class RealTransportFlakyPool(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(retry_backoff=0.0)
+            self._sleep = lambda _seconds: None  # keep any real backoff at 0s
+
+        def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+            return None  # no real DNS; _send below ignores destination anyway
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None, *, timeout=None) -> str:  # type: ignore[override]
+            send_calls.append(agent.id)
+            if agent.id == "flaky_escalated_agent":
+                raise _http_error(503)
+            return f"[{agent.id}] answer"
+
+    agents = [
+        ModelAgent(
+            agent_id,
+            f"{agent_id}-model",
+            base_url="https://provider.example/v1",
+            credential_key="",
+            tags=("reasoning", "cost:free"),
+        )
+        for agent_id in ("flaky_escalated_agent", "ready_sibling_b", "ready_sibling_c")
+    ] + [ModelAgent("priced_worker", "priced-model", tags=("reasoning",), priority=99)]
+    orchestrator = TaskOrchestrator(
+        agents,
+        client=RealTransportFlakyPool(),
+        tool_retry_attempts=1,
+        tool_retry_backoff_seconds=0.0,
+    )
+    orchestrator._triage_fn = lambda text: False  # force the single-worker route path
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["trace"][0]["served_agent_id"] in {"ready_sibling_b", "ready_sibling_c"}
+    flaky_attempts = send_calls.count("flaky_escalated_agent")
+    # _invoke's own budget is 1 + tool_retry_attempts (=1 here) = 2 real tries
+    # against one candidate before it fails over -- never multiplied by
+    # ModelClient's own max_retries+1 (=3 by default) stacked underneath it.
+    assert flaky_attempts <= 2, (
+        f"flaky agent consumed {flaky_attempts} real network attempts before "
+        "failover, expected at most 2 (the _invoke-level retry budget); "
+        "ModelClient's own internal transient-retry-with-backoff must not "
+        "stack underneath _invoke's own retry-then-failover decision"
+    )
+    assert "priced_worker" not in send_calls
 
 
 if __name__ == "__main__":

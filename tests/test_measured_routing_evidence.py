@@ -315,8 +315,8 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
 
     def fake_invoke(primary, messages, **kwargs):
         if primary.id == "primary_worker":
-            return "weak answer", "primary_worker", {"completion_tokens": 10}
-        return "strong answer", "backup_worker", None
+            return "weak answer", "primary_worker", "mock", {"completion_tokens": 10}
+        return "strong answer", "backup_worker", "mock", None
 
     monkeypatch.setattr(orchestrator, "_invoke", fake_invoke)
 

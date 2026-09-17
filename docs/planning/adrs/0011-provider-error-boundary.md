@@ -29,6 +29,14 @@ available through a public gateway error or an exception cause.
    request failed` / `provider <id> batch request failed`) because a stream may
    already have emitted bytes (no retry, no failover), and raw connection
    resets outside ``URLError`` map to the same stable ``transport_error`` code.
+7. A virtual structured request keeps one request-scoped set of models proven
+   missing. Evidence roles and final synthesis share it, so each missing model
+   is attempted at most once and complete exhaustion terminates with the typed
+   `model_not_found` surface rather than restarting the same catalog sequence.
+8. Configured-gateway readiness probes use a distinct capability-probe
+   telemetry operation. They are not caller attempts. Conversely, an explicit
+   structured model pin constrains evidence, model judgment, and synthesis to
+   that same agent; only virtual selectors may replace a missing model.
 
 ## Consequences
 
@@ -41,6 +49,7 @@ responses have a wider audience than provider credentials and request data.
 ## Verification
 
 `tests/test_model_discovery.py`, `tests/test_provider_reliability.py`,
+`tests/test_auto_discovery_server.py`, `tests/test_chat_response_format_http_honesty.py`,
 `tests/test_true_streaming.py`, and `tests/test_model_judge.py` assert that
 provider response text is absent from public messages and causes, while the
 full suite must remain green before merge.

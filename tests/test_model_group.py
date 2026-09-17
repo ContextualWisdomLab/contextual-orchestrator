@@ -68,6 +68,27 @@ def test_group_router_rejects_unrepresentable_throughput_before_mutation() -> No
     assert router.member_observation_count("member_one") == 0
 
 
+def test_group_router_records_success_without_latency_evidence() -> None:
+    """``latency_seconds=None`` (e.g. a shared batch call with no honest
+    single-attempt timing) must still record stability/rate evidence, but
+    must never seed or move the latency EWMA -- a caller with a real timed
+    success afterward gets its own honest sample, not one blended with a
+    duration that never described one attempt.
+    """
+    router = ModelGroupRouter()
+    router.observe_success("member_one", None, output_tokens=40, total_tokens=100)
+
+    report = router.member_report("member_one")
+    assert report["ewma_latency_seconds"] is None
+    assert report["ewma_tokens_per_second"] is None  # throughput needs a real duration too
+    assert router.member_observation_count("member_one") == 1
+    assert report["max_observed_rpm"] == 1
+    assert report["max_observed_tpm"] == 100
+
+    router.observe_success("member_one", 0.4)
+    assert router.member_report("member_one")["ewma_latency_seconds"] == 0.4
+
+
 def test_group_router_reports_peak_observed_rpm_and_provider_reported_tpm() -> None:
     """One-minute maxima use real completions and reported tokens only."""
     now = 0.0

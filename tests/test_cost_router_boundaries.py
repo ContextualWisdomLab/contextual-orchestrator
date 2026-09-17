@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 import pytest
@@ -11,12 +12,19 @@ from contextual_orchestrator import (
     InMemoryConfigStore,
     ModelAgent,
     PriceBook,
+    PriceEntry,
     TaskOrchestrator,
 )
 from contextual_orchestrator.batch_routing import (
+    BatchDownloadError,
     BatchJob,
+    BatchRequest,
     BatchResultItem,
     EmbeddingBatchResultItem,
+)
+from contextual_orchestrator.batch_job_registry import (
+    ClaimNotAcquired,
+    JobRegistryFactory,
 )
 from contextual_orchestrator.cost_router import (
     CostRoutingCoordinator as Coordinator,
@@ -26,6 +34,20 @@ from contextual_orchestrator.cost_router import (
     _provider_from_base_url,
     _weighted_average_embedding,
 )
+from contextual_orchestrator.token_counting import (
+    TokenCountUnavailable,
+    UnavailableEmbeddingTokenCounter,
+)
+
+
+class _ExactTestCounter:
+    """Deterministic injected counter for synthetic embedding fixtures."""
+
+    def count_text(self, text: str, model: str = "") -> int:
+        return len(text.split())
+
+    def count_messages(self, messages: list[dict], model: str = "") -> int:
+        return sum(len(str(m.get("content", "")).split()) for m in messages)
 
 
 def _coordinator(**kwargs: Any) -> Coordinator:
@@ -35,12 +57,17 @@ def _coordinator(**kwargs: Any) -> Coordinator:
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning", "writing"),
+            # "embedding" so unspecified-model embedding batch submissions
+            # (the ordinary, non-ZDR path) resolve through the real
+            # capability-agent lookup rather than relying on passthrough.
+            tags=("reasoning", "writing", "embedding"),
         )
     ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
-    price_book = PriceBook(config)
+    price_book = kwargs.pop("price_book", None) or PriceBook(config)
+    if "token_counter" not in kwargs and "embedding_token_counter" not in kwargs:
+        kwargs["embedding_token_counter"] = _ExactTestCounter()
     return Coordinator(orchestrator, config, price_book=price_book, **kwargs)
 
 
@@ -94,6 +121,257 @@ def test_stream_usage_aggregates_trace_steps_without_text_estimates() -> None:
         model_name="requested-model",
     )
     assert len(coordinator.ledger.records()) == 2
+
+
+def test_unpriced_stream_usage_omits_cost_total() -> None:
+    result = _coordinator().record_stream_usage(
+        result={
+            "workflow_run_id": "unpriced-stream",
+            "mode": "route",
+            "trace": [{"agent_id": "mock_worker", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}],
+        },
+        attribution=None,
+        model_name="mock-a",
+    )
+    assert result["cost"]["price_known"] is False
+    assert result["cost"]["cost_amount"] is None
+
+
+def test_unpriced_sync_cost_omits_total() -> None:
+    result = _coordinator().complete([{"role": "user", "content": "hello"}])
+    assert result["cost"]["price_known"] is False
+    assert result["cost"]["cost_amount"] is None
+
+
+def test_unpriced_provider_request_cost_omits_total() -> None:
+    result = _coordinator().complete(
+        [{"role": "user", "content": "return json"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "return json"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+    assert result["cost"]["price_known"] is False
+    assert result["cost"]["cost_amount"] is None
+
+
+def test_unpriced_batch_item_omits_cost() -> None:
+    coordinator = _coordinator()
+    job = coordinator.submit_batch(
+        [BatchRequest(messages=[{"role": "user", "content": "batch"}], model="mock-a")]
+    )
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+    assert item["price_known"] is False
+    assert item["cost_amount"] is None
+
+
+def test_provider_confirmed_zero_usage_stays_measured_and_price_known() -> None:
+    class ZeroUsageBackend:
+        name = "zero-usage"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del requests, metadata
+            return BatchJob("zero-usage-job", self.name, request_count=1)
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            return [BatchResultItem(
+                "zero-result", "", prompt_tokens=0, completion_tokens=0,
+                model="unpriced-model", usage_valid=True,
+            )]
+
+    coordinator = _coordinator(batch_backend=ZeroUsageBackend())
+    job = coordinator.submit_batch([BatchRequest(
+        messages=[{"role": "user", "content": "ignored"}], model="unpriced-model"
+    )])
+
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+
+    assert item["prompt_tokens"] == item["completion_tokens"] == 0
+    assert item["measurement_status"] == "measured"
+    assert item["price_known"] is True
+    assert item["cost_amount"] == 0.0
+
+
+def test_invalid_batch_usage_estimates_prompt_tokens_from_original_request() -> None:
+    """usage_valid=False must estimate from the real submitted prompt.
+
+    The fallback count is computed before submission and stored as safe
+    metadata on the durable job record. Raw prompts are never copied into the
+    shared registry, and the accepted job has only one publication write.
+    """
+    class InvalidUsageBackend:
+        name = "invalid-usage"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del metadata
+            self._custom_id = requests[0].custom_id
+            return BatchJob("invalid-usage-job", self.name, request_count=1)
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            return [BatchResultItem(
+                self._custom_id, "short answer", prompt_tokens=-1, completion_tokens=2,
+                model="mock-a", usage_valid=False,
+            )]
+
+    coordinator = _coordinator(batch_backend=InvalidUsageBackend(), token_counter=_ExactTestCounter())
+    large_prompt = "word " * 500
+    job = coordinator.submit_batch([
+        BatchRequest(messages=[{"role": "user", "content": large_prompt}], model="mock-a")
+    ])
+
+    stored_job = coordinator._batch_jobs[job.job_id]  # noqa: SLF001
+    assert stored_job.prompt_token_estimates == job.prompt_token_estimates
+    assert large_prompt not in repr(stored_job)
+
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+
+    assert item["measurement_status"] == "estimated"
+    # A hardcoded empty placeholder would estimate near-zero prompt tokens
+    # regardless of the real prompt's size; the actual submitted prompt must
+    # drive the estimate instead.
+    assert item["prompt_tokens"] > 100
+
+
+def test_invalid_batch_usage_uses_legacy_request_registry_when_job_predates_prompt_estimates() -> None:
+    """Pre-upgrade jobs keep old prompt fallback compatibility without new writes."""
+    class LegacyRegistry(JobRegistryFactory):
+        def __init__(self) -> None:
+            super().__init__()
+            self._mappings: dict[str, Any] = {}
+
+        def mapping(self, name, *, decode=None):  # type: ignore[no-untyped-def]
+            if name not in self._mappings:
+                self._mappings[name] = {}
+            return self._mappings[name]
+
+    class InvalidUsageBackend:
+        name = "invalid-usage"
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            return [BatchResultItem(
+                "legacy-request", "short answer", prompt_tokens=-1, completion_tokens=2,
+                model="mock-a", usage_valid=False,
+            )]
+
+    registry = LegacyRegistry()
+    coordinator = _coordinator(
+        batch_backend=InvalidUsageBackend(), job_registry=registry, token_counter=_ExactTestCounter()
+    )
+    coordinator._batch_jobs["legacy-job"] = BatchJob(  # noqa: SLF001
+        "legacy-job", "invalid-usage", request_count=1
+    )
+    registry.mapping("batch_requests", decode=lambda raw: BatchRequest(**raw))["legacy-job"] = [
+        BatchRequest(
+            messages=[{"role": "user", "content": "word " * 500}],
+            model="mock-a",
+            custom_id="legacy-request",
+        )
+    ]
+
+    item = coordinator.retrieve_batch("legacy-job")["results"][0]
+
+    assert item["measurement_status"] == "estimated"
+    assert item["prompt_tokens"] > 100
+    assert coordinator._batch_jobs["legacy-job"].prompt_token_estimates == {  # noqa: SLF001
+        "legacy-request": item["prompt_tokens"]
+    }
+
+
+def test_legacy_batch_requests_stay_available_across_partial_retrievals() -> None:
+    """A partial retrieval must not stop a later one from reaching legacy fallback.
+
+    (Devin review on #956) Once one legacy custom_id picks up a stored
+    estimate, ``job.prompt_token_estimates`` becomes non-empty -- gating the
+    legacy registry lookup on mere non-emptiness would silently stop looking
+    up every other still-unestimated custom_id from that point on, even
+    though the legacy request registry still holds their original prompts.
+    """
+    class LegacyRegistry(JobRegistryFactory):
+        def __init__(self) -> None:
+            super().__init__()
+            self._mappings: dict[str, Any] = {}
+
+        def mapping(self, name, *, decode=None):  # type: ignore[no-untyped-def]
+            if name not in self._mappings:
+                self._mappings[name] = {}
+            return self._mappings[name]
+
+    class TwoPassInvalidUsageBackend:
+        name = "invalid-usage"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            self.calls += 1
+            custom_id = "legacy-request-one" if self.calls == 1 else "legacy-request-two"
+            return [BatchResultItem(
+                custom_id, "short answer", prompt_tokens=-1, completion_tokens=2,
+                model="mock-a", usage_valid=False,
+            )]
+
+    registry = LegacyRegistry()
+    backend = TwoPassInvalidUsageBackend()
+    coordinator = _coordinator(
+        batch_backend=backend, job_registry=registry, token_counter=_ExactTestCounter()
+    )
+    coordinator._batch_jobs["legacy-job"] = BatchJob(  # noqa: SLF001
+        "legacy-job", "invalid-usage", request_count=2
+    )
+    registry.mapping("batch_requests", decode=lambda raw: BatchRequest(**raw))["legacy-job"] = [
+        BatchRequest(
+            messages=[{"role": "user", "content": "word " * 500}],
+            model="mock-a",
+            custom_id="legacy-request-one",
+        ),
+        BatchRequest(
+            messages=[{"role": "user", "content": "word " * 700}],
+            model="mock-a",
+            custom_id="legacy-request-two",
+        ),
+    ]
+
+    first = coordinator.retrieve_batch("legacy-job")["results"][0]
+    assert first["prompt_tokens"] > 100  # first partial retrieval: legacy lookup works
+
+    second = coordinator.retrieve_batch("legacy-job")["results"][0]
+    # Pre-fix: the first retrieval already left prompt_token_estimates
+    # non-empty, so this second retrieval's legacy lookup was skipped
+    # entirely and this custom_id's real prompt was never found.
+    assert second["custom_id"] == "legacy-request-two"
+    assert second["prompt_tokens"] > 100
+
+    assert coordinator._batch_jobs["legacy-job"].prompt_token_estimates == {  # noqa: SLF001
+        "legacy-request-one": first["prompt_tokens"],
+        "legacy-request-two": second["prompt_tokens"],
+    }
+
+
+def test_batch_prompt_fallback_has_no_separate_registry_publication() -> None:
+    """Accepted jobs publish their safe fallback metadata in one job record."""
+    class RecordingRegistry(JobRegistryFactory):
+        def __init__(self) -> None:
+            super().__init__()
+            self.names: list[str] = []
+
+        def mapping(self, name, *, decode=None):  # type: ignore[no-untyped-def]
+            self.names.append(name)
+            return super().mapping(name, decode=decode)
+
+    registry = RecordingRegistry()
+    coordinator = _coordinator(job_registry=registry)
+
+    coordinator.submit_batch([
+        BatchRequest(messages=[{"role": "user", "content": "private prompt"}])
+    ])
+
+    assert "batch_jobs" in registry.names
+    assert "batch_requests" not in registry.names
 
 
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
@@ -177,11 +455,10 @@ class _ExplodingCounter:
         return 3
 
 
-def test_embedding_token_count_tolerates_counter_failure_and_clamps() -> None:
+def test_embedding_token_count_propagates_counter_failure() -> None:
     coordinator = _coordinator(token_counter=_ExplodingCounter())
-    # Adapter failure falls back to whitespace units.
-    assert coordinator._count_embedding_tokens("alpha beta gamma", "mock-e") == 3
-    assert coordinator._count_embedding_tokens("", "mock-e") == 0
+    with pytest.raises(RuntimeError, match="counter backend offline"):
+        coordinator._count_embedding_tokens("alpha beta gamma", "mock-e")
 
 
 class _ZeroCounter:
@@ -192,15 +469,29 @@ class _ZeroCounter:
         return 1
 
 
-def test_embedding_token_count_clamps_positive_text_to_one() -> None:
+def test_embedding_token_count_rejects_non_positive_authoritative_result() -> None:
     coordinator = _coordinator(token_counter=_ZeroCounter())
-    assert coordinator._count_embedding_tokens("nonempty", "mock-e") == 1
+    with pytest.raises(RuntimeError, match="non-positive"):
+        coordinator._count_embedding_tokens("nonempty", "mock-e")
 
 
 def test_split_empty_input_yields_single_empty_part() -> None:
     coordinator = _coordinator()
     assert coordinator._split_embedding_input("", model="m", max_tokens=4, max_chars=10) == [("", 0)]
     assert coordinator._force_token_safe_chunks("", model="m", max_tokens=4, max_chars=10) == [("", 0)]
+
+
+def test_split_uses_native_packer_when_available() -> None:
+    class Counter:
+        def pack_text(self, text: str, model: str, max_tokens: int):
+            assert (text, model, max_tokens) == ("alpha beta", "text-embedding-3-small", 4)
+            return [("alpha ", 2), ("beta", 1)]
+
+    coordinator = _coordinator(token_counter=Counter())
+
+    assert coordinator._split_embedding_input(
+        "alpha beta", model="text-embedding-3-small", max_tokens=4, max_chars=100
+    ) == [("alpha ", 2), ("beta", 1)]
 
 
 class _WholeStringOnlyCounter:
@@ -273,6 +564,7 @@ class _DroppingEmbeddingBackend:
     """Local-shaped embedding backend that loses one requested vector."""
 
     name = "dropping"
+    poll_after_ms = 250
 
     def __init__(self) -> None:
         self.jobs: Dict[str, BatchJob] = {}
@@ -305,6 +597,21 @@ class _DroppingEmbeddingBackend:
         ]
 
 
+def test_embedding_submission_stops_before_backend_when_count_is_unavailable() -> None:
+    """No provider work or cost record may follow an unavailable exact count."""
+    backend = _DroppingEmbeddingBackend()
+    coordinator = _coordinator(
+        embedding_batch_backend=backend,
+        embedding_token_counter=UnavailableEmbeddingTokenCounter(),
+    )
+
+    with pytest.raises(TokenCountUnavailable, match="no authoritative tokenizer"):
+        coordinator.submit_embeddings_batch(["synthetic input"], model="unknown-embedding")
+
+    assert backend.jobs == {}
+    assert coordinator.ledger.records() == []
+
+
 def test_embeddings_document_reports_placeholder_for_missing_parts() -> None:
     backend = _DroppingEmbeddingBackend()
     coordinator = _coordinator(embedding_batch_backend=backend)
@@ -327,10 +634,77 @@ def test_embeddings_document_is_idempotent_after_completion() -> None:
     assert backend.polled.count(job.job_id) == 1
 
 
+def test_concurrent_embedding_polls_record_usage_once() -> None:
+    backend = _DroppingEmbeddingBackend()
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    job = coordinator.submit_embeddings_batch(["only one"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        documents = list(
+            executor.map(
+                lambda _index: coordinator.embeddings_batch_document(job.job_id),
+                range(2),
+            )
+        )
+
+    assert documents[0] == documents[1]
+    assert len(coordinator.ledger.records()) == 1
+
+
+def test_contended_embedding_document_claim_returns_cache_or_pending() -> None:
+    backend = _DroppingEmbeddingBackend()
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    job = coordinator.submit_embeddings_batch(["only one"])
+
+    class _ContendedClaim:
+        def __enter__(self):
+            raise ClaimNotAcquired("owned by another poller")
+
+        def __exit__(self, *_args):
+            return False
+
+    coordinator.job_registry.lock = lambda *_args, **_kwargs: _ContendedClaim()
+
+    pending = coordinator.embeddings_batch_document(job.job_id)
+    assert pending == {
+        "batch_id": job.job_id,
+        "status": "in_progress",
+        "backend": job.backend,
+        "model": "mock-a",
+        "embeddings": None,
+        "poll_after_ms": 250,
+        "job_retention_ms": coordinator.job_registry.retention_seconds * 1000,
+    }
+
+    cached = {**pending, "status": "completed", "embeddings": []}
+    coordinator._embedding_documents[job.job_id] = cached
+    assert coordinator.embeddings_batch_document(job.job_id) == cached
+
+
+def test_unpriced_embeddings_document_omits_cost() -> None:
+    document = _coordinator().complete_embeddings_batch(["unpriced embedding"])
+    assert document["price_known"] is False
+    assert document["cost_amount"] is None
+    assert document["cost_micro_usd"] is None
+
+
 def test_embeddings_document_requires_known_batch() -> None:
     coordinator = _coordinator()
     with pytest.raises(KeyError, match="embeddings batch job"):
         coordinator.embeddings_batch_document("no_such_batch")
+
+
+def test_embeddings_document_requires_the_bound_owner() -> None:
+    coordinator = _coordinator(embedding_batch_backend=_DroppingEmbeddingBackend())
+    job = coordinator.submit_embeddings_batch(["private"], owner_id="principal-a")
+
+    with pytest.raises(KeyError, match="embeddings batch job"):
+        coordinator.embeddings_batch_document(job.job_id, owner_id="principal-b")
+
+    assert (
+        coordinator.embeddings_batch_document(job.job_id, owner_id="principal-a")["status"]
+        == "completed"
+    )
 
 
 def test_embeddings_document_incomplete_status_has_no_vectors() -> None:
@@ -343,6 +717,102 @@ def test_embeddings_document_incomplete_status_has_no_vectors() -> None:
     document = coordinator.embeddings_batch_document(job.job_id)
     assert document["embeddings"] is None
     assert document["status"] == "in_progress"
+
+
+def test_embeddings_document_preserves_failed_terminal_state_without_cost() -> None:
+    class _FailedBackend(_DroppingEmbeddingBackend):
+        def poll(self, job: BatchJob) -> Dict[str, Any]:
+            return {
+                "job_id": job.job_id,
+                "status": "failed",
+                "is_complete": True,
+                "failure": {"error_type": "ProviderError", "retryable": False},
+            }
+
+        def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+            raise AssertionError("failed jobs have no result payload")
+
+    coordinator = _coordinator(embedding_batch_backend=_FailedBackend())
+    job = coordinator.submit_embeddings_batch(["never billed"])
+
+    document = coordinator.embeddings_batch_document(job.job_id)
+
+    assert document["status"] == "failed"
+    assert document["embeddings"] is None
+    assert document["failure"]["error_type"] == "ProviderError"
+    assert coordinator.ledger.records() == []
+
+
+def test_embeddings_document_bills_the_selected_agent_not_caller_attribution() -> None:
+    agent = ModelAgent(
+        id="embedding_worker",
+        model="embedding-v1",
+        base_url="mock://embed",
+        provider_name="trusted-provider",
+        tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("trusted-provider", "embedding-v1", 2.0, 0.0))
+    coordinator = Coordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=_ExactTestCounter(),
+        embedding_batch_backend=_DroppingEmbeddingBackend(),
+    )
+
+    coordinator.complete_embeddings_batch(
+        ["bill selected route"],
+        model="embedding-v1",
+        agent_id=agent.id,
+        attribution={"provider": "spoofed-provider"},
+    )
+
+    row = coordinator.ledger.records()[0]
+    assert row["provider_name"] == "trusted-provider"
+    assert row["model_name"] == "embedding-v1"
+
+
+class _FlakyEmbeddingBackend(_DroppingEmbeddingBackend):
+    """Fails the first retrieve() with a download error, then succeeds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.retrieve_calls = 0
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        self.retrieve_calls += 1
+        if self.retrieve_calls == 1:
+            raise BatchDownloadError(job.job_id, "transient download error")
+        return super().retrieve(job)
+
+
+def test_embeddings_document_download_failure_is_not_cached_and_retries() -> None:
+    """A download failure must never be cached as a fabricated "completed" doc.
+
+    Regression for the bug where ``retrieve()`` mapped an explicit
+    ``success: False`` to an empty list, which was then unconditionally
+    cached as ``status: "completed"`` with empty vectors -- permanently
+    poisoning the batch id since the cache short-circuits all future
+    poll/retrieve calls. The failure must stay uncached so a later call
+    re-hits the backend and can recover real vectors.
+    """
+    backend = _FlakyEmbeddingBackend()
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    job = coordinator.submit_embeddings_batch(["only one"])
+
+    failed = coordinator.embeddings_batch_document(job.job_id)
+    assert failed["status"] == "failed"
+    assert failed["embeddings"] is None
+    assert "transient download error" in failed["error"]
+    assert backend.retrieve_calls == 1
+
+    recovered = coordinator.embeddings_batch_document(job.job_id)
+    assert recovered["status"] == "completed"
+    assert backend.retrieve_calls == 2
+    assert recovered["embeddings"][0]["embedding"] != []
 
 
 def test_cost_report_delegates_to_ledger_window() -> None:
@@ -430,8 +900,8 @@ def test_document_recounts_tokens_when_backend_reports_zero_usage() -> None:
     coordinator = _coordinator(embedding_batch_backend=_SilentEmbeddingBackend())
     job = coordinator.submit_embeddings_batch(["alpha beta gamma"])
     document = coordinator.embeddings_batch_document(job.job_id)
-    # HeuristicTokenCounter counts word units with the BPE expansion factor.
-    assert document["token_counts"] == [4]
+    # The injected exact test seam counts whitespace-delimited fixture units.
+    assert document["token_counts"] == [3]
 
 
 def test_complete_embeddings_batch_round_trips_locally() -> None:
@@ -442,7 +912,8 @@ def test_complete_embeddings_batch_round_trips_locally() -> None:
     )
     assert document["status"] == "completed"
     assert document["embeddings"][0]["index"] == 0
-    assert document["cost_micro_usd"] >= 0
+    assert document["cost_micro_usd"] is None
+    assert document["price_known"] is False
 
 
 

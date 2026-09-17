@@ -29,7 +29,6 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     agent_from_discovered,
     discover_provider_models,
     refresh_price_book,
-    select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
 from contextual_orchestrator.orchestrator import (  # noqa: E402
@@ -120,7 +119,7 @@ def test_embedding_deployments_never_enter_chat_agent_discovery() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(source)
@@ -172,7 +171,7 @@ def test_bytez_chat_catalog_still_rejects_non_chat_identifiers() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(source)
@@ -197,7 +196,6 @@ def test_non_chat_discovery_is_not_priced_or_selected_for_chat() -> None:
     assert price_book.get_price(
         "enterprise_gateway", "azure/text-embedding-3-large"
     ) is None
-    assert select_cheapest_discovered_agent([embedding_model], price_book) is None
     assert select_top_n_cheapest_discovered_agents(
         [embedding_model], price_book, 1
     ) == []
@@ -235,7 +233,7 @@ def test_generic_media_catalog_rows_stay_out_of_bootstrap_and_review_chat_pool(
         ]
     }
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(source)
@@ -263,7 +261,7 @@ def test_generic_media_catalog_rows_stay_out_of_bootstrap_and_review_chat_pool(
         lambda: (discovered, []),
     )
     review_orchestrator = review_gateway.build_review_orchestrator(
-        {"OPENAI_API_KEY": "review-secret"}, max_agents=10
+        {"NVIDIA_NIM_API_KEY": "review-secret"}
     )
     assert [agent.model for agent in review_orchestrator.agents] == [
         "text-free-model"
