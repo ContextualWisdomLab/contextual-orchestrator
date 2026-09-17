@@ -1,5 +1,28 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-14 inference-scoped readiness probe (issue #926)
+
+Local branch adds `GET /v1/readiness`, authorized at `inference` scope, so a
+minimal-privilege caller such as `ContextualWisdomLab/.github`'s CI review
+sidecar (ADR-0005) can get real per-candidate liveness diagnostics
+(`status`, `failure_code`, `latency_ms`) without being provisioned an
+admin-scoped token that would widen it to the full `/api/v1/*` operator
+surface. `TaskOrchestrator.inference_readiness_report()` reuses
+`provider_readiness_report()` — no second probe implementation — and returns
+an explicit allowlist (`agent_id`, `model`, `provider_name`, `status`,
+`failure_code`, `latency_ms`, and, when present, `rate_limited_until`/
+`earliest_ready_seconds`); credentials, base URLs, admin audit fields, and
+`usage` are stripped. `?refresh=true` shares the existing
+`provider_readiness_report` lock with the admin route; no new rate limit was
+invented since none existed to reuse beyond that lock. The existing
+admin-scoped `/api/v1/provider_readiness/latest` is unchanged (its contract
+test still passes). Local evidence:
+`python -m pytest tests/test_inference_readiness_probe.py tests/test_api_contract.py
+tests/test_self_check.py tests/test_security_hardening.py
+tests/test_provider_reliability.py -q` passes. This is local, single-branch
+evidence, not a protected-main merge or hosted CI run; sidecar adoption and a
+live gateway round-trip from `.github` remain open.
+
 ## 2026-09-13 Response lifecycle repair candidate
 
 Final frozen validation candidate `345ee6b2` passed 275 focused strict tests and

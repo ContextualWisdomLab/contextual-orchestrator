@@ -309,6 +309,20 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        "/v1/readiness": {
+            "get": {
+                "operationId": "get_inference_readiness",
+                "summary": "Get inference-scoped, per-candidate provider readiness diagnostics",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "refresh",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "boolean", "default": False},
+                }],
+                "responses": {"200": {"description": "Redacted provider readiness report"}},
+            }
+        },
         "/v1/chat/completions": {
             "post": {
                 "operationId": "create_chat_completion",
