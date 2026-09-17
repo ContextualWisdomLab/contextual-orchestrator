@@ -286,13 +286,23 @@ principle **"No os.getenv, values from KV"**, that source moves to the KV:
 
 Provider credentials and gateway bearer authentication are separate concerns.
 The CLI resolves named server tokens from this KV when `--auth-token-key`,
-`--admin-token-key`, or `--inference-token-key` is used; it does not read the
-legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
-Explicit token flags remain local-development escape hatches. Add `--production`
- to require split admin/inference credentials and reject the insecure admin
- session cookie option; `--allow-public-bind` requires split credentials and
- also rejects the insecure cookie option.
+`--admin-token-key`, `--inference-token-key`, or `--trace-token-key` is used;
+it does not read the legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment
+variables at request time. Explicit token flags remain local-development
+escape hatches. Add `--production` to require split admin/inference
+credentials and reject the insecure admin session cookie option;
+`--allow-public-bind` requires split credentials and also rejects the
+insecure cookie option.
 Both gates fail before resolving any credential when a single token is selected.
+
+The `trace` purpose (ADR 0026) has its own optional credential,
+`--trace-token`/`--trace-token-key` (KV name `CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN`
+by default). In single-token mode (only `--auth-token`/`--auth-token-key`
+configured, with no admin/inference/trace token), `auth_token` still
+authorizes `trace` as the documented local escape hatch. In split
+admin/inference mode, admin and inference tokens never authorize `trace`:
+without a distinct `trace_token`, trace-bearing responses fail closed
+(`401`); with one configured, only that token authorizes the `trace` scope.
 
 For production ecosystem access, construct `SecurityConfig` with a reviewed
 `bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must
@@ -380,3 +390,4 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
+

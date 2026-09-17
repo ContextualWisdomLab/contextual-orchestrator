@@ -21,6 +21,7 @@
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
+| `GET` | `/v1/readiness` | Inference-scoped, per-candidate provider readiness (issue #926); a redacted subset of `/api/v1/provider_readiness/latest` for a minimal-privilege caller such as a CI review sidecar |
 | `GET` | `/api/v1/agent_pools` | List model agents |
 | `GET` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Read a worker only when it belongs to the addressed pool |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
