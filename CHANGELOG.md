@@ -23,7 +23,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Generation-token inputs retain positive-integer validation without an
   arbitrary shared 1,048,576-token ceiling. Responses normalizes legacy token
   aliases to `max_output_tokens` before provider forwarding, preserving caller
-  budgets and native-field precedence (issue #1151). Model-specific limits remain.
+  budgets and native-field precedence (issue #1151; ADR 0132). Model-specific limits remain.
 - Finite administrator model timeouts now use one end-to-end deadline across
   local admission, connection, retry, and streamed chunks; synchronous
   embeddings use the selected model's policy. Timeout values are capped at the
