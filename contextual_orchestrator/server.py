@@ -379,6 +379,7 @@ class SecurityConfig:
     auth_token: str = ""
     admin_token: str = ""
     inference_token: str = ""
+    trace_token: str = ""
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
     max_body_bytes: int = DEFAULT_MAX_JSON_BODY_BYTES
@@ -476,7 +477,13 @@ class SecurityConfig:
     ) -> str:
         """Validate a bearer token or an opaque admin session; return the authorized purpose."""
         effective_purpose = self.resolve_purpose(scope, purpose)
-        if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
+        if not (
+            self.auth_token
+            or self.admin_token
+            or self.inference_token
+            or self.trace_token
+            or self.bearer_verifier
+        ):
             raise RequestError(401, "unauthorized", "bearer token is required")
         if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
             # An active opaque session authorizes the admin role; the route-owned
@@ -498,9 +505,21 @@ class SecurityConfig:
             elif scope == "inference":
                 expected = self.inference_token or self.auth_token
             elif scope == "trace":
-                # Static single-token mode is a local escape hatch. Production
-                # deployments should use bearer_verifier for a separate purpose claim.
-                expected = self.auth_token
+                if self.trace_token:
+                    # A configured trace_token is the only credential that
+                    # authorizes the trace purpose once one is provisioned.
+                    expected = self.trace_token
+                elif not (self.admin_token or self.inference_token):
+                    # Static single-token mode is a local escape hatch: with no
+                    # split admin/inference credentials and no trace_token,
+                    # auth_token remains the only configured bearer, so it
+                    # authorizes trace as documented in ADR 0026.
+                    expected = self.auth_token
+                else:
+                    # Split admin/inference mode without a distinct trace_token
+                    # has no verified trace claim, so it fails closed rather
+                    # than letting admin_token or inference_token stand in.
+                    expected = ""
             else:
                 expected = ""
             valid = bool(expected) and secrets.compare_digest(token, expected)
