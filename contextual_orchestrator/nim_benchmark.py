@@ -112,10 +112,10 @@ REQUIRED_COMPLETION_FRACTION = 0.9
 
 ACTUAL_COST_EVIDENCE: dict[str, Any] = {
     "evidence_schema_version": "1.0.0",
-    "source_title": "NVIDIA NIM General FAQ",
-    "source_url": "https://docs.api.nvidia.com/nim/docs/product",
+    "source_title": "Run NIM Anywhere",
+    "source_url": "https://docs.api.nvidia.com/nim/docs/run-anywhere",
     "reviewed_at_date": "2026-09-05",
-    "valid_until_date": "2026-10-05",
+    "valid_until_date": "2026-10-04",
     "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
     "access_scope": "free API endpoint access for prototyping",
     "production_access_note": (
@@ -2565,9 +2565,9 @@ def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
         raise BenchmarkContractError(
             "actual cost evidence must preserve the reviewed zero-cost value"
         )
-    if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/product":
+    if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/run-anywhere":
         raise BenchmarkContractError(
-            "actual cost evidence must cite the reviewed NVIDIA NIM General FAQ"
+            "actual cost evidence must cite the reviewed NVIDIA NIM access terms"
         )
     reviewed_at = _parse_evidence_date(evidence["reviewed_at_date"], "reviewed_at_date")
     valid_until = _parse_evidence_date(evidence["valid_until_date"], "valid_until_date")
@@ -2966,6 +2966,9 @@ def assemble_benchmark_report(
         cells,
         evaluation["locked_task_count"],
     )
+    if run_mode == "dry_run":
+        evidence_summary["evidence_status"] = "synthetic_diagnostic_only"
+        evidence_summary["decision_use"] = "benchmark_smoke_only"
     report = {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "provenance": build_provenance(

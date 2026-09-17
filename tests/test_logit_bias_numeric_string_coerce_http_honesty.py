@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_responses_accepts_logit_bias_numeric_string_values() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_still_rejects_logit_bias_bool_and_oob() -> None:
@@ -89,6 +91,7 @@ def test_http_responses_still_rejects_logit_bias_bool_and_oob() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_nonempty_logit_bias_after_type_check() -> None:
@@ -110,6 +113,7 @@ def test_http_chat_still_rejects_nonempty_logit_bias_after_type_check() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ def _get_state(server, token: str) -> dict:
             return json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_state_carries_viewer_config_when_set() -> None:

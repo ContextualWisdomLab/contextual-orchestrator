@@ -35,12 +35,15 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import threading
 import time
 import weakref
 from collections.abc import MutableMapping
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
+
+_LOGGER = logging.getLogger(__name__)
 
 # Registry entries expire after this many seconds so abandoned jobs do
 # not accumulate forever. Seven days comfortably outlives every batch
@@ -198,6 +201,11 @@ class JobRegistryFactory:
             weakref.WeakValueDictionary()
         )
         self._local_locks_guard = threading.Lock()
+
+    @property
+    def retention_seconds(self) -> int:
+        """Return the configured registry retention for durable recovery expiry."""
+        return self._retention_seconds
 
     def lock(
         self,
@@ -419,11 +427,18 @@ def build_job_registry(config_store: Any) -> JobRegistryFactory:
 
     Resolves ``batch_job_registry_valkey_url`` through the KV credential
     registry first, then the config store's secret surface (the injectable
-    test path). When it is unset,
-    or the ``redis`` client package is not installed (it ships in the
-    ``queue`` extra), registries stay in-process dicts — exactly the
-    pre-Valkey behavior — so nothing changes for deployments that have
-    not opted in.
+    test path). When it is unset, registries stay in-process dicts —
+    exactly the pre-Valkey behavior — so nothing changes for deployments
+    that have not opted in.
+
+    A configured URL with the ``redis`` client missing (it ships in the
+    ``queue`` extra) is a different case: that deployment *did* opt into
+    durable registries and would otherwise receive the in-process
+    behavior with no signal, so it is logged at warning level. The
+    degradation itself is preserved rather than raised, because failing
+    startup would take down a gateway that is otherwise serving; the
+    warning is what distinguishes "not configured" from "configured but
+    unavailable".
     """
     from .credentials import get_credential
 
@@ -439,6 +454,11 @@ def build_job_registry(config_store: Any) -> JobRegistryFactory:
     try:
         import redis
     except ImportError:
+        _LOGGER.warning(
+            "batch_job_registry_valkey_url is configured but the redis client is "
+            "unavailable; job registries stay in-process and do not survive a restart. "
+            "Install the 'queue' extra to honor the configured durable registry."
+        )
         return JobRegistryFactory(None)
     client = redis.Redis.from_url(str(url))
     retention = DEFAULT_RETENTION_SECONDS

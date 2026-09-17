@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -63,6 +64,7 @@ def test_http_chat_accepts_string_content() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_developer_role_as_system() -> None:
@@ -84,6 +86,7 @@ def test_http_chat_accepts_developer_role_as_system() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_multipart_image_content() -> None:
@@ -113,6 +116,7 @@ def test_http_chat_accepts_multipart_image_content() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_input_audio_content_part() -> None:
@@ -140,6 +144,7 @@ def test_http_chat_rejects_input_audio_content_part() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_non_string_non_array_content() -> None:
@@ -157,6 +162,7 @@ def test_http_chat_rejects_non_string_non_array_content() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

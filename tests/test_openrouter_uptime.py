@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import socket
 import sys
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -85,6 +88,89 @@ def test_unavailable_uptime_poll_is_a_no_op() -> None:
     agent = _agents()[0]
     collector._poll_agent(agent)
     assert collector.window_evidence(agent.id) == (0.0, 0.0)
+
+
+def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() -> None:
+    """The background uptime GET keeps its own bound, unlike inference calls.
+
+    #971 removes the *inference* client's fixed wall-clock deadline (a user
+    is actively waiting on a model completion). This collector's HTTP GET is
+    unrelated background telemetry on one dedicated sequential sweep thread
+    that ``stop()`` cannot interrupt mid-request (Python threads cannot be
+    forcibly cancelled): an unbounded fetch would let one unresponsive
+    OpenRouter endpoint hang that thread forever, leaking it and
+    indefinitely starving every later member of an uptime update. The fetch
+    must stay bounded regardless of #971's inference-deadline policy.
+    """
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"data": {"endpoints": []}}).encode()
+
+    collector, _, _, _ = _collectors(None)
+    del collector._fetch_uptime
+    with patch(
+        "contextual_orchestrator.openrouter_uptime.urllib.request.urlopen",
+        return_value=_Response(),
+    ) as opened:
+        assert collector._fetch_uptime("org/model-a") is None
+
+    timeout = opened.call_args.kwargs["timeout"]
+    assert timeout is not None
+    assert 0 < timeout <= 30
+
+
+def test_uptime_fetch_does_not_hang_forever_on_an_unresponsive_endpoint(monkeypatch) -> None:
+    """A stalled connection is bounded end-to-end, not blocked forever.
+
+    Complements the kwarg-level assertion above by proving the timeout is
+    actually enforced: a real TCP listener that accepts the connection and
+    never responds must still return within a short bound instead of
+    hanging the sweep thread indefinitely (which would leak that thread and
+    starve every later member of an uptime update).
+    """
+    import contextual_orchestrator.openrouter_uptime as uptime_module
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    host, port = server.getsockname()
+    accepted = threading.Event()
+
+    def accept_and_stall() -> None:
+        try:
+            conn, _ = server.accept()
+            accepted.set()
+            time.sleep(2.0)  # Accept the connection but never respond.
+            conn.close()
+        except OSError:
+            pass
+
+    acceptor = threading.Thread(target=accept_and_stall, daemon=True)
+    acceptor.start()
+    try:
+        monkeypatch.setattr(uptime_module, "_UPTIME_FETCH_TIMEOUT_SECONDS", 0.3)
+        monkeypatch.setattr(
+            uptime_module, "_OPENROUTER_UPTIME_ORIGIN", f"http://{host}:{port}/api/v1"
+        )
+        collector, _, _, _ = _collectors(None)
+        del collector._fetch_uptime
+
+        started = time.monotonic()
+        result = collector._fetch_uptime("org/model-a")
+        elapsed = time.monotonic() - started
+
+        assert result is None
+        assert elapsed < 2.0
+        assert accepted.wait(timeout=1.0)
+    finally:
+        server.close()
+        acceptor.join(timeout=3.0)
 
 
 def test_background_loop_accumulates_and_stop_joins() -> None:
