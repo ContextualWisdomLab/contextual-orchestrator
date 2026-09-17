@@ -1,5 +1,18 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 declared workflow depth and token budgets (proposed)
+
+Removes hidden `MAX_WORKFLOW_DEPTH = 5` and `DEFAULT_MAX_OUTPUT_TOKENS = 264`
+from `contextual_orchestrator/nim_benchmark.py`. Request planning, equal-budget
+cells, CLI, and provenance require positive integer declarations. Missing,
+boolean, or non-positive values fail closed. The equal cell token budget is
+the product of the two declarations. Workflow YAML and tests may still write
+5 and 264 as this run's choices. Report schema stays 4.0.0. ADR 0043 is
+Proposed.
+
+This is calculation-contract evidence, not buyer-held-out accuracy, p95
+latency, or protected merge. Production route/conduct defaults stay locked.
+
 ## 2026-09-13 artifact runtime migration — Proposed
 
 Source `7032bee94c85d4937ddad21de88bccd35051ff29` upgrades four artifact

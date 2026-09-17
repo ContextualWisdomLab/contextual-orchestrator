@@ -91,17 +91,9 @@ NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
 DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
 # Fixed epoch for deterministic dry-run artifacts (2026-01-01T00:00:00Z).
 DRY_RUN_FIXED_UNIX_TIME = 1767225600.0
-# Issue contract: Conductor/TRINITY-style deep paths are capped at five steps.
-MAX_WORKFLOW_DEPTH = 5
-# Provider output remains capped at 264 tokens by default. The equal cell-wide
-# prompt-plus-completion budget scales with the maximum five-call envelope so a
-# fixed conduct workflow can carry its prompts without being starved. The
-# eight-token margin over the historical 256 keeps the locked 30-task
-# manifest's tightest conduct_bounded task (four-call accumulated prompt
-# context) inside its equal budget under the current deterministic dry-run
-# token estimate; see test_smoke_manifest_cannot_authorize_production_routing.
-DEFAULT_MAX_OUTPUT_TOKENS = 264
-DEFAULT_POLICY_TOTAL_TOKEN_BUDGET = MAX_WORKFLOW_DEPTH * DEFAULT_MAX_OUTPUT_TOKENS
+# Workflow depth and per-call output tokens are run declarations. Historical
+# dry-run workflow flags used five steps and 264 tokens so the locked smoke
+# manifest stayed inside an equal cell budget; those numbers are not defaults.
 # Bound every provider response before materializing it in memory. Eight MiB is
 # ample for model catalogs, JSON probe responses, and the deliberately tiny
 # benchmark media outputs while preventing a provider from returning an
@@ -2074,17 +2066,24 @@ def cheapest_priced_agent(
     return min(priced, key=lambda row: (row[0], row[1]))[2]
 
 
-def planned_evaluation_requests(worker_count: int, locked_task_count: int) -> int:
+def planned_evaluation_requests(
+    worker_count: int,
+    locked_task_count: int,
+    maximum_calls: int | None = None,
+) -> int:
     """Upper bound on evaluation calls, checked pre-flight so the run fails closed.
 
     Direct baselines, ``route_once``, and cheapest-eligible cells each reserve
     one worker call plus one real-time judge call. ``route_once`` reserves the
-    full equal-call envelope because endpoint races and future failover may use
-    more than one worker attempt. ``conduct`` reserves its five-step workflow
-    envelope, including the model judge.
+    declared equal-call envelope because endpoint races and future failover may
+    use more than one worker attempt. ``conduct`` reserves the same declared
+    workflow envelope, including the model judge.
     """
+    declared_maximum_calls = _require_declared_positive_int(
+        maximum_calls, "maximum_calls"
+    )
     return locked_task_count * (
-        worker_count * 2 + MAX_WORKFLOW_DEPTH + MAX_WORKFLOW_DEPTH + 2
+        worker_count * 2 + declared_maximum_calls + declared_maximum_calls + 2
     )
 
 
@@ -2092,6 +2091,7 @@ def plan_complete_request_budget(
     discovered_model_count: int,
     max_eval_models: int,
     locked_task_count: int,
+    maximum_calls: int | None = None,
 ) -> dict[str, int]:
     """Return the complete conservative request plan for one catalog snapshot.
 
@@ -2105,6 +2105,7 @@ def plan_complete_request_budget(
         discovered_model_count: Usable model ids returned by ``/v1/models``.
         max_eval_models: Maximum workers allowed into policy evaluation.
         locked_task_count: Number of locked benchmark tasks.
+        maximum_calls: Declared equal-call workflow envelope.
 
     Returns:
         Named request counts including the complete run total.
@@ -2127,6 +2128,7 @@ def plan_complete_request_budget(
     evaluation_reserve_request_count = planned_evaluation_requests(
         planned_worker_count,
         locked_task_count,
+        maximum_calls=maximum_calls,
     )
     return {
         "catalog_request_count": 1,
@@ -2143,6 +2145,7 @@ def planned_complete_run_requests(
     model_count: int,
     locked_task_count: int,
     max_eval_models: int,
+    maximum_calls: int | None = None,
 ) -> dict[str, int]:
     """Return buyer-facing request counts for a complete benchmark run.
 
@@ -2155,6 +2158,7 @@ def planned_complete_run_requests(
         model_count: Usable model identifiers discovered from ``/v1/models``.
         locked_task_count: Number of locked evaluation tasks.
         max_eval_models: Maximum workers admitted to policy comparison.
+        maximum_calls: Declared equal-call workflow envelope.
 
     Returns:
         Catalog, capability, evaluation, post-catalog, and total request counts.
@@ -2163,6 +2167,7 @@ def planned_complete_run_requests(
         discovered_model_count=model_count,
         max_eval_models=max_eval_models,
         locked_task_count=locked_task_count,
+        maximum_calls=maximum_calls,
     )
     requests_after_catalog = (
         plan["capability_probe_request_count"]
@@ -2185,8 +2190,8 @@ def evaluate_policies(
     client: ModelClient,
     request_budget: RequestBudget,
     timer: Callable[[], float] = time.perf_counter,
-    total_token_budget: int = DEFAULT_POLICY_TOTAL_TOKEN_BUDGET,
-    maximum_calls: int = MAX_WORKFLOW_DEPTH,
+    total_token_budget: int | None = None,
+    maximum_calls: int | None = None,
 ) -> dict[str, Any]:
     """Run every compared policy with equal cell-level token and call budgets.
 
@@ -2200,16 +2205,23 @@ def evaluate_policies(
         client: Shared request-budgeted model client.
         request_budget: Complete-run provider request cap.
         timer: Monotonic latency source.
-        total_token_budget: Equal prompt-plus-completion allowance per cell.
-        maximum_calls: Equal declared provider-call envelope per cell.
+        total_token_budget: Declared equal prompt-plus-completion allowance.
+        maximum_calls: Declared equal provider-call envelope per cell.
 
     Returns:
         Evaluation cells and pool/task metadata.
 
     Raises:
-        BenchmarkContractError: If no workers or locked tasks are available.
+        BenchmarkContractError: If no workers or locked tasks are available,
+            or if the token/call envelopes are undeclared.
         BenchmarkBudgetError: If the complete evaluation cannot fit the run cap.
     """
+    declared_total_token_budget = _require_declared_positive_int(
+        total_token_budget, "total_token_budget"
+    )
+    declared_maximum_calls = _require_declared_positive_int(
+        maximum_calls, "maximum_calls"
+    )
     if not agents:
         raise BenchmarkContractError(
             "policy evaluation requires at least one chat-eligible worker"
@@ -2217,7 +2229,9 @@ def evaluate_policies(
     tasks = locked_evaluation_tasks(manifest)
     if not tasks:
         raise BenchmarkContractError("task manifest has no locked evaluation tasks")
-    planned = planned_evaluation_requests(len(agents), len(tasks))
+    planned = planned_evaluation_requests(
+        len(agents), len(tasks), maximum_calls=declared_maximum_calls
+    )
     if planned > request_budget.remaining_requests:
         raise BenchmarkBudgetError(
             f"planned evaluation needs up to {planned} requests but only "
@@ -2230,7 +2244,7 @@ def evaluate_policies(
         realtime_judge=True,
         verifier_required=True,
         workflow_planning="template",
-        max_workflow_steps=MAX_WORKFLOW_DEPTH,
+        max_workflow_steps=declared_maximum_calls,
         verifier_judge="model",
     )
 
@@ -2243,8 +2257,8 @@ def evaluate_policies(
         """Run one independent policy/task cell and append budget evidence."""
         cell_client = EqualBudgetModelClient(
             client,
-            total_token_budget,
-            maximum_calls,
+            declared_total_token_budget,
+            declared_maximum_calls,
         )
         orchestrator = TaskOrchestrator(
             pool,
@@ -2360,6 +2374,16 @@ def evaluate_policies(
         "locked_task_count": len(tasks),
         "worker_count": len(agents),
     }
+
+
+
+def _require_declared_positive_int(value: object, field_name: str) -> int:
+    """Reject missing, boolean, or non-positive integer declarations."""
+    if type(value) is not int or value < 1:
+        raise BenchmarkContractError(
+            f"{field_name} must be a declared positive integer"
+        )
+    return value
 
 
 # --------------------------------------------------------------------------
@@ -2761,6 +2785,8 @@ _REPORT_REQUIRED_PATHS = (
     "provenance.catalog_snapshot_sha256",
     "provenance.task_manifest_sha256",
     "provenance.benchmark_parameters",
+    "provenance.benchmark_parameters.max_output_tokens",
+    "provenance.benchmark_parameters.max_workflow_depth",
     "catalog_snapshot.endpoint",
     "catalog_snapshot.discovered_model_count",
     "catalog_snapshot.duplicate_model_ids",
@@ -2858,6 +2884,11 @@ def validate_report_schema(report: dict[str, Any]) -> None:
     expected = {(policy, task, "locked") for policy in policies for task in task_ids}
     if identities[0] != expected:
         raise BenchmarkContractError("planned evaluation is not the complete selected policy matrix")
+    parameters = report["provenance"]["benchmark_parameters"]
+    _require_declared_positive_int(parameters["max_output_tokens"], "max_output_tokens")
+    _require_declared_positive_int(
+        parameters["max_workflow_depth"], "max_workflow_depth"
+    )
 
 
 _CSV_CELL_COLUMNS = (
@@ -3289,9 +3320,10 @@ def run_benchmark(
     max_total_requests: int = 2000,
     probe_concurrency: int = 4,
     timeout_seconds: float = 60.0,
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+    max_output_tokens: int | None = None,
     max_eval_models: int = 7,
     seed: int = 7,
+    max_workflow_depth: int | None = None,
     git_sha: str = "",
     workflow_run_id: str = "",
     transport: ProviderTransport | None = None,
@@ -3311,11 +3343,12 @@ def run_benchmark(
         max_total_requests: Complete-run provider request cap.
         probe_concurrency: Maximum concurrent model probe workers.
         timeout_seconds: Per-address network timeout.
-        max_output_tokens: Per-provider-call output-token cap. The equal
-            cell-wide prompt-plus-completion budget is this value multiplied
-            by ``MAX_WORKFLOW_DEPTH``.
+        max_output_tokens: Declared per-provider-call output-token cap.
         max_eval_models: Maximum chat-eligible workers in policy evaluation.
         seed: Deterministic bootstrap seed.
+        max_workflow_depth: Declared equal-call workflow envelope. The equal
+            cell-wide prompt-plus-completion budget is ``max_output_tokens``
+            multiplied by this value.
         git_sha: Exact source revision, required live.
         workflow_run_id: Workflow provenance identifier, required live.
         transport: Optional injected provider transport for deterministic tests.
@@ -3331,12 +3364,12 @@ def run_benchmark(
         raise BenchmarkContractError(
             f"run_mode must be 'dry_run' or 'live', not {run_mode!r}"
         )
-    if (
-        isinstance(max_output_tokens, bool)
-        or not isinstance(max_output_tokens, int)
-        or max_output_tokens < 1
-    ):
-        raise BenchmarkContractError("max_output_tokens must be a positive integer")
+    declared_max_output_tokens = _require_declared_positive_int(
+        max_output_tokens, "max_output_tokens"
+    )
+    declared_max_workflow_depth = _require_declared_positive_int(
+        max_workflow_depth, "max_workflow_depth"
+    )
     manifest = load_task_manifest(task_manifest_path)
     pricing_scenario = load_pricing_scenario(pricing_scenario_path)
     if run_mode == "live":
@@ -3364,7 +3397,7 @@ def run_benchmark(
         eval_client: ModelClient = _BudgetedModelClient(
             request_budget,
             transport=active_transport,
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=declared_max_output_tokens,
         )
     else:
         api_key = get_credential(NIM_CREDENTIAL_NAME) or ""
@@ -3382,7 +3415,7 @@ def run_benchmark(
             request_budget,
             transport=active_transport,
             timeout=float(timeout_seconds),
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=declared_max_output_tokens,
         )
 
     benchmark_parameters = {
@@ -3390,11 +3423,13 @@ def run_benchmark(
         "max_total_requests": max_total_requests,
         "probe_concurrency": probe_concurrency,
         "timeout_seconds": timeout_seconds,
-        "max_output_tokens": max_output_tokens,
+        "max_output_tokens": declared_max_output_tokens,
         "max_eval_models": max_eval_models,
-        "max_workflow_depth": MAX_WORKFLOW_DEPTH,
-        "policy_total_token_budget": max_output_tokens * MAX_WORKFLOW_DEPTH,
-        "policy_maximum_calls": MAX_WORKFLOW_DEPTH,
+        "max_workflow_depth": declared_max_workflow_depth,
+        "policy_total_token_budget": (
+            declared_max_output_tokens * declared_max_workflow_depth
+        ),
+        "policy_maximum_calls": declared_max_workflow_depth,
         "minimum_paired_task_count": None,
         "required_completion_fraction": None,
         "seed": seed,
@@ -3417,6 +3452,7 @@ def run_benchmark(
         discovered_model_count=len(catalog["models"]),
         max_eval_models=max_eval_models,
         locked_task_count=len(locked_evaluation_tasks(manifest)),
+        maximum_calls=declared_max_workflow_depth,
     )
     if request_plan["total_required_request_count"] > request_budget.max_total_requests:
         raise BenchmarkBudgetError(
@@ -3458,8 +3494,8 @@ def run_benchmark(
         eval_client,
         request_budget,
         timer,
-        total_token_budget=max_output_tokens * MAX_WORKFLOW_DEPTH,
-        maximum_calls=MAX_WORKFLOW_DEPTH,
+        total_token_budget=declared_max_output_tokens * declared_max_workflow_depth,
+        maximum_calls=declared_max_workflow_depth,
     )
     report = assemble_benchmark_report(
         run_mode,
@@ -3522,7 +3558,16 @@ def run_benchmark_cli(argv: list[str]) -> int:
     parser.add_argument("--probe-concurrency", type=int, default=4)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
     parser.add_argument(
-        "--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS
+        "--max-output-tokens",
+        type=int,
+        default=None,
+        help="Declared per-call output-token cap. Required; there is no hidden default.",
+    )
+    parser.add_argument(
+        "--max-workflow-depth",
+        type=int,
+        default=None,
+        help="Declared equal-call workflow envelope. Required; there is no hidden default.",
     )
     parser.add_argument("--max-eval-models", type=int, default=7)
     parser.add_argument("--seed", type=int, default=7)
@@ -3554,6 +3599,7 @@ def run_benchmark_cli(argv: list[str]) -> int:
             max_output_tokens=args.max_output_tokens,
             max_eval_models=args.max_eval_models,
             seed=args.seed,
+            max_workflow_depth=args.max_workflow_depth,
             git_sha=args.git_sha,
             workflow_run_id=args.workflow_run_id,
         )

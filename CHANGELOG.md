@@ -10,6 +10,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+
+### Changed
+
+- NIM benchmark workflow depth and per-call output-token budgets are required
+  declarations (`max_workflow_depth` / `max_output_tokens`); omitted values fail
+  closed instead of inventing five steps or 264 tokens (ADR 0043).
+
 ### Added
 
 - A canonical, immutable release mechanism: `.github/workflows/release.yml`
