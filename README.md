@@ -74,6 +74,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 HTTP serving is hardened for local lab use:
 
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one local token. Explicit `--auth-token`/split-token values are local-development escape hatches; `--production` and `--allow-public-bind` reject single-token mode and insecure admin-session cookies, and the CLI never reads auth secrets from environment variables.
+- The `trace` purpose (orchestration-trace-bearing responses, ADR 0026) is authorized separately: in single-token mode `--auth-token` still covers it as a local escape hatch, but in split admin/inference mode neither the admin nor the inference token authorizes `trace` — configure `--trace-token`/`--trace-token-key` (KV name `CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN` by default), or trace responses fail closed with `401`.
 - A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
 - Binding to a non-loopback address requires `--allow-public-bind`; loopback
   addresses and `localhost` remain available for local development.
