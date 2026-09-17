@@ -2081,6 +2081,19 @@ class ModelClient:
         self._local.assistant_message = None
         return extras if isinstance(extras, dict) else None
 
+    def take_output_budget(self) -> dict[str, Any] | None:
+        """Return and clear this thread's most recent output-budget clamp evidence.
+
+        ``None`` means the request carried no explicit ``max_tokens`` /
+        ``max_completion_tokens`` / ``max_output_tokens`` for the clamp to
+        evaluate. Otherwise the dict always names ``requested_output_tokens``,
+        ``effective_output_tokens``, and whether the agent's published
+        ``max_output_tokens`` ceiling forced the request down -- see ADR 0130.
+        """
+        budget = getattr(self._local, "output_budget", None)
+        self._local.output_budget = None
+        return budget if isinstance(budget, dict) else None
+
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
         scoped = getattr(self._local, "request_settings", {})
@@ -2246,6 +2259,7 @@ class ModelClient:
             raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
         self._local.assistant_message = None
+        self._local.output_budget = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         settings = self.request_settings_snapshot()
         effective_temperature = settings["temperature"] if temperature is None else temperature
@@ -2523,7 +2537,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
-        payload = self._clamp_agent_token_budget(agent, payload)
+        payload = self._clamp_agent_token_budget_with_evidence(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -2568,6 +2582,36 @@ class ModelClient:
                     updated = dict(payload)
                 updated[field] = limit
         return updated
+
+    def _clamp_agent_token_budget_with_evidence(
+        self, agent: ModelAgent, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Clamp the payload and record honest clamp evidence for this thread.
+
+        ADR 0130: a caller's explicit output-budget field is authoritative
+        within the agent's published ceiling; when it exceeds that ceiling the
+        gateway must say so in-band (trace + response) instead of silently
+        rewriting it. This records what was requested and what was actually
+        applied so ``take_output_budget()`` can surface both.
+        """
+        requested = None
+        for field in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+            value = payload.get(field)
+            if type(value) is int:
+                requested = value
+                break
+        clamped_payload = self._clamp_agent_token_budget(agent, payload)
+        if requested is None:
+            self._local.output_budget = None
+            return clamped_payload
+        limit = agent.max_output_tokens
+        was_clamped = type(limit) is int and limit > 0 and requested > limit
+        self._local.output_budget = {
+            "requested_output_tokens": requested,
+            "effective_output_tokens": limit if was_clamped else requested,
+            "output_budget_clamped": was_clamped,
+        }
+        return clamped_payload
 
     @staticmethod
     def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
@@ -2785,7 +2829,7 @@ class ModelClient:
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
-        payload = self._clamp_agent_token_budget(agent, payload)
+        payload = self._clamp_agent_token_budget_with_evidence(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -3190,7 +3234,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
-        payload = self._clamp_agent_token_budget(agent, payload)
+        payload = self._clamp_agent_token_budget_with_evidence(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -4546,6 +4590,7 @@ class TaskOrchestrator:
         rate_limit_unknown_cooldown_seconds: float = 5.0,
     ) -> None:
         self._assistant_message_local = threading.local()
+        self._output_budget_local = threading.local()
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
@@ -5715,6 +5760,17 @@ class TaskOrchestrator:
                         if callable(send_once):
                             send = send_once
                     response = send(candidate, endpoint, candidate_payload)
+                    # ADR 0130: ``send`` clamps candidate_payload's output
+                    # budget through ModelClient._send_raw's evidence-recording
+                    # variant, so this thread's take_output_budget() reflects
+                    # the attempt that just ran -- capture it before any later
+                    # candidate attempt (or another request on this thread)
+                    # overwrites it.
+                    output_budget = (
+                        self.client.take_output_budget()
+                        if hasattr(self.client, "take_output_budget")
+                        else None
+                    )
                     if require_output:
                         provider_output(candidate, response)
                     attempts.append(
@@ -5730,6 +5786,8 @@ class TaskOrchestrator:
                             orchestration["route"] = route_evidence(
                                 terminal_reason="served"
                             )
+                            if isinstance(output_budget, dict):
+                                orchestration.update(output_budget)
                     return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     if isinstance(exc, ToolFallbackStoppedError):
@@ -6191,15 +6249,29 @@ class TaskOrchestrator:
             elif "messages" in echo:
                 echo["messages"] = copy.deepcopy(messages)
         route = None
+        output_budget_evidence: dict[str, Any] = {}
         existing_orchestration = raw.get("orchestration")
         if isinstance(existing_orchestration, dict):
             route = existing_orchestration.get("route")
+            # ADR 0130: the synthesis send site records this on ``raw`` at
+            # attempt time (see ``send_synthesis``); it must survive this
+            # rebuild the same way ``route`` already does.
+            output_budget_evidence = {
+                key: existing_orchestration[key]
+                for key in (
+                    "requested_output_tokens",
+                    "effective_output_tokens",
+                    "output_budget_clamped",
+                )
+                if key in existing_orchestration
+            }
         workflow_run_id = persist_structured_record(synthesis_output)
         raw["orchestration"] = {
             "workflow_run_id": workflow_run_id,
             "mode": "conduct",
             "agent_count": len(workflow["trace"]) + len(structured_attempt_steps),
             "plan_source": workflow.get("plan_source"),
+            **output_budget_evidence,
         }
         if isinstance(route, dict):
             raw["orchestration"]["route"] = route
@@ -6455,6 +6527,7 @@ class TaskOrchestrator:
         owner_id: str | None = None,
         include_usage: bool = False,
         usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
+        output_budget_callback: Callable[[dict[str, Any] | None], None] | None = None,
     ):
         """Stream Fugu-route content deltas, then persist the run.
 
@@ -6570,6 +6643,13 @@ class TaskOrchestrator:
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
         if usage_callback is not None:
             usage_callback(usage)
+        output_budget = (
+            self.client.take_output_budget()
+            if hasattr(self.client, "take_output_budget")
+            else None
+        )
+        if output_budget_callback is not None:
+            output_budget_callback(output_budget)
         if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         self._record_success(agent.id)
@@ -6600,6 +6680,8 @@ class TaskOrchestrator:
         }
         if isinstance(usage, dict):
             trace_step["usage"] = usage
+        if isinstance(output_budget, dict):
+            trace_step.update(output_budget)
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -7716,6 +7798,21 @@ class TaskOrchestrator:
         """Store this thread's pending assistant extras."""
         self._assistant_message_local.value = value
 
+    @property
+    def _last_output_budget(self) -> dict[str, Any] | None:
+        """Output-budget clamp evidence from THIS thread's most recent ``_invoke`` call.
+
+        Mirrors ``_last_assistant_message``'s per-thread storage for the same
+        ``ThreadingHTTPServer`` reason: one shared ``TaskOrchestrator`` serves
+        every request on its own thread, so this cannot be plain instance state.
+        """
+        return getattr(self._output_budget_local, "value", None)
+
+    @_last_output_budget.setter
+    def _last_output_budget(self, value: dict[str, Any] | None) -> None:
+        """Store this thread's pending output-budget clamp evidence."""
+        self._output_budget_local.value = value
+
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -7785,6 +7882,8 @@ class TaskOrchestrator:
             )
             extras = getattr(self, "_last_assistant_message", None)
             self._last_assistant_message = None
+            output_budget = getattr(self, "_last_output_budget", None)
+            self._last_output_budget = None
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -7799,6 +7898,8 @@ class TaskOrchestrator:
             }
             if attempt_usage is not None:
                 row["usage"] = attempt_usage
+            if isinstance(output_budget, dict):
+                row.update(output_budget)
             if attempt_served_id != candidate.id:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
@@ -7846,6 +7947,10 @@ class TaskOrchestrator:
             "verification": {**verification, "verifier_output": answer},
             "trace": [final_row],
         }
+        if "output_budget_clamped" in final_row:
+            result["requested_output_tokens"] = final_row["requested_output_tokens"]
+            result["effective_output_tokens"] = final_row["effective_output_tokens"]
+            result["output_budget_clamped"] = final_row["output_budget_clamped"]
         if isinstance(extras, dict):
             if extras.get("tool_calls"):
                 result["tool_calls"] = extras["tool_calls"]
@@ -8067,6 +8172,8 @@ class TaskOrchestrator:
             )
             extras = self._last_assistant_message
             self._last_assistant_message = None
+            output_budget = self._last_output_budget
+            self._last_output_budget = None
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
@@ -8077,6 +8184,8 @@ class TaskOrchestrator:
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
+            if isinstance(output_budget, dict):
+                row.update(output_budget)
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
@@ -8136,6 +8245,10 @@ class TaskOrchestrator:
             "verification": verification,
             "plan_source": plan_source,
         }
+        if trace and "output_budget_clamped" in trace[-1]:
+            result["requested_output_tokens"] = trace[-1]["requested_output_tokens"]
+            result["effective_output_tokens"] = trace[-1]["effective_output_tokens"]
+            result["output_budget_clamped"] = trace[-1]["output_budget_clamped"]
         if tool_result is not None:
             result["tool_calls"] = tool_result["tool_calls"]
             result["finish_reason"] = tool_result.get("finish_reason") or "tool_calls"
@@ -9259,6 +9372,7 @@ class TaskOrchestrator:
         select the primary when the call's effort profile has a distinct name.
         """
         self._last_assistant_message = None
+        self._last_output_budget = None
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
@@ -9296,7 +9410,14 @@ class TaskOrchestrator:
 
             def call(
                 agent: ModelAgent,
-            ) -> tuple[str, str, str, dict[str, Any] | None, dict[str, Any] | None]:
+            ) -> tuple[
+                str,
+                str,
+                str,
+                dict[str, Any] | None,
+                dict[str, Any] | None,
+                dict[str, Any] | None,
+            ]:
                 tool_scope = (
                     self.client.suppress_request_tools()
                     if role != "worker"
@@ -9315,7 +9436,12 @@ class TaskOrchestrator:
                         if hasattr(self.client, "take_assistant_message")
                         else None
                     )
-                return output, agent.id, agent.model, usage, extras
+                    output_budget = (
+                        self.client.take_output_budget()
+                        if hasattr(self.client, "take_output_budget")
+                        else None
+                    )
+                return output, agent.id, agent.model, usage, extras, output_budget
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
@@ -9349,8 +9475,14 @@ class TaskOrchestrator:
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability="text")
                 self._record_success(outcome.winner_endpoint_id)
-                output, served_id, served_model, usage, extras = outcome.value
+                output, served_id, served_model, usage, extras, output_budget = outcome.value
                 self._last_assistant_message = extras
+                # ADR 0130: only the winning endpoint's clamp evidence is
+                # recorded here. Losing attempts race the same messages
+                # against equivalent endpoints and are otherwise discarded
+                # (see ``_race_attempt_collector``), so their clamp decisions
+                # never reach a caller and are not worth threading through.
+                self._last_output_budget = output_budget
                 output_tokens = None
                 if isinstance(usage, dict):
                     reported = usage.get("completion_tokens", usage.get("output_tokens"))
@@ -9509,6 +9641,11 @@ class TaskOrchestrator:
                     else None
                 )
                 self._last_assistant_message = extras
+                self._last_output_budget = (
+                    self.client.take_output_budget()
+                    if hasattr(self.client, "take_output_budget")
+                    else None
+                )
                 output_tokens = self._usage_completion_tokens(usage)
                 total_tokens = self._usage_total_tokens(usage)
                 if agent.group_name or allowed_agent_ids is not None:
@@ -17762,6 +17899,9 @@ def chat_completion_response(
         "routing_reason": result.get("routing_reason"),
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
+        "requested_output_tokens": result.get("requested_output_tokens"),
+        "effective_output_tokens": result.get("effective_output_tokens"),
+        "output_budget_clamped": result.get("output_budget_clamped"),
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
@@ -17882,6 +18022,9 @@ def chat_completion_chunks(
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result.get("mode"),
         "verification": result.get("verification"),
+        "requested_output_tokens": result.get("requested_output_tokens"),
+        "effective_output_tokens": result.get("effective_output_tokens"),
+        "output_budget_clamped": result.get("output_budget_clamped"),
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
