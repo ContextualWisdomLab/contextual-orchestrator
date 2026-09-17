@@ -10,6 +10,8 @@ affected_components:
 related:
   - path: "docs/planning/adrs/0041-generalize-models-dev-cost-classification.md"
     relation: related
+  - path: "docs/planning/adrs/0044-declared-heldout-bootstrap-coverage.md"
+    relation: followed_by
 success_criteria:
   - metric: "no hidden workflow envelope"
     target: "omitted maximum_calls or max_workflow_depth fails closed"
@@ -51,8 +53,8 @@ Workflow YAML and tests may still write 5 and 264 as this run's choices.
 
 Report schema stays 4.0.0; those fields already exist in provenance and are
 now validated as declarations. Production route/conduct defaults stay locked.
-The psychometric held-out harness's 2,000-sample 95% interval remains a later
-slice.
+The psychometric held-out harness's 2,000-sample 95% interval is the
+successor slice in ADR 0044.
 
 ## Alternatives considered
 
@@ -74,5 +76,5 @@ declarations; omitting them fails closed.
 
 ## Remaining work
 
-The psychometric held-out harness still uses a 2,000-sample 95% interval.
-This ADR is Proposed until independent review and protected delivery.
+Held-out bootstrap coverage moves to ADR 0044. This ADR is Proposed until
+independent review and protected delivery.

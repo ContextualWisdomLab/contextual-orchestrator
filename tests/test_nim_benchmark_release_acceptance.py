@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import subprocess
@@ -23,20 +24,23 @@ from contextual_orchestrator.credentials import (
 from contextual_orchestrator.orchestrator import ModelClient
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
+EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
+FAKE_ENDPOINT = "https://nim.example.test/v1"
+
 DECLARED_MAX_WORKFLOW_DEPTH = 5
 DECLARED_MAX_OUTPUT_TOKENS = 264
 DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
     DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
 )
 DECLARED_RUN_KWARGS = {
+    "resample_count": 2000,
+    "confidence_level": 0.95,
+    "comparison_pairs": (("conduct_bounded", "route_once"),),
     "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
     "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
 }
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
-EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
-FAKE_ENDPOINT = "https://nim.example.test/v1"
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +51,29 @@ def _isolated_credentials() -> None:
         yield
     finally:
         set_backend(None)
+
+
+@pytest.fixture
+def current_actual_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in: keep the reviewed hosted-cost evidence window valid for one test.
+
+    ``nb.ACTUAL_COST_EVIDENCE["valid_until_date"]`` is a human-reviewed fact
+    about NVIDIA's published hosted-endpoint terms, not a test fixture, and
+    ``_require_current_actual_cost_evidence`` fails closed once that literal
+    calendar date lapses. This module's two pricing-scenario contract tests
+    need to get past that unrelated evidence-currency gate to reach the
+    ``validate_live_pricing_scenario`` assertions they actually exercise, so
+    they request this fixture by name rather than relying on the literal
+    production date staying valid (see the identically-named fixture in
+    ``test_nim_benchmark.py``, which owns the same pattern for that file).
+    """
+    today = datetime.date.today()
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", today.isoformat())
+    monkeypatch.setitem(
+        nb.ACTUAL_COST_EVIDENCE,
+        "valid_until_date",
+        (today + datetime.timedelta(days=1)).isoformat(),
+    )
 
 
 def _write_json(path: Path, payload: object) -> str:
@@ -95,10 +122,10 @@ def test_package_import_does_not_eagerly_load_optional_benchmark() -> None:
 
 
 def test_live_run_rejects_unreviewed_pricing_before_egress(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    current_actual_cost_evidence: None,
 ) -> None:
     """Schema-demo prices can support dry runs but can never drive a live policy."""
-    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
     scenario = json.loads(EXAMPLE_PRICING_PATH.read_text(encoding="utf-8"))
     scenario_path = _write_json(tmp_path / "unreviewed_pricing.json", scenario)
@@ -122,10 +149,9 @@ def test_live_run_rejects_unreviewed_pricing_before_egress(
 
 def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    current_actual_cost_evidence: None,
 ) -> None:
     """Live hypothetical prices need complete, current, independently reviewed evidence."""
-    monkeypatch.setattr(nb, "_require_current_actual_cost_evidence", lambda: None)
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
     incomplete = _reviewed_pricing_scenario()
     del incomplete["reviewed_by"]
