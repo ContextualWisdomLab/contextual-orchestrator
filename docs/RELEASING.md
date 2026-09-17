@@ -40,12 +40,10 @@ LifeOS and other consumers must verify their specific owner contracts too.
 4. The exact commit has passing required checks. The workflow rechecks
    registered push-triggered jobs and the reported check rollup through
    `scripts/ci/release_checks_gate.sh`, and runs the full test suite fresh.
-   Every check named by `RELEASE_EXPECTED_PUSH_CHECKS` must have status
-   `completed` and conclusion exactly `success`. Additional noncritical
-   check-runs may end with `success`, `skipped`, or `neutral`; that allowance
-   does not apply to the required inventory and is not permission to treat a
-   skipped semantic security action as review evidence. Protected integration
-   still requires all applicable organization gates and reviews.
+   Its existing check policy accepts terminal success, skipped or neutral
+   conclusions; this is not permission to treat a skipped required semantic
+   security action as actual review evidence. Protected integration still
+   requires all applicable organization gates and reviews.
    A newly merged commit whose expected push checks have not yet registered
    is not ready. Re-dispatch after the genuine required evidence exists;
    do not weaken the expected check inventory.

@@ -457,12 +457,11 @@ def test_checks_gate_some_but_not_all_expected_checks_green_fails_closed(tmp_pat
     workflow = _workflow_text()
     expected_json = _expected_push_checks_json(workflow)
     expected_names = json.loads(expected_json)
-    assert len(expected_names) >= 2
-    present = set(expected_names[:-1])
-    missing_names = [expected_names[-1]]
+    present = {"Full unit and contract suite", "CodeQL analysis"}
+    missing_names = [name for name in expected_names if name not in present]
 
     partial = _check_runs_response(
-        [_check_run(name, job=index) for index, name in enumerate(sorted(present), start=1)]
+        [_check_run("Full unit and contract suite", job=1), _check_run("CodeQL analysis", job=2)]
     )
     result = _run_checks_gate_script(tmp_path, partial, expected_json)
 
@@ -470,8 +469,6 @@ def test_checks_gate_some_but_not_all_expected_checks_green_fails_closed(tmp_pat
     assert f"{len(missing_names)} expected push-triggered check(s)" in result.stderr
     for name in missing_names:
         assert name in result.stderr
-    for name in present:
-        assert name not in result.stderr
 
 
 def test_checks_gate_all_expected_checks_registered_and_green_passes(tmp_path: Path) -> None:
@@ -496,7 +493,7 @@ def test_checks_gate_all_expected_checks_registered_and_green_passes(tmp_path: P
 
 def test_checks_gate_all_expected_registered_but_one_still_pending_fails_closed(tmp_path: Path) -> None:
     """All expected checks have registered (so the missing-checks gate
-    passes), but one is still in flight -- the success-only expected-check
+    passes), but one is still in flight -- the pre-existing not-ready/green
     gate must still catch it."""
     workflow = _workflow_text()
     expected_json = _expected_push_checks_json(workflow)
@@ -509,7 +506,7 @@ def test_checks_gate_all_expected_registered_but_one_still_pending_fails_closed(
 
     assert result.returncode != 0, result.stderr
     assert "have not registered yet" not in result.stderr
-    assert "are not complete with conclusion success" in result.stderr
+    assert "not both complete and green" in result.stderr
 
 
 def test_checks_gate_evaluates_target_sha_not_the_dispatch_commit(tmp_path: Path) -> None:

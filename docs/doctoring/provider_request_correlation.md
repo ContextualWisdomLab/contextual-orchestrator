@@ -137,3 +137,167 @@ chat stopped-tool errors. The Responses fixture fixes the routing choice to
 isolate SSE framing; it does not test routing policy. The original cases failed
 identity equality; after repair, these and both debug logging suites passed
 (40 tests, 2.75 seconds). No hosted check or deployment is implied.
+
+## Rate-limit storm (2026-09-14)
+
+Distinct from the request-identity correlation issues above, but the same
+provider-request-boundary area: org CI review lanes calling this gateway with
+`orchestrator/free` saw every candidate return HTTP 429 within ~50ms during a
+free-pool rate-limit storm (noema run 34758641142, strix run 34758679736:
+preflight `ready_count: 0`, 7x 429 across OpenRouter and NIM accounts), and the
+gateway failed the request instead of honoring the provider's declared
+cooldown. `ContextualWisdomLab/.github#2148` root-caused the same failure mode
+against a three-route OpenRouter `:free` ZDR pool wiped by a single 429 burst
+(its item 1: "honor provider-stated Retry-After, no arbitrary retry budget");
+`#2165` shows the resulting `noema-review`/`strix` failing closed on
+gateway-side 429/502 after failover, with caller `attempts=1`.
+
+Fixed: `Retry-After`/`x-ratelimit-reset*` parsing, a per-agent cooldown kept
+separate from the health circuit breaker, a shared skip in
+`_failover_candidates` for every caller, and one shared bounded
+wait-then-retry (or honest `429 provider_rate_limited` with a `Retry-After`
+header) implementation, `_await_rate_limit_recovery`, reached from both
+`proxy_completion`'s passthrough failover loop and
+`_invoke_with_rate_limit_recovery` -- the wrapper around `_invoke`, the shared
+engine `route_once` and every `conduct` step use, so the real
+`orchestrator/free` HTTP path this incident describes is covered, not just
+direct-API passthrough use. Full detail and test evidence: the 2026-09-14
+entry in [the gap baseline](../product-technical-gap-baseline.md).
+
+The org sidecar's own preflight artifact (`contextual-orchestrator-preflight.json`)
+already reports `candidate`/`probed`/`rejected_count` and
+`account_skip_after_429` fields; those are the RED/GREEN evidence an external
+CI run can use to confirm this class of fix without needing gateway-internal
+access. This repo does not modify that org-owned sidecar script.
+
+### Follow-up: a 429/503 with no cooldown header at all (2026-09-14)
+
+The fix above still had a gap: `_record_rate_limit(agent_id, None)` returned
+without recording anything, so a 429/503 whose provider omitted both
+`Retry-After` and `x-ratelimit-reset*` (RFC 9110 10.2.3 permits omitting it
+entirely, and NIM/OpenRouter routinely do) was never marked cooling --
+`_await_rate_limit_recovery` saw no candidate to wait for, and the request
+failed exactly as if this whole feature did not exist. The 2026-09-13
+production storm may well have been exactly this shape.
+
+Fixed: an unknown-duration 429 now records the administrator-owned
+`rate_limit_unknown_cooldown_seconds` (constructor/CLI default 5s) as an
+*assumed* cooldown instead of nothing, tagged `cooldown_source: "assumed"` in
+`provider_readiness_report` and in the honest-429 error detail (vs
+`"provider"` for a real `Retry-After`/`x-ratelimit-reset*` value); the
+existing "cooldowns only extend forward" rule also protects the source label,
+so a later assumed cooldown can never shorten or relabel an active
+provider-stated one. Scoped to 429 specifically, not 503: a 503 ("service
+unavailable") is a genuine, possibly permanent availability signal with no
+inherent quota-recovery semantics, and extending the assumption to it made
+several pre-existing exhaustion tests loop through repeated assumed waits
+before finally raising the wrong (storm) error identity for what was actually
+a permanent, unrelated failure -- concrete regression evidence, not a
+guess. Also added: `_await_rate_limit_recovery` waits only for a virtual/
+gateway-selected model (`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/`FREE_MODEL`, or
+none) -- confirmed against `tests/test_provider_error_taxonomy.py`'s
+single-candidate, explicit-concrete-model `rate_limit_exceeded` contract,
+which this same-shaped defect (before this guard existed) made hang past its
+5s client timeout. An earlier version of this guard keyed off candidate
+count instead (fewer than two candidates meant "nothing to wait for"), but
+that misclassified a virtual selector's pool wiped down to exactly one
+eligible candidate by a 429 -- a real, common production shape, corrected in
+the "explicit-vs-virtual selector" follow-up below -- identically to a
+genuinely pinned concrete model, and failed the request immediately instead
+of waiting. The discriminator is now whether the caller delegated selection
+at all, not how many candidates happen to remain.
+
+Tests added to `tests/test_rate_limit_aware_admission.py`: a
+no-Retry-After/no-header 429 storm across two candidates still waits the
+assumed cooldown and is served; the same with zero budget returns
+429/`provider_rate_limited` with `Retry-After` equal to the ceiled assumed
+value and `cooldown_source: "assumed"` in the error detail; a provider-stated
+cooldown is never shortened or relabeled by a later assumed one. Two
+pre-existing tests in `tests/test_passthrough_provider_failover.py`
+(`test_all_candidates_chain_the_last_failure`,
+`test_free_virtual_model_never_fails_over_to_a_paid_agent`) used a bare 429
+purely incidentally (to represent "some transient failover-eligible
+failure", not to test rate-limiting itself) and were switched to 500 to keep
+that intent isolated from this feature.
+
+### Follow-up: explicit-vs-virtual selector, not candidate count (2026-09-14)
+
+The "two or more candidates" guard above was itself a defect, not just a
+narrow scope choice: `_await_rate_limit_recovery` opened with
+`if len(candidates) < 2: return False`, so a pool with exactly one eligible
+candidate never waited out a storm -- it failed immediately, which is the
+behavior this whole feature exists to remove. Production evidence this case
+is real and common: noema-review run 34772771262 (sidecar pin `767e67fb`) on
+contextual-orchestrator#1177 reported preflight `ready_count: 1`, and the
+review call then failed after 562s with `HTTP Error 429` served by
+`google/gemma-4-31b-it:free`; `ContextualWisdomLab/.github#2148` records that
+the private-target ZDR pool is three OpenRouter `:free` routes on a single
+account, so one 429 wipes the whole pool down to at most one eligible route.
+
+The guard existed for a good reason that had to be preserved:
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+pins one named concrete model that always answers 429 with no headers; under
+an assumed-cooldown-always-waits path that request hangs past its
+client-side read timeout. The correct discriminator was never the candidate
+count -- it is whether the caller delegated selection at all: an explicit
+concrete model must fail fast with the honest 429 (unchanged), while a
+virtual selector (`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/`FREE_MODEL`, or no
+model) must wait even when only one candidate remains.
+
+Fixed: `_await_rate_limit_recovery` gained a keyword-only `virtual_selector`
+parameter that both `proxy_completion`'s passthrough loop and
+`_invoke_with_rate_limit_recovery` (in turn threaded from `route_once`'s and
+`conduct`'s own `model_name in {GATEWAY_DEFAULT_MODEL, AUTO_MODEL,
+FREE_MODEL}` check) compute once and pass through, replacing the
+`len(candidates) < 2` guard. Tests added to
+`tests/test_rate_limit_aware_admission.py` cover a virtual selector with
+exactly one eligible candidate that 429s with `Retry-After: 1` then succeeds
+on retry (waits once, served), the same shape with no budget (honest 429),
+and an explicit concrete model with a single always-429 candidate (fails
+fast, no wait).
+
+## Typed streaming fallback attempt evidence (issue #1016, rows 2/4)
+
+A missing correlation ID is not the only gap a per-attempt log line can have:
+until now, `stream_route`'s single-worker fallback trace step recorded a failed
+candidate as prose only (`"subtask": "Failed direct route attempt (streamed)"`),
+with no machine-typed outcome, error code, or provider status -- unlike the
+structured-synthesis candidate loop's `route.attempted[]` entries. A debug-log
+consumer correlating requests by ID still could not tell *why* an earlier
+streaming attempt failed without parsing prose.
+
+Each streaming fallback trace step now also carries the same typed fields the
+structured path emits, built by the shared `_typed_attempt_entry` helper:
+
+```json
+{
+  "id": 0,
+  "role": "worker",
+  "agent_id": "primary_worker",
+  "model": "primary-model",
+  "subtask": "Failed direct route attempt (streamed)",
+  "reason": "provider rejected the request with HTTP 503",
+  "outcome": "retryable_transport",
+  "error_code": "service_unavailable",
+  "provider_status": 503,
+  "retryable": true,
+  "transport": "stream"
+}
+```
+
+`outcome` follows a fixed vocabulary: `retryable_transport`, `request_too_large`,
+`deadline_exceeded` (the administrator `model_timeout` policy from PR #1053
+elapsed -- no second vocabulary was invented for it), or `fail_closed`. The
+prose `subtask`/`reason` fields remain for humans; they are no longer the only
+signal available to callers or log consumers. This shape is now a documented,
+versioned contract (`OrchestrationRouteAttempt` / `OrchestrationRoute` in
+`contextual_orchestrator/api_contract.py`, spec version `0.3.0`), validated by
+`tests/test_api_contract.py` against both a real structured-synthesis failover
+and a real streaming failover. Reproduce with:
+
+```sh
+python -m pytest tests/test_true_streaming.py tests/test_api_contract.py -q
+```
+
+This is a shape/typing fix, not a change to which candidate is selected, to
+retry/circuit-breaker behavior, or to request-ID correlation itself.

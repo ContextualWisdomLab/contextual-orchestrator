@@ -29,7 +29,7 @@ success_criteria:
 
 ## Status
 
-**Proposed.** The current implementation and acceptance target is Draft successor PR #1186; stale PR #1030 is retained only as predecessor lineage. This ADR is intentionally not Accepted yet. The Python-runtime prerequisite #995 must land first, #1186 must be non-force-restacked onto that protected-main descendant, its final exact head must obtain authoritative hosted GREEN evidence, and a real release has not yet been cut. No check or review from #1030 transfers to the successor. Provenance/attestation and reproducibility evidence beyond the mandatory CycloneDX SBOM also remain release-readiness gaps rather than claims of completion.
+**Proposed.** The workflow implementation exists on PR #1030, but this ADR is intentionally not Accepted yet. The Python-runtime prerequisite #995 must land first, #1030 must be non-force-restacked onto that protected-main descendant, its final exact head must obtain authoritative hosted GREEN evidence, and a real release has not yet been cut. Provenance/attestation and reproducibility evidence beyond the mandatory CycloneDX SBOM also remain release-readiness gaps rather than claims of completion.
 
 ## Problem
 
@@ -98,7 +98,7 @@ Repository-controlled tests and release-note rendering run in the read-only `ver
 
 ## TDD evidence
 
-The predecessor repair lineage recorded from #1030 includes:
+The current repair lineage on #1030 includes:
 
 - `9b93a215530c96509de9d368f0008b713fe0640b`: RED contract rejecting generic `commits/v${RELEASE_VERSION}` tag lookup and optional SBOM behavior.
 - `788dfce254604f1d8cec1681205faf19d6125333`: production GREEN using exact `git/ref/tags/...` identity and fail-closed SBOM evidence/attachment.
@@ -106,7 +106,7 @@ The predecessor repair lineage recorded from #1030 includes:
 - `d22586f8e8dd9be3762ed7bf02762c9f82fbf771`: release runbook brought code-current with the same invariants.
 - `7a37d595ff3d39d7eb05d6030790c0c05d312741`: test-first child repair proving a lightweight release tag must be rejected rather than accepted as a resumable canonical release; merged normally into #1030 as `b73b5fed144dedf4bd4e4fb2bf5dbf886414ee40`.
 
-The historical `b73b5fed...` generation on #1030 had terminal repository/org review checks, including Required Noema, without a failing check-run; that evidence does not transfer protected-main or release authority to #1186. #1030 remains open only as predecessor lineage. Current acceptance belongs to #1186 exact heads, which remain Draft while #995 and current-head acceptance are unresolved. The central runner/control-plane owner path is tracked separately; checks on predecessor heads are historical only.
+The current `b73b5fed...` generation has terminal repository/org review checks, including Required Noema, without a failing check-run; that does not transfer protected-main or release authority. #1030 remains Draft because it is still diverged from protected `main` and its Python-runtime prerequisite #995 remains unmerged. The central runner/control-plane owner path is tracked separately; checks on predecessor heads are historical only.
 
 ## Alternatives considered
 
@@ -150,7 +150,7 @@ Costs and residual risks:
 - GitHub does not expose an atomic "create tag only if branch still equals SHA" operation, so a small fresh-publish check-then-act window remains after the final `main`-tip check. The mitigation is fail-closed prechecks plus exact remote tag verification; if a concurrent merge wins that window, publish a new patch/minor version and never move the earlier tag.
 - GitHub Release creation and asset upload are separate mutations. A Release can therefore exist temporarily without the SBOM after an interrupted run; workflow success is withheld until the asset is verified.
 - The current path establishes SBOM evidence but does not yet establish the broader provenance/attestation and reproducibility evidence required by the fleet's final release-ready definition. Those are follow-up acceptance items; this ADR remains Proposed until they are resolved or explicitly superseded by another owner decision.
-- #1186 currently depends on #995's supported-runtime correction and on reconciliation with the current protected-main lineage. Neither is bypassed here.
+- #1030 currently depends on #995's supported-runtime correction and on reconciliation with the current protected-main lineage. Neither is bypassed here.
 
 ## Rollback and recovery
 
@@ -162,8 +162,8 @@ A lightweight tag, a tag pointing outside current `main` history, an ambiguous t
 
 ## Acceptance before status may become Accepted
 
-- #995 merged normally and #1186 non-force-restacked to the resulting protected-main descendant.
-- all final #1186 exact-head required repository and org-central checks terminal GREEN with no valid unresolved review findings; predecessor #1030 checks/reviews are historical only.
+- #995 merged normally and #1030 non-force-restacked to the resulting protected-main descendant.
+- all final exact-head required repository and org-central checks terminal GREEN with no valid unresolved review findings.
 - release docs and product/technical gap baseline agree with the final implementation.
 - first canonical version published at an exact annotated tag with verified mandatory SBOM.
 - release provenance/attestation and reproducibility requirements either implemented and tested or governed by a separate Accepted owner ADR with an explicit contract.
