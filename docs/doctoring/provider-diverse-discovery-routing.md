@@ -1,6 +1,6 @@
 ---
 title: "Provider-diverse discovery and cost-honest failover routing"
-status: "implemented"
+status: "proposed"
 date: "2026-08-21"
 scope: "PR #770"
 ---
@@ -12,17 +12,34 @@ scope: "PR #770"
 PR #770 makes model discovery fail closed for invalid catalog rows (a price
 that is negative, non-finite, or a nonzero value that underflows to zero),
 retains eligible candidates that simply have no reported price as an
-explicit unknown-cost fallback, and selects a provider-diverse bootstrap
-pool before ordinary chat routing. The selector is deterministic eligibility
-and cost accounting; it is not a learned answer-quality judge and does not
-claim to reproduce the learning systems in the cited work.
+explicit unknown-cost fallback, and proposes a provider/model-group-diverse
+bootstrap pool before ordinary chat routing. Provider/model-group labels are
+not outage probabilities or utility evidence. A proposal therefore fails
+closed when it changes the price-evidenced candidate sequence, or when selected
+and excluded candidates have equal comparable cost or incomplete price
+evidence. Operators must supply a released decision model, comparable price
+evidence, or capacity for the whole competing class. The selector is
+deterministic eligibility and cost accounting; it is not a learned
+answer-quality or availability judge and does not claim to reproduce the
+learning systems in the cited work.
 
 Virtual-model passthrough requests use that same provider-diverse pool for
 tools, structured output, and Responses payloads. Each candidate receives one
 attempt: RFC 9110 section 9.2.2 does not permit blind automatic replay of a
-non-idempotent request, so ambiguous timeout and connection outcomes fail
-closed. A rejected 429/5xx, stale 404/410 candidate, or temporary pre-request
-DNS failure can advance without changing an explicitly requested concrete model.
+non-idempotent request, so an ambiguous timeout or connection outcome is
+always recorded as a failure of that candidate. Whether the *request* may
+then move on depends on who chose the candidate. An explicit concrete model
+was pinned by the caller, so there is nothing safe to substitute it with and
+the request still fails closed without replay. A virtual selector
+(none/`AUTO_MODEL`/`FREE_MODEL`/gateway default) means the caller delegated
+candidate selection to the gateway, so the gateway also owns failover across
+that ambiguous attempt and advances to the next ranked, provider-diverse
+candidate instead of failing the whole request over one candidate's timeout
+(PR #1166, fixing a regression where three ready free-pool candidates went
+uncalled after one timeout; see `#1045` for why the candidate itself is
+still never replayed). A rejected 429/5xx, stale 404/410 candidate, or
+temporary pre-request DNS failure can advance the same way without changing
+an explicitly requested concrete model.
 
 ## PR #1004 mixed-failure classification follow-up
 
@@ -133,7 +150,8 @@ pass. The full run at `2582176d` was explicitly interrupted after this finding
 | --- | --- | --- |
 | Reject malformed, negative, or non-finite price rows | A cost-aware router must not treat missing or invalid evidence as zero cost. | Discovery and persisted-price tests reject the row before selection. |
 | Keep unknown-price candidates only as an explicit fallback | Cost optimization must remain honest when price evidence is incomplete. | Selection tests never rank an unknown price above a valid priced candidate. |
-| Prefer distinct providers in the bootstrap pool | A gateway needs an upstream failover set rather than several aliases for one provider. | Provider-diversity tests assert the configured pool spans available providers. |
+| Propose distinct providers without treating labels as utility | A gateway may benefit from independently failing upstreams, but provider names alone do not quantify that benefit. | Discovery-selector tests reject a more-expensive diversity proposal until an explicit decision model supplies the missing evidence. |
+| Reject an evidence-tied capacity cutoff | Lexical provider/model identity is deterministic ordering metadata, not price, quality, or availability evidence. | Both selectors raise when a selected and excluded candidate share the same comparable-cost/unknown state. |
 | Fail over virtual-model passthrough once per provider | Preserve raw provider features without retry amplification; concrete model selection remains a caller contract. | Passthrough tests cover 404, 410, 429, 503, wrapped failures, caller errors, and exhaustion. |
 | Leave quality judgment to evaluation/review policy | Routing signals and answer-quality judgment have different failure modes. | Existing model-judge and fail-closed routing tests remain the quality boundary. |
 
@@ -143,6 +161,17 @@ stack base under `docs/papers/` (`routellm-routing-2406.18665.pdf`,
 `frugalgpt-cost-2305.05176.pdf`). This doctoring record makes their relevance
 to the exact discovery selector explicit instead of treating inherited files
 as incidental documentation.
+
+## Consumer migration boundary
+
+`provider_bootstrap.select_model_group_diverse_models` and
+`model_discovery.select_bootstrap_discovered_agents` may propose exact
+model-group/provider spread, but neither may let that proposal change the
+price-evidenced candidate sequence without an explicit decision model. Consumers
+that require provider-level redundancy must supply that released allocation
+contract at the approved owner boundary. Neither selector may break an
+equal/incomplete evidence tie or displace lower-cost evidence by provider or
+model name.
 
 ## APA 7 references
 

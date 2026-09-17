@@ -74,6 +74,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 HTTP serving is hardened for local lab use:
 
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one local token. Explicit `--auth-token`/split-token values are local-development escape hatches; `--production` and `--allow-public-bind` reject single-token mode and insecure admin-session cookies, and the CLI never reads auth secrets from environment variables.
+- The `trace` purpose (orchestration-trace-bearing responses, ADR 0026) is authorized separately: in single-token mode `--auth-token` still covers it as a local escape hatch, but in split admin/inference mode neither the admin nor the inference token authorizes `trace` — configure `--trace-token`/`--trace-token-key` (KV name `CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN` by default), or trace responses fail closed with `401`.
 - A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
 - Binding to a non-loopback address requires `--allow-public-bind`; loopback
   addresses and `localhost` remain available for local development.
@@ -154,7 +155,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** �
 One public interface:
 
 - `contextual-orchestrator` is the model-like control-plane candidate exposed to callers. `/v1/models` lists it first, followed by every configured worker candidate, including disabled candidates with their status.
-- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a usage-only chunk after the terminal stop chunk. Valid provider counts carry `usage_source: reported` and `usage_measurement_status: measured`; missing or malformed counts carry `usage: null` and `usage_measurement_status: unavailable`. Single-agent `tools` passthrough follows the same rule and never reconstructs tool or multimodal framing. `response_format`-only structured passthrough (conduct mode) still rejects the combination before provider execution when workflow-level usage is unavailable. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
+- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a usage-only chunk after the terminal stop chunk. Valid provider counts carry `usage_source: reported` and `usage_measurement_status: measured`; missing or malformed counts carry `usage: null` and `usage_measurement_status: unavailable`. Single-agent `tools` passthrough follows the same rule and never reconstructs tool or multimodal framing. `response_format`-only structured passthrough (conduct mode) is accepted the same way; its usage comes from a multi-step workflow's cost ledger, so the terminal usage-only chunk is emitted only when every contributing ledger row is measured — otherwise the answer still streams to completion without exposing estimated workflow usage. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline — per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
@@ -290,8 +291,9 @@ is read from a **KV config store**, never `os.getenv`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe that returns
   only service identity and process status; it never discloses worker topology,
   backend names, usage volume, or upstream readiness. Admins can use
-  `GET /api/v1/provider_readiness/latest?refresh=true` for one bounded,
-  non-retrying chat probe per enabled worker.
+  `GET /api/v1/provider_readiness/latest?refresh=true` for one explicitly
+  cancellable, non-retrying chat probe per enabled worker. Concurrent refreshes
+  return `refresh_in_progress` instead of blocking behind a slow provider.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN
   and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,
@@ -401,8 +403,10 @@ python tests/test_discovery_bootstrap_selection.py
 python tests/test_chat_capability.py
 python tests/test_review_gateway.py
 python tests/test_provider_bootstrap.py
+python tests/test_provider_bootstrap_report_identity.py
 python tests/test_provider_bootstrap_secret_normalization.py
 python tests/test_provider_catalog_bootstrap.py
+python tests/test_provider_catalog_bootstrap_report_identity.py
 python tests/test_provider_catalog_credential_promotion.py
 python tests/test_provider_catalog_store.py
 python tests/test_tool_execution_fallback.py

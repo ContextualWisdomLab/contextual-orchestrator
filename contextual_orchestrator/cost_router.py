@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import asdict, replace
 from threading import Lock
 from typing import Any, Dict, List, Optional
+from .decision_receipts import record_initial_selection
 
 from .batch_routing import (
     BatchBackend,
@@ -37,6 +39,7 @@ from .batch_routing import (
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
     ProviderEmbeddingBatchBackend,
+    PgLlmBatchBackend,
     RoutingHints,
     RoutingPolicy,
 )
@@ -62,6 +65,12 @@ _DEFAULT_EMBEDDING_MAX_INPUTS_PER_REQUEST = 1
 _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS = 30.0
 _BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
+# The durable provider-embedding claim lease is an internal locking/heartbeat
+# interval (how long one worker holds a job claim before it must renew), not
+# a caller-facing request deadline. It must stay a fixed, positive default
+# independent of ``ModelClient.timeout`` -- deriving it from that (optional,
+# now ``None``-by-default) client timeout meant a durable job registry raised
+# at coordinator construction whenever the caller opted into "no deadline".
 
 
 class BatchModelSelectionError(RuntimeError):
@@ -259,32 +268,60 @@ class CostRoutingCoordinator:
             if first.agent_id is not None
             else self.orchestrator.select_capability_agent("embedding", first.model)
         )
+        # ``first.agent_id`` may be a route pinned at submission time under
+        # an active ``zdr_only`` policy (see ``_resolve_embedding_target``)
+        # and later replayed by ``ProviderEmbeddingBatchBackend`` after a
+        # process restart recovers a durably queued job -- an arbitrarily
+        # long gap during which an operator could have removed the agent's
+        # ZDR tag or repointed it to a non-ZDR route. Re-validate the
+        # request's own recorded privacy scope against the agent's *current*
+        # tags here, at the point of execution, rather than trusting the
+        # pinned id blindly; the ambient ``request_policy`` contextvar used
+        # at submission time is not (and cannot be) in effect on this
+        # worker thread.
+        if first.zdr_only and "privacy:zdr" not in agent.tags:
+            raise RuntimeError(
+                f"embedding agent {agent.id!r} no longer satisfies zdr_only; "
+                "refusing to execute a recovered privacy-scoped batch"
+            )
         if any(
-            request.model != first.model or request.agent_id != first.agent_id
+            request.model != first.model
+            or request.agent_id != first.agent_id
+            or request.zdr_only != first.zdr_only
             for request in requests
         ):
-            raise RuntimeError("provider embedding batch must retain one selected route")
+            raise RuntimeError(
+                "provider embedding batch must retain one selected route and privacy policy"
+            )
         max_tokens, _max_chars, max_inputs = self._embedding_request_limits()
         vectors: List[List[float]] = []
         prompt_tokens = 0
         shard: List[EmbeddingBatchRequest] = []
         shard_tokens = 0
-        for request in requests:
-            request_tokens = request.token_count or len(request.input_text.encode("utf-8"))
-            if shard and (
-                len(shard) >= max_inputs or shard_tokens + request_tokens > max_tokens
-            ):
+        # Re-establish the ambient ``request_policy`` scope for the actual
+        # client call(s) below. It is not in effect on this worker thread
+        # (see the recovery comment above) but the client's OpenRouter ZDR
+        # pin (``_pin_openrouter_zdr``) reads it, not ``first.zdr_only``
+        # directly -- without this, a recovered ``zdr_only`` batch's request
+        # would silently omit ``provider.zdr`` even though the tag check
+        # above already re-validated the route.
+        with self.orchestrator.request_policy(first.zdr_only):
+            for request in requests:
+                request_tokens = request.token_count or len(request.input_text.encode("utf-8"))
+                if shard and (
+                    len(shard) >= max_inputs or shard_tokens + request_tokens > max_tokens
+                ):
+                    shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
+                    vectors.extend(shard_vectors)
+                    prompt_tokens += shard_usage
+                    shard = []
+                    shard_tokens = 0
+                shard.append(request)
+                shard_tokens += request_tokens
+            if shard:
                 shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
                 vectors.extend(shard_vectors)
                 prompt_tokens += shard_usage
-                shard = []
-                shard_tokens = 0
-            shard.append(request)
-            shard_tokens += request_tokens
-        if shard:
-            shard_vectors, shard_usage = self._run_embedding_shard(agent, shard)
-            vectors.extend(shard_vectors)
-            prompt_tokens += shard_usage
         return vectors, prompt_tokens
 
     def _refresh_embedding_backend(self) -> None:
@@ -487,6 +524,10 @@ class CostRoutingCoordinator:
             context["pending_usage"].append((endpoint_id, value))
             return
         usage = self._race_result_usage(value)
+        counts = self._provider_usage(usage)
+        if counts is None:
+            context["race_usage_complete"] = False
+            return
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
             None,
@@ -608,6 +649,7 @@ class CostRoutingCoordinator:
                 "workflow_ready": workflow_run_id is not None,
                 "records": [],
                 "pending_usage": [],
+                "race_usage_complete": True,
             }
             race_token = self._race_usage_context.set(race_context)
             try:
@@ -706,8 +748,29 @@ class CostRoutingCoordinator:
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
                 "price_known": price_known,
-                "measurement_status": aggregate_measurement_status,
+                "measurement_status": (
+                    "estimated"
+                    if not race_context["race_usage_complete"]
+                    or any(record.measurement_status == "estimated" for record in records)
+                    else aggregate_measurement_status
+                ),
             }
+            if race_context["race_usage_complete"] and all(
+                record.measurement_status == "measured" for record in records
+            ):
+                race_ids = {record.usage_record_id for record in race_records}
+                client_records = [
+                    record for record in records if record.usage_record_id not in race_ids
+                ]
+                provider_response["usage"] = {
+                    "prompt_tokens": sum(record.prompt_tokens for record in client_records),
+                    "completion_tokens": sum(
+                        record.completion_tokens for record in client_records
+                    ),
+                    "total_tokens": sum(record.total_tokens for record in client_records),
+                }
+            else:
+                provider_response.pop("usage", None)
             if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
                 provider_response["cost"]["currency_components"] = [
                     {
@@ -742,6 +805,7 @@ class CostRoutingCoordinator:
             "workflow_ready": workflow_run_id is not None,
             "records": [],
             "pending_usage": [],
+            "race_usage_complete": True,
         }
         race_token = self._race_usage_context.set(race_context)
         try:
@@ -819,7 +883,7 @@ class CostRoutingCoordinator:
         client_usage_records = [
             item for item in records if item.usage_record_id not in race_record_ids
         ]
-        client_measurement_available = all(
+        client_measurement_available = race_context["race_usage_complete"] and all(
             item.measurement_status == "measured" for item in client_usage_records
         )
         result["usage"] = (
@@ -850,7 +914,12 @@ class CostRoutingCoordinator:
             ),
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
             "price_known": price_known,
-            "measurement_status": aggregate_measurement_status,
+            "measurement_status": (
+                "estimated"
+                if not race_context["race_usage_complete"]
+                or any(item.measurement_status == "estimated" for item in records)
+                else aggregate_measurement_status
+            ),
         }
         if len(currencies) > 1 and aggregate_measurement_status != "unavailable" and price_known:
             result["cost"]["currency_components"] = [
@@ -983,6 +1052,7 @@ class CostRoutingCoordinator:
         requests: List[BatchRequest],
         metadata: Optional[Dict[str, Any]] = None,
         owner_id: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a batch, resolve its targets, and bind its authenticated owner."""
         try:
@@ -1006,7 +1076,36 @@ class CostRoutingCoordinator:
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         job.owner_id = owner_id
         job.prompt_token_estimates = prompt_token_estimates
-        self._batch_jobs[job.job_id] = job
+        if request_id is not None and self.orchestrator._store is not None:
+            try:
+                # One append-only submission envelope commits all item links
+                # together. A later retrieval never rewrites this origin.
+                self.orchestrator._store.save("batch_request_link", job.job_id, {
+                    "request_id": request_id,
+                    "batch_job_id": job.job_id,
+                    "custom_ids": [request.custom_id for request in prepared_requests],
+                    "owner_id": owner_id,
+                    "recovery_descriptor": ({
+                        "job": asdict(job),
+                        "expires_at": job.submitted_at + self._job_registry.retention_seconds,
+                        "backend": self.batch_backend.recovery_descriptor(prepared_requests),
+                    } if isinstance(self.batch_backend, PgLlmBatchBackend) else None),
+                }, durable=True)
+            except Exception:
+                # The upstream submission already happened. Preserve its handle
+                # and report incomplete lineage instead of inviting a resubmit.
+                job.request_link_status = "write_failed"
+            else:
+                job.request_link_status = "durable"
+                if isinstance(self.batch_backend, PgLlmBatchBackend) and self.batch_backend.recovery_enabled:
+                    job.recovery_status = "durable_descriptor"
+        job.registry_persistence_status = "stored"
+        try:
+            self._batch_jobs[job.job_id] = job
+        except Exception:
+            # Submission already applied remotely; an HSET/expiry failure may
+            # itself be partially applied. Return the handle without replay.
+            job.registry_persistence_status = "write_failed"
         return job
 
     def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
@@ -1057,7 +1156,7 @@ class CostRoutingCoordinator:
             not self._batch_item_usage_valid(item)
             and item.custom_id not in prompt_token_estimates
             for item in items
-        )
+        ) and job.recovered_request_metadata is None
         request_by_custom_id = (
             self._legacy_batch_requests(job) if needs_legacy_lookup else {}
         )
@@ -1304,7 +1403,53 @@ class CostRoutingCoordinator:
         return provider, item.model
 
     def _require_job(self, job_id: str, *, owner_id: Optional[str] = None) -> BatchJob:
-        job = self._batch_jobs.get(job_id)
+        try:
+            job = self._batch_jobs.get(job_id)
+        except Exception:
+            job = None
+        if job is not None and job.owner_id != owner_id:
+            raise KeyError(f"batch job {job_id!r} not found")
+        if job is not None and isinstance(self.batch_backend, PgLlmBatchBackend):
+            if self.batch_backend.has_job_metadata(job):
+                return job
+            # Missing or differently bound metadata cannot use the ordinary
+            # retrieval path; only a validated durable descriptor may recover.
+            job = None
+        if (owner_id is not None and self.orchestrator._store is not None
+                and (job is None or (isinstance(self.batch_backend, PgLlmBatchBackend)
+                                     and self.batch_backend.recovery_enabled))):
+            record = self.orchestrator._store.load_latest_key("batch_request_link", job_id)
+            if (isinstance(record, dict) and record.get("owner_id") == owner_id
+                    and record.get("batch_job_id") == job_id
+                    and isinstance(self.batch_backend, PgLlmBatchBackend)):
+                descriptor = record.get("recovery_descriptor")
+                try:
+                    if not isinstance(descriptor, dict) or type(descriptor.get("expires_at")) is not int:
+                        raise ValueError("invalid descriptor")
+                    if descriptor["expires_at"] <= time.time():
+                        raise ValueError("expired descriptor")
+                    recovered = BatchJob(**descriptor["job"])
+                    if recovered.job_id != job_id or recovered.owner_id != owner_id or recovered.backend != self.batch_backend.name:
+                        raise ValueError("mismatched descriptor")
+                    custom_ids = record.get("custom_ids")
+                    if (type(recovered.request_count) is not int or recovered.request_count < 1
+                            or not isinstance(custom_ids, list)
+                            or any(not isinstance(item, str) or not item for item in custom_ids)
+                            or len(custom_ids) != recovered.request_count
+                            or len(set(custom_ids)) != recovered.request_count):
+                        raise ValueError("invalid recovery item identities")
+                    estimates = recovered.prompt_token_estimates
+                    if (not isinstance(estimates, dict) or not set(estimates).issubset(custom_ids)
+                            or any(type(value) is not int or value < 0 for value in estimates.values())):
+                        raise ValueError("invalid recovery estimates")
+                    self.batch_backend.restore_descriptor(recovered, descriptor["backend"])
+                    if set(recovered.recovered_request_metadata) != set(custom_ids):
+                        raise ValueError("mismatched recovery items")
+                    recovered.request_link_status = "durable"
+                    recovered.recovery_status = "durable_descriptor"
+                    job = recovered
+                except (KeyError, TypeError, ValueError):
+                    job = None
         if job is None or job.owner_id != owner_id:
             raise KeyError(f"batch job {job_id!r} not found")
         return job
@@ -1335,7 +1480,12 @@ class CostRoutingCoordinator:
         if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
             raise TypeError("agent_id must be a non-empty string when provided")
         self._refresh_embedding_backend()
-        resolved_model, resolved_agent_id = self._resolve_embedding_target(model, zdr_only, agent_id)
+        resolved_model, resolved_agent_id, resolved_provider = self._resolve_embedding_target(
+            model, zdr_only, agent_id
+        )
+        provider_routing = (
+            {"zdr": True} if zdr_only and resolved_provider == "openrouter" else None
+        )
         backend = self._embedding_backend_for_route(resolved_model, resolved_agent_id)
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
@@ -1344,12 +1494,15 @@ class CostRoutingCoordinator:
             attribution=shared_attribution,
             zdr_only=zdr_only,
             agent_id=resolved_agent_id,
+            provider_routing=provider_routing,
         )
         reserve = getattr(backend, "reserve", None)
         start = getattr(backend, "start", None)
         if callable(reserve) and callable(start):
             job = reserve(requests, metadata=metadata)
         else:
+            if resolved_agent_id is not None:
+                record_initial_selection([resolved_agent_id], "embedding_submission")
             job = backend.submit(requests, metadata=metadata)
         self._embedding_models[job.job_id] = resolved_model
         self._embedding_owners[job.job_id] = owner_id
@@ -1359,12 +1512,14 @@ class CostRoutingCoordinator:
         self._embedding_part_limits[job.job_id] = part_limits
         self._embedding_jobs[job.job_id] = job
         if callable(reserve) and callable(start):
+            if resolved_agent_id is not None:
+                record_initial_selection([resolved_agent_id], "embedding_submission")
             start(job)
         return job
 
     def _resolve_embedding_target(
         self, model: str, zdr_only: bool, agent_id: Optional[str]
-    ) -> tuple[str, Optional[str]]:
+    ) -> tuple[str, Optional[str], Optional[str]]:
         """Resolve one embedding member without losing a caller's member choice.
 
         An explicit caller-supplied ``agent_id`` always wins, and an explicit
@@ -1391,16 +1546,16 @@ class CostRoutingCoordinator:
             and not zdr_only
             and not unspecified_model
         ):
-            return model, None
+            return model, None, None
         selection_model = None if unspecified_model else model
         with self.orchestrator.request_policy(zdr_only):
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
             chosen = self._cheapest_capability_candidate(candidates)
-            return chosen.model, chosen.id
+            return chosen.model, chosen.id, _resolved_provider_name(chosen)
         for candidate in candidates:
             if candidate.id == agent_id:
-                return candidate.model, candidate.id
+                return candidate.model, candidate.id, _resolved_provider_name(candidate)
         raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
 
     def _build_embedding_requests(
@@ -1411,6 +1566,7 @@ class CostRoutingCoordinator:
         attribution: Dict[str, Any],
         zdr_only: bool,
         agent_id: Optional[str],
+        provider_routing: Optional[Dict[str, Any]],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars, max_inputs = self._embedding_request_limits()
@@ -1435,6 +1591,7 @@ class CostRoutingCoordinator:
                         token_count=token_count,
                         zdr_only=zdr_only,
                         agent_id=agent_id,
+                        provider_routing=provider_routing,
                     )
                 )
         return requests, part_counts, {
@@ -1915,6 +2072,31 @@ def _provider_from_base_url(base_url: str) -> str:
     except Exception:
         return ""
     return host
+
+
+def _resolved_provider_name(agent: Any) -> str:
+    """Return a canonical provider name for one selected agent snapshot.
+
+    ``base_url`` is what actually decides an outbound HTTP destination;
+    ``provider_name`` is a free-text label unvalidated at ``ModelAgent``
+    construction, so it can be empty *or* nonempty-but-wrong (a typo, a
+    stale copy-paste). Trusting a nonempty ``provider_name`` unconditionally
+    — the previous ``agent.provider_name or ...`` short-circuit — let an
+    agent whose ``base_url`` is OpenRouter's own endpoint report a different
+    provider identity, which made ``submit_embeddings_batch``'s ZDR pin
+    (``provider_routing = {"zdr": True} if resolved_provider == "openrouter"
+    ...``) silently skip OpenRouter requests under an active ``zdr_only``
+    scope. The exact destination hostname is checked first and is
+    authoritative whenever it is OpenRouter's, mirroring
+    ``orchestrator._resolved_openrouter_provider`` so both ZDR-pin choke
+    points (the embedding-batch path here and the chat/streaming/raw/batch
+    JSONL path there) share one normalization rule (CodeRabbit review on
+    #953, discussion_r3898471887 / discussion_r3898659143).
+    """
+    host = _provider_from_base_url(agent.base_url)
+    if host == "openrouter.ai":
+        return "openrouter"
+    return agent.provider_name or host
 
 
 def _positive_int(value: Any, default: int) -> int:

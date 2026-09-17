@@ -25,6 +25,7 @@ from contextual_orchestrator.orchestrator import (
     ModelClient,
     ProviderRequestTooLargeError,
     _is_ambiguous_passthrough_transport_failure,
+    _is_request_too_large_error,
     _structured_output_error,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
@@ -744,9 +745,14 @@ def test_auto_virtual_model_fails_over_across_model_groups() -> None:
 
 def test_free_virtual_model_never_fails_over_to_a_paid_agent() -> None:
     """The free selector exhausts only explicitly zero-cost providers."""
+    # 500 here (not 429): this test is about the free/paid selection
+    # boundary, not rate-limiting -- a bare 429 with no Retry-After now
+    # assumes a short quota cooldown and waits/retries the single free
+    # candidate, which would make this test slow and flaky on call count
+    # instead of exercising the boundary it actually tests.
     client = SequencedProxyClient(
         {
-            "free_agent": _http_error(429),
+            "free_agent": _http_error(500),
             "paid_agent": {"model": "paid-model"},
         }
     )
@@ -881,6 +887,153 @@ def test_virtual_passthrough_fails_over_on_single_tool_call_limit() -> None:
         "primary_agent",
         "fallback_agent",
     ]
+
+
+def _free_pool_with_tool_call_evidence(
+    client: SequencedProxyClient, primary_tags: tuple[str, ...]
+) -> TaskOrchestrator:
+    """Build a free pool whose primary agent carries the given discovery evidence."""
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(
+            agent,
+            tags=(
+                *agent.tags,
+                "cost:free",
+                *(primary_tags if agent.id == "primary_agent" else ("tool_call:multi",)),
+            ),
+        )
+        for agent in orchestrator.agents
+    ]
+    return orchestrator
+
+
+def _two_tool_request(**extra: Any) -> dict[str, Any]:
+    """Return the request shape the discovery probe proved a single-call model rejects."""
+    return {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": [{"role": "user", "content": "use two tools at once"}],
+        "tools": [
+            {"type": "function", "function": {"name": "inspect", "description": "x"}},
+            {"type": "function", "function": {"name": "scan", "description": "y"}},
+        ],
+        **extra,
+    }
+
+
+def _one_tool_request(**extra: Any) -> dict[str, Any]:
+    """Return a single-tool request no provider evidence shows to be rejected."""
+    return {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": [{"role": "user", "content": "use one tool"}],
+        "tools": [
+            {"type": "function", "function": {"name": "inspect", "description": "x"}},
+        ],
+        **extra,
+    }
+
+
+def test_free_pool_skips_single_tool_call_agent_for_multi_tool_request() -> None:
+    """Positive single-call evidence removes an agent before the request is sent.
+
+    Issue #940: discovery already records ``tool_call:single`` when a provider
+    rejected the probe's two-tool ``parallel_tool_calls: true`` request, and
+    the passthrough path already fails over on that 400. Selection must use
+    the same evidence so the doomed provider round-trip never happens.
+    """
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+
+    result = orchestrator.proxy_completion(_two_tool_request())
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+
+
+def test_free_pool_skips_single_tool_call_agent_when_parallel_calls_requested() -> None:
+    """An explicit ``parallel_tool_calls: true`` needs multi-call capability even with one tool."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+
+    result = orchestrator.proxy_completion(_one_tool_request(parallel_tool_calls=True))
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _one_tool_request(),
+        _two_tool_request(parallel_tool_calls=False),
+    ],
+    ids=["single_tool_without_flag", "parallel_calls_disabled"],
+)
+def test_free_pool_keeps_single_tool_call_agent_for_single_call_shapes(
+    body: dict[str, Any],
+) -> None:
+    """Shapes no provider evidence rejects keep the single-call agent eligible."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+@pytest.mark.parametrize("tools", [None, []], ids=["no_tools_key", "empty_tools"])
+def test_free_pool_keeps_single_tool_call_agent_for_requests_without_tools(tools) -> None:
+    """A request that carries no tools never triggers the single-call exclusion."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ("tool_call:single",))
+    body = {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": [{"role": "user", "content": "plain text"}],
+    }
+    if tools is not None:
+        body["tools"] = tools
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_free_pool_keeps_agent_without_tool_call_evidence() -> None:
+    """Absent evidence never excludes: ADR-0035 capability tags are positive declarations."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _free_pool_with_tool_call_evidence(client, ())
+
+    result = orchestrator.proxy_completion(_two_tool_request())
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 @pytest.mark.parametrize(
@@ -1187,8 +1340,13 @@ def test_suppressed_transient_context_does_not_authorize_failover() -> None:
 def test_all_candidates_chain_the_last_failure() -> None:
     """Exhaustion reports one stable gateway error with the final provider cause."""
     final = _http_error(503)
+    # 500 here (not 429): this test is about which classified failure
+    # survives exhaustion, not rate-limiting -- a bare 429 with no
+    # Retry-After now assumes a short quota cooldown and waits, which would
+    # route this candidate's identity through the rate-limit-storm path
+    # instead of the plain exhaustion path this test actually exercises.
     orchestrator = _build(
-        SequencedProxyClient({"primary_agent": _http_error(429), "fallback_agent": final})
+        SequencedProxyClient({"primary_agent": _http_error(500), "fallback_agent": final})
     )
 
     with pytest.raises(ProviderUpstreamError) as caught:
@@ -1300,8 +1458,8 @@ def test_only_temporary_dns_failures_advance(
 
 
 @pytest.mark.parametrize("error_type", [TimeoutError, ConnectionError])
-def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
-    """Unknown transport outcomes remain terminal and expose no raw diagnostics."""
+def test_ambiguous_timeout_on_explicit_model_is_not_replayed(error_type) -> None:
+    """An explicit concrete model still fails closed after exactly one call."""
     failure = error_type("provider outcome unknown token=private_test_value")
     client = SequencedProxyClient(
         {
@@ -1313,7 +1471,10 @@ def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
 
     with pytest.raises(ProviderUpstreamError) as raised:
         orchestrator.proxy_completion(
-            {"messages": [{"role": "user", "content": "x"}]}
+            {
+                "model": "primary-model",
+                "messages": [{"role": "user", "content": "x"}],
+            }
         )
 
     assert raised.value.error_code == "provider_outcome_unknown"
@@ -1324,6 +1485,109 @@ def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
     assert "private_test_value" not in str(raised.value)
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
     assert "primary_agent" in orchestrator._circuit
+
+
+@pytest.mark.parametrize(
+    "model",
+    [None, TaskOrchestrator.AUTO_MODEL],
+    ids=["default_model", "auto_model"],
+)
+def test_ambiguous_timeout_on_virtual_selector_advances_to_next_candidate(
+    model: str | None,
+) -> None:
+    """A virtual selector may advance past one candidate's ambiguous timeout."""
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    body: dict[str, Any] = {"messages": [{"role": "user", "content": "x"}]}
+    if model is not None:
+        body["model"] = model
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    assert "primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_free_model_advances_to_next_free_candidate() -> None:
+    """``FREE_MODEL`` advances past an ambiguous timeout with admitted free candidates."""
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "free_primary_agent": failure,
+            "free_fallback_agent": {"model": "free-fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary_agent",
+                "free-primary-model",
+                priority=10,
+                provider_name="free_primary",
+                tags=("cost:free",),
+            ),
+            ModelAgent(
+                "free_fallback_agent",
+                "free-fallback-model",
+                priority=1,
+                provider_name="free_fallback",
+                tags=("cost:free",),
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "x"}],
+        }
+    )
+
+    assert result["model"] == "free-fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "free_primary_agent",
+        "free_fallback_agent",
+    ]
+    assert "free_primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_virtual_selector_exhausts_to_classified_502() -> None:
+    """When every virtual-selector candidate times out, the request still fails classified 502."""
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": TimeoutError("provider outcome unknown"),
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+
+    assert caught.value.client_status == 502
+    assert caught.value.error_code == "provider_connection_error"
+    assert caught.value.retryable is True
+    assert caught.value.transport == "passthrough"
+    assert caught.value.agent_id == "fallback_agent"
+    assert caught.value.__cause__ is None
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    assert "primary_agent" in orchestrator._circuit
+    assert "fallback_agent" in orchestrator._circuit
 
 
 @pytest.mark.parametrize("wrapper_type", [RuntimeError, TimeoutError])
@@ -1357,7 +1621,7 @@ def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send
 
     def raw_send(agent, *args, **kwargs):
         sent.append(agent.id)
-        if after_send:
+        if after_send and agent.id == "primary_agent":
             raise TimeoutError("response not received after transport invocation")
         return {"model": agent.model, "choices": []}
 
@@ -1365,11 +1629,12 @@ def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send
     slot = nullcontext() if after_send else _local_provider_slot(router.agents[0], 1, None)
     with slot:
         if after_send:
-            with pytest.raises(ProviderUpstreamError) as raised:
-                router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
-            assert raised.value.error_code == "provider_outcome_unknown"
-            assert raised.value.retryable is False
-            assert sent == ["primary_agent"]
+            # Virtual selector owns failover across an ambiguous post-send
+            # timeout (#1166/#1176); the failed candidate is still recorded.
+            result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert result["model"] == "fallback-model"
+            assert sent == ["primary_agent", "fallback_agent"]
+            assert "primary_agent" in router._circuit
         else:
             result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
             assert result["model"] == "fallback-model"
@@ -1675,7 +1940,7 @@ def _wrapped_url_error(cause: OSError) -> urllib.error.URLError:
     ids=["read-timeout", "reset", "incomplete-read", "remote-disconnected", "connect-timeout"],
 )
 def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseException) -> None:
-    """Every ambiguous transport failure fails closed the same way: classified, recorded, not replayed."""
+    """Explicit-model ambiguous failures fail closed: classified, recorded, not replayed."""
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
@@ -1687,7 +1952,7 @@ def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseExc
     with pytest.raises(ProviderUpstreamError) as caught:
         orchestrator.proxy_completion(
             {
-                "model": "contextual-orchestrator",
+                "model": "primary-model",
                 "messages": [{"role": "user", "content": "use the tool"}],
                 "tools": [{"type": "function", "function": {"name": "inspect"}}],
             }
@@ -1724,11 +1989,14 @@ def test_ambiguous_transport_failure_is_observed_by_the_group_router() -> None:
         replace(agent, group_name="provider-group") for agent in orchestrator.agents
     ]
 
-    with pytest.raises(ProviderUpstreamError):
-        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+    result = orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
+    assert result["model"] == "fallback-model"
     assert orchestrator._group_router.member_observation_count("primary_agent") == 1
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
 
 
 def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:
@@ -2251,3 +2519,227 @@ def test_route_once_explicit_model_carries_no_tool_loop_evidence() -> None:
     assert called[0] == "fallback_agent"
     assert virtual["tool_loop_route"] == "emitting_agent"
     assert virtual["tool_loop_agent_id"] == "fallback_agent"
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (
+            400,
+            {"error": {"code": "context_length_exceeded", "message": "nope"}},
+            True,
+        ),
+        (
+            400,
+            {
+                "error": {
+                    "message": (
+                        "This model's maximum context length is 8192 tokens. "
+                        "However, you requested 9001 tokens ..."
+                    )
+                }
+            },
+            True,
+        ),
+        (
+            400,
+            {"error": "context length 8192 exceeded: 9001 tokens requested"},
+            True,
+        ),
+        (
+            400,
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long: 9001 tokens > 8192 maximum",
+                }
+            },
+            True,
+        ),
+        (
+            400,
+            {"error": {"type": "invalid_request_error", "message": "missing required field 'model'"}},
+            False,
+        ),
+        (
+            500,
+            {
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "This model's maximum context length is 8192 tokens.",
+                }
+            },
+            False,
+        ),
+    ],
+    ids=[
+        "openai_structured_code",
+        "maximum_context_length_message",
+        "context_length_and_tokens_string_body",
+        "anthropic_prompt_too_long",
+        "generic_400_unrelated_message",
+        "same_message_wrong_status",
+    ],
+)
+def test_is_request_too_large_error_recognizes_context_length_exceeded(
+    status: int, body: dict[str, Any], expected: bool
+) -> None:
+    """Context-window overflow is a request-size rejection like 413, only at status 400."""
+    assert _is_request_too_large_error(_http_error(status, body)) is expected
+
+
+def test_context_length_exceeded_fails_over_without_penalizing_provider_health() -> None:
+    """A context-window overflow fails over to the next agent and is health-neutral.
+
+    Mirrors ``test_explicit_grouped_model_413_does_not_degrade_provider_health``:
+    consumers (noema, opencode) must not see this as a hard 400, and the
+    rejecting agent's stability record must not be debited for a prompt that
+    simply did not fit its context window.
+    """
+    failure = _http_error(
+        400,
+        {
+            "error": {
+                "code": "context_length_exceeded",
+                "message": (
+                    "This model's maximum context length is 8192 tokens. "
+                    "However, you requested 9001 tokens ..."
+                ),
+            }
+        },
+    )
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+
+    result = orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.AUTO_MODEL, "messages": [{"role": "user", "content": "x" * 40000}]}
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+    assert orchestrator._circuit.get("primary_agent") in (None, {"failures": 0.0, "opened_at": 0.0})
+
+
+def _context_window_body(char_count: int, *, model: str = "contextual-orchestrator") -> dict[str, Any]:
+    """Build a virtual-selector chat body whose prompt is ``char_count`` characters."""
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": ("ab " * (char_count // 3 + 1))[:char_count]}],
+    }
+
+
+def test_context_window_filter_skips_too_small_known_window_and_serves_next() -> None:
+    """A provably-too-small known context window is skipped; the next candidate serves."""
+    client = SequencedProxyClient(
+        {
+            "small_window_agent": {"model": "small-window-model"},
+            "unknown_window_agent": {"model": "unknown-window-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "small_window_agent",
+                "small-window-model",
+                priority=10,
+                provider_name="small",
+                context_window=1000,
+            ),
+            ModelAgent(
+                "unknown_window_agent",
+                "unknown-window-model",
+                priority=1,
+                provider_name="unknown",
+                context_window=None,
+            ),
+        ],
+        client=client,
+    )
+
+    # 8000 chars -> lower-bound estimate of 8000 // 7 == 1142 tokens, provably
+    # larger than small_window_agent's 1000-token known window.
+    result = orchestrator.proxy_completion(_context_window_body(8000))
+
+    assert result["model"] == "unknown-window-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["unknown_window_agent"]
+    evidence = result["orchestration"]
+    assert evidence["context_window_excluded"] == ["small_window_agent"]
+    assert evidence["prompt_token_lower_bound"] >= 1001
+    assert evidence["prompt_token_bound_source"] in ("exact", "estimate_lower_bound")
+
+
+def test_context_window_filter_never_excludes_an_unknown_window() -> None:
+    """A candidate with ``context_window=None`` is never excluded, however large the prompt."""
+    client = SequencedProxyClient({"unknown_window_agent": {"model": "unknown-window-model"}})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "unknown_window_agent",
+                "unknown-window-model",
+                provider_name="unknown",
+                context_window=None,
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(_context_window_body(50_000))
+
+    assert result["model"] == "unknown-window-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["unknown_window_agent"]
+    # Nothing was excluded, so no orchestration evidence is attached -- the
+    # plain passthrough shape is unchanged (mirrors other evidence fields
+    # like served_agent_id/failover_from that are only present when notable).
+    assert "orchestration" not in result
+
+
+def test_context_window_filter_raises_request_too_large_when_every_window_is_too_small() -> None:
+    """Every known window too small raises the honest 413 request-too-large contract."""
+    client = SequencedProxyClient({})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "first_agent", "first-model", priority=10, provider_name="first", context_window=500,
+            ),
+            ModelAgent(
+                "second_agent", "second-model", priority=1, provider_name="second", context_window=200,
+            ),
+        ],
+        client=client,
+    )
+
+    with pytest.raises(ProviderRequestTooLargeError) as caught:
+        orchestrator.proxy_completion(_context_window_body(8000))
+
+    message = str(caught.value)
+    assert "200" in message  # smallest known window
+    assert not client.calls
+
+
+def test_context_window_filter_does_not_apply_to_an_explicit_model_request() -> None:
+    """An explicitly requested concrete model is never pre-filtered by context window."""
+    client = SequencedProxyClient({"tiny_window_agent": {"model": "tiny-window-model"}})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "tiny_window_agent",
+                "tiny-window-model",
+                provider_name="tiny",
+                context_window=1,
+            ),
+        ],
+        client=client,
+    )
+
+    # An enormous prompt whose lower bound provably exceeds the 1-token window --
+    # if the filter applied here, this would raise ProviderRequestTooLargeError
+    # instead of reaching the provider.
+    result = orchestrator.proxy_completion(_context_window_body(50_000, model="tiny-window-model"))
+
+    assert result["model"] == "tiny-window-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["tiny_window_agent"]
+    assert "orchestration" not in result
