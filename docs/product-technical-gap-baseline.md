@@ -1,5 +1,96 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 artifact runtime migration — Proposed
+
+Source `7032bee94c85d4937ddad21de88bccd35051ff29` upgrades four artifact
+pins to the verified Node 24 action, preserving every upload option and gate.
+Actionlint and eight workflow contracts pass locally; hosted publication and
+review remain unproven. The central owner still needs a released reusable
+contract preserving CO quality, wheel and fuzz requirements before thin-caller
+migration. [Evidence and alternatives](doctoring/artifact_runtime_migration.md).
+This is operational maintenance, not measured accuracy or decision-latency gain.
+
+## 2026-09-13 Camoufox MCP renderer SDK contract
+
+`privacy_policy_analysis._render_policy_document_with_camoufox` imports the MCP
+Python SDK 2.x client API (`mcp.Client`, `streamable_http_client(url,
+http_client=...)`), but no document or dependency declaration said so. With a
+1.x SDK installed (1.23.3 locally) the import raised an opaque
+`cannot import name 'Client'`, `crawl_policy_document` swallowed it into the
+static-text fallback, and the pinned-client test crashed with `AttributeError`
+instead of skipping (full suite at `012beaac`: 1 failed / 3601 passed /
+1 skipped). Candidate `47db9ebf` raises an explicit `ImportError` naming the
+`>= 2.0` requirement and the installed version, runs the pinned-client test
+through `sys.modules` stubs of the 2.x surface (no SDK needed, import path
+covered in CI), and adds a 1.x stub regression test plus both states of the
+installed-version helper. Verified: mcp 1.23.3 → 12 passed; 2.x API
+introspected from an isolated `mcp==2.2.0` environment.
+Not established: a live Camoufox round-trip, and an operator-visible signal when
+the fallback is taken (the fallback still swallows `ImportError`/`OSError`).
+
+## 2026-09-13 Trace HTTP fixture successor — Proposed
+
+Candidate `e88562187b7ab3bf681b306ab98d2ca821ae82ed`, based on #1140
+`38c0603a`, repairs client error-body and listener ownership in the trace HTTP
+tests without changing production authorization or routing. Targeted strict
+checks pass (31 trace cases; 126 related cases), and the full default suite
+passes 3670 tests with 2 skipped. Full strict remains RED: 1173 failed,
+2494 passed, 2 skipped, 13 errors. All process exits were observed.
+This closes a test-validation gap, not an observed customer accuracy or latency
+gap. Required review, full strict remediation and protected delivery remain.
+Ownership, RED evidence, independent review and exact-head logs are in the
+[HTTP resource runbook](doctoring/http_test_resource_lifecycle.md#trace-http-fixture-successor-2026-09-13).
+
+## 2026-09-13 Test-owned listener and HTTPError resource warnings
+
+`python -m pytest tests -q -W default` at `012beaac` emitted 2013 warnings,
+1221 of them unclosed listening sockets from test `_server()` helpers that call
+`shutdown()`/`join()` but never `server_close()`, plus `HTTPError` bodies read
+without closing. Production `server.py` already calls `server_close()` after
+`serve_forever()`, so this is test hygiene, not a runtime defect. Candidate
+`80dedd08` applies an exact-pattern transformation to the 215 test files that
+no open PR touches (1055 `server_close()` sites, 210 `with exc:` wraps): the
+same command reports 475 warnings with an identical pass/fail set. Remaining
+sockets (155) sit in files owned by open PRs #1152/#1140/#1159/#1155/#1149;
+unowned sqlite3 handles in `tests/test_cost_ledger.py` and six one-off
+`HTTPError` handlers are tracked in #1168 (review 2026-09-20). Aggregate
+warning counts are a hygiene KPI, not a latency or accuracy measurement.
+
+## 2026-09-12 SSE test-fixture socket ownership RCA
+
+Draft optimizer PR #1137 exact `341bf003561d6118a38c142c1dc9a131696b1ebf`
+and protected `main@012beaacd0631f8cd3391c77744eeb626269b5de` independently
+reproduced `tests/test_true_streaming.py::test_stream_send_parses_real_provider_sse`
+under `pytest -W error`: `_FakeSSEProvider.__exit__` called
+`ThreadingHTTPServer.shutdown()` without closing the listening socket, producing
+`ResourceWarning` and `PytestUnraisableExceptionWarning`. The sibling
+`_CapturingSSEProvider` had the same lifecycle defect. A standard-library probe
+confirmed that `shutdown()` leaves the descriptor open while `server_close()`
+changes it to `-1`.
+
+RED `a38258c4b25b3b4994b61d42708aea9ef0292b1d` requires both provider
+contexts to leave descriptor `-1`. GREEN
+`093d03f9329927a8e9d130a3ff623800bb1f34de` adds only
+`server_close()` to the two context-manager exits. This is test-harness resource
+ownership, not optimizer behavior or provider routing. It resolves one proven
+root warning; it does not classify the other failures in #1137's truncated
+full-suite output or convert that Draft's skipped product jobs into passing
+evidence. Hosted exact-head checks and independent review remain required.
+
+## 2026-09-13 Served requests had no correlatable identity (#1016, partial)
+
+Gap table for #1016 at `012beaac`: request identity reached error payloads
+only (`server.py` error adapters), typed per-attempt outcomes existed only on
+the structured synthesis path (`orchestration.route` / `attempts`),
+`/v1/provider_readiness` is preflight-only, and no versioned outcome contract
+exists. Candidate on `fix/request-id-response-header-1016` closes the first
+row: `_send_security_headers` now emits `x-request-id` with the server-generated
+identity on every response path. RED: three real HTTP cases (served chat,
+401, served stream) failed on a missing header; GREEN after the change, with
+`tests/test_stream_error_identity.py` unchanged and passing. Not established:
+typed attempt evidence on the single-worker route path, cancellation/deadline
+as a typed field, and a published contract version; those rows stay open.
+
 ## 2026-09-14 reference-cases terminology cleanup (#1015)
 
 The operator Evaluation surface labeled its dataset class "Golden prompts",
@@ -45,7 +136,6 @@ tests/test_self_check.py tests/test_security_hardening.py
 tests/test_provider_reliability.py -q` passes. This is local, single-branch
 evidence, not a protected-main merge or hosted CI run; sidecar adoption and a
 live gateway round-trip from `.github` remain open.
-
 
 ## 2026-09-13 Response lifecycle repair candidate
 
@@ -1161,7 +1251,9 @@ with rustdoc 1.97.1 passed one synthetic unit example: original and transformed
 inner products both equal 3.5 while unaligned coordinate RMSE equals 1.0.
 This demonstrates the identification pitfall, not estimator accuracy or a
 latency improvement. It is a manual documentation check, not yet a hosted
-CI gate or a test of the released fast-mlsirm implementation.## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
+CI gate or a test of the released fast-mlsirm implementation.
+
+## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 
 PR #1053's valid default-null timeout and administrator-policy delta was 169
 commits behind protected `main@012beaacd0631f8cd3391c77744eeb626269b5de`
@@ -1291,6 +1383,27 @@ See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
 revisions, retained failures, corrected test-evidence limitations, owner
 boundaries and the full remaining acceptance gates. Local configuration work
 must not be represented as released enforcement or psychometric accuracy gain.
+
+## 2026-09-12 Optimizer score-domain recovery
+
+Current main `012beaacd0631f8cd3391c77744eeb626269b5de` still accepts NaN,
+infinity and out-of-range per-task quality into configuration ranking. Recovery
+test commit `40290df6` reproduced 28 failures and 16 valid-case passes (5.89s).
+The shared guard at `982b553345623e006698950bd560d94b4038ed33` passed all 76
+focused optimizer tests (11.65s), covering both public optimizers and serial/batch
+route evaluation. Invalid pairs whose average is valid are rejected individually;
+valid endpoints, fractional values and Boolean predicates retain their meaning.
+
+This restores a measurement-integrity prerequisite, not observed accuracy or
+latency improvement. Calls finish before score validation; no saved spend or
+early cancellation is claimed. Current-head full-suite, installed-package,
+independent review, visual inspection and protected-release evidence remain
+pending at the initial focused checkpoint. At code/document revision 321409b0,
+the full source suite subsequently passed 3645 tests (2 skipped), installed
+public-API acceptance passed 44 cases, and desktop documentation was visually
+inspected. Protected CI, formal approval, release and real KPI evidence remain
+pending. Historical September 9 artifacts do not prove this revision passed.
+See [the recovery runbook](doctoring/optimizer_score_recovery.md).
 
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
@@ -5233,6 +5346,35 @@ wall-clock limits from inference, discovery, OpenRouter ZDR lookup, and
 local readiness paths; only operator cancellation or a superseded PR head
 may terminate that work.
 
+## 2026-09-12 Optimizer cardinality acceptance and calibration boundary
+
+Frozen `090b4ec841cfc78b45248b561f1cef6396b57429` rejects incomplete/extra
+custom batch outputs before callbacks, preserving incurred usage. Corrected
+route-mode RED has six actual batch failures; full source **3,791 passed,
+2 skipped**, separate installed core **222 passed**. Earlier fixture failures
+are corrected, not counted as product reproductions. Exact commands, hashes
+and failed attempts are in [the recovery runbook](doctoring/optimizer_score_recovery.md).
+The PR remains Draft: this repair does not supply calibrated production
+ranking or observed accuracy/latency gains. Reuse fast-mlsirm's existing
+validation-profile owner successor #1737 rather than create a parallel consumer
+manifest; it is not in the inspected v0.9.1 release.
+
+The historical overall-deadline recommendation above is not current policy:
+model timeouts default to null, and a terminal 502 alone does not justify a
+new application-wide timeout or caller-side provider fallback. Trace the
+actual eligible candidates and request phases before changing owner behavior.
+
+Production approval boundary audit at `d43e08c7`: generic optimizer callback
+scores and recommendations are not calibration approval. No production
+approval adapter was identified in this checkout's runtime call graph; external
+callers remain outside that audit. Preserve descriptive/checkable-answer APIs
+and do not invent a purpose/profile layer in this repair. The canonical owner
+follow-up must define released applicable evidence, verification and lifecycle
+checks, and fail-closed production recommendation tests before an actual
+production caller adopts it. See the
+[adapter audit](doctoring/optimizer_score_recovery.md#production-approval-adapter-audit--2026-09-12).
+This gap remains open independently of the repaired cardinality/usage defects.
+
 ### HTTP resource lifecycle follow-up — local candidate, 2026-09-12
 
 Owner: CO transport, stacked on #1135 exact
@@ -6574,3 +6716,70 @@ issue #1016 row 1 (separate PR), and the SSE wire frames themselves still omit
 `orchestration.route` per-token (only the persisted/queried workflow-run trace
 carries it) — no caller currently reads it from the streaming wire response,
 so this was left out of scope rather than silently assumed equivalent.
+### Sqlite connection lifecycle warnings — test hygiene, not a product defect — 2026-09-14
+
+Issue #1168's residual `ResourceWarning: unclosed database in <sqlite3.Connection ...>`
+warnings (56 of 2044 total on `767e67fb`, `python -m pytest tests -q -W default
+--ignore=tests/fuzz`) were root-caused by opening `-W error::ResourceWarning` on
+each named file in isolation. `_AgentPoolStore` (`contextual_orchestrator/orchestrator.py:3511`)
+already opens and closes a short-lived connection at every one of its five call
+sites via `try`/`finally`; `_StateStore` (`orchestrator.py:4168`) already exposes
+`close()` for its long-lived `self._conn`, and `TaskOrchestrator.close()`
+(`orchestrator.py:4556`) already calls into both owned stores. No product code
+was leaking. The leaks were entirely test-owned:
+
+- `with sqlite3.connect(path) as connection:` in `tests/test_model_timeout_policy.py`
+  (14 sites); `tests/test_agent_pool_db.py` (13 sites) already closed on this
+  restack base via main's `closing(...)` form — the sqlite3 connection
+  context manager only commits/rolls back the open transaction on exit, it does
+  not close the connection, so every one of these leaked.
+- Bare `connection = sqlite3.connect(...)` with no `close()` at all in
+  `tests/test_metering.py` (7 sites) and `tests/test_cost_ledger_boundaries.py`
+  (1 site, not in the original 56/6-file count but the same defect).
+- `TaskOrchestrator([...], state_db=...)` constructed twice and never closed in
+  `tests/test_structured_output_distinct_fallback.py` — the owning `_StateStore`
+  connection could only be closed by the orchestrator's own `close()`, which the
+  test never called.
+
+`ResourceWarning` fires lazily at garbage collection, so pytest's per-test
+attribution (e.g. the KPI evidence's "line ~3880 in `_save_in_transaction`", or
+this fix's own residual runs attributing warnings to `test_healthz_is_unauthenticated_and_ok`)
+names whatever test happened to be running when the GC swept the leaked
+connection, not the test that created it — a red herring worth recording so it
+is not re-chased.
+
+Fix: closed every leaking connection deterministically — `contextlib.closing(...)`
+wrapping the `with ... as` sites (preserving the original transaction semantics
+via a second `with connection:` inside), `try`/`finally` around the bare
+`sqlite3.connect()` sites, and `orchestrator.close()` (`try`/`finally`) around
+both `TaskOrchestrator(state_db=...)` instances in the structured-output-fallback
+test. No production code changed.
+
+`tests/test_cost_ledger.py` was explicitly left untouched: it is covered by the
+separate `test/cost-ledger-sqlite-close-1168` branch (PR #1173), which is **not**
+merged into this branch's `origin/main` base (`1af542bb`, post-#1030/#1177/#1180 restack) despite being widely
+believed already landed — `git merge-base --is-ancestor dc8f4d81 HEAD` returns
+false on this base. Its ~20 unclosed-database warnings remain on this branch
+until that PR merges.
+
+Before: `python -m pytest tests -q -W default --ignore=tests/fuzz` → 2044
+warnings, 56 `ResourceWarning: unclosed database`. After (this fix alone, on
+top of the same unmerged `test_cost_ledger.py`): 2008 warnings, 20 remaining
+`unclosed database` warnings — all attributable to the still-unmerged
+`test_cost_ledger.py` fix. Once PR #1173 merges, the count drops to 0. Full
+suite: 3663 passed, 1 skipped, 5 known local-only failures (the openai SDK
+2.54.0-pin tests and the `mcp.Client` privacy test), unchanged by this change.
+`python -m interrogate -v contextual_orchestrator/` remains 100% (no production
+code touched).
+
+## 2026-09-14 Generated-plan step bound origin (section 3.1 / 5.1 fidelity)
+
+`OrchestrationPolicy.max_workflow_steps = 6` bounded generated Conductor plans
+(prompt text and parser) without stating where the number came from, while the
+Fugu-Ultra report's "up to 5 steps" (arXiv:2606.21228 S3.2.3) is a training
+setting that must not be copied into other layers. This change records the
+origin as a product decision beside the field and in `docs/architecture.md`,
+keeps the value administrator-owned through `OrchestrationPolicy`, and adds
+`tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
+(prompt and parser follow the policy value; default stays 6). Not established:
+an ablation of the bound itself, which belongs to the #568 equal-budget lane.

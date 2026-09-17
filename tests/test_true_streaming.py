@@ -108,6 +108,19 @@ class _CapturingSSEProvider:
         return f"http://127.0.0.1:{self._server.server_address[1]}"
 
 
+def test_stream_provider_contexts_close_listening_sockets() -> None:
+    """Both local SSE provider contexts release their listening sockets."""
+    providers = (_FakeSSEProvider([]), _CapturingSSEProvider([[]]))
+    socket_descriptors: list[int] = []
+
+    for provider in providers:
+        with provider:
+            pass
+        socket_descriptors.append(provider._server.socket.fileno())
+
+    assert socket_descriptors == [-1, -1]
+
+
 def _delta(content: str) -> str:
     return 'data: ' + json.dumps({"choices": [{"delta": {"content": content}}]}) + "\n\n"
 
@@ -810,6 +823,7 @@ def test_http_route_stream_carries_shared_context_budget_evidence_on_terminal_fr
                 body = response.read().decode("utf-8")
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     # remaining = 20 - 9 = 11; ceiling = min(50, 11) = 11 -- sent to the provider.
@@ -878,6 +892,7 @@ def test_http_route_stream_shared_context_budget_error_before_any_provider_bytes
                 body = response.read().decode("utf-8")
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     # No provider bytes: the decision fires before ModelClient ever opens the
@@ -1018,6 +1033,7 @@ def test_http_route_stream_terminal_frame_survives_realtime_judge_second_call(
                 body = response.read().decode("utf-8")
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     # remaining = 20 - 9 = 11; ceiling = min(50, 11) = 11 -- the SERVED

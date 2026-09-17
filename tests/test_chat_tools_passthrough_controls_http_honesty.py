@@ -71,7 +71,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict | str]:
                 else json.loads(body),
             )
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -113,6 +114,7 @@ def test_http_tools_passthrough_rejects_invalid_temperature() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n() -> None:
@@ -133,6 +135,7 @@ def test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> None:
@@ -150,6 +153,7 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_response_format_only_stream_usage_omits_unmeasured_counts() -> None:
@@ -179,6 +183,7 @@ def test_http_response_format_only_stream_usage_omits_unmeasured_counts() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_tools_passthrough_accepts_coerced_sampling() -> None:
@@ -193,6 +198,7 @@ def test_http_tools_passthrough_accepts_coerced_sampling() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_response_format_passthrough_rejects_seed() -> None:
@@ -213,6 +219,7 @@ def test_http_response_format_passthrough_rejects_seed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

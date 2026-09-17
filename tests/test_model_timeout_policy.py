@@ -1,5 +1,6 @@
 """Administrator-owned model timeout policy must survive configuration changes."""
 
+import contextlib
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -145,7 +146,10 @@ def test_model_timeout_policy_accepts_socket_safe_maximum(tmp_path: Path) -> Non
     orchestrator.patch_agent(
         "default", model_agent.id, {"model_timeout_seconds": 2_147_483_647}
     )
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute(
             "SELECT model_timeout_seconds FROM agent_pool WHERE agent_id = ?", (model_agent.id,)
         ).fetchone() == (2_147_483_647.0,)
@@ -159,7 +163,10 @@ def test_model_timeout_policy_migrates_existing_pool(tmp_path: Path) -> None:
     database_path = str(tmp_path / "agent-pool.db")
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
     orchestrator.patch_agent("default", model_agent.id, {"priority": 7})
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         connection.execute("ALTER TABLE agent_pool DROP COLUMN model_timeout_seconds")
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
     assert restored._agent(model_agent.id).priority == 7
@@ -217,7 +224,10 @@ def test_model_timeout_policy_audit_failure_does_not_apply(
     if previous_limit is not None:
         orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": previous_limit})
 
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         connection.execute(
             "CREATE TRIGGER reject_timeout_history BEFORE INSERT ON model_timeout_history "
             "BEGIN SELECT RAISE(ABORT, 'audit storage unavailable'); END"
@@ -229,7 +239,10 @@ def test_model_timeout_policy_audit_failure_does_not_apply(
         orchestrator._agent(model_agent.id).model_timeout_seconds,
         restored._agent(model_agent.id).model_timeout_seconds,
     ) == (previous_limit, previous_limit)
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (
             int(previous_limit is not None),
         )
@@ -301,7 +314,10 @@ def test_model_timeout_policy_records_atomic_history(tmp_path: Path) -> None:
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
     for limit in (7200, None):
         orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": limit})
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute(
             "SELECT previous_seconds, timeout_seconds FROM model_timeout_history "
             "WHERE agent_id = ? ORDER BY policy_revision", (model_agent.id,)
@@ -320,7 +336,10 @@ def test_model_timeout_policy_rejects_stale_writer(tmp_path: Path) -> None:
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
     assert restored._agent(model_agent.id).model_timeout_seconds == 7200
     assert stale._agent(model_agent.id).model_timeout_seconds is None
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (1,)
 
 
@@ -349,7 +368,10 @@ def test_model_timeout_policy_rejects_aba_writer(tmp_path: Path) -> None:
         stale.patch_agent("default", model_agent.id, {"model_timeout_seconds": 3600})
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
     assert restored._agent(model_agent.id).model_timeout_seconds is None
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (2,)
 
 
@@ -361,7 +383,10 @@ def test_model_timeout_policy_loads_value_and_revision_together(
     database_path = str(tmp_path / "agent-pool.db")
     writer = TaskOrchestrator([model_agent], agents_db=database_path)
     writer.patch_agent("default", model_agent.id, {"model_timeout_seconds": 3600})
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         connection.execute("PRAGMA journal_mode=WAL")
     reader = TaskOrchestrator([model_agent], agents_db=database_path)
     original_connect = reader._pool_store._connect
@@ -401,7 +426,10 @@ def test_model_timeout_policy_records_verified_principal(tmp_path: Path) -> None
     orchestrator.patch_agent(
         "default", model_agent.id, {"model_timeout_seconds": 7200}, actor_id=principal_id
     )
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         recorded = connection.execute("SELECT actor_id FROM model_timeout_history").fetchone()[0]
     assert recorded == principal_id
     assert "example_admin" not in recorded
@@ -418,7 +446,10 @@ def test_model_timeout_policy_rejects_raw_actor_values(tmp_path: Path, invalid_a
             "default", model_agent.id, {"model_timeout_seconds": 7200}, actor_id=invalid_actor
         )
     assert orchestrator._agent(model_agent.id).model_timeout_seconds is None
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute("SELECT COUNT(*) FROM model_timeout_history").fetchone() == (0,)
 
 
@@ -428,11 +459,17 @@ def test_model_timeout_policy_migrates_unknown_actor_history(tmp_path: Path) -> 
     database_path = str(tmp_path / "agent-pool.db")
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
     orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         connection.execute("ALTER TABLE model_timeout_history DROP COLUMN actor_id")
     restored = TaskOrchestrator([model_agent], agents_db=database_path)
     assert restored._agent(model_agent.id).model_timeout_seconds == 7200
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute("SELECT actor_id FROM model_timeout_history").fetchall() == [(None,)]
 
 
@@ -449,7 +486,10 @@ def test_model_timeout_policy_restore_creates_a_new_revision(tmp_path: Path) -> 
     )
     assert restored["model_timeout_seconds"] == 7200
     assert restored["model_timeout_revision"] > cleared["model_timeout_revision"]
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         assert connection.execute(
             "SELECT previous_seconds, timeout_seconds, restored_from_revision, actor_id "
             "FROM model_timeout_history ORDER BY policy_revision DESC LIMIT 1"
@@ -492,7 +532,10 @@ def test_model_timeout_policy_restore_audit_failure_rolls_back(tmp_path: Path) -
     orchestrator = TaskOrchestrator([model_agent], agents_db=database_path)
     first = orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": 7200})
     latest = orchestrator.patch_agent("default", model_agent.id, {"model_timeout_seconds": None})
-    with sqlite3.connect(database_path) as connection:
+    with (
+        contextlib.closing(sqlite3.connect(database_path)) as connection,
+        connection,
+    ):
         connection.execute(
             "CREATE TRIGGER reject_restore BEFORE INSERT ON model_timeout_history "
             "BEGIN SELECT RAISE(ABORT, 'restore audit unavailable'); END"

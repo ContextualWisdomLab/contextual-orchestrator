@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -67,6 +68,7 @@ def test_http_chat_rejects_prompt_cache_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_safety_identifier() -> None:
@@ -88,6 +90,7 @@ def test_http_chat_rejects_safety_identifier() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_verbosity_high() -> None:
@@ -107,6 +110,7 @@ def test_http_chat_accepts_verbosity_high() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_prompt_cache_key() -> None:
@@ -128,6 +132,7 @@ def test_http_responses_rejects_prompt_cache_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_safety_identifier() -> None:
@@ -149,6 +154,7 @@ def test_http_completions_rejects_safety_identifier() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_baseline_chat_without_sdk_controls() -> None:
@@ -166,3 +172,4 @@ def test_http_baseline_chat_without_sdk_controls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

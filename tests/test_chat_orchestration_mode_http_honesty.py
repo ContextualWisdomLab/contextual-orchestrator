@@ -42,7 +42,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_http_chat_accepts_mode_route() -> None:
@@ -64,6 +65,7 @@ def test_http_chat_accepts_mode_route() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_omitted_model_defaults_to_gateway_virtual_model() -> None:
@@ -84,6 +86,7 @@ def test_http_chat_omitted_model_defaults_to_gateway_virtual_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_null_model() -> None:
@@ -105,6 +108,7 @@ def test_http_chat_rejects_null_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_orchestration_mode_auto() -> None:
@@ -125,6 +129,7 @@ def test_http_chat_accepts_orchestration_mode_auto() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_conduct_accepts_advertised_gateway_default_model() -> None:
@@ -158,6 +163,7 @@ def test_http_chat_conduct_accepts_advertised_gateway_default_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_orchestrator_free_auto_stays_on_route_for_long_review_prompt() -> None:
@@ -195,6 +201,7 @@ def test_http_chat_orchestrator_free_auto_stays_on_route_for_long_review_prompt(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_invalid_mode() -> None:
@@ -216,6 +223,7 @@ def test_http_chat_rejects_invalid_mode() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_mode_non_string() -> None:
@@ -237,6 +245,7 @@ def test_http_chat_rejects_mode_non_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

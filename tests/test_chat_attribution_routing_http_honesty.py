@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -65,6 +66,7 @@ def test_http_chat_accepts_known_attribution_and_routing() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_unknown_attribution_dimension() -> None:
@@ -85,6 +87,7 @@ def test_http_chat_rejects_unknown_attribution_dimension() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_attribution_non_object() -> None:
@@ -103,6 +106,7 @@ def test_http_chat_rejects_attribution_non_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_routing_unknown_key() -> None:
@@ -123,6 +127,7 @@ def test_http_chat_rejects_routing_unknown_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_routing_latency_tolerant_non_boolean() -> None:
@@ -142,6 +147,7 @@ def test_http_chat_rejects_routing_latency_tolerant_non_boolean() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_routing_invalid_channel() -> None:
@@ -160,6 +166,7 @@ def test_http_chat_rejects_routing_invalid_channel() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_routing_invalid_priority() -> None:
@@ -178,6 +185,7 @@ def test_http_chat_rejects_routing_invalid_priority() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_batch_routing_latency_tolerant() -> None:
@@ -197,6 +205,7 @@ def test_http_chat_accepts_batch_routing_latency_tolerant() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

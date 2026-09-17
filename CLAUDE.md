@@ -1,5 +1,18 @@
 # CLAUDE.md
 
+Optimizer means must not replace ordered `score_observations`. Reuse the shared
+scoring boundary and preserve existing selection semantics until the separate
+applicable-evaluator contract is resolved; see the optimizer recovery runbook.
+
+For optimizer batch validation and installed-test setup, read
+`docs/doctoring/optimizer_score_recovery.md`. Match task/result counts before
+scoring and preserve usage on failure; batch fixtures must select route mode.
+Passing this boundary does not establish psychometric calibration eligibility.
+
+Artifact pin changes must retain paths, retention, failure handling and trigger
+locks. Run actionlint and the NIM workflow contracts; local success is not
+artifact publication proof. See `docs/doctoring/artifact_runtime_migration.md`.
+
 Read `docs/doctoring/kpi_stack_integration.md` before changing cache measurements.
 One admission may contain cached and uncached items: finalize cache-only status
 at request close, retain failures and isolate request context. The runbook owns
@@ -11,6 +24,11 @@ durable lineage. Preserve job-scoped item IDs and original submission identity.
 
 See `docs/doctoring/workflow_request_link.md` for request-to-workflow correlation
 tests, cache semantics, and the distinction between in-memory and durable outcomes.
+
+For trace HTTP regressions, distinguish the test client's HTTPError from the
+server's serialized authorization failure. The test owns response/listener
+cleanup. Exact-head RED/GREEN and remaining strict failures are recorded in
+`docs/doctoring/http_test_resource_lifecycle.md` under the trace successor.
 
 For HTTP test cleanup, reuse response context managers and explicit server
 closure. Test-resource fixes do not prove production transport closure; follow
@@ -183,6 +201,11 @@ owners, native build commands, and unverified acceptance boundaries are recorded
 in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
 
 ## Tool-call handoffs
+
+Optimizer score validation is shared by both public optimizers: reject nonfinite
+or out-of-range per-task values before aggregation, preserve valid predicates
+and completed-call usage. See `docs/doctoring/optimizer_score_recovery.md` for
+RED/GREEN, isolated-package evidence and remaining coverage boundaries.
 
 Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.

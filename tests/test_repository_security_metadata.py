@@ -62,7 +62,7 @@ def test_security_workflow_covers_core_repository_security_process():
         "python -m pip install --no-deps -e .",
         "python -m pip_audit -r requirements.lock",
         "cyclonedx-py environment",
-        "actions/upload-artifact@v5",
+        "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
     for expected_token in expected_tokens:
@@ -229,7 +229,7 @@ def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     assert 'version: "0.12.5"' in workflow_text
     locked_sync = "uv sync --locked --extra api --extra db --extra queue --group dev --group native-build"
     native_build = "uv run --no-sync maturin develop --locked --release --features pyo3/extension-module"
-    full_tests = "uv run --no-sync python -m pytest -q"
+    full_tests = "uv run --no-sync python -m pytest -q -ra"
     assert workflow_text.index(locked_sync) < workflow_text.index(native_build) < workflow_text.index(full_tests)
 
 

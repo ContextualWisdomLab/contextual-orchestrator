@@ -1068,6 +1068,17 @@ class OrchestrationPolicy:
     # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
     # fixed 4-step plan. Generated plans that fail validation fall back to the template.
     workflow_planning: str = "template"
+    # Validation bound for *generated* plans (prompt and parser both read it).
+    # Origin: a product decision, not a paper value. The fixed template needs
+    # four steps (thinker, worker, verifier, synthesizer); six leaves a
+    # generated plan room for one extra worker and one repair/verify step
+    # without letting the planner emit unbounded fan-out. It is deliberately
+    # NOT the Fugu-Ultra report's "up to 5 steps" (arXiv:2606.21228 S3.2.3),
+    # which is a training setting for that report's learned conductor, nor the
+    # effort catalog's 4 (``reasoning_effort_profile``), which bounds
+    # role compute under an explicit effort profile. Administrators change it
+    # through OrchestrationPolicy; ablation of the value belongs to the #568
+    # equal-budget lane, not to a test fixture.
     max_workflow_steps: int = 6
     # Verifier verdicts are structured model judgments. Keyword matching is intentionally
     # unsupported: it cannot handle negation, language, or a report that quotes a risk.
@@ -5628,7 +5639,7 @@ class TaskOrchestrator:
     @staticmethod
     def _zdr_agent_allowed(agent: ModelAgent) -> bool:
         """Return whether one agent is eligible under the active privacy policy."""
-        return not _REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags
+        return not _REQUEST_ZDR_ONLY.get() or ("privacy:zdr" in agent.tags and "privacy:no_zdr" not in agent.tags)
 
     def select_model_group_members(
         self,
@@ -9889,7 +9900,15 @@ class TaskOrchestrator:
         genuinely free transcription/video/image agent unreachable through
         its own capability's free route. See :meth:`_is_general_free_agent`
         for the stricter, blind-general-chat variant.
+
+        Experiential promotional/free metadata is deliberately excluded here
+        as well as in discovery-time selection. Its waterfall can spend
+        credits after a free limit, and the public contract exposes no
+        request-level free-only enforcement evidence. This protects durable
+        agents and capability-scoped routes that predate the discovery guard.
         """
+        if agent.provider_name == "experiential_labs":
+            return False
         if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
             return True
         return self.price_per_million.get(agent.model) == 0 and sum(
@@ -19191,17 +19210,46 @@ def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | No
     return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
 
 
-def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool) -> float:
-    """Mean quality of one config over the task set; route configs may evaluate via Batch."""
-    if use_batch and mode == "route":
-        records = orchestrator.batch_route([task["prompt"] for task in tasks])
-        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
-    else:
-        scores = [
-            float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
-            for task in tasks
-        ]
-    return sum(scores) / len(scores) if scores else 0.0
+def _optimizer_usage_snapshot(orchestrator: Any, evaluation_index: int) -> dict[str, Any]:
+    """Capture cumulative engine totals without prompts, configuration, or model identifiers."""
+    totals = orchestrator.spend_analytics()["totals"]
+    return {
+        "evaluation_index": evaluation_index,
+        "scope": "cumulative_engine_snapshot",
+        "snapshot_status": "available",
+        "totals": {key: totals.get(key) for key in (
+            "run_count", "prompt_tokens", "output_tokens", "prompt_tokens_source", "cost_usd", "currency"
+        )} | {"cost_usd": totals["cost_usd"]},
+    }
+
+
+def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool,
+                  usage_receipts: list[dict[str, Any]]) -> tuple[float, list[float]]:
+    """Return the existing mean and ordered task scores without changing selection policy."""
+    try:
+        if use_batch and mode == "route":
+            records = orchestrator.batch_route([task["prompt"] for task in tasks])
+            if len(records) != len(tasks):
+                raise ValueError("batch result count must match task count")
+            scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
+        else:
+            scores = [
+                float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
+                for task in tasks
+            ]
+        if any(not math.isfinite(score) or not 0.0 <= score <= 1.0 for score in scores):
+            raise ValueError("quality scores must be finite and in [0, 1]")
+        usage_receipts.append(_optimizer_usage_snapshot(orchestrator, len(usage_receipts)))
+        return (sum(scores) / len(scores) if scores else 0.0), scores
+    except Exception as evaluation_error:
+        try:
+            failed_usage = _optimizer_usage_snapshot(orchestrator, len(usage_receipts))
+        except Exception:
+            failed_usage = {"evaluation_index": len(usage_receipts), "scope": "cumulative_engine_snapshot",
+                            "snapshot_status": "unavailable", "totals": None}
+        completed_usage = tuple([*usage_receipts, failed_usage])
+        vars(evaluation_error)["optimizer_usage"] = completed_usage
+        raise
 
 
 def optimize_orchestration(
@@ -19220,20 +19268,25 @@ def optimize_orchestration(
     - ``quality_fn(task, answer_text) -> float`` in [0, 1] — the caller's real quality
       signal (e.g. checkable answers or a judge). This function does not fabricate quality.
     - ``cost_budget_usd``: optional cap. Recommendation = highest-quality config within
-      budget, else the cheapest; with no budget, the best quality-per-USD.
+      budget, else the cheapest; with no budget, highest quality then cheapest.
 
     Returns per-config measured quality + real cost, the Pareto front, and a recommendation.
+    Each result also retains ``score_observations`` in input-task order, before
+    mean rounding. This descriptive evidence does not establish calibration or
+    applicability of the existing selection policy.
     """
     results: list[dict[str, Any]] = []
+    usage_receipts: list[dict[str, Any]] = []
     for candidate in candidates:
         orchestrator = candidate["orchestrator"]
         mode = candidate.get("mode", "auto")
-        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
-        cost = orchestrator.spend_analytics()["totals"]["cost_usd"]
+        quality, score_observations = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
+        cost = usage_receipts[-1]["totals"]["cost_usd"]
         results.append({
             "name": candidate["name"],
             "mode": mode,
             "quality": round(quality, 4),
+            "score_observations": score_observations,
             "cost_usd": round(cost, 6) if cost is not None else None,
             "quality_per_usd": (
                 round(quality / cost, 2) if cost is not None and cost > 0 else None
@@ -19278,6 +19331,8 @@ def evolve_orchestration(
     Fitness maximizes measured quality, then minimizes measured cost; configs whose cost
     exceeds ``cost_budget_usd`` rank below all affordable ones. Quality comes from the
     caller's ``quality_fn(task, answer) -> [0,1]`` — never fabricated.
+    Per-config ``score_observations`` retain input-task order before mean rounding.
+    Their availability does not qualify the existing fitness policy psychometrically.
     """
     rng = random.Random(seed)
     params = sorted(search_space)
@@ -19296,6 +19351,7 @@ def evolve_orchestration(
         return json.dumps({p: config[p] for p in params}, sort_keys=True, ensure_ascii=False)
 
     evaluated: dict[str, dict[str, Any]] = {}
+    usage_receipts: list[dict[str, Any]] = []
 
     def evaluate(config: dict[str, Any]) -> dict[str, Any]:
         config_key = key(config)
@@ -19303,12 +19359,13 @@ def evolve_orchestration(
             return evaluated[config_key]
         orchestrator = build_orchestrator(config)
         mode = config.get("mode", "auto")
-        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
-        cost = orchestrator.spend_analytics()["totals"]["cost_usd"]
+        quality, score_observations = _score_config(orchestrator, tasks, quality_fn, mode, use_batch, usage_receipts)
+        cost = usage_receipts[-1]["totals"]["cost_usd"]
         result = {
             "name": config_key,
             "config": dict(config),
             "quality": round(quality, 4),
+            "score_observations": score_observations,
             "cost_usd": round(cost, 6) if cost is not None else None,
             "quality_per_usd": (
                 round(quality / cost, 2) if cost is not None and cost > 0 else None

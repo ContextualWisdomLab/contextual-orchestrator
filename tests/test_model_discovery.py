@@ -3937,3 +3937,18 @@ def test_model_agent_config_fails_closed_on_malformed_disabled_flag(
     )
 
     assert agent.disabled is True
+
+
+def test_conflicting_zdr_evidence_fails_closed():
+    """Mixed explicit negative and legacy positive evidence fails closed."""
+    base = _tool_call_probe_base()
+    conflicted = replace(base, supports_zero_data_retention=False, zdr_capable=True)
+    assert privacy_tags_for_discovered(conflicted) == ("privacy:no_zdr",)
+    agent = ModelAgent("mixed_agent", "mixed", tags=("privacy:zdr", "privacy:no_zdr"))
+    orchestrator = TaskOrchestrator([agent])
+    with orchestrator.request_policy(True):
+        assert not orchestrator._zdr_agent_allowed(agent)
+        with orchestrator.request_policy(False):
+            assert orchestrator._zdr_agent_allowed(agent)
+        assert not orchestrator._zdr_agent_allowed(agent)
+    assert orchestrator._zdr_agent_allowed(agent)

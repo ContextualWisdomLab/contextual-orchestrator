@@ -51,7 +51,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -109,6 +110,7 @@ def test_http_completions_accepts_whole_float_token_prompt() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_batch_whole_float_token_prompts() -> None:
@@ -124,6 +126,7 @@ def test_http_completions_accepts_batch_whole_float_token_prompts() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_invalid_whole_float_token_prompts() -> None:
@@ -140,6 +143,7 @@ def test_http_completions_rejects_invalid_whole_float_token_prompts() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_whole_float_token_input() -> None:
@@ -155,6 +159,7 @@ def test_http_embeddings_accepts_whole_float_token_input() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_batch_whole_float_token_inputs() -> None:
@@ -171,6 +176,7 @@ def test_http_embeddings_accepts_batch_whole_float_token_inputs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_rejects_invalid_whole_float_token_inputs() -> None:
@@ -188,6 +194,7 @@ def test_http_embeddings_rejects_invalid_whole_float_token_inputs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_integer_token_prompt_still_works() -> None:
@@ -202,6 +209,7 @@ def test_http_completions_integer_token_prompt_still_works() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

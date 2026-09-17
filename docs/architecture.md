@@ -46,6 +46,8 @@ TRINITY contributes the compact coordinator idea: a small model representation p
 
 Conductor contributes the workflow representation: each step is a natural-language subtask, an assigned worker, and an access list of prior step outputs. This is the key piece for preventing every worker from being dragged into the same transcript while still allowing deliberate collaboration.
 
+The generated-plan step bound (`OrchestrationPolicy.max_workflow_steps`, default 6) is a product decision recorded in the policy source: the fixed template needs four steps, and six leaves a generated plan one extra worker plus one repair/verify step. It is not the Fugu-Ultra report's "up to 5 steps" training setting (arXiv:2606.21228 S3.2.3), which is not copied into any other layer here, and it is separate from the effort catalog's per-profile `max_workflow_steps`. The planner prompt and the plan parser read the same policy value (`tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`).
+
 The Fugu report combines these ideas into production constraints:
 
 - Fugu is optimized for latency by selecting a worker without expensive coordinator generation.

@@ -902,5 +902,17 @@ def test_postgres_privacy_evidence_is_parameterized_and_read_only() -> None:
     assert store.privacy_assessments(source) == (assessment,)
 
 
+def test_last_known_good_dual_zdr_tags_restore_fail_closed():
+    """Persisted contradictory privacy tags restore to explicit no-ZDR."""
+    source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
+    model = replace(_model(source, "dual-zdr-model", 0), supports_zero_data_retention=False)
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source, [model], eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: ("discovered", "privacy:zdr", "privacy:no_zdr")},
+    )
+    assert store.serving_models(source)[0].supports_zero_data_retention is False
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
