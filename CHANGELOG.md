@@ -64,6 +64,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Local SSE provider test fixtures now close their listening sockets after shutdown, preventing `ResourceWarning` / `PytestUnraisableExceptionWarning` failures under warnings-as-errors execution.
+
 - Refresh the time-bounded NVIDIA hosted NIM access evidence against the
   official Run NIM Anywhere terms, restoring fail-closed live benchmark
   execution through 2026-10-04 without treating prototype access as production
