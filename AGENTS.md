@@ -96,6 +96,13 @@ push or open a PR.
 
 ### This repo: the org LLM gateway
 
+- Classify retry safety by the failure boundary, not a generic timeout name.
+  Only a direct local-slot admission failure proves no upstream send began;
+  wrapped exceptions and post-send timeouts do not authorize replay. Test the
+  real slot-to-transport path with per-candidate transport call counts and keep
+  unknown-outcome no-replay controls alongside it. Transport spies are not wire
+  delivery evidence. Preserve the default-null model timeout.
+
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.
@@ -219,6 +226,13 @@ Zero check runs on a stacked PR can mean its base was excluded by
 quality trigger unfiltered and validate `tests/test_repository_security_metadata.py`
 plus actionlint. After a new head, verify actual hosted execution; previous-head
 results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
+
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
 
 ## Tool-call handoffs
 

@@ -20,6 +20,35 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Binary provider responses now downgrade active or unknown media types at the
+  shared HTTP response boundary, while preserving approved media and download
+  formats (issue #1161).
+- Response-format SSE requests may now ask for usage; the terminal usage chunk
+  is emitted only when the workflow cost ledger marks the counts as measured.
+- Generation-token inputs retain positive-integer validation without an
+  arbitrary shared 1,048,576-token ceiling. Responses normalizes legacy token
+  aliases to `max_output_tokens` before provider forwarding, preserving caller
+  budgets and native-field precedence (issue #1151; ADR 0132). Model-specific limits remain.
+- Finite administrator model timeouts now use one end-to-end deadline across
+  local admission, connection, retry, and streamed chunks; synchronous
+  embeddings use the selected model's policy. Timeout values are capped at the
+  socket-safe 2,147,483,647-second boundary. Pre-send local admission expiry
+  may fail over, while post-send timeout/reset outcomes never replay and remain
+  distinct from clean provider completion or caller cancellation.
+- Ambiguous transport outcomes on both concrete-model and virtual passthrough
+  paths now fail closed as `provider_outcome_unknown`, never replay onto another
+  provider, update circuit/group reliability evidence, omit provider-controlled
+  diagnostics, and tell retrying SDKs not to repeat the request.
+- Live NIM benchmark evaluation now reaches its already pinned provider transport
+  instead of failing every policy cell during a duplicate generic DNS preflight;
+  injected transports retain URL and credential validation for deterministic
+  contract tests.
+- Pytest now declares function-scoped asynchronous fixture loops explicitly,
+  removing the ambient `pytest-asyncio` deprecation ambiguity.
+- Model, Agent, gateway, and structured-output repair requests now default to
+  no application timeout. An administrator-owned per-model wait is applied only
+  to that model; there is no shared 90s/900s/3-hour ceiling. Explicit probe,
+  discovery, benchmark, and operator limits remain bounded.
 - Virtual `orchestrator/free` structured completions (`response_format`, no
   tools/stream) fail over a retryable synthesizer 502/429 onto the next
   eligible free worker and attach request-scoped eligible/attempted

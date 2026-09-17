@@ -37,6 +37,134 @@ model checks do not establish observed accuracy or decision latency. The
 records the read scope and failed PDF rendering; no estimator or production
 policy is changed. Owner implementation and observed evaluation remain open.
 
+
+## 2026-09-13 context-length-exceeded failover (#1174)
+
+A provider HTTP 400 context-window overflow is classified as a request-size
+rejection (`_is_context_length_exceeded_error` inside
+`_is_request_too_large_error`), so virtual-selector failover advances without
+debiting provider/member health. Complementary pre-flight exclusion is #1178/#1200.
+
+## 2026-09-14 trace-scope token (issue #117 acceptance item 9)
+
+Issue #117's maintainer verification map, acceptance item 9, flagged that
+`SecurityConfig.authorize` let a bare single `auth_token` satisfy the `trace`
+scope unconditionally, with no test covering the raw library path (`server.py`
+had `expected = self.auth_token` for scope `trace` whenever no
+`bearer_verifier` was configured, regardless of split admin/inference mode).
+ADR 0026 already documented the intended contract — inference or admin
+authentication alone must not authorize a trace-bearing response, and split
+static admin/inference mode should fail closed for trace absent a verified
+claim — but `authorize()` did not implement that fail-closed branch.
+
+Added an explicit `trace_token: str = ""` field to `SecurityConfig`. In
+`authorize()`, scope `trace` without a `bearer_verifier` now resolves in three
+modes: (1) a configured `trace_token` is the only credential that authorizes
+`trace`; (2) with no `trace_token` and no split `admin_token`/`inference_token`
+(single-token mode), `auth_token` keeps the documented local escape hatch; (3)
+split admin/inference mode without a distinct `trace_token` fails closed with
+the existing `401 unauthorized` — `admin_token`/`inference_token` never
+satisfy `trace`. Wired `--trace-token`/`--trace-token-key` in `__main__.py`
+exactly like `--inference-token` (KV credential name
+`CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN` by default, resolved via
+`get_credential`, no runtime env reads). The CLI's existing `--production`
+gating (which requires split admin/inference credentials and rejects
+identical admin/inference values) is unchanged: it only checks admin/inference
+separation, not a trace credential, and every trace-bearing HTTP route already
+gates on the caller's base admin/inference scope *and* the separate `trace`
+scope over the same bearer, so split mode without a `trace_token` was already
+structurally fail-closed for trace once `authorize()` was fixed — no new
+startup requirement was added.
+
+Raw-library-path tests in `tests/test_security_hardening.py`
+(`test_single_token_mode_keeps_the_documented_trace_escape_hatch`,
+`test_split_token_mode_without_trace_token_fails_closed_for_trace`,
+`test_split_token_mode_trace_token_authorizes_only_trace`) cover all three
+modes directly against `SecurityConfig.authorize`, including that
+`trace_token` does not authorize `admin` or `inference`. One HTTP-level test
+in `tests/test_chat_include_orchestration_trace_http_honesty.py`
+(`test_split_token_mode_refuses_trace_with_inference_token_but_accepts_trace_token`)
+shows a real `/v1/chat/completions` trace-bearing request is refused with the
+plain inference token in split mode, and accepted once `trace_token` is
+provisioned for that credential. Focused suite:
+`tests/test_security_hardening.py`, `tests/test_chat_include_orchestration_trace_http_honesty.py`,
+`tests/test_api_contract.py`, `tests/test_self_check.py`,
+`tests/test_kv_credentials.py` (77 tests) pass; `interrogate` reports 100%
+docstring coverage. Issue #117 acceptance item 6 (tenant/resource binding)
+remains open.
+## 2026-09-13 Output-budget clamp evidence (#1169)
+
+`ModelClient._clamp_agent_token_budget` silently rewrote an explicit caller
+budget (`max_tokens`/`max_completion_tokens`/`max_output_tokens`) down to the
+served agent's published `max_output_tokens` ceiling with no error, header,
+trace field, or usage marker telling the caller its budget was not the budget
+applied — filed as #1169 during the local reproduction review of #1154
+(removal of the global generation-token ceiling per #1151). ADR
+[0130](planning/adrs/0130-output-budget-clamp-evidence.md) records the
+decision to surface the clamp in-band rather than via a response header
+(unavailable on the streaming path, since `_begin_sse()` flushes headers
+before the provider call and its clamp decision exist) or a hard `400`
+rejection (would break `noema`/`opencode`, which send a large `max_tokens` as
+a ceiling, not a demand). `ModelClient` now records
+`requested_output_tokens`/`effective_output_tokens`/`output_budget_clamped`
+per thread (`_clamp_agent_token_budget_with_evidence` /
+`take_output_budget()`, mirroring the existing `take_usage()` pattern), and
+`TaskOrchestrator._invoke`'s non-race branch exposes it the same way it
+already exposes assistant-message extras (`_last_output_budget`, mirroring
+`_last_assistant_message`). The `route`/`conduct` trace-row builders attach
+the three fields to the relevant provider-call trace row, and
+`chat_completion_response` / `chat_completion_chunks` copy them onto the
+existing `orchestration` extension object already used for `cost` and
+`verification`. This now extends to the remaining call paths flagged as follow-up in the
+initial cut: the multi-endpoint `immediate_race` branch (`TaskOrchestrator
+._invoke`'s race `call()` closure also takes `take_output_budget()` and
+records only the winning endpoint's evidence — a losing attempt's clamp
+decision is discarded along with the rest of that attempt), structured/
+`free_only` synthesis (`ModelClient._send_raw` now uses
+`_clamp_agent_token_budget_with_evidence`, and `_orchestrated_provider
+_completion`'s `send_synthesis`/final-response assembly carries the evidence
+on the same ad hoc `orchestration` object it already attaches next to
+`route`), and true-streaming passthrough (`ModelClient._stream_send` now
+uses the evidence-recording clamp too, and `TaskOrchestrator.stream_route`
+gained an `output_budget_callback` parameter — mirroring its existing
+`usage_callback` — that `server.py`'s `_stream_route_completion` uses to
+carry the evidence on the final SSE chunk's `orchestration` object, since
+`_begin_sse()` has already flushed headers by the time the clamp decision
+exists). Verified by `tests/test_output_budget_model_max.py` (clamped,
+unclamped, and no-explicit-budget cases at the `ModelClient` and
+`TaskOrchestrator` layers, plus one clamped/unclamped pair each for the race
+winner, structured/`free_only` synthesis, and streaming-passthrough final
+chunk) plus `tests/test_orchestrator_client_boundaries.py`,
+`tests/test_true_streaming.py`, `tests/test_api_contract.py`, and
+`tests/test_passthrough_provider_failover.py` (168 passed, 1 pre-existing
+unrelated `openai` SDK version-pin failure), the full suite (3697 passed, 1
+skipped, the same SDK version-pin failures plus one pre-existing unrelated
+`mcp.Client`/camoufox environment failure), and `interrogate` at 100% on
+`contextual_orchestrator/`. Not yet covered: the async-batch-submission call
+site (`ModelClient._batch_run`'s `batch_body`/`_clamp_agent_token_budget`
+call) has no synchronous trace or response to attach evidence to and remains
+a separate follow-up.
+
+## 2026-09-13 Free-pool selection ignored single-tool-call evidence (#940)
+
+At `012beaac` the three mechanisms named in #940 stood at: capability
+evidence implemented (`DiscoveredModel.supports_parallel_tool_calls`, probe
+and 400 classifier from #1121, tags `tool_call:single|multi`), passthrough
+400 failover implemented (`_is_single_tool_call_limit_error`), selection-time
+exclusion missing: `_is_general_free_agent` checked only price and input
+modality, so a `tool_call:single` agent was still chosen first for a
+multi-tool request and one provider round-trip was wasted before failover.
+Candidate on `fix/free-pool-single-tool-call-exclusion-940` adds a
+request-shape predicate matching exactly the probe's rejected shape (two or
+more tools without `parallel_tool_calls: false`, or an explicit `true`) and
+passes the chat body at the two tool-carrying selection sites
+(`proxy_completion`, structured `free_only` synthesis). RED: two new tests
+failed with the single-call agent still served; GREEN after the change with
+the single-tool, opt-out, and no-evidence shapes still served by that agent.
+Not established: a live NIM confirmation that a one-tool request without the
+flag is accepted (left to failover by design), and any change to
+`general_free_serving_candidates`, which stays request-blind on purpose.
+
 ## 2026-09-12 Title-only psychometric citation gap
 
 Research parent `14a6a943` cited Fox and Glas (2001) without an identifier,
@@ -134,6 +262,22 @@ Current PR head/base still match the above revisions, Ready/Open with no reviews
 No independent approval,
 protected merge, release, remote-provider integration, or observed KPI gain is
 established. The untracked local native extension was not committed.
+
+## 2026-09-12 Retained export validation repair (Proposed)
+
+PR #1138's repair `7ebf577535139c6655a1b8d360682511defc22ba`, based on
+`d1a080d7bd9de4e37aa72a7f98f9414abc0362fc`,
+preserves fixed-cutoff initial/final decision provenance across 257 admissions
+and rejects disabled measurements instead of presenting an apparently empty
+cohort. Malformed phases remain counted and missing durations remain null.
+Focused actual-native validation passes 62 tests with warnings-as-errors; after
+test-only root lifecycle repairs the six-module expansion passes 124 tests with
+process exit 0. All 23 isolated failure-union nodes now pass; a fresh noneditable
+core/native wheel installation outside the checkout passes the same 124 tests.
+No customer accuracy or
+decision-latency gain, hosted acceptance, release, or deployment is established.
+See [the validation runbook](doctoring/request_outcome_export_validation.md)
+for RED/GREEN evidence, parent comparison, reproduction, and remaining gates.
 
 ## 2026-09-09 Request-outcome export gap
 
@@ -591,6 +735,136 @@ inner products both equal 3.5 while unaligned coordinate RMSE equals 1.0.
 This demonstrates the identification pitfall, not estimator accuracy or a
 latency improvement. It is a manual documentation check, not yet a hosted
 CI gate or a test of the released fast-mlsirm implementation.
+## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
+
+PR #1053's valid default-null timeout and administrator-policy delta was 169
+commits behind protected `main@012beaacd0631f8cd3391c77744eeb626269b5de`
+and conflicted in five files. A non-force merge preserves both histories. The
+RED merge-result regression had seven failures: ambiguous transport exceptions
+were typed as `provider_outcome_unknown` on one path without updating circuit
+evidence, while newer tests expected the older retryable
+`provider_connection_error`; the concrete-model HTTP path leaked the raw
+exception into a retrying 500 response. The reconciled contract records the
+candidate and group failure once, returns non-retryable
+`provider_outcome_unknown`, omits provider-controlled diagnostics, and emits
+`x-should-retry: false` for both concrete and virtual passthrough. The focused
+timeout, passthrough, telemetry, policy, pool, and admin suite passes 287 tests.
+Protected-main reconciliation also exposed a duplicate DNS preflight in the NIM
+benchmark evaluation adapter: the pinned benchmark transport was never reached,
+so 180 evaluation cells collapsed into local failures after capability probing.
+The adapter now keeps URL and KV credential validation while delegating address
+resolution exclusively to its pinned transport; the malformed-evaluation
+contract again fails before artifact publication. Four focused regression and
+stale-contract tests pass; five additional adapter tests cover the delegated,
+valid injected, unsafe-URL, and missing-credential boundaries. Pytest's
+asynchronous fixture-loop scope is now
+explicit rather than inherited from a deprecated plugin default.
+
+Five review-discovered timeout paths are also repaired on the same Proposed
+successor. Finite model policies now create one monotonic deadline before local
+admission and spend the remaining budget on connection, retries, and every
+stream read. A timeout caused by that explicit policy returns non-retryable
+`model_timeout`; a connection reset remains the distinct non-replayable
+`provider_outcome_unknown`. A local admission expiry occurs before any send and
+therefore moves directly to an eligible sibling without consuming the
+same-agent retry budget. Synchronous embeddings resolve the selected embedding
+agent's timeout instead of the client-wide default. Policy writes and OpenAPI
+now reject values above the socket-safe 2,147,483,647-second maximum. Focused
+tests cover post-send no-replay, streaming lifetime, pre-send failover,
+embedding selection, and the numeric boundary.
+
+The reconciled tree's local full suite reports `3686 passed, 3 skipped, 1
+deselected`; the deselected owner-contract test requires the released
+`fast-mlsirm` native extension, while this runner has neither that artifact nor
+a Rust toolchain. Public-object docstring coverage is 100%, Ruff and compileall
+are clean. Aggregate branch-aware coverage is 94%, so no full-repository 100%
+coverage claim is made and the PR remains Proposed pending hosted exact-head
+evidence.
+
+This remains Proposed exact-tree evidence. Protected merge, immutable release,
+consumer pin update, and a live `orchestrator/free` recovery remain required.
+The triggering `.github` #2106 model gates therefore remain nonpassing even
+though its exact-head CodeQL run has subsequently settled successfully.
+
+## 2026-09-07 per-model serving timeout and HTTP policy writes
+
+PR #1053 now applies an administrator-owned `model_timeout_seconds` value on
+the selected model's serving path. The client default remains null. There is
+no shared application ceiling. Authenticated timeout-only PATCH writes are
+admitted and recorded with the opaque principal digest. GET
+`timeout_policy` still reports a stale serving snapshot when another process
+wrote the durable row; that cross-process refresh remains open. HTTP restore
+and administrator UI remain unfinished. This is local regression evidence,
+not a protected merge or live-provider recovery claim.
+
+## 2026-09-07 timeout audit visibility repair
+
+On PR #1053 base `1ccc9599415096433214cd9ad0df611eddfc8fbb`, successful
+timeout set, clear, and restore operations had durable policy history but no
+operator audit event. A local regression reproduced the missing events; the
+repair adds committed revision references to the existing audit stream.
+History GET access now uses the existing durable replay-authorization path.
+An authenticated loopback HTTP regression reproduced missing access auditing
+and now checks both successful access and HTTP 503 when audit recording fails.
+
+The timeout-policy and agent-pool suites passed 73 tests in 12.30s before this
+documentation update. No live provider, protected merge, or deployment is
+claimed. The HTTP test spies on the durable audit call; it does not prove
+storage survival after a crash. Policy history remains atomic with the policy
+update; the separate operator event is not a new cross-store transaction.
+Default-null model timeout and explicit administrator control are unchanged.
+
+## 2026-09-06 model-specific timeout policy: local, not delivered
+
+PR #1053's remote `661ce8db` has a completed 3400-pass/2-skip regression suite
+for removing the implicit client timeout. The subsequent local durable-policy
+implementation at `439da2e5` has 31 related passes, but does not yet enforce
+model-specific execution limits. HTTP write admission and UI controls remain
+closed for the new setting. Neither result proves deployment or buyer latency.
+
+A new failure-injection test at `6236e982` demonstrates an unresolved audit
+atomicity gap: the update reports an audit error while both memory and a
+restarted instance retain the new 7200-second policy. Policy change/history
+was subsequently moved into one local pool transaction at `4e839ce1`;
+`c3879439` has 37 related passes, including history-insertion rollback for
+new/existing rows and rejection of a stale different-value writer. This does
+not yet cover authenticated actor evidence or cross-process serving refresh.
+Subsequent `d911a38e` adds history-revision comparisons for ABA conflicts;
+`e5e9c96f` reads values and revisions in one database snapshot. Their committed
+RED cases reproduced stale-value acceptance and mixed revisions respectively;
+the latter head has 39 related passes.
+Actor evidence is now stored as an optional opaque principal digest at local
+`c08a5fd5`; this is not yet authenticated HTTP policy-write E2E and null
+historical actors remain unknown. Static-token identity is deployment-scoped.
+Local `37bca9ca` adds revision-checked restoration as a new, source-linked
+history entry; `62ba3c3b` has 54 related passes including foreign-model and
+audit-failure rejection. Authenticated HTTP restore,
+precedence, cancellation semantics, released Rust runtime integration and
+actual administrator visual/E2E evidence also remain open.
+
+Local `9701dec2` guards ordinary pool saves against stale policy value/revision
+overwrites (60 focused passes). `befe04ce` additionally delays removal and
+group-change serving publication until durable saves succeed, following three
+reproduced failures; 103 related tests passed in 15.34 seconds. Multi-model
+batch rollback and cross-process serving refresh remain unproven. Neither
+change supplies model deadline enforcement or a new full-suite result.
+
+Subsequent `ad337e18` reproduced partial persistence in all three group/discovery
+batch paths when the second model conflicted. `36fc35df` now commits each batch
+in one transaction using the existing normalized writes; 122 related tests
+passed in 5.04 seconds. Cross-process refresh and end-to-end timeout delivery
+remain open; separate bootstrap operations are not one atomic batch.
+
+`a2951f67` adds actual authenticated HTTP evidence: stale ordinary edits fail
+without overwriting the other writer's policy, invalid credentials get 401,
+and the unfinished timeout write field remains rejected (1 focused pass,
+4.01 seconds). This is rejection-boundary evidence, not successful policy
+activation or inference enforcement.
+
+See [the evidence record](doctoring/model-timeout-policy-evidence.md) for exact
+revisions, retained failures, corrected test-evidence limitations, owner
+boundaries and the full remaining acceptance gates. Local configuration work
+must not be represented as released enforcement or psychometric accuracy gain.
 
 ## 2026-09-09 Request-to-provider diagnostic correlation
 
@@ -650,7 +924,7 @@ the recorded retryable upstream error first. Caller-selected endpoint, model, fr
 file-replica, and ambiguous-tool-replay restrictions remain unchanged.
 Both ordered regression cases failed before the fix and pass afterward.
 See [doctoring](doctoring/provider-diverse-discovery-routing.md#pr-1004-mixed-failure-classification-follow-up).
-Protected merge and post-change live gateway evidence are still required;
+ Protected merge and post-change live gateway evidence are still required;
 head `cdb672c23a23dd3c83be3cd4190f5a7b1d5da032` passed the full local suite
 (`3409 passed, 2 skipped in 657.92s`). That result predates the accounting
 correction below and does not verify it.
@@ -691,7 +965,7 @@ usage evidence; all 60 focused cases pass. The interrupted full run on
 - **Exact evidence:** `tests/test_model_judge.py::test_structured_repair_does_not_retry_request_excluded_model` established a stale candidate already excluded by a 404, a live candidate producing invalid structured output, and a repair-only 413. The generated handler retired the live candidate and called the generic structured-exhaustion helper, incorrectly raising `StructuredOutputExhaustedError` instead of preserving `ProviderRequestTooLargeError`.
 - **Classification:** deterministic code-generation/repair-path defect in this repository, not a provider/network transient, fixture race, missing permission, or expected fail-closed governance result.
 - **Causal fix:** keep the repair prompt candidate-bound; on repair-only 413, retire that candidate and start a fresh synthesis only on another already-eligible, non-excluded candidate. If none remains, persist the request-size failure and re-raise the original typed 413. Never retry a request-excluded predecessor.
-- **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
+ - **Verification:** this writer commits only after the focused routing suite, broad suite, compile checks, and `git diff --check` pass. Required exact-head GitHub Checks/reviews still must complete; pending evidence is not treated as passing.
 
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
@@ -2477,6 +2751,227 @@ normative ADR 0016 file remains. Privacy requirements additionally follow
 > checks, reviews, and base relationships can change after publication. Always
 > refetch the remote exact head and protected rules before acting on a row.
 
+## 2026-09-14 rate-limit-aware admission for a 429 storm
+
+Production evidence: org CI review lanes call this gateway with
+`orchestrator/free`. During a free-pool rate-limit storm every candidate
+returned HTTP 429 within ~50ms (noema run 34758641142, strix run 34758679736:
+preflight `ready_count: 0`, 7x 429 across OpenRouter and NIM accounts), and the
+gateway simply failed the request. `ContextualWisdomLab/.github#2148`
+independently root-caused the same failure mode against a private-target ZDR
+pool of three OpenRouter `:free` routes on one account, wiped by a single 429
+burst; `#2165` shows `noema-review`/`strix` failing closed on the resulting
+429/502 with `attempts=1`, blocking unchanged consumer PRs. The owner's
+requirement across all three reports is the same: the gateway's job under a
+429 storm is to not fail.
+
+Fixed: `orchestrator.py` now parses `Retry-After` (delta-seconds or an
+HTTP-date; `provider_errors.parse_retry_after`) and falls back to a numeric
+`x-ratelimit-reset*` header when absent, recording a per-agent cooldown
+(`TaskOrchestrator._record_rate_limit`/`_rate_limit_remaining`) kept separate
+from the health circuit breaker -- a 429 is quota exhaustion, not a model
+health failure, and no longer trips `_circuit` (a direct 503 still does).
+`classify_provider_failure` now attaches `retry_after_seconds` to any 429/503
+classification's `extra_detail`, so both the passthrough transport and the
+chat transport used by `_invoke` (route_once/conduct's shared engine) can
+record the same cooldown from one `ProviderUpstreamError`.
+`_failover_candidates` (shared by every caller, including `route_once`/
+`conduct`) now skips a currently cooled-down candidate by default, falling
+back to the full list only when every candidate is limited so a caller with no
+wait logic of its own still gets one honest attempt.
+
+The wait-then-retry/honest-429 admission decision itself is one shared
+implementation, `TaskOrchestrator._await_rate_limit_recovery(candidates, *,
+deadline, transport)`: it computes the earliest known cooldown among
+currently rate-limited members of `candidates`, waits for it (one bounded
+`time.sleep`-backed call, never a busy-loop) and returns `True` when it fits
+the remaining budget against `deadline` -- resolved from the request's
+administrator-owned `model_timeout_seconds` deadline (issue #1053) when set,
+else the new `rate_limit_wait_seconds` constructor/CLI default (30s, a
+documented caller-contract bound, not a hidden product limit) -- or raises the
+honest `provider_rate_limited` error code (429, `retryable=True`) instead of
+misclassifying quota exhaustion as a `502 provider_connection_error` when
+waiting is impossible. Two callers reach it:
+
+- `proxy_completion`'s own passthrough failover loop calls it directly each
+  round its ranked candidates are exhausted.
+- `TaskOrchestrator._invoke_with_rate_limit_recovery` wraps `_invoke` (the one
+  shared engine both `route_once` and every `conduct` step, including the
+  worker step, call to reach a candidate): when `_invoke`'s own candidate
+  exhaustion raises a 429/503 `ProviderUpstreamError` AND every candidate
+  currently eligible for that call is rate-limited (a genuine storm, not a
+  mixed failure set), it calls the same helper and retries the whole
+  `_invoke` call instead of propagating the exhaustion. A mixed failure set
+  re-raises exactly as `_invoke` would have, unchanged.
+
+`server.py` answers a raised `provider_rate_limited` error with `429` and a
+`Retry-After` header (or the equivalent field in the terminal SSE error frame
+when headers are already flushed) regardless of which of the two callers
+raised it. `provider_readiness_report` now also reports `rate_limited_until`
+and `earliest_ready_seconds` per agent so an external preflight/readiness
+sidecar (the org sidecar's own `contextual-orchestrator-preflight.json`
+already reports `candidate`/`probed`/`rejected_count` and
+`account_skip_after_429` as its RED/GREEN evidence for this class of change)
+can wait instead of exiting.
+
+Coverage note: this closes the real `orchestrator/free` HTTP path.
+`route_once`/`conduct` (via `_invoke`) is the path CI review lanes actually hit
+over `/v1/chat/completions` for a virtual model, since a virtual model with
+tools deliberately stays on Fugu route / TRINITY-Conductor conduct rather than
+single-agent passthrough
+(`tests/test_actions_model_fallback.py::test_http_virtual_free_tools_stay_on_route`);
+`proxy_completion`'s own multi-candidate virtual-selector branch remains
+reachable over HTTP only through direct API use, but now shares the identical
+wait/honest-429 decision through `_await_rate_limit_recovery` rather than a
+separate implementation. Every conduct step (thinker/worker/verifier/
+synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
+site, so the worker step required by the owner's report gets the fix, and so
+do the other roles for free, without a second implementation.
+
+### Follow-up (same day): an omitted cooldown header must still count as cooling
+
+`_record_rate_limit(agent_id, None)` originally returned without recording
+anything, so a 429/503 whose provider omitted both `Retry-After` and
+`x-ratelimit-reset*` (RFC 9110 10.2.3 permits omitting it entirely; NIM and
+OpenRouter routinely do) was never marked cooling -- `_await_rate_limit_recovery`
+saw no candidate to wait for and the request failed exactly as if this whole
+feature did not exist. The 2026-09-13 production storm may well have been
+exactly this shape.
+
+Fixed: an unknown-duration 429 now records the new administrator-owned
+`rate_limit_unknown_cooldown_seconds` (constructor/CLI default 5s -- short by
+design, so an unknown cooldown is re-probed soon rather than parked) as an
+*assumed* cooldown instead of nothing, tagged `cooldown_source: "assumed"` in
+both `provider_readiness_report` and the honest-429 error detail (vs
+`"provider"` for a real header-derived value); the existing "cooldowns only
+extend forward" rule also protects the source label, so a later assumed
+cooldown can never shorten or relabel an active provider-stated one.
+
+Two scope refinements, both made after concrete regression evidence rather
+than by design intent alone:
+
+- **429 only, not 503.** Extending the assumption to a headerless 503
+  made several pre-existing exhaustion tests
+  (`test_mixed_failures_surface_the_final_classified_provider_failure`,
+  `test_default_mock_endpoint_represents_one_fixture_provider`) loop through
+  repeated assumed waits before finally raising the wrong (storm) error
+  identity for what was actually a permanent, unrelated failure double. A
+  503 ("service unavailable") is a genuine, possibly permanent availability
+  signal with no inherent quota-recovery semantics the way a 429 is, so it
+  keeps requiring an explicit provider-stated duration to be treated as
+  cooling at all.
+- **Two or more candidates required (superseded 2026-09-14, see the
+  follow-up entry below).** `_await_rate_limit_recovery` at this point in the
+  timeline returned `False` (nothing to wait for) whenever fewer than two
+  candidates were passed in, regardless of rate-limit state: a "storm" was
+  read as implying coordinated failure across a pool of alternatives, and a
+  single pinned/named candidate with no failover pool kept its pre-existing
+  immediate classified-error contract -- the client already sees
+  `retryable=true` and can retry on its own with no server-side latency
+  added. Without this guard, `tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+  (one named model, always 429, no headers) hung waiting out an assumed
+  cooldown and blew past its 5s client-side read timeout -- the same
+  regression shape the coordinator warned the 2026-09-13 storm might be, now
+  reproduced directly against a stability-guaranteeing pre-existing test. A
+  bug in the initial fix for this guard (`_invoke_with_rate_limit_recovery`
+  looping unconditionally regardless of whether the shared helper actually
+  found anything to wait for) was caught by the same test and closed by
+  checking the helper's return value before retrying. This candidate-count
+  threshold was itself later found to be the wrong discriminator: it
+  misclassified a virtual selector's pool wiped down to exactly one eligible
+  candidate by a 429 (a real, common production shape) identically to a
+  genuinely pinned concrete model. See "explicit-vs-virtual selector, not
+  candidate count" below for the fix.
+
+Two pre-existing tests in `tests/test_passthrough_provider_failover.py`
+(`test_all_candidates_chain_the_last_failure`,
+`test_free_virtual_model_never_fails_over_to_a_paid_agent`) used a bare 429
+purely incidentally, as a stand-in for "some transient failover-eligible
+failure" unrelated to rate-limiting itself, across two real candidates each
+(so the two-candidate guard above did not save them); both were switched to
+500 to keep their actual intent isolated from this feature.
+
+Tests: `tests/test_rate_limit_aware_admission.py` (20 tests) -- adds a
+no-header 429 storm across two candidates that still waits the assumed
+cooldown and is served, the same with zero budget returning
+429/`provider_rate_limited` with `Retry-After` equal to the ceiled assumed
+value and `cooldown_source: "assumed"` in the error detail, and confirmation
+that a provider-stated cooldown is never shortened or relabeled by a later
+assumed one -- on top of the 17 tests from the entry above.
+`python -m pytest tests/test_provider_error_taxonomy.py
+tests/test_rate_limit_aware_admission.py tests/test_passthrough_provider_failover.py
+-q` passed except the pre-existing local-only `openai` SDK version pin
+(`test_sdk_passthrough_unknown_outcome_never_replays`); the repository-wide
+suite passed 3704/3705 (1 skipped) with only that same SDK-pin failure and
+the separately known local-only `mcp.Client` privacy test failure, neither
+touched by this change. `python -m interrogate -v contextual_orchestrator/`
+reported 100% docstring coverage.
+
+## 2026-09-14 rate-limit-aware admission: explicit-vs-virtual selector, not candidate count
+
+The "two or more candidates" guard added earlier the same day was itself a
+defect, not just a narrow scope choice: `_await_rate_limit_recovery` opened
+with `if len(candidates) < 2: return False`, so a pool with exactly one
+eligible candidate never waited out a rate-limit storm -- it failed
+immediately, which is the behavior this whole feature exists to remove.
+
+Production evidence this case is real and common, not hypothetical:
+noema-review run 34772771262 (2026-09-14, sidecar pin `767e67fb`) on
+`contextual-orchestrator#1177`: preflight reported `ready_count: 1`, and the
+review call then failed after 562s with `HTTP Error 429` served by
+`google/gemma-4-31b-it:free`. `ContextualWisdomLab/.github#2148` records that
+the private-target ZDR pool is three OpenRouter `:free` routes on a single
+account, so one 429 wipes the whole pool and leaves at most one eligible
+route.
+
+The guard was added for a good reason that had to be preserved:
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+pins ONE named concrete model that always answers 429 with no headers; under
+the assumed-cooldown path that test hung past its client-side read timeout.
+The correct discriminator was never the candidate count -- it is whether the
+caller delegated selection at all: an explicit concrete model must fail fast
+with the honest 429 (unchanged), while a virtual selector
+(`FREE_MODEL`/`AUTO_MODEL`/`GATEWAY_DEFAULT_MODEL`/no model) must wait even
+when only one candidate remains.
+
+Fixed (smallest diff): the count guard was replaced with an explicit-selector
+guard. `_await_rate_limit_recovery` gained a required keyword-only
+`virtual_selector: bool` parameter; `if len(candidates) < 2: return False`
+became `if not virtual_selector: return False`. Both call sites now pass a
+value they already compute rather than re-deriving it:
+`proxy_completion`'s own passthrough failover loop computes
+`virtual_selector = requested_model in {None, GATEWAY_DEFAULT_MODEL,
+AUTO_MODEL, FREE_MODEL}` right where `requested_model` is read (the same set
+its own explicit-model early-return branch already used inline), and
+`_invoke_with_rate_limit_recovery` gained the identical required keyword-only
+parameter, threaded in by `route_once` and `conduct`, each of which computes
+`model_name in {GATEWAY_DEFAULT_MODEL, AUTO_MODEL, FREE_MODEL}` once from
+their own `model_name` parameter. `_invoke_with_rate_limit_recovery`'s own
+"not a genuine storm" guard changed from `len(candidates) < 2 or any(...)` to
+`not virtual_selector or any(...)`, preserving the untouched "some eligible
+candidate is not rate-limited -- a mixed, unrelated failure" branch.
+
+Tests added to `tests/test_rate_limit_aware_admission.py`: a virtual selector
+(`FREE_MODEL`) with exactly ONE eligible candidate that answers 429 with
+`Retry-After: 1` then succeeds on retry waits once and is served (the single
+candidate is called twice); the same single-candidate virtual case with no
+wait budget returns an honest 429/`provider_rate_limited` with
+`Retry-After`, not a generic failure; an explicit concrete model with a
+single candidate that always 429s fails fast with no wait (the injected
+sleep hook is asserted never called). Every pre-existing test in that file
+stays green, and
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+was re-run to confirm the original client-timeout regression does not
+return.
+
+`python -m pytest tests/test_rate_limit_aware_admission.py
+tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py
+tests/test_provider_reliability.py tests/test_api_contract.py
+tests/test_self_check.py -q` passed except the pre-existing local-only
+`openai` SDK version pin and the separately known local-only `mcp.Client`
+privacy test, neither touched by this change. `python -m interrogate -v
+contextual_orchestrator/` reported 100% docstring coverage.
+
 ## 1. Product requirements (PRD)
 
 Contextual Orchestrator must let an application keep using an OpenAI-compatible
@@ -3310,6 +3805,11 @@ of fabricated-precision the project's Honest metrics convention exists to
 prevent. `tools` passthrough doesn't have this exposure (always one
 non-streaming upstream call; `payload["usage"]` there is always the raw
 provider JSON's own field), which is also exactly the shape Strix needs.
+**Resolved by the conduct SSE usage follow-up**: `_chat_response_sse_chunks`
+now applies the same `measurement_status == "measured"` gate
+`chat_completion_chunks` already has, so conduct-mode streamed usage is exposed
+only when measured instead of rejecting the whole streaming request.
+
 **Follow-up delivered by ADR 0006**: `_chat_response_sse_chunks` now emits
 measured usage only for valid provider counts and otherwise emits null usage
 with an unavailable status rather than synthesizing the historical estimate.
@@ -3395,7 +3895,7 @@ failed after the verdict was already correctly published and enforced —
 a downstream status-publish step, not the review pipeline itself; not yet
 investigated.
 
-**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+**Historical incident, not current-runtime proof** (traced via `.github#1276`'s
 `noema-review` run, flagged by the user as "still not working" after the
 above fixes landed): `TaskOrchestrator._invoke()`
 (`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
@@ -3937,6 +4437,269 @@ at `0024522146803627b8741470ebefaf79ffa4a310`, preserving the complete prior
 delta before this normal document revert. The [handoff](doctoring/lart_measurement_review.md#preprocessing-evidence-successor)
 keeps the upstream Draft/maintainer-approval boundary and unverified estimator,
 rights, accuracy and latency gates visible. This is not gap closure or release.
+`.github`-hosted PRs' `noema-review`/dispatch runs succeed in that historical
+observation). The earlier proposed universal deadline is superseded by the
+explicit model-timeout requirement: model execution defaults to null, and only
+an administrator-configured model limit may bound its complete execution.
+Readiness probes have a separate finite operational contract. The old run does
+not prove current deployment behavior or justify imposing a global inference cap.
+
+### Read-only timeout policy visibility — local, not runtime activation
+
+Source `6774dab4` exposes an admin-only timeout-policy GET that separates fresh
+configured seconds/revision from the local serving snapshot. It reports seconds
+and `enforcement_available=false`; reads do not activate limits or refresh
+routing. The actual HTTP and related pool/policy/security checks pass 88 tests
+in 9.52 seconds. Source `f9505a5c` adds model-scoped audit history with stable
+older-revision cursors and at most 100 records per read; 96 related tests pass
+in 7.70 seconds, including HTTP authorization and invalid-bound checks. HTTP
+set/clear/restore, released Rust runtime integration and actual administrator
+UI acceptance remain open. See
+[policy evidence](doctoring/model-timeout-policy-evidence.md#read-only-operator-policy-view).
+
+### Unknown request outcome — local error-contract repair
+
+At `76d1caab`, a passthrough timeout or connection failure with unknown
+acceptance no longer escapes as a generic internal error. The existing
+single-attempt/no-fallback decision is retained, with a caller-safe
+`provider_outcome_unknown` response, `retryable=false` and an explicit
+SDK no-retry header. No tool execution is inferred from a model timeout.
+OpenAI SDK 2.54.0 → actual loopback HTTP → orchestrator → mock provider
+verifies one primary call, no fallback, and no raw diagnostic disclosure.
+The SDK-enabled related run passes 212 tests in 14.63 seconds. This is
+local evidence, not a protected release or live-provider result; full-suite
+verification of these new commits remains pending. Higher-level Strix
+retries, SSE errors, default-null full-response lifetime and UI acceptance
+remain open. See [incident and SDK evidence](doctoring/model-timeout-policy-evidence.md).
+
+The separate Naruon Noema 429 incident lacks per-attempt upstream status;
+final gateway status alone cannot establish every candidate's failure cause.
+Local `0b949aa2` adds bounded numeric status to the existing common failed-
+attempt log without reading provider text or bodies (89 related tests pass,
+15.28 seconds). Full verification and release of this diagnostic addition
+remain pending; provider availability itself is not repaired by better logs.
+
+### Message-count provenance registry — 2026-09-14
+
+Issue #1157 (shared-context accounting) required provider/model-specific
+counting provenance instead of a raw-text heuristic standing in for message
+accounting. #927 explicitly left prompt sizing for future work and #1151 is
+the separate common-output-ceiling concern; neither is reopened here. PR
+#1178 (`feat/context-window-candidate-filter`, not merged) added a raw-text
+*lower bound* for selection-time candidate filtering — deliberately a lower
+bound, not message accounting, and left untouched by this change.
+
+`contextual_orchestrator/token_counting.py` gained
+`COUNTING_PROVENANCE_REGISTRY`, keyed by exact model identifier, each entry
+citing an official source (currently the OpenAI Cookbook's "How to count
+tokens with tiktoken", fetched live 2026-09-14) and scoped to exactly the
+model identifiers that source states the framing constants apply to —
+`gpt-3.5-turbo-0125`, `gpt-4-0314`, `gpt-4-32k-0314`, `gpt-4-0613`,
+`gpt-4-32k-0613`, `gpt-4o-mini-2024-07-18`, `gpt-4o-2024-08-06`. Bare family
+aliases (`gpt-4o`, `gpt-4`, ...) are deliberately excluded: the source itself
+calls its formula for those "an estimate, not a timeless guarantee," and
+registering them would reintroduce exactly the heuristic framing constant
+operating rules 3.1/9.1 prohibit. `NativeExactTokenCounter.describe_messages`
+/`count_messages` return an exact, provenance-bound count only inside that
+scope; a `tools` payload, a non-text content part, or any other field outside
+`role`/`content`/`name` raises `TokenCountUnavailable` naming the field, and a
+model outside the scope raises the same way. Tools, image/audio content,
+`instructions`, and prior Responses-API `response_id`/conversation references
+remain explicitly unavailable — no accounting for them is invented.
+
+The served `/v1/chat/completions` response gained an optional
+`prompt_count_source` field, set only when
+`contextual_orchestrator/server.py::_prompt_count_source` obtains a count for
+the exact served request/model from this registry, and omitted otherwise; it
+sits next to the existing `usage`/`usage_measurement_status` pair without
+touching the candidate-selection surfaces PR #1177/#1178/#1179 are changing.
+
+Remaining gap: tool-schema, multimodal, `instructions`, and prior-response
+token accounting have no verified official source yet, so #1157's shared-
+context budgeting (using the count against a model's valid output ceiling and
+remaining input/output context) is not implemented by this change — it is a
+provenance-registry foundation, not a closing fix. Local evidence only: the
+new and touched tests pass (`tests/test_token_counting_boundaries.py`,
+`tests/test_api_contract.py`, `tests/test_self_check.py`), and the full
+`tests/` run is green apart from the pre-existing, unrelated local-only
+`openai` SDK 2.54.0-pin and `mcp.Client` failures already tracked elsewhere in
+this document.
+
+### Shared-context output budgeting — second half of #1157
+
+Building on the counting-provenance registry above, `token_counting.py`
+gained `shared_context_output_budget(agent, messages, requested_output_tokens,
+*, counter, tools=None)`. It returns a `SharedContextBudget` decision (never
+an estimate) only when every input is authoritative: `agent.context_window`
+is a known positive int, `agent.max_output_tokens` is known, and
+`describe_message_count` returns an exact, registry-verified count for
+`messages`/`agent.model` (no tools, no non-text fields, an in-scope model).
+Any other case — unknown context window, unknown output ceiling, or a count
+unavailable because of tools/modality/an out-of-scope model — returns `None`
+so callers leave existing behavior untouched; per operating rule 9.1, no
+fixed ratio or hidden shrinkage is ever substituted. When a decision is
+returned, `remaining = context_window - prompt_tokens` (the exact count
+already folds in the model's reply-priming tokens per the OpenAI Cookbook
+framing, so they are not subtracted twice) and `output_ceiling =
+min(max_output_tokens, remaining)`.
+
+`ModelClient.chat()` applies this decision at the exact site the existing
+catalog output-ceiling clamp already ran (`effective_max_output_tokens`,
+before the provider HTTP call): with no explicit caller/client output budget,
+it now sends `min(max_output_tokens, remaining)` instead of the bare catalog
+ceiling; when the caller's own explicit budget exceeds `remaining`, or
+`remaining < 1` regardless of an explicit budget, it raises the existing
+`ProviderRequestTooLargeError` (413, `request_too_large`) naming
+`context_window`, `prompt_tokens`, and the requested budget — never a silent
+clamp or truncation. `ModelClient` gained an optional `token_counter`
+constructor argument (the default `TaskOrchestrator` wires its own counter
+into its default client only; a caller-supplied client keeps whichever
+counter it already has) and `take_shared_context_budget()`, mirroring the
+existing `take_usage()` thread-local seam. The served
+`/v1/chat/completions` response gained an optional `shared_context_budget`
+evidence object (`context_window`/`prompt_tokens`/`output_ceiling`/
+`source: "exact"`) next to `prompt_count_source`, read and cleared by
+`server._take_shared_context_budget()`, and omitted when no decision was
+made.
+
+Scope left out of this step, by design: only the non-streaming
+`ModelClient.chat()` send path is wired. The streaming (`_stream_send`) and
+local-proxy/passthrough send paths still apply only the pre-existing plain
+`_clamp_agent_token_budget` clamp against `agent.max_output_tokens`, with no
+shared-context accounting — a natural follow-up once this path is proven.
+Tool-schema, multimodal, `instructions`, and prior-response token accounting
+remain unavailable inputs (per the registry gap above), so requests carrying
+them still fall back to the pre-existing plain clamp with no `#1157` evidence
+attached; #1157 is not closed by this change. Local evidence only: the new
+and touched tests pass (`tests/test_token_counting_boundaries.py`,
+`tests/test_output_budget_model_max.py`,
+`tests/test_prompt_count_source_http_honesty.py`, `tests/test_api_contract.py`,
+`tests/test_self_check.py`), `python -m interrogate -v contextual_orchestrator/`
+reports 100%, and the full `tests/` run is green apart from the same
+pre-existing, unrelated local-only `openai` SDK 2.54.0-pin and `mcp.Client`
+failures tracked elsewhere in this document.
+
+### Streaming and passthrough shared-context output budgeting — closes the above follow-up
+
+The streaming/local-proxy gap left above is now closed. `ModelClient._stream_send`
+applies the identical `shared_context_output_budget` decision at the exact
+site its own plain `_clamp_agent_token_budget` clamp already ran (using the
+same "explicit" seam as `chat()` — the request-scoped or client-level
+`max_output_tokens`, never whatever catalog default `stream_chat()` already
+wrote into `payload["max_tokens"]` before calling `_stream_send`) — before
+any provider bytes are sent for that attempt. `ModelClient._proxy_send`
+(behind `proxy_send`/`proxy_send_once`/`probe_structured_chat`, the transport
+under the server's single-agent tool-loop passthrough) applies the same
+decision for the `chat/completions` endpoint, reading the caller's own
+`max_tokens` from the untouched passthrough body *before* the existing
+local-provider default-cap injection runs in the same method, so a
+gateway-injected local default is never misread as the caller's own explicit
+budget. In both cases: no explicit budget and all inputs authoritative sends
+`min(max_output_tokens, remaining)`; an explicit budget over `remaining`, or
+`remaining < 1` regardless of an explicit budget, raises the existing
+`ProviderRequestTooLargeError` naming `context_window`, `prompt_tokens`, and
+the requested budget — never a silent clamp. `shared_context_output_budget`
+already returns `None` for any shape `describe_message_count` cannot account
+for (a Responses-shaped `input` body, `tools`, non-text content, an
+out-of-scope model), so passthrough callers get no decision — not a forced
+estimate — whenever the caller-shaped body isn't exact chat-message
+accounting; this is the smallest-diff outcome the follow-up required, not an
+extension of the registry's own scope.
+
+The true streaming `/v1/chat/completions` route
+(`server._stream_route_completion`) already flushes SSE response headers and
+writes its first (`role: assistant`) frame before ever driving the provider
+call, so a rejection on this path necessarily surfaces *after* headers are
+committed rather than as a pre-request HTTP error. No new error-frame plumbing
+was needed for this: `ProviderRequestTooLargeError` is already a
+`ProviderUpstreamError`, and `_stream_route_completion`'s existing
+`except ProviderUpstreamError` handler already turns any such upstream
+rejection into a terminal SSE error frame carrying the same
+`context_window=`/`prompt_tokens=`/`requested_output_tokens=` evidence in its
+message. Live evidence: the terminal success ("stop") frame now also carries
+the same `shared_context_budget` object as the non-streaming response (same
+field name, same shape — `context_window`/`prompt_tokens`/`output_ceiling`/
+`source: "exact"`), attached only when `ModelClient.take_shared_context_budget()`
+returns one (reusing `server._take_shared_context_budget()` verbatim,
+matching this repo's existing pattern of attaching `prompt_count_source`-style
+evidence next to a terminal chunk rather than inventing a second shape), and
+omitted otherwise.
+
+Left out, and why: the `responses`-endpoint conversion branch inside
+`_proxy_send` (used only for local/`opencode_go` providers) is unchanged —
+its payload is already a Responses-shaped `input` body, which
+`describe_message_count` cannot account for, so wiring it in would only ever
+compute `None` there; the batch-upload send path (`_batch_run`) is a separate
+async transport (job upload/poll, not a live per-request send) and stays on
+the plain catalog clamp; embeddings (`_send_raw` called from
+`embed_with_usage`) never carry chat messages and are untouched. The
+passthrough response body itself is deliberately left with no
+`shared_context_budget` field: this transport's own module contract is that
+"the full provider response shape... survives verbatim" for tool-loop
+callers, so adding an extra top-level key there would violate that contract;
+only the outbound request-shaping decision (send/clamp/reject) applies to
+passthrough, not response evidence. Local evidence only: the new and touched
+tests pass (`tests/test_true_streaming.py`, `tests/test_output_budget_model_max.py`,
+`tests/test_token_counting_boundaries.py`,
+`tests/test_prompt_count_source_http_honesty.py`, `tests/test_api_contract.py`,
+`tests/test_self_check.py`), `python -m interrogate -v contextual_orchestrator/`
+reports 100%, and the full `tests/` run (3723 passed, 2 skipped) is green
+apart from the same five pre-existing, unrelated local-only `openai` SDK
+2.54.0-pin and `mcp.Client` failures tracked elsewhere in this document.
+
+### Streaming terminal-frame shared-context evidence ordering hazard — fixed
+
+Review of the streaming follow-up above found an ordering hazard it did not
+account for: `TaskOrchestrator.stream_route`'s post-stream real-time judge
+(`policy.realtime_judge`, on by default; see its "Real-time judging after the
+stream" comment) issues its own provider call on the same thread — through
+`_model_judge_verification` -> `_FastMLSIJudgeAdapter.complete()` ->
+`ModelClient.chat()` — and `chat()` unconditionally clears, and can
+repopulate with *its own* evidence, the thread-local shared-context-budget
+accessor at entry. `server._stream_route_completion` read that accessor via
+`server._take_shared_context_budget()` only after `stream_route` had already
+returned, i.e. after the judge's own call had run and potentially overwritten
+it — so the terminal SSE frame could carry the judge's `shared_context_budget`
+evidence, or none at all, instead of the served request's. This is the same
+dishonest-evidence failure mode this document's honest-metrics principle
+forbids, just on the streaming success path rather than the accounting
+surfaces this document otherwise tracks.
+
+Fixed by capturing the served request's evidence *inside* `stream_route`,
+immediately next to the pre-existing `take_usage()` call and before the judge
+runs, following the exact pattern already proven for usage: a new optional
+`shared_context_budget_callback` parameter (mirroring `usage_callback`'s
+shape) hands the caller the evidence at that point. `server
+._stream_route_completion` now passes this callback — guarded by an
+`inspect.signature`-based duck-typing check so a minimal test double whose
+`stream_route` does not accept the parameter still works, falling back to the
+old post-hoc `_take_shared_context_budget()` read only in that case — and
+uses the captured value for the terminal frame. The non-streaming response
+path's `_take_shared_context_budget()` call is unchanged: it already reads
+before any judge call runs and was never affected by this hazard.
+
+`prompt_count_source` was audited for the identical hazard and confirmed
+safe, not just assumed so: `server._prompt_count_source(orchestrator,
+messages, model_name)` derives its answer purely from the request's own
+`messages`/`model_name` via the counting-provenance registry, never from any
+`ModelClient` thread-local state, and — unlike `shared_context_budget` — it
+is not even emitted on the streaming path today, so there is nothing on that
+path for a second call to clobber.
+
+New regression coverage:
+`tests/test_true_streaming.py::test_http_route_stream_terminal_frame_survives_realtime_judge_second_call`
+installs a working (not neutralized) fast-mlsirm judge whose `.judge()` makes
+a real second provider call through the adapter, and asserts the terminal
+frame still carries the served request's `shared_context_budget`
+(`prompt_tokens`/`output_ceiling`), not the judge's. Verified to fail against
+the pre-fix code — the terminal frame carried the judge's own
+`prompt_tokens`/`output_ceiling` instead of the served request's — before the
+fix landed. Local evidence: `tests/test_true_streaming.py`,
+`tests/test_output_budget_model_max.py`,
+`tests/test_prompt_count_source_http_honesty.py`,
+`tests/test_token_counting_boundaries.py`, `tests/test_api_contract.py`, and
+`tests/test_self_check.py` all pass, and `python -m interrogate -v
+contextual_orchestrator/` reports 100%.
 
 ## 2026-09-13 constant-only KPI PR repair findings
 

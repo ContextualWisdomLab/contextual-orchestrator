@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import ExitStack
 import json
 import secrets
 import threading
 import sys
 import urllib.request
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,6 +22,20 @@ from contextual_orchestrator import (  # noqa: E402
     TaskOrchestrator,
 )
 from contextual_orchestrator.server import SecurityConfig, _readiness_payload, build_server  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def close_test_listeners(monkeypatch):
+    """Close every real listener after the test has stopped its serving loop."""
+    original_builder = build_server
+    with ExitStack() as cleanup_stack:
+        def tracked_builder(*args, **kwargs):
+            server = original_builder(*args, **kwargs)
+            cleanup_stack.callback(server.server_close)
+            return server
+
+        monkeypatch.setattr(sys.modules[__name__], "build_server", tracked_builder)
+        yield
 
 
 def _serve(security=None):
@@ -52,7 +68,8 @@ def _request(method, url, token=None, body=None, status_ok=(200, 201, 202)):
         with urllib.request.urlopen(req) as response:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:  # pragma: no cover - surfaced in asserts
-        return exc.code, json.loads(exc.read())
+        with exc:
+            return exc.code, json.loads(exc.read())
 
 
 def test_healthz_is_unauthenticated_and_ok() -> None:
