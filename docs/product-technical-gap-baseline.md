@@ -1,11 +1,14 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
-## 2026-09-13 context-length-exceeded failover (#1174)
+## 2026-09-17 context-window candidate filter + overflow failover (#1178/#1174)
 
-A provider HTTP 400 context-window overflow is classified as a request-size
-rejection (`_is_context_length_exceeded_error` inside
-`_is_request_too_large_error`), so virtual-selector failover advances without
-debiting provider/member health. Complementary pre-flight exclusion is #1178/#1200.
+`ModelAgent.context_window` is discovered and persisted but was not consulted
+during virtual-selector candidate selection. This change adds the pre-flight
+lane (skip known-too-small windows via a labeled lower bound; ADR 0133) and
+classifies provider 400 context-window overflow as a request-size rejection
+for failover without health debit. Unknown windows and explicit concrete
+model pins remain unfiltered. Tool-call capability exclusion for #940 remains
+on `main` via #1170.
 
 ## 2026-09-08 PR #971: unmodeled diversity displacement + full-pool ordering (fail-closed)
 

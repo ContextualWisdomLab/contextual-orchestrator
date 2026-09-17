@@ -9,6 +9,8 @@ unavailable rather than estimated.
 
 from __future__ import annotations
 
+import re
+
 import importlib
 import operator
 from collections.abc import Mapping
@@ -503,3 +505,65 @@ def shared_context_output_budget(
         requested_output_tokens=requested_output_tokens,
         exceeds_remaining=exceeds_remaining,
     )
+
+# Conservative divisor for the character-based token lower bound. Chosen well
+# above the ~4 characters/token average documented for the BPE tokenizers this
+# module maps exactly (cl100k/o200k) on English prose, so that
+# ``len(text) // _LOWER_BOUND_CHARS_PER_TOKEN`` stays at or below the true
+# token count even for highly compressible/repetitive text, whose realized
+# ratio can climb toward the high single digits as long common substrings
+# collapse into single vocabulary entries. Denser scripts (CJK, code, heavy
+# punctuation) tokenize at a much lower ratio in practice (often 1-3
+# characters/token), so the same divisor undercounts them by an even wider
+# margin -- always safe as a lower bound, just looser. This is a documented
+# engineering approximation, not a formal proof against adversarial input;
+# callers must always attribute it via the ``"estimate_lower_bound"`` source
+# label rather than presenting it as a measured count. See planning ADR 0133
+# (selection-time lower bound vs exact-only shared-context budgeting).
+_LOWER_BOUND_CHARS_PER_TOKEN = 7
+
+
+_REPEATED_CHARACTER_RUN = re.compile(r"(.)\1{2,}", re.DOTALL)
+
+
+def estimate_lower_bound_tokens(text: str) -> int:
+    """Conservative, non-overestimating token-count lower bound for raw text.
+
+    Intended only for callers that have already tried and failed to obtain an
+    authoritative count (see :func:`prompt_token_lower_bound`). Character-count
+    based: ``len(text) // _LOWER_BOUND_CHARS_PER_TOKEN``; see that module
+    constant's comment for why the divisor is deliberately conservative
+    (biased toward under-counting) rather than tuned for typical-case
+    accuracy. Selection-time exclusion (Ong et al., 2024) may use this labeled
+    bound; shared-context budgeting must not (ADR 0133).
+    """
+    if not text:
+        return 0
+    # Runs of one repeated character (indentation spaces, "-----" rules,
+    # "=====" banners) tokenize into a handful of multi-character tokens, so a
+    # raw character count would *over*estimate them and break the lower-bound
+    # guarantee. Collapse every run to at most two characters before dividing;
+    # for ordinary prose and code this changes little, for run-heavy text it
+    # only makes the bound looser, never larger than the true count.
+    collapsed = _REPEATED_CHARACTER_RUN.sub(lambda m: m.group(1) * 2, text)
+    return len(collapsed) // _LOWER_BOUND_CHARS_PER_TOKEN
+
+
+def prompt_token_lower_bound(text: str, model: str, token_counter: Any) -> tuple[int, str]:
+    """Return a conservative prompt-token lower bound and its evidence source.
+
+    Tries ``token_counter.count_text`` first: when a native tokenizer is
+    mapped for ``model``, its exact count is returned labelled ``"exact"`` (an
+    exact count is trivially also a valid lower bound). When no authoritative
+    tokenizer is available for ``model`` (:class:`TokenCountUnavailable`),
+    falls back to :func:`estimate_lower_bound_tokens`, labelled
+    ``"estimate_lower_bound"`` -- mirroring how ``usage_source`` /
+    ``measurement_status`` are labelled elsewhere in this codebase, so a
+    caller never mistakes a heuristic for a measured count (Ong et al., 2024;
+    ADR 0133).
+    """
+    try:
+        return token_counter.count_text(text, model), "exact"
+    except TokenCountUnavailable:
+        return estimate_lower_bound_tokens(text), "estimate_lower_bound"
+
