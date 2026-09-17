@@ -1,5 +1,19 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Served requests had no correlatable identity (#1016, partial)
+
+Gap table for #1016 at `012beaac`: request identity reached error payloads
+only (`server.py` error adapters), typed per-attempt outcomes existed only on
+the structured synthesis path (`orchestration.route` / `attempts`),
+`/v1/provider_readiness` is preflight-only, and no versioned outcome contract
+exists. Candidate on `fix/request-id-response-header-1016` closes the first
+row: `_send_security_headers` now emits `x-request-id` with the server-generated
+identity on every response path. RED: three real HTTP cases (served chat,
+401, served stream) failed on a missing header; GREEN after the change, with
+`tests/test_stream_error_identity.py` unchanged and passing. Not established:
+typed attempt evidence on the single-worker route path, cancellation/deadline
+as a typed field, and a published contract version; those rows stay open.
+
 ## 2026-09-14 reference-cases terminology cleanup (#1015)
 
 The operator Evaluation surface labeled its dataset class "Golden prompts",
