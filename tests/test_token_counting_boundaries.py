@@ -18,6 +18,8 @@ from contextual_orchestrator.token_counting import (
     UnavailableTokenCounter,
     build_token_counter,
     describe_message_count,
+    estimate_lower_bound_tokens,
+    prompt_token_lower_bound,
     shared_context_output_budget,
 )
 
@@ -314,3 +316,87 @@ def test_shared_context_output_budget_flags_remaining_below_one_even_without_a_r
     budget = shared_context_output_budget(agent, _MESSAGES, None, counter=counter)
     assert budget.remaining == 5 - _EXACT_PROMPT_TOKENS
     assert budget.exceeds_remaining is True
+
+
+def test_estimate_lower_bound_tokens_is_conservative_and_zero_for_empty() -> None:
+    """The character-based lower bound is empty-safe and monotone in length."""
+    assert estimate_lower_bound_tokens("") == 0
+    short = "hi"
+    long = "hi" * 100
+    assert estimate_lower_bound_tokens(short) <= estimate_lower_bound_tokens(long)
+    # len(text) // 7, per the documented divisor.
+    assert estimate_lower_bound_tokens("word " * 140) == 100
+
+
+def test_prompt_token_lower_bound_labels_exact_when_native_tokenizer_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declared model with a native tokenizer yields an ``"exact"``-labelled count."""
+    module = types.SimpleNamespace(
+        count_cl100k=lambda text: len(text.split()),
+        count_o200k=lambda _text: 0,
+        pack_cl100k=lambda *_args: ([], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.token_counting.importlib.import_module",
+        lambda _name: module,
+    )
+    counter = build_token_counter()
+    assert isinstance(counter, NativeExactTokenCounter)
+
+    count, source = prompt_token_lower_bound("hello world review", "gpt-4", counter)
+
+    assert count == 3
+    assert source == "exact"
+
+
+def test_prompt_token_lower_bound_falls_back_to_estimate_when_unavailable() -> None:
+    """An unmapped model with no authoritative tokenizer falls back to the heuristic."""
+    counter = UnavailableTokenCounter()
+    text = "word " * 140
+
+    count, source = prompt_token_lower_bound(text, "some-unmapped-model", counter)
+
+    assert count == estimate_lower_bound_tokens(text)
+    assert source == "estimate_lower_bound"
+
+
+@pytest.mark.parametrize(
+    "sample,label",
+    [
+        ("The quick brown fox jumps over the lazy dog. " * 20, "ascii_prose"),
+        ("def add(a, b):\n    return a + b\n\nresult = add(1, 2)\n" * 20, "code"),
+        ("你好世界，今天的天气非常好，我们一起去公园散步吧。" * 20, "cjk"),
+    ],
+)
+def test_estimate_lower_bound_never_exceeds_a_real_native_exact_count(
+    sample: str, label: str
+) -> None:
+    """Property: the heuristic estimate never overestimates a real tokenizer's count.
+
+    Uses whatever tokenizer this environment's ``build_token_counter()``
+    actually resolves (native extension or configured Postgres backend); when
+    neither is available here, the case is skipped rather than faked, per the
+    gap-filter spec's requirement that this only assert against a genuinely
+    available native counter.
+    """
+    counter = build_token_counter()
+    try:
+        exact = counter.count_text(sample, "gpt-4")
+    except TokenCountUnavailable:
+        pytest.skip(f"no native tokenizer is available in this environment for {label!r}")
+    assert estimate_lower_bound_tokens(sample) <= exact
+
+
+def test_estimate_lower_bound_collapses_repeated_character_runs() -> None:
+    """Whitespace and rule runs must not inflate the bound above a real count.
+
+    Native tokenizers fold long runs of one character into a few multi-character
+    tokens, so a raw ``len // 7`` over-counts them; the estimator collapses each
+    run to two characters first.
+    """
+    assert estimate_lower_bound_tokens(" " * 1000) == 0
+    assert estimate_lower_bound_tokens("-" * 400) == 0
+    indented = ("        return value\n") * 40
+    assert estimate_lower_bound_tokens(indented) <= len(indented.replace("        ", "  ")) // 7
+

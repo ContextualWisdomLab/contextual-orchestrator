@@ -9,6 +9,7 @@ from contextvars import ContextVar, copy_context
 from .decision_receipts import observe_auxiliary_dispatch, record_answer_cache_hit, record_initial_selection
 from concurrent.futures import ThreadPoolExecutor
 import copy
+import errno
 import hashlib
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -24,6 +25,7 @@ import os
 from pathlib import Path
 import random
 import re
+import select
 import socket
 import ssl
 import sqlite3
@@ -43,7 +45,7 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
-from .conventions import require_object_name
+from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
 from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
@@ -96,6 +98,7 @@ from .reasoning_effort_profile import (
 from .token_counting import (
     TokenCountUnavailable,
     build_token_counter,
+    prompt_token_lower_bound as _prompt_token_lower_bound_evidence,
     shared_context_output_budget,
 )
 
@@ -185,7 +188,6 @@ DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
 )
-MAX_PROVIDER_PROBE_TIMEOUT = 30.0
 _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "ConnectionError",
     "HTTPError",
@@ -200,22 +202,79 @@ _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
 })
 
 
+class _ProviderCancellation:
+    """Close stdlib HTTP connections owned by one cancellable provider call."""
+
+    def __init__(self) -> None:
+        self._connections: set[http.client.HTTPConnection] = set()
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._cancelled_event = threading.Event()
+
+    def register(self, connection: http.client.HTTPConnection) -> None:
+        """Register a live connection or reject it after cancellation."""
+        with self._lock:
+            if not self._cancelled:
+                self._connections.add(connection)
+                return
+        try:
+            connection.close()
+        except Exception:
+            pass
+        raise _ProviderRequestCancelled("provider request was cancelled")
+
+    def cancel(self) -> None:
+        """Best-effort close every registered connection exactly once."""
+        with self._lock:
+            self._cancelled = True
+            self._cancelled_event.set()
+            connections = tuple(self._connections)
+            self._connections.clear()
+        for connection in connections:
+            sock = connection.sock
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    def raise_if_cancelled(self) -> None:
+        """Abort a cancellable DNS or connect operation after explicit cancellation."""
+        if self._cancelled_event.is_set():
+            raise _ProviderRequestCancelled("provider request was cancelled")
+
+    def run(self, call: Callable[[], Any]) -> Any:
+        """Run one call and translate transport fallout from cancellation."""
+        token = _PROVIDER_CANCELLATION.set(self)
+        try:
+            return call()
+        except BaseException as exc:
+            if self._cancelled:
+                raise _ProviderRequestCancelled("provider request was cancelled") from exc
+            raise
+        finally:
+            _PROVIDER_CANCELLATION.reset(token)
+            self.cancel()
+
+
+class _ProviderRequestCancelled(RuntimeError):
+    """A provider attempt stopped because its equivalent race already completed."""
+
+
+_PROVIDER_CANCELLATION: ContextVar[_ProviderCancellation | None] = ContextVar(
+    "provider_cancellation", default=None
+)
+_PROVIDER_DNS_SLOTS = threading.BoundedSemaphore(4)
+
+
 def _safe_provider_probe_error_type(exc: Exception) -> str:
     """Keep provider diagnostics package-owned instead of echoing exception classes."""
     name = type(exc).__name__
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
-
-
-def _validate_provider_probe_timeout(timeout: float) -> float:
-    """Validate the finite, bounded timeout used by explicit readiness probes."""
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise ValueError("provider probe timeout must be a finite number")
-    value = float(timeout)
-    if not math.isfinite(value) or not 0.1 <= value <= MAX_PROVIDER_PROBE_TIMEOUT:
-        raise ValueError(
-            f"provider probe timeout must be between 0.1 and {MAX_PROVIDER_PROBE_TIMEOUT:g} seconds"
-        )
-    return value
 
 
 class BudgetExceededError(RuntimeError):
@@ -358,6 +417,33 @@ def _step_output_token_count(
     return _step_output_tokens(step, token_counter, model)[0]
 
 
+def _context_window_exclusions(
+    candidates: list[ModelAgent], lower_bound_tokens: int
+) -> tuple[list[ModelAgent], list[str]]:
+    """Drop candidates whose KNOWN context window cannot hold the prompt.
+
+    Exclusion requires positive proof: ``agent.context_window`` must be a
+    known positive int strictly smaller than ``lower_bound_tokens`` (itself a
+    conservative lower bound that never overestimates -- see
+    :func:`contextual_orchestrator.token_counting.prompt_token_lower_bound`).
+    An unknown (``None``) window is absence of evidence, not evidence of a
+    too-small window, so it never excludes a candidate (Ong et al., 2024;
+    ADR 0133).
+    """
+    kept: list[ModelAgent] = []
+    excluded: list[str] = []
+    for candidate in candidates:
+        window = candidate.context_window
+        has_known_window = (
+            isinstance(window, int) and not isinstance(window, bool) and window > 0
+        )
+        if has_known_window and lower_bound_tokens > window:
+            excluded.append(candidate.id)
+            continue
+        kept.append(candidate)
+    return kept, excluded
+
+
 def _cost_usd_decimal(output_tokens: int, price_per_million: float) -> Decimal:
     """Return exact decimal USD for tokens at a USD-per-million price."""
     return Decimal(output_tokens) * Decimal(str(price_per_million)) / Decimal(1_000_000)
@@ -402,6 +488,66 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     default=None,
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
+
+
+def _resolved_openrouter_provider(agent: ModelAgent) -> str:
+    """Canonical provider identity for the ZDR-pin decision, base_url-first.
+
+    ``ModelAgent.provider_name`` is free-text and unvalidated at construction
+    (hand-authored JSON, ``model_discovery.py`` auto-discovery, or KV-driven
+    config can all leave it empty or typo'd). Trusting it verbatim here would
+    let an agent whose ``base_url`` is OpenRouter's own endpoint silently skip
+    the ``provider.zdr=true`` enforcement pin under an explicit ``zdr_only``
+    scope while still routing bytes to OpenRouter (base_url decides where the
+    request goes; this function only decides whether the pin is applied) —
+    a silent ZDR-policy bypass, not a crash (CodeRabbit review on #953,
+    discussion_r3898471887). Treating the exact OpenRouter hostname as
+    authoritative also covers a nonempty typo in that free-text field. Every
+    call site that funnels through this shared choke point (chat, streaming,
+    raw, binary media, and non-embedding batch JSONL) therefore gets the same
+    protection the embedding batch path already has.
+    """
+    host = urlparse(agent.base_url).hostname or ""
+    if host == "openrouter.ai":
+        return "openrouter"
+    return agent.provider_name or host
+
+
+def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str, Any]:
+    """Force OpenRouter to enforce zero-data-retention at request time.
+
+    OpenRouter can multiplex one model id across several backing providers;
+    a discovery-time ZDR feed snapshot proves a route was ZDR-attested when
+    it was fetched, not which provider actually serves a later request. Their
+    documented ``provider: {"zdr": true}`` request field is OpenRouter's own
+    server-side enforcement (https://openrouter.ai/docs/features/provider-routing)
+    and is authoritative for the request being sent right now, so it is
+    applied here rather than trusted to have been decided correctly upstream.
+    A caller-supplied ``provider`` object (e.g. explicit routing preferences)
+    is preserved and only gains the ``zdr`` key.
+
+    ``provider`` is an optional caller passthrough field reaching this shared
+    choke point unvalidated from every call site (chat, streaming, tools and
+    binary-media passthrough, and the batch JSONL path). A malformed truthy
+    non-mapping value (an int, bool, list, or string) must fail with a named,
+    caller-actionable validation error here rather than an opaque ``TypeError``
+    from ``dict()`` deep inside provider-transport code (Devin review on #953).
+
+    The "is this agent OpenRouter" check itself goes through
+    ``_resolved_openrouter_provider`` rather than a bare ``agent.provider_name``
+    comparison, so a misconfigured agent (empty/wrong ``provider_name`` but a
+    ``base_url`` that is actually OpenRouter's) still gets pinned instead of
+    silently bypassing ZDR enforcement (CodeRabbit review on #953).
+    """
+    if not _REQUEST_ZDR_ONLY.get() or _resolved_openrouter_provider(agent) != "openrouter":
+        return payload
+    provider_routing = payload.get("provider")
+    if provider_routing is not None and not isinstance(provider_routing, dict):
+        raise ValueError("provider must be an object with optional OpenRouter routing keys")
+    provider_routing = dict(provider_routing or {})
+    provider_routing["zdr"] = True
+    return {**payload, "provider": provider_routing}
+
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -1102,7 +1248,7 @@ def _is_context_length_exceeded_error(error: urllib.error.HTTPError) -> bool:
     rejection like the 413 and tool-description-limit cases above, not a
     generic caller error: the same prompt commonly fits the next
     capability-matched agent's larger context window, so it must fail over
-    rather than count against the rejecting agent's health.
+    rather than count against the rejecting agent's health (Ong et al., 2024).
 
     Three provider shapes are recognized, in order:
 
@@ -2043,7 +2189,7 @@ class ModelClient:
         self,
         timeout: float | None = None,
         max_output_tokens: int | None = None,
-        max_retries: int = 2,
+        max_retries: int = 0,
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
@@ -2054,8 +2200,15 @@ class ModelClient:
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
         token_counter: Any = None,
+        *,
+        connect_timeout: float | None = None,
     ) -> None:
+        # No deadline is selected by default. Explicit legacy caller limits remain
+        # compatible; review workflows and readiness paths never supply them.
         self.timeout = timeout
+        if connect_timeout is not None and connect_timeout <= 0:
+            raise ValueError("connect_timeout must be positive")
+        self.connect_timeout = None if connect_timeout is None else float(connect_timeout)
         # Optional authoritative counter for the shared-context output-budget
         # decision (see ``token_counting.shared_context_output_budget``).
         # ``None`` means no decision is ever made here, not an estimate.
@@ -2092,11 +2245,18 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
+
         if not verify_tls:
             raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
         # TLS trust for provider egress. The system trust store is the default;
         # ca_bundle points at a custom CA for a reviewed corporate gateway.
         self._ssl_context = self._build_ssl_context(ca_bundle)
+
+    @staticmethod
+    def cancellable_call(call: Callable[[], Any]) -> tuple[Callable[[], Any], Callable[[], None]]:
+        """Wrap one provider call with socket-closing cooperative cancellation."""
+        cancellation = _ProviderCancellation()
+        return lambda: cancellation.run(call), cancellation.cancel
 
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None) -> ssl.SSLContext:
@@ -2468,15 +2628,16 @@ class ModelClient:
                 applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
         return applied
 
-    def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
-        """Verify a local model registry, then run one bounded completion probe.
+    def probe(self, agent: ModelAgent, *, timeout: float | None = None) -> dict[str, Any]:
+        """Verify a local model registry, then run one unbounded completion probe.
 
         ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
         this verifies the configured local model and deliberately exercises the
-        chat path with one output token. It never retries, so a stuck local queue
-        cannot be multiplied by the readiness check.
+        chat path with one output token. Registry lookup and model inference are
+        allowed to complete regardless of wall-clock duration and are cancelled
+        only by an explicit caller action.
         """
-        probe_timeout = _validate_provider_probe_timeout(timeout)
+        del timeout  # compatibility-only; readiness has no wall-clock deadline
         started = time.monotonic()
         if not is_chat_compatible_model_id(agent.model):
             return {
@@ -2500,9 +2661,7 @@ class ModelClient:
                         self._provider_url(agent, "/models"),
                         method="GET",
                     )
-                    with self._open_provider(
-                        registry_request, destination, timeout=probe_timeout
-                    ) as registry_response:
+                    with self._open_provider(registry_request, destination) as registry_response:
                         registry = json.loads(
                             self._read_bounded_response(
                                 registry_response, MAX_PROVIDER_RESPONSE_BYTES
@@ -2527,8 +2686,8 @@ class ModelClient:
                 }
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
-                    content = self._send(agent, payload, destination, timeout=probe_timeout)
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    content = self._send(agent, payload, destination)
                 usage = self.take_usage()
             if not content.strip():
                 failure_code = "provider_empty_probe_response"
@@ -2651,6 +2810,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
+        payload = _pin_openrouter_zdr(agent, payload)
         payload = self._clamp_agent_token_budget_with_evidence(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
@@ -2754,11 +2914,38 @@ class ModelClient:
         """Connect to one already-resolved address without performing another DNS lookup."""
         family, sockaddr = destination
         connection = socket.socket(family, socket.SOCK_STREAM)
+        cancellation = _PROVIDER_CANCELLATION.get()
         try:
-            connection.settimeout(timeout)
             if source_address is not None:
                 connection.bind(source_address)
-            connection.connect(sockaddr)
+            if cancellation is None:
+                connection.settimeout(timeout)
+                connection.connect(sockaddr)
+                return connection
+            connection.setblocking(False)
+            result = connection.connect_ex(sockaddr)
+            if result not in {0, errno.EISCONN}:
+                if result not in {errno.EINPROGRESS, errno.EALREADY, errno.EWOULDBLOCK}:
+                    raise OSError(result, os.strerror(result))
+                deadline = None if timeout is None else time.monotonic() + timeout
+                while True:
+                    cancellation.raise_if_cancelled()
+                    wait = 0.05
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("provider connection exceeded its explicit deadline")
+                        wait = min(wait, remaining)
+                    _readable, writable, exceptional = select.select(
+                        (), (connection,), (connection,), wait
+                    )
+                    if writable or exceptional:
+                        error = connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        if error:
+                            raise OSError(error, os.strerror(error))
+                        break
+            cancellation.raise_if_cancelled()
+            connection.settimeout(timeout)
             return connection
         except Exception:
             connection.close()
@@ -2766,8 +2953,38 @@ class ModelClient:
 
     @staticmethod
     def _resolve_addresses(hostname: str, port: int) -> list[ProviderDestination]:
+        cancellation = _PROVIDER_CANCELLATION.get()
         try:
-            addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+            if cancellation is None:
+                addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+            else:
+                result: list[Any] = []
+                finished = threading.Event()
+
+                while not _PROVIDER_DNS_SLOTS.acquire(timeout=0.05):
+                    cancellation.raise_if_cancelled()
+
+                def resolve() -> None:
+                    try:
+                        result.append(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
+                    except BaseException as exc:  # propagated on the requesting thread
+                        result.append(exc)
+                    finally:
+                        finished.set()
+                        _PROVIDER_DNS_SLOTS.release()
+
+                worker = threading.Thread(target=resolve, daemon=True, name="provider-dns")
+                try:
+                    worker.start()
+                except BaseException:
+                    _PROVIDER_DNS_SLOTS.release()
+                    raise
+                while not finished.wait(0.05):
+                    cancellation.raise_if_cancelled()
+                cancellation.raise_if_cancelled()
+                if isinstance(result[0], BaseException):
+                    raise result[0]
+                addresses = result[0]
         except socket.gaierror as exc:
             raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
         resolved = [(family, sockaddr) for family, _type, _proto, _canonname, sockaddr in addresses]
@@ -2821,7 +3038,14 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
-        connection_timeout = timeout if timeout is not None else self.timeout
+        generation_timeout = self.timeout if timeout is None else timeout
+        connection_timeout = generation_timeout
+        if self.connect_timeout is not None:
+            connection_timeout = (
+                self.connect_timeout
+                if generation_timeout is None
+                else min(self.connect_timeout, generation_timeout)
+            )
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
@@ -2832,14 +3056,22 @@ class ModelClient:
                 context=self._ssl_context,
             )
         else:
-            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=connection_timeout)
+            connection = http.client.HTTPConnection(
+                parsed.hostname, port, timeout=connection_timeout
+            )
         connection._create_connection = (  # type: ignore[attr-defined]
             lambda _address, timeout, source_address: self._connect_validated(
                 destination, timeout, source_address
             )
         )
         target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        cancellation = _PROVIDER_CANCELLATION.get()
+        if cancellation is not None:
+            cancellation.register(connection)
         try:
+            connection.connect()
+            if connection.sock is not None:
+                connection.sock.settimeout(generation_timeout)
             connection.request(
                 request.get_method(),
                 target,
@@ -2980,6 +3212,7 @@ class ModelClient:
                 payload = dict(payload)
                 payload["max_tokens"] = shared_budget.output_ceiling
             self._local.shared_context_budget = shared_budget.as_evidence()
+        payload = _pin_openrouter_zdr(agent, payload)
         payload = self._clamp_agent_token_budget_with_evidence(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
@@ -3255,6 +3488,7 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> tuple[bytes, str]:
         """Passthrough a provider response whose body is binary media."""
+        payload = _pin_openrouter_zdr(agent, payload)
         if agent.base_url.startswith("mock://"):
             return b"mock audio", "audio/mpeg"
         api_key = _provider_credential(agent)  # pragma: no cover
@@ -3428,6 +3662,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
+        payload = _pin_openrouter_zdr(agent, payload)
         payload = self._clamp_agent_token_budget_with_evidence(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
@@ -3683,9 +3918,9 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": self._clamp_agent_token_budget(
+                "body": self._clamp_agent_token_budget_with_evidence(
                     agent,
-                    self.apply_effort_profile(agent, batch_body(messages), effort_profile),
+                    _pin_openrouter_zdr(agent, self.apply_effort_profile(agent, batch_body(messages), effort_profile)),
                 ),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
@@ -5075,6 +5310,7 @@ class TaskOrchestrator:
     ) -> None:
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
+        self._context_window_local = threading.local()
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
@@ -5311,14 +5547,24 @@ class TaskOrchestrator:
         self,
         *,
         refresh: bool = False,
-        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Report provider liveness separately from an explicit chat readiness probe."""
+        del timeout  # compatibility-only; readiness has no wall-clock deadline
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
-        probe_timeout = _validate_provider_probe_timeout(timeout)
         items: list[dict[str, Any]] = []
-        with self._provider_readiness_lock:
+        acquired = not refresh or self._provider_readiness_lock.acquire(blocking=False)
+        if not acquired:
+            return {
+                "status": "refresh_in_progress",
+                "probe": "refresh",
+                "checked_at": None,
+                "agent_count": len(self.agents),
+                "ready_agent_count": 0,
+                "items": [],
+            }
+        try:
             for agent in self.candidates:
                 provider = agent.provider_name or self._infer_provider_name(agent.base_url)
                 if agent.disabled:
@@ -5330,7 +5576,7 @@ class TaskOrchestrator:
                     })
                     continue
                 if refresh:
-                    item = dict(self.client.probe(agent, timeout=probe_timeout))
+                    item = dict(self.client.probe(agent))
                     item["provider"] = provider
                     items.append(redact_value(item))
                 else:
@@ -5340,6 +5586,9 @@ class TaskOrchestrator:
                         "provider": provider,
                         "status": "unprobed",
                     })
+        finally:
+            if refresh:
+                self._provider_readiness_lock.release()
         active = [item for item in items if item["status"] != "disabled"]
         status = "unprobed" if not refresh else (
             "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
@@ -5363,7 +5612,6 @@ class TaskOrchestrator:
         return {
             "status": status,
             "probe": "refresh" if refresh else "none",
-            "timeout_seconds": probe_timeout,
             "checked_at": int(time.time()) if refresh else None,
             "agent_count": len(active),
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
@@ -5655,6 +5903,12 @@ class TaskOrchestrator:
         # path (and the virtual tools path reached with single_agent=True).
         # Conducted structured synthesis never replays across providers — see
         # _orchestrated_provider_completion.
+        # Only this virtual-selector branch reaches here at all -- an
+        # explicitly requested concrete model returns earlier in this
+        # function -- so context-window filtering below never applies to a
+        # caller's own explicit choice.
+        prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(text, agent.model)
+        self._last_context_window_excluded = []
         ranked_candidates = self._failover_candidates(
             agent,
             text,
@@ -5666,7 +5920,10 @@ class TaskOrchestrator:
             # admission below and needs the full ranked list (including
             # currently cooled-down candidates) to do it.
             skip_rate_limited=False,
+            prompt_token_lower_bound=prompt_bound,
         )
+        context_window_excluded = list(self._last_context_window_excluded)
+        self._last_context_window_excluded = []
         ranked_candidates = _eligible_role_effort_candidates(ranked_candidates, effort_profile)
         candidates: list[ModelAgent] = []
         seen_providers: set[str] = set()
@@ -5787,7 +6044,9 @@ class TaskOrchestrator:
                         orchestration["rate_limited_skipped"] = list(
                             dict.fromkeys(rate_limited_skipped)
                         )
-                return result
+                return self._with_context_window_orchestration_extension(
+                    result, prompt_bound, prompt_bound_source, context_window_excluded
+                )
 
             # Recompute cooldowns AFTER the attempt round: a candidate that
             # was eligible at the top (no pre-existing cooldown) can have
@@ -8210,6 +8469,15 @@ class TaskOrchestrator:
         (or the cost router) opts it in via ``patch_agent``.
         """
         existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
+        legacy_discovered = {
+            (agent.provider_name, agent.model, agent.id): index
+            for index, agent in enumerate(self.candidates)
+        }
+        discovered_by_identity = {
+            (agent.provider_name, agent.credential_name, agent.model): index
+            for index, agent in enumerate(self.candidates)
+            if "discovered" in agent.tags
+        }
         updated_candidates = list(self.candidates)
         effective_discovered_agents: list[ModelAgent] = []
         added: list[str] = []
@@ -8217,13 +8485,31 @@ class TaskOrchestrator:
         for agent in discovered_agents:
             index = existing_by_id.get(agent.id)
             if index is None:
+                index = legacy_discovered.get(
+                    (
+                        agent.provider_name,
+                        agent.model,
+                        legacy_discovered_agent_id(agent.provider_name, agent.model),
+                    )
+                )
+                if index is None:
+                    index = discovered_by_identity.get(
+                        (agent.provider_name, agent.credential_name, agent.model)
+                    )
+                if index is not None:
+                    # Identity remapping is only for discovery-owned rows; never
+                    # overwrite an operator-managed agent that shares legacy id shape.
+                    if "discovered" not in updated_candidates[index].tags:
+                        continue
+                    agent = replace(agent, id=updated_candidates[index].id)
+            if index is None:
                 existing_by_id[agent.id] = len(updated_candidates)
                 updated_candidates.append(agent)
                 added.append(agent.id)
             else:
                 agent = replace(
                     agent,
-                    group_name=updated_candidates[index].group_name,
+                    group_name=updated_candidates[index].group_name or agent.group_name,
                     model_timeout_seconds=updated_candidates[index].model_timeout_seconds,
                     model_timeout_revision=updated_candidates[index].model_timeout_revision,
                 )
@@ -8236,7 +8522,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
-        for agent in discovered_agents:
+        for agent in effective_discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
             self._append_audit_event(
@@ -8322,6 +8608,22 @@ class TaskOrchestrator:
         """Store this thread's pending output-budget clamp evidence."""
         self._output_budget_local.value = value
 
+    @property
+    def _last_context_window_excluded(self) -> list[str]:
+        """Agent ids the context-window candidate filter skipped for THIS thread.
+
+        Mirrors :attr:`_last_assistant_message`'s thread-local side channel: one
+        ``TaskOrchestrator`` is shared across every request thread, so this
+        cannot be plain instance state without one thread's evidence leaking
+        into a sibling request's response.
+        """
+        return getattr(self._context_window_local, "value", [])
+
+    @_last_context_window_excluded.setter
+    def _last_context_window_excluded(self, value: list[str]) -> None:
+        """Store this thread's most recent context-window exclusion evidence."""
+        self._context_window_local.value = value
+
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -8355,6 +8657,17 @@ class TaskOrchestrator:
         ) or self._ranked_agents(
             text, "worker", free_only=free_only, prompt_context=prompt_context
         )
+        # Context-window candidate filtering only applies to virtual/role-based
+        # selection: an explicitly requested concrete model (``requested`` is
+        # not None) is the caller's own choice, and the provider's own error
+        # is the honest answer for it -- never pre-filtered.
+        prompt_bound: int | None = None
+        prompt_bound_source: str | None = None
+        if requested is None and ranked_pool:
+            prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(
+                text, ranked_pool[0].model
+            )
+        context_window_excluded: list[str] = []
         free_ids = {
             candidate.id
             for candidate in self.agents
@@ -8387,12 +8700,17 @@ class TaskOrchestrator:
                     role="worker",
                     allowed_agent_ids=allowed_agent_ids,
                     virtual_selector=virtual_selector,
+                    prompt_token_lower_bound=prompt_bound,
                 )
             )
             extras = getattr(self, "_last_assistant_message", None)
             self._last_assistant_message = None
             output_budget = getattr(self, "_last_output_budget", None)
             self._last_output_budget = None
+            for excluded_id in self._last_context_window_excluded:
+                if excluded_id not in context_window_excluded:
+                    context_window_excluded.append(excluded_id)
+            self._last_context_window_excluded = []
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -8465,6 +8783,10 @@ class TaskOrchestrator:
                 result["tool_calls"] = extras["tool_calls"]
             if extras.get("finish_reason"):
                 result["finish_reason"] = extras["finish_reason"]
+        if prompt_bound is not None and prompt_bound_source is not None:
+            result = self._with_context_window_evidence(
+                result, prompt_bound, prompt_bound_source, context_window_excluded
+            )
         return self._with_effort_snapshot(result)
 
     def _realtime_route_judge(
@@ -8626,6 +8948,13 @@ class TaskOrchestrator:
             if model_name == self.FREE_MODEL
             else None
         )
+        # Context-window candidate filtering only applies to the worker step's
+        # virtual/role-based selection, and only when the caller did not pin a
+        # concrete model: ``requested_agent`` not None means the caller's own
+        # choice, and the provider's own error is the honest answer for it.
+        context_window_excluded: list[str] = []
+        prompt_bound: int | None = None
+        prompt_bound_source: str | None = None
 
         for step in steps:
             if plan_source == "generated":
@@ -8667,6 +8996,12 @@ class TaskOrchestrator:
                     "content": instruction,
                 },
             ]
+            step_prompt_bound: int | None = None
+            if step.role == "worker" and requested_agent is None:
+                prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(
+                    task, agent.model
+                )
+                step_prompt_bound = prompt_bound
             start = time.perf_counter()
             output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
                 agent,
@@ -8678,11 +9013,17 @@ class TaskOrchestrator:
                 ),
                 excluded_agent_ids=_excluded_agent_ids,
                 virtual_selector=virtual_selector,
+                prompt_token_lower_bound=step_prompt_bound,
             )
             extras = self._last_assistant_message
             self._last_assistant_message = None
             output_budget = self._last_output_budget
             self._last_output_budget = None
+            if step_prompt_bound is not None:
+                for excluded_id in self._last_context_window_excluded:
+                    if excluded_id not in context_window_excluded:
+                        context_window_excluded.append(excluded_id)
+            self._last_context_window_excluded = []
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
@@ -8761,6 +9102,10 @@ class TaskOrchestrator:
         if tool_result is not None:
             result["tool_calls"] = tool_result["tool_calls"]
             result["finish_reason"] = tool_result.get("finish_reason") or "tool_calls"
+        if prompt_bound is not None and prompt_bound_source is not None:
+            result = self._with_context_window_evidence(
+                result, prompt_bound, prompt_bound_source, context_window_excluded
+            )
         if workflow_run_id is None:
             return self._with_effort_snapshot(result)
         record = self._with_effort_snapshot(
@@ -9579,7 +9924,12 @@ class TaskOrchestrator:
         ]
         if not ranked:
             raise RuntimeError(f"no enabled agent available for capability={capability}")
-        return ranked
+        healthy = [agent for agent in ranked if not self._circuit_open(agent.id)]
+        if not healthy:
+            raise RuntimeError(
+                f"all enabled agents temporarily unavailable for capability={capability}"
+            )
+        return healthy
 
     def select_capability_agent(self, capability: str, model_name: str | None = None) -> ModelAgent:
         """Select a measured member supporting a capability, optionally within one group."""
@@ -9646,7 +9996,11 @@ class TaskOrchestrator:
             {
                 "capability": capability,
                 "endpoint_id": endpoint_id,
-                "validation_outcome": "provider_error" if error is not None else "completed",
+                "validation_outcome": (
+                    "cancelled"
+                    if isinstance(error, _ProviderRequestCancelled)
+                    else "provider_error" if error is not None else "completed"
+                ),
                 "usage": usage,
                 "duplicate_cost_evidence": (
                     "provider_reported_usage" if usage is not None
@@ -9665,7 +10019,11 @@ class TaskOrchestrator:
     ) -> None:
         """Share race completion evidence with normal stability/circuit ledgers."""
         self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
-        if error is not None and not _is_request_too_large_error(error):
+        if (
+            error is not None
+            and not isinstance(error, _ProviderRequestCancelled)
+            and not _is_request_too_large_error(error)
+        ):
             self._group_router.observe_failure(endpoint_id)
             self._record_failure(endpoint_id)
 
@@ -9779,17 +10137,16 @@ class TaskOrchestrator:
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
             decision_attempt_id = uuid.uuid4().hex
+            def attempt(agent: ModelAgent) -> EndpointAttempt[Any]:
+                provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
+                return EndpointAttempt(
+                    agent.id, contract, provider_call,
+                    cancellation_supported=contract.cancellation_supported,
+                    cancel=cancel if contract.cancellation_supported else None,
+                )
             try:
                 outcome = race_first_valid(
-                    [
-                        EndpointAttempt(
-                            agent.id,
-                            contract,
-                            lambda agent=agent: call(agent),
-                            cancellation_supported=False,
-                        )
-                        for agent in race_members
-                    ],
+                    [attempt(agent) for agent in race_members],
                     validate=(
                         (
                             lambda value: isinstance(value, tuple)
@@ -9897,6 +10254,7 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
+        prompt_token_lower_bound: int | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -9907,9 +10265,18 @@ class TaskOrchestrator:
 
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
+
+        ``prompt_token_lower_bound``, when given, is forwarded to
+        :meth:`_failover_candidates` so it skips a candidate whose known
+        context window provably cannot hold the prompt. Callers pass it only
+        for virtual/role-based selection -- never for an explicitly requested
+        concrete model, where the provider's own error is the honest answer.
+        The candidate ids it excludes are recorded on this thread's
+        :attr:`_last_context_window_excluded` for the caller to read back.
         """
         self._last_assistant_message = None
         self._last_output_budget = None
+        self._last_context_window_excluded = []
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
@@ -9919,6 +10286,7 @@ class TaskOrchestrator:
             required_tags=required_tags,
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
+            prompt_token_lower_bound=prompt_token_lower_bound,
         )
         if not candidates and required_tags:
             candidates = self._failover_candidates(
@@ -9927,6 +10295,7 @@ class TaskOrchestrator:
                 eligibility_role or role,
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
+                prompt_token_lower_bound=prompt_token_lower_bound,
             )
         if excluded_agent_ids:
             candidates = [
@@ -9985,16 +10354,16 @@ class TaskOrchestrator:
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
             decision_attempt_id = uuid.uuid4().hex
+            def attempt(agent: ModelAgent) -> EndpointAttempt[Any]:
+                provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
+                return EndpointAttempt(
+                    agent.id, contract, provider_call,
+                    cancellation_supported=contract.cancellation_supported,
+                    cancel=cancel if contract.cancellation_supported else None,
+                )
             try:
                 outcome = race_first_valid(
-                [
-                    EndpointAttempt(
-                        agent.id,
-                        contract,
-                        lambda agent=agent: call(agent),
-                    )
-                    for agent in race_members
-                    ],
+                    [attempt(agent) for agent in race_members],
                     validate=lambda value: isinstance(value[0], str)
                     and (
                         bool(value[0])
@@ -10235,6 +10604,97 @@ class TaskOrchestrator:
             event_detail["observed_failure_kind"] = observed_kind.value
         self._append_audit_event("tool_fallback_decision", event_detail)
 
+    def _prompt_token_lower_bound(self, text: str, model: str) -> tuple[int, str]:
+        """Conservative prompt-token lower bound for context-window filtering.
+
+        Thin wrapper over :func:`contextual_orchestrator.token_counting.prompt_token_lower_bound`
+        bound to this instance's configured ``token_counter`` (Ong et al., 2024;
+        ADR 0133).
+        """
+        return _prompt_token_lower_bound_evidence(text, model, self.token_counter)
+
+    def _apply_context_window_filter(
+        self,
+        candidates: list[ModelAgent],
+        lower_bound_tokens: int,
+    ) -> tuple[list[ModelAgent], list[str]]:
+        """Skip candidates whose KNOWN context window cannot hold the prompt.
+
+        Raises :class:`ProviderRequestTooLargeError` naming the smallest known
+        window and the lower-bound count when filtering would remove every
+        candidate, so the caller gets the same honest request-too-large
+        contract as the all-providers-413 case instead of an empty pool or a
+        500.
+        """
+        kept, excluded = _context_window_exclusions(candidates, lower_bound_tokens)
+        if kept or not excluded:
+            return kept, excluded
+        smallest_window = min(
+            candidate.context_window
+            for candidate in candidates
+            if isinstance(candidate.context_window, int)
+            and not isinstance(candidate.context_window, bool)
+            and candidate.context_window > 0
+        )
+        raise ProviderRequestTooLargeError(
+            "every eligible candidate's known context window "
+            f"({smallest_window} tokens, smallest known) is smaller than the "
+            f"prompt's lower-bound token count ({lower_bound_tokens})"
+        )
+
+    @staticmethod
+    def _with_context_window_evidence(
+        result: dict[str, Any],
+        lower_bound_tokens: int,
+        bound_source: str,
+        excluded_agent_ids: list[str],
+    ) -> dict[str, Any]:
+        """Attach context-window candidate-filter evidence to a ``route``/``conduct`` result.
+
+        Only attached when the filter actually excluded a candidate --
+        otherwise the response shape is unchanged, matching every other
+        evidence field in this dict (e.g. ``served_agent_id``/``failover_from``)
+        that is only present when something notable happened. Sets flat
+        top-level keys, mirroring this dict's other orchestration fields
+        (``mode``, ``verification``, ...) -- :func:`chat_completion_response`
+        reads them the same way to populate its ``orchestration`` extension.
+        """
+        if not isinstance(result, dict) or not excluded_agent_ids:
+            return result
+        annotated = dict(result)
+        annotated["prompt_token_lower_bound"] = lower_bound_tokens
+        annotated["prompt_token_bound_source"] = bound_source
+        annotated["context_window_excluded"] = excluded_agent_ids
+        return annotated
+
+    @staticmethod
+    def _with_context_window_orchestration_extension(
+        result: dict[str, Any],
+        lower_bound_tokens: int,
+        bound_source: str,
+        excluded_agent_ids: list[str],
+    ) -> dict[str, Any]:
+        """Attach context-window candidate-filter evidence to a raw passthrough body.
+
+        Only attached when the filter actually excluded a candidate, so a
+        request nothing was skipped for keeps its plain passthrough shape
+        (some callers assert the absence of an ``orchestration`` key for
+        exactly that reason). Unlike :meth:`_with_context_window_evidence`,
+        this nests the fields under the wire-level ``orchestration`` extension
+        key directly, since a ``proxy_completion`` result IS the final
+        OpenAI-shaped response body (no later ``chat_completion_response``
+        wrapping step re-derives one).
+        """
+        if not isinstance(result, dict) or not excluded_agent_ids:
+            return result
+        annotated = dict(result)
+        orchestration = dict(annotated.get("orchestration") or {})
+        orchestration["prompt_token_lower_bound"] = lower_bound_tokens
+        orchestration["prompt_token_bound_source"] = bound_source
+        orchestration["context_window_excluded"] = excluded_agent_ids
+        annotated["orchestration"] = orchestration
+        return annotated
+
     def _failover_candidates(
         self,
         primary: ModelAgent,
@@ -10246,6 +10706,7 @@ class TaskOrchestrator:
         prompt_context: str | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
         skip_rate_limited: bool = True,
+        prompt_token_lower_bound: int | None = None,
     ) -> list[ModelAgent]:
         """Rank and filter failover candidates for one role.
 
@@ -10308,6 +10769,11 @@ class TaskOrchestrator:
             # storm-wait logic of its own should still get one honest
             # attempt/failure instead of "no eligible provider candidate".
             healthy = not_rate_limited or healthy
+        if prompt_token_lower_bound is not None:
+            healthy, excluded = self._apply_context_window_filter(
+                healthy, prompt_token_lower_bound
+            )
+            self._last_context_window_excluded = excluded
         return healthy
 
     def _circuit_open(self, agent_id: str) -> bool:
@@ -10351,6 +10817,29 @@ class TaskOrchestrator:
                 self.circuit_failure_threshold,
                 self.circuit_reset_seconds,
             )
+
+    def _record_embedding_failure(
+        self, agent: ModelAgent, endpoint_path: str, exc: BaseException
+    ) -> None:
+        """Quarantine one failing embedding endpoint and retain secret-free evidence."""
+        provider_status = getattr(exc, "provider_status", None)
+        if provider_status is None and isinstance(exc, urllib.error.HTTPError):
+            provider_status = exc.code
+        if isinstance(provider_status, bool) or not isinstance(provider_status, int):
+            provider_status = None
+        if provider_status != 413:
+            self._group_router.observe_failure(agent.id)
+            self._record_failure(agent.id)
+        self.record_analytics_event(
+            "embedding_endpoint_failed",
+            {
+                "endpoint_path": endpoint_path,
+                "agent_id": agent.id,
+                "model": agent.model,
+                "error_type": type(exc).__name__,
+                "provider_status": provider_status,
+            },
+        )
 
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:
@@ -10576,6 +11065,7 @@ class TaskOrchestrator:
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
         virtual_selector: bool,
+        prompt_token_lower_bound: int | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
 
@@ -10610,6 +11100,7 @@ class TaskOrchestrator:
                     allowed_agent_ids=allowed_agent_ids,
                     eligibility_role=eligibility_role,
                     excluded_agent_ids=excluded_agent_ids,
+                    prompt_token_lower_bound=prompt_token_lower_bound,
                 )
             except ProviderUpstreamError as exc:
                 if exc.provider_status not in (429, 503):
@@ -10624,6 +11115,7 @@ class TaskOrchestrator:
                     allowed_agent_ids=allowed_agent_ids,
                     prompt_context=prompt_context,
                     skip_rate_limited=False,
+                    prompt_token_lower_bound=prompt_token_lower_bound,
                 )
                 if excluded_agent_ids:
                     candidates = [
@@ -18464,6 +18956,9 @@ def chat_completion_response(
         "requested_output_tokens": result.get("requested_output_tokens"),
         "effective_output_tokens": result.get("effective_output_tokens"),
         "output_budget_clamped": result.get("output_budget_clamped"),
+        "prompt_token_lower_bound": result.get("prompt_token_lower_bound"),
+        "prompt_token_bound_source": result.get("prompt_token_bound_source"),
+        "context_window_excluded": result.get("context_window_excluded") or None,
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
@@ -18637,3 +19132,4 @@ def sse_stream_body(chunks: list[dict[str, Any]]) -> str:
     frames = [f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks]
     frames.append("data: [DONE]\n\n")
     return "".join(frames)
+

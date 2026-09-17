@@ -2004,3 +2004,125 @@ def test_context_length_exceeded_fails_over_without_penalizing_provider_health()
     assert result["model"] == "fallback-model"
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
     assert orchestrator._circuit.get("primary_agent") in (None, {"failures": 0.0, "opened_at": 0.0})
+
+
+def _context_window_body(char_count: int, *, model: str = "contextual-orchestrator") -> dict[str, Any]:
+    """Build a virtual-selector chat body whose prompt is ``char_count`` characters."""
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": ("ab " * (char_count // 3 + 1))[:char_count]}],
+    }
+
+
+def test_context_window_filter_skips_too_small_known_window_and_serves_next() -> None:
+    """A provably-too-small known context window is skipped; the next candidate serves."""
+    client = SequencedProxyClient(
+        {
+            "small_window_agent": {"model": "small-window-model"},
+            "unknown_window_agent": {"model": "unknown-window-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "small_window_agent",
+                "small-window-model",
+                priority=10,
+                provider_name="small",
+                context_window=1000,
+            ),
+            ModelAgent(
+                "unknown_window_agent",
+                "unknown-window-model",
+                priority=1,
+                provider_name="unknown",
+                context_window=None,
+            ),
+        ],
+        client=client,
+    )
+
+    # 8000 chars -> lower-bound estimate of 8000 // 7 == 1142 tokens, provably
+    # larger than small_window_agent's 1000-token known window.
+    result = orchestrator.proxy_completion(_context_window_body(8000))
+
+    assert result["model"] == "unknown-window-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["unknown_window_agent"]
+    evidence = result["orchestration"]
+    assert evidence["context_window_excluded"] == ["small_window_agent"]
+    assert evidence["prompt_token_lower_bound"] >= 1001
+    assert evidence["prompt_token_bound_source"] in ("exact", "estimate_lower_bound")
+
+
+def test_context_window_filter_never_excludes_an_unknown_window() -> None:
+    """A candidate with ``context_window=None`` is never excluded, however large the prompt."""
+    client = SequencedProxyClient({"unknown_window_agent": {"model": "unknown-window-model"}})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "unknown_window_agent",
+                "unknown-window-model",
+                provider_name="unknown",
+                context_window=None,
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(_context_window_body(50_000))
+
+    assert result["model"] == "unknown-window-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["unknown_window_agent"]
+    # Nothing was excluded, so no orchestration evidence is attached -- the
+    # plain passthrough shape is unchanged (mirrors other evidence fields
+    # like served_agent_id/failover_from that are only present when notable).
+    assert "orchestration" not in result
+
+
+def test_context_window_filter_raises_request_too_large_when_every_window_is_too_small() -> None:
+    """Every known window too small raises the honest 413 request-too-large contract."""
+    client = SequencedProxyClient({})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "first_agent", "first-model", priority=10, provider_name="first", context_window=500,
+            ),
+            ModelAgent(
+                "second_agent", "second-model", priority=1, provider_name="second", context_window=200,
+            ),
+        ],
+        client=client,
+    )
+
+    with pytest.raises(ProviderRequestTooLargeError) as caught:
+        orchestrator.proxy_completion(_context_window_body(8000))
+
+    message = str(caught.value)
+    assert "200" in message  # smallest known window
+    assert not client.calls
+
+
+def test_context_window_filter_does_not_apply_to_an_explicit_model_request() -> None:
+    """An explicitly requested concrete model is never pre-filtered by context window."""
+    client = SequencedProxyClient({"tiny_window_agent": {"model": "tiny-window-model"}})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "tiny_window_agent",
+                "tiny-window-model",
+                provider_name="tiny",
+                context_window=1,
+            ),
+        ],
+        client=client,
+    )
+
+    # An enormous prompt whose lower bound provably exceeds the 1-token window --
+    # if the filter applied here, this would raise ProviderRequestTooLargeError
+    # instead of reaching the provider.
+    result = orchestrator.proxy_completion(_context_window_body(50_000, model="tiny-window-model"))
+
+    assert result["model"] == "tiny-window-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["tiny_window_agent"]
+    assert "orchestration" not in result
+
