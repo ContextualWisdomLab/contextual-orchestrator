@@ -20,6 +20,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Response-format SSE requests may now ask for usage; the terminal usage chunk
+  is emitted only when the workflow cost ledger marks the counts as measured.
 - Generation-token inputs retain positive-integer validation without an
   arbitrary shared 1,048,576-token ceiling. Responses normalizes legacy token
   aliases to `max_output_tokens` before provider forwarding, preserving caller
