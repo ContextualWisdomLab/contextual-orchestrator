@@ -79,6 +79,9 @@ _LOGGER = logging.getLogger(__name__)
 # provider catalog must not be mistaken for an unavailable provider.
 # Non-transient failures (auth/config errors, malformed responses) are never
 # retried — a retry cannot fix those and would only waste the time budget.
+# When the caller passes an explicit per-attempt timeout, the second attempt
+# is capped so a transient retry cannot consume the caller's full budget.
+_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
 _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
