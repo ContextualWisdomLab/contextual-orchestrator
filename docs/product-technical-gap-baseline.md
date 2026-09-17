@@ -5915,3 +5915,33 @@ stays quiet).
 Not established: whether any deployment currently runs in this state. The
 readiness surface still does not report registry durability; that would be a
 separate change.
+
+### Typed streaming fallback attempt evidence and route contract docs — 2026-09-14
+
+Addresses issue #1016 rows 2 and 4 (remaining gaps confirmed on the 2026-09-13
+assessment; row 1 is separately handled by PR #1171 and is untouched here).
+Row 2: the single-worker streaming fallback trace step (`TaskOrchestrator.
+stream_route`, `contextual_orchestrator/orchestrator.py`) previously recorded a
+failed candidate as prose only (`"subtask": "Failed direct route attempt
+(streamed)"`), unlike the structured-synthesis candidate loop's typed
+`route.attempted[]` entries (`_orchestrated_provider_completion`). Each failed
+streaming attempt now also carries `outcome` (`retryable_transport`,
+`request_too_large`, `deadline_exceeded`, `fail_closed`), `error_code`,
+`provider_status`, `retryable`, and `transport`, built by one small shared
+helper (`_typed_attempt_entry`) both paths now call; `deadline_exceeded` reuses
+PR #1053's `model_timeout` error code rather than a second vocabulary. Prose
+(`subtask`, and a new `reason` field) remains for humans but is no longer the
+only signal. Row 4: the previously internal, undocumented `route`/
+`attempted[]` shape is now a versioned contract
+(`OrchestrationRoute`/`OrchestrationRouteAttempt`, `api_contract.py` spec
+`0.3.0`), and `tests/test_api_contract.py` validates both a real
+structured-synthesis failover and a real streaming failover against it (11
+tests: `test_api_contract.py`, `test_true_streaming.py`). Local run:
+`python -m pytest tests/test_api_contract.py tests/test_true_streaming.py
+tests/test_stream_error_identity.py tests/test_provider_error_taxonomy.py
+tests/test_model_timeout_policy.py tests/test_self_check.py -q` — 109 passed.
+`python -m interrogate -v contextual_orchestrator/` — 100%. Not addressed:
+issue #1016 row 1 (separate PR), and the SSE wire frames themselves still omit
+`orchestration.route` per-token (only the persisted/queried workflow-run trace
+carries it) — no caller currently reads it from the streaming wire response,
+so this was left out of scope rather than silently assumed equivalent.
