@@ -41,7 +41,7 @@ DIF_SAMPLE_SIZE = 4_000
 DIF_SEED = 260_906
 JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
-ITEM_COVARIATE_SAMPLE_SIZE = 1_200
+DECLARED_ITEM_COVARIATE_SAMPLE_SIZE = 1_200
 ITEM_COVARIATE_SEED = 260_908
 ITEM_COVARIATE_MAX_ITER = 1_000
 UNCERTAINTY_SAMPLE_SIZE = 1_200
@@ -1172,15 +1172,27 @@ def _validate_judge_effects() -> dict[str, object]:
     }
 
 
-def _validate_item_covariate_effect() -> dict[str, object]:
-    """Estimate one known item-side context contrast without claiming invariance."""
+def _validate_item_covariate_effect(
+    *,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """Estimate one known item-side context contrast without claiming invariance.
+
+    ``sample_size`` must declare at least two observations for two groups.
+    ``None`` is a fail-closed sentinel, not a statistical default.
+    """
+    declared_sample_size = _require_declared_positive_int(
+        sample_size, "sample_size"
+    )
+    if declared_sample_size < 2:
+        raise ValueError("sample_size must be at least 2 for two groups")
     generator = np.random.default_rng(ITEM_COVARIATE_SEED)
     item_count = 12
-    group_id = np.arange(ITEM_COVARIATE_SAMPLE_SIZE) % 2
+    group_id = np.arange(declared_sample_size) % 2
     covariate = np.vstack(
         (np.linspace(0.0, 1.0, item_count), np.linspace(1.0, 0.0, item_count))
     )
-    ability = generator.standard_normal(ITEM_COVARIATE_SAMPLE_SIZE)
+    ability = generator.standard_normal(declared_sample_size)
     intercept = np.linspace(-1.0, 1.0, item_count)
     true_delta = -0.8
     logits = ability[:, None] + intercept[None, :] + true_delta * covariate[group_id]
@@ -1206,7 +1218,7 @@ def _validate_item_covariate_effect() -> dict[str, object]:
     return {
         "method": "multigroup_item_covariate",
         "max_iterations": ITEM_COVARIATE_MAX_ITER,
-        "sample_size": ITEM_COVARIATE_SAMPLE_SIZE,
+        "sample_size": declared_sample_size,
         "seed": ITEM_COVARIATE_SEED,
         "contexts": len(covariate),
         "items": item_count,
@@ -1801,7 +1813,9 @@ def run_benchmark(
     selection_utility = _validate_selection_utility()
     candidate_group_dif = _validate_candidate_group_dif()
     judge_effects = _validate_judge_effects()
-    item_covariate_effect = _validate_item_covariate_effect()
+    item_covariate_effect = _validate_item_covariate_effect(
+        sample_size=DECLARED_ITEM_COVARIATE_SAMPLE_SIZE
+    )
     parameter_uncertainty = _validate_parameter_uncertainty()
     baseline_latency, candidate_latency, baseline_medians, candidate_medians = (
         _measure_paired_latency(baseline_evidence, candidate_evidence)

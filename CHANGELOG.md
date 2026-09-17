@@ -10,9 +10,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
-
 ### Changed
 
+- Held-out item-side language/domain evidence now requires a declared sample
+  size. The hidden 1,200-row default is removed. The harness run still writes
+  1,200 as this run's choice.
 - The psychometric held-out harness now requires a declared resample count,
   percentile coverage, and seed for paired intervals. Hidden 2,000-sample
   95% defaults are removed. The script entry still writes 2,000, 0.95, and
