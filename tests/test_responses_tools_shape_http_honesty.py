@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -77,6 +78,7 @@ def test_http_responses_accepts_valid_tools_and_auto_choice() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 def test_http_responses_accepts_empty_tools_array_as_noop() -> None:
     """SDKs often send tools: [] when no tools are configured — honest no-op."""
@@ -90,6 +92,7 @@ def test_http_responses_accepts_empty_tools_array_as_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_tool_without_function_type() -> None:
@@ -108,6 +111,7 @@ def test_http_responses_rejects_tool_without_function_type() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_tool_choice_auto_without_tools_as_omit() -> None:
@@ -126,6 +130,7 @@ def test_http_responses_accepts_tool_choice_auto_without_tools_as_omit() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_legacy_functions_surface() -> None:
@@ -146,6 +151,7 @@ def test_http_responses_rejects_legacy_functions_surface() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_named_tool_choice_not_in_tools() -> None:
@@ -168,6 +174,7 @@ def test_http_responses_rejects_named_tool_choice_not_in_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

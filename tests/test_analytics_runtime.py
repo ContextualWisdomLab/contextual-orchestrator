@@ -40,7 +40,8 @@ def post_json(url: str, payload: dict[str, object], token: str) -> tuple[int, di
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def get_json(url: str, token: str) -> tuple[int, dict[str, object]]:
@@ -53,7 +54,8 @@ def get_json(url: str, token: str) -> tuple[int, dict[str, object]]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def by_name(rows: list[dict[str, object]]) -> dict[str, dict[str, object]]:
@@ -124,6 +126,7 @@ def test_analytics_endpoint_and_admin_console_use_source_backed_snapshot() -> No
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     kpis = by_name(snapshot["kpis"])
     assert chat_status == 200
@@ -158,6 +161,7 @@ def test_conducted_structured_chat_emits_distinct_analytics_label() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     event_counts = snapshot["event_counts"]
     assert chat_status == 200
@@ -189,6 +193,7 @@ def test_conducted_responses_emits_distinct_analytics_label() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     event_counts = snapshot["event_counts"]
     assert response_status == 200

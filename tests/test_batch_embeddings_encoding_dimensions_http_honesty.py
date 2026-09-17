@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -67,6 +68,7 @@ def test_http_batch_embeddings_accepts_encoding_format_float() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_accepts_encoding_format_base64() -> None:
@@ -86,6 +88,7 @@ def test_http_batch_embeddings_accepts_encoding_format_base64() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_rejects_dimensions() -> None:
@@ -106,6 +109,7 @@ def test_http_batch_embeddings_rejects_dimensions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_omit_encoding_and_dimensions_ok() -> None:
@@ -119,3 +123,4 @@ def test_http_batch_embeddings_omit_encoding_and_dimensions_ok() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

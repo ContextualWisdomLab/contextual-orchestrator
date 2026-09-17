@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "contextual-decision-receipt"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.maturin]
+module-name = "contextual_orchestrator._decision_receipt"
+python-source = "../.."
+features = ["pyo3/extension-module"]

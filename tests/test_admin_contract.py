@@ -167,6 +167,39 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Field encryption and audited release" not in ADMIN_HTML
 
 
+def test_timeout_audit_renders_operator_copy_not_internal_json() -> None:
+    """Execute the real renderer with a timeout event, without a browser mock UI."""
+    start = ADMIN_HTML.index("function renderAudit()")
+    end = ADMIN_HTML.index("function renderSecondaryViews()", start)
+    script = "\n".join([
+        'import assert from "node:assert/strict";',
+        f"const translations = {json.dumps(ADMIN_TRANSLATIONS)};",
+        'let currentLang = "ko";',
+        'const t = key => translations[currentLang][key] || key;',
+        'const escapeHtml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll(\'"\', "&quot;");',
+        'const els = {auditRows: {innerHTML: ""}};',
+        'const state = {recent_audit_events: [{event_type: "model_timeout_policy_changed", created_at: 1788758435, event_detail: {worker_agent_id: "audit_worker", revision: 1, restored_from_revision: null}}]};',
+        ADMIN_HTML[start:end],
+        'renderAudit();',
+        'assert(!els.auditRows.innerHTML.includes("model_timeout_policy_changed"));',
+        'assert(!els.auditRows.innerHTML.includes("worker_agent_id"));',
+        'assert(els.auditRows.innerHTML.includes("audit_worker"));',
+        'for (const lang of ["en", "ko"]) {',
+        'currentLang = lang;',
+        'state.recent_audit_events[0].event_detail = {worker_agent_id: "x".repeat(300) + "<script>alert(1)</script>", revision: 3, restored_from_revision: 1};',
+        'state.recent_audit_events[0].created_at = "invalid";',
+        'renderAudit();',
+        'assert(els.auditRows.innerHTML.includes(t("audit_timeout_restored")));',
+        'assert(els.auditRows.innerHTML.includes(t("audit_date_unknown")));',
+        'assert(els.auditRows.innerHTML.includes("x".repeat(300)));',
+        'assert(!els.auditRows.innerHTML.includes("<script>"));',
+        'assert(els.auditRows.innerHTML.includes("&lt;script&gt;"));',
+        '}',
+    ])
+    result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_model_group_mutations_refresh_audit_events() -> None:
     """Model-group mutations refresh the shared Audit view."""
     assert "async function refreshAuditEvents()" in ADMIN_HTML
@@ -250,8 +283,65 @@ def test_admin_state_exposes_agents_without_secrets() -> None:
     assert state["policy"]["supported_locales"] == ["en", "ko"]
 
 
+def test_reference_cases_terminology_replaces_golden_prompts() -> None:
+    """Issue #1015: the governed term is "Reference cases" / "참조 평가 사례".
+
+    #1014 and fast-mlsirm#1727 introduced generated/provisional/adjudicated/
+    validated dataset states that "Golden prompts" wrongly conflated into a
+    single authority claim. The admin translation bundle must expose the new
+    key with locale-key parity, and no locale may still render the retired
+    "golden" wording.
+    """
+    assert ADMIN_TRANSLATIONS["en"].keys() == ADMIN_TRANSLATIONS["ko"].keys()
+
+    assert ADMIN_TRANSLATIONS["en"]["reference_cases"] == "Reference cases"
+    assert ADMIN_TRANSLATIONS["ko"]["reference_cases"] == "참조 평가 사례"
+
+    for locale, bundle in ADMIN_TRANSLATIONS.items():
+        assert "reference_cases" in bundle
+        value = bundle["reference_cases"]
+        assert value, f"locale {locale} has an empty reference_cases value"
+        if locale != "en":
+            assert value != ADMIN_TRANSLATIONS["en"]["reference_cases"], (
+                f"locale {locale} left the English fallback in place"
+            )
+        for retired in ("golden_prompts", "Golden prompts", "골든 프롬프트", "golden", "골든"):
+            assert retired not in bundle.values(), f"locale {locale} still renders {retired!r}"
+            assert retired not in bundle, f"locale {locale} still keys on {retired!r}"
+
+    assert "golden_prompts" not in ADMIN_HTML
+    assert "Golden prompts" not in ADMIN_HTML
+    assert "골든 프롬프트" not in ADMIN_HTML
+    assert '{name: "reference_cases", owner: "AI product", prompts: 42, policy: "route + conduct"}' in ADMIN_HTML
+
+    start = ADMIN_HTML.index("function renderDatasets()")
+    end = ADMIN_HTML.index("function renderIntegrations()", start)
+    script = "\n".join(
+        [
+            'import assert from "node:assert/strict";',
+            f"const translations = {json.dumps(ADMIN_TRANSLATIONS)};",
+            'let currentLang = "en";',
+            'const t = key => translations[currentLang][key] || key;',
+            'const escapeHtml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll(\'"\', "&quot;");',
+            'const els = {datasetRows: {innerHTML: ""}};',
+            'const datasets = [{name: "reference_cases", owner: "AI product", prompts: 42, policy: "route + conduct"}];',
+            ADMIN_HTML[start:end],
+            'renderDatasets();',
+            'assert(els.datasetRows.innerHTML.includes("Reference cases"));',
+            'assert(!els.datasetRows.innerHTML.includes("Golden"));',
+            'currentLang = "ko";',
+            'renderDatasets();',
+            'assert(els.datasetRows.innerHTML.includes("참조 평가 사례"));',
+            'assert(!els.datasetRows.innerHTML.includes("골든"));',
+        ]
+    )
+    result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_admin_surface_exists_for_enterprise_operations()
     test_model_group_mutations_refresh_audit_events()
     test_admin_state_exposes_agents_without_secrets()
+    test_reference_cases_terminology_replaces_golden_prompts()
     print("ok")

@@ -10,19 +10,20 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from pathlib import Path
+from contextlib import closing
 import sys
 import tempfile
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
 
 
 def _seed() -> list[ModelAgent]:
@@ -69,7 +70,7 @@ def test_endpoint_equivalence_contract_is_normalized_and_survives_restart() -> N
         )
         second = TaskOrchestrator(_seed(), agents_db=database_path)
         assert second._agent("general_agent").endpoint_equivalence == _endpoint_contract()
-        with sqlite3.connect(database_path) as connection:
+        with closing(sqlite3.connect(database_path)) as connection, connection:
             assert connection.execute(
                 "SELECT COUNT(*) FROM endpoint_equivalence_contract"
             ).fetchone() == (1,)
@@ -91,7 +92,7 @@ def test_clearing_last_endpoint_member_reaps_its_orphan_contract() -> None:
         orchestrator.patch_agent(
             "default", "general_agent", {"endpoint_equivalence": None}
         )
-        with sqlite3.connect(database_path) as connection:
+        with closing(sqlite3.connect(database_path)) as connection, connection:
             assert connection.execute(
                 "SELECT COUNT(*) FROM endpoint_equivalence_member"
             ).fetchone() == (0,)
@@ -119,7 +120,7 @@ def test_add_patch_remove_survive_restart() -> None:
         assert by_id["general_agent"].priority == 9  # patch restored over the seed
         assert by_id["coding_agent"].model == "gpt-5.5"
         assert {a.group_name for a in by_id.values()} == {"example_logical_model"}
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_pool)")}
             assert "payload" not in columns  # normalized schema, no JSON shadow
             assert conn.execute("SELECT group_name FROM model_group").fetchall() == [
@@ -145,7 +146,7 @@ def test_stream_usage_capability_patch_survives_restart() -> None:
             "default", "persisted_agent", {"stream_usage_supported": True}
         )
         assert updated["stream_usage_supported"] is True
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT stream_usage_supported FROM agent_pool WHERE agent_id = ?",
                 (agent.id,),
@@ -196,7 +197,7 @@ def test_add_agent_rejects_unpersistable_limit_without_mutation() -> None:
             )
 
         assert [agent.id for agent in orchestrator.candidates] == ["general_agent"]
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT COUNT(*) FROM agent_pool WHERE agent_id = ?",
                 ("overflow_agent",),
@@ -216,7 +217,7 @@ def test_patch_agent_rejects_unpersistable_limit_without_mutation() -> None:
             )
 
         assert orchestrator._agent("general_agent").context_window is None
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT context_window FROM agent_pool WHERE agent_id = ?",
                 ("general_agent",),
@@ -227,14 +228,14 @@ def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")
         legacy = ModelAgent("legacy_agent", "legacy-model", group_name="legacy-group").to_config()
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute("CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
             conn.execute("INSERT INTO agent_pool VALUES (?, ?)", ("legacy_agent", json.dumps(legacy)))
 
         restored = TaskOrchestrator([], agents_db=db)
 
         assert restored.candidates[0].group_name == "legacy_group"
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             # The normalized pool has no payload column; membership lives in its
             # own relation and the legacy payload table is dropped after promotion.
             tables = {
@@ -284,7 +285,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
         first = TaskOrchestrator([agent], agents_db=db)
         first._pool_store.save(agent)
 
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_pool)")}
             assert "payload" not in columns
             assert "reasoning_effort_supported" in columns
@@ -339,7 +340,7 @@ def test_legacy_agent_pool_payloads_migrate_transactionally() -> None:
             provider_exclusions=("provider-x",),
             reasoning_effort_supported=True,
         )
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             connection.execute(
                 "CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
             )
@@ -351,7 +352,7 @@ def test_legacy_agent_pool_payloads_migrate_transactionally() -> None:
 
         restored = TaskOrchestrator([], agents_db=db).agents
         assert restored == [legacy]
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
                 ("agent_pool_legacy_payloads",),
@@ -362,7 +363,7 @@ def test_malformed_legacy_agent_pool_rolls_back_without_losing_source() -> None:
     """Reject malformed legacy data and leave the original table recoverable."""
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             connection.execute(
                 "CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
             )
@@ -374,7 +375,7 @@ def test_malformed_legacy_agent_pool_rolls_back_without_losing_source() -> None:
 
         with pytest.raises(json.JSONDecodeError):
             TaskOrchestrator([ModelAgent("seed_agent", "unused")], agents_db=db)
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             assert connection.execute(
                 "SELECT payload FROM agent_pool WHERE agent_id = ?", ("broken_agent",)
             ).fetchone() == ("not-json",)
@@ -450,7 +451,126 @@ def _call(url: str, method: str, token: str, payload: dict | None = None) -> tup
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def test_http_unrelated_admin_edit_preserves_newer_timeout_policy(tmp_path) -> None:
+    """Authenticated priority edits preserve policy without relaxing access gates."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    writer = TaskOrchestrator(seeds, agents_db=database_path)
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(auth_token="pool_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    before = list(serving.candidates)
+    try:
+        writer.patch_agent("default", "general_agent", {"model_timeout_seconds": 7200})
+        status, _ = _call(url, "PATCH", "wrong_token", {"priority": 7})
+        assert status == 401
+        assert serving.candidates == before
+        status, _ = _call(url, "PATCH", "pool_token", {"priority": 7})
+        assert status == 200
+        assert serving._agent("general_agent").priority == 7
+        after_priority_edit = list(serving.candidates)
+        status, body = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": 3600})
+        assert status == 400
+        assert "reload before updating" in body.get("error", {}).get("message", body.get("message", ""))
+        assert serving.candidates == after_priority_edit
+        restored = TaskOrchestrator(seeds, agents_db=database_path)
+        assert restored._agent("general_agent").priority == 7
+        assert restored._agent("general_agent").model_timeout_seconds == 7200
+        assert restored._agent("general_agent").model_timeout_revision == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_http_timeout_policy_reads_durable_state_without_activation(tmp_path) -> None:
+    """Operators can distinguish stored policy from a stale serving snapshot."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    writer = TaskOrchestrator(seeds, agents_db=database_path)
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(
+        admin_token="pool_token", inference_token="inference_token",
+    ))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    try:
+        assert _call(base + "/timeout_policy", "GET", "wrong_token")[0] == 401
+        assert _call(base + "/timeout_policy", "GET", "inference_token")[0] == 401
+        status, initial = _call(base + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert initial["configured_seconds"] is None
+        assert initial["revision"] == 0
+        writer.patch_agent("default", "general_agent", {"model_timeout_seconds": 7200})
+        status, policy = _call(base + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert policy == {
+            "configured_seconds": 7200.0, "revision": 1, "unit": "seconds",
+            "serving_snapshot_seconds": None, "serving_snapshot_revision": 0,
+            "enforcement_available": True,
+        }
+        assert serving._agent("general_agent").model_timeout_revision == 0
+        missing = base.replace("general_agent", "missing_agent")
+        assert _call(missing + "/timeout_policy", "GET", "pool_token")[0] == 404
+        from contextual_orchestrator.api_contract import OPENAPI_SPEC
+        operation = OPENAPI_SPEC["paths"][
+            "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy"
+        ]["get"]
+        assert operation["security"] == [{"admin_bearer_auth": []}]
+        schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        assert set(schema["required"]) == set(policy)
+        assert schema["properties"]["enforcement_available"] == {"const": True}
+        history_url = base + "/timeout_policy/history"
+        assert _call(history_url, "GET", "inference_token")[0] == 401
+        status, history = _call(history_url + "?page_size=1", "GET", "pool_token")
+        assert status == 200
+        assert history["history_available"] is True
+        assert history["items"][0]["configured_seconds"] == 7200
+        assert history["items"][0]["revision"] == 1
+        assert history["next_before_revision"] is None
+        for query in ("page_size=0", "page_size=101", "before_revision=-1", "before_revision=9223372036854775808"):
+            assert _call(history_url + "?" + query, "GET", "pool_token")[0] == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_http_timeout_policy_write_applies_on_serving_process(tmp_path) -> None:
+    """Authenticated timeout-only writes update the serving snapshot and persist."""
+    seeds = _seed()
+    database_path = str(tmp_path / "pool.db")
+    serving = TaskOrchestrator(seeds, agents_db=database_path)
+    server = build_server(serving, port=0, security=SecurityConfig(auth_token="pool_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents/general_agent"
+    try:
+        status, payload = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": 12})
+        assert status == 200
+        assert payload["model_timeout_seconds"] == 12
+        assert serving._agent("general_agent").model_timeout_seconds == 12
+        status, policy = _call(url + "/timeout_policy", "GET", "pool_token")
+        assert status == 200
+        assert policy["configured_seconds"] == 12
+        assert policy["serving_snapshot_seconds"] == 12
+        assert policy["enforcement_available"] is True
+        status, cleared = _call(url, "PATCH", "pool_token", {"model_timeout_seconds": None})
+        assert status == 200
+        assert cleared["model_timeout_seconds"] is None
+        restored = TaskOrchestrator(seeds, agents_db=database_path)
+        assert restored._agent("general_agent").model_timeout_seconds is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_http_create_and_delete_worker_agents() -> None:
@@ -482,7 +602,7 @@ def test_http_create_and_delete_worker_agents() -> None:
         status, read = _call(f"{base}/general_agent", "GET", token)
         assert status == 200 and read["stream_usage_supported"] is True
 
-        status, dup = _call(base, "POST", token, NEW_AGENT)
+        status, _ = _call(base, "POST", token, NEW_AGENT)
         assert status == 400  # duplicate rejected
 
         status, wrong_pool = _call(
@@ -512,6 +632,7 @@ def test_http_create_and_delete_worker_agents() -> None:
         assert status == 404
     finally:
         server.shutdown()
+        server.server_close()
     assert {a.id for a in orchestrator.agents} == {"general_agent"}
 
 
@@ -573,6 +694,7 @@ def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
         assert orchestrator.list_model_groups() == []
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
@@ -591,6 +713,7 @@ def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
             assert body["error"]["code"] == "agent_not_found"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":
