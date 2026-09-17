@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+For NIM error ownership, assert closure before test fallback cleanup. Cover both
+OSError and RuntimeError cleanup failures; do not swallow BaseException. A clean
+benchmark-module run does not establish combined-suite acceptance: inherited
+ModelClient cleanup remains owned by #1140. See the NIM doctoring record.
+
 Optimizer means must not replace ordered `score_observations`. Reuse the shared
 scoring boundary and preserve existing selection semantics until the separate
 applicable-evaluator contract is resolved; see the optimizer recovery runbook.

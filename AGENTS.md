@@ -1,5 +1,10 @@
 # AGENTS.md
 
+NIM policy evaluation owns HTTP errors it converts into outcome cells; classify
+before close and preserve the outcome on cleanup Exception, not BaseException. Propagated errors
+retain caller ownership. The NIM doctoring record distinguishes this repair
+from the separate ModelClient response-lifecycle owner (#1140).
+
 Preserve ordered `score_observations` in optimizer results: equal means can
 hide different task outcomes. This additive field does not approve the existing
 selection policy; keep its psychometric evidence gap explicit in the runbook.
