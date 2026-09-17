@@ -8,9 +8,10 @@
 #
 # Fails closed unless every one of this repository's known push-triggered
 # checks (RELEASE_EXPECTED_PUSH_CHECKS) has already registered as a
-# check-run for TARGET_SHA, and every check GitHub reports for TARGET_SHA
-# (excluding this release run's own, via GITHUB_RUN_ID) is complete with an
-# acceptable conclusion.
+# check-run for TARGET_SHA and completed with conclusion `success`. Other
+# check-runs GitHub reports for TARGET_SHA (excluding this release run's own,
+# via GITHUB_RUN_ID) must also be complete with an acceptable non-failing
+# conclusion.
 #
 # Required env: GITHUB_REPOSITORY, TARGET_SHA, GITHUB_RUN_ID,
 # RELEASE_EXPECTED_PUSH_CHECKS. Needs `checks: read` (for the `gh api` call)
@@ -53,11 +54,33 @@ if [ "${missing_count}" != "0" ]; then
   echo "::error::${missing_count} expected push-triggered check(s) for commit ${TARGET_SHA} have not registered yet (GitHub may still be creating check-runs for this commit): $(echo "${missing_checks}" | jq -c .). Wait a few moments and re-dispatch." >&2
   exit 1
 fi
-not_ready="$(echo "${observed_checks}" | jq '
-  map(select(.status != "completed" or ((.conclusion // "") as $c | (["success","skipped","neutral"] | index($c)) == null)))
+
+# Merely registering a release-critical job name is not enough. A skipped or
+# neutral expected job can result from conditional execution or an
+# unavailable prerequisite and therefore cannot certify the immutable
+# publication boundary. Every named expected job must finish with the exact
+# successful conclusion.
+required_not_success="$(echo "${observed_checks}" | jq --argjson expected "${RELEASE_EXPECTED_PUSH_CHECKS}" '
+  map(select((.name as $name | ($expected | index($name)) != null)
+    and (.status != "completed" or (.conclusion // "") != "success")))
+')"
+required_not_success_count="$(echo "${required_not_success}" | jq 'length')"
+if [ "${required_not_success_count}" != "0" ]; then
+  echo "::error::${required_not_success_count} expected push-triggered check(s) for commit ${TARGET_SHA} are not complete with conclusion success: $(echo "${required_not_success}" | jq -c 'map({name, status, conclusion})')" >&2
+  exit 1
+fi
+
+# Preserve the existing conservative treatment of additional, noncritical
+# checks GitHub reports for the commit: they must be terminal and may use
+# GitHub's non-failing success/skipped/neutral conclusions. Expected
+# release-critical checks were already held to the stricter success-only
+# contract above.
+not_ready="$(echo "${observed_checks}" | jq --argjson expected "${RELEASE_EXPECTED_PUSH_CHECKS}" '
+  map(select((.name as $name | ($expected | index($name)) == null)
+    and (.status != "completed" or ((.conclusion // "") as $c | (["success","skipped","neutral"] | index($c)) == null))))
 ')"
 not_ready_count="$(echo "${not_ready}" | jq 'length')"
 if [ "${not_ready_count}" != "0" ]; then
-  echo "::error::${not_ready_count} check(s) for commit ${TARGET_SHA} are not both complete and green (excluding this release run's own checks): $(echo "${not_ready}" | jq -c 'map({name, status, conclusion})')" >&2
+  echo "::error::${not_ready_count} additional check(s) for commit ${TARGET_SHA} are not complete with a non-failing conclusion (excluding this release run's own checks): $(echo "${not_ready}" | jq -c 'map({name, status, conclusion})')" >&2
   exit 1
 fi
