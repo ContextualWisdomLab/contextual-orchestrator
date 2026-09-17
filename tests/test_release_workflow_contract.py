@@ -496,7 +496,7 @@ def test_checks_gate_all_expected_checks_registered_and_green_passes(tmp_path: P
 
 def test_checks_gate_all_expected_registered_but_one_still_pending_fails_closed(tmp_path: Path) -> None:
     """All expected checks have registered (so the missing-checks gate
-    passes), but one is still in flight -- the pre-existing not-ready/green
+    passes), but one is still in flight -- the success-only expected-check
     gate must still catch it."""
     workflow = _workflow_text()
     expected_json = _expected_push_checks_json(workflow)
@@ -509,7 +509,7 @@ def test_checks_gate_all_expected_registered_but_one_still_pending_fails_closed(
 
     assert result.returncode != 0, result.stderr
     assert "have not registered yet" not in result.stderr
-    assert "not both complete and green" in result.stderr
+    assert "are not complete with conclusion success" in result.stderr
 
 
 def test_checks_gate_evaluates_target_sha_not_the_dispatch_commit(tmp_path: Path) -> None:
