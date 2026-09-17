@@ -47,6 +47,7 @@ def test_uncancellable_loser_never_returning_does_not_block_process_exit() -> No
         """
         import sys
         import threading
+        import time
 
         sys.path.insert(0, %(repo_root)r)
         from contextual_orchestrator.endpoint_race import (
@@ -91,20 +92,31 @@ def test_uncancellable_loser_never_returning_does_not_block_process_exit() -> No
         )
         assert outcome.value == "winner"
         assert outcome.cancellation_outcomes == (("stuck_endpoint", "safe_drain"),)
+        # Emit the post-return wall clock so the parent can measure only
+        # interpreter shutdown, not cold import / race setup latency.
+        print(f"RACE_RETURNED_AT={time.time():.6f}", flush=True)
         # No explicit sys.exit()/os._exit(): a genuinely non-blocking fix
         # must let normal interpreter shutdown proceed on its own, with the
         # hung loser thread still blocked in the background.
         """
     ) % {"repo_root": str(Path(__file__).resolve().parents[1])}
 
-    started = time.monotonic()
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
         timeout=15,
     )
-    elapsed = time.monotonic() - started
+    finished = time.time()
 
     assert result.returncode == 0, result.stderr
-    assert elapsed < 5.0, f"process took {elapsed:.1f}s to exit with an uncancellable loser outstanding"
+    marker_lines = [
+        line for line in result.stdout.splitlines() if line.startswith("RACE_RETURNED_AT=")
+    ]
+    assert marker_lines, f"missing race-return marker in stdout: {result.stdout!r}"
+    returned_at = float(marker_lines[-1].split("=", 1)[1])
+    shutdown_elapsed = finished - returned_at
+    assert shutdown_elapsed < 5.0, (
+        f"interpreter took {shutdown_elapsed:.1f}s to exit after race return "
+        "with an uncancellable loser outstanding"
+    )
