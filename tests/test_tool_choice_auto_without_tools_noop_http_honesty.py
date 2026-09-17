@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -64,6 +65,7 @@ def test_http_chat_accepts_tool_choice_auto_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_choice_none_without_tools() -> None:
@@ -82,6 +84,7 @@ def test_http_chat_accepts_tool_choice_none_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_choice_auto_with_empty_tools() -> None:
@@ -101,6 +104,7 @@ def test_http_chat_accepts_tool_choice_auto_with_empty_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_tool_choice_auto_without_tools() -> None:
@@ -119,6 +123,7 @@ def test_http_responses_accepts_tool_choice_auto_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_noop_tool_controls_are_omitted_from_provider_request() -> None:
@@ -157,6 +162,7 @@ def test_noop_tool_controls_are_omitted_from_provider_request() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_tool_choice_required_without_tools() -> None:
@@ -176,3 +182,4 @@ def test_http_chat_still_rejects_tool_choice_required_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

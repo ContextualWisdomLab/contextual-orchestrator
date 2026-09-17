@@ -72,6 +72,7 @@ def test_http_chat_stream_options_all_false_without_stream_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_stream_options_true_without_stream_fail_closed() -> None:
@@ -90,6 +91,7 @@ def test_http_chat_stream_options_true_without_stream_fail_closed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_stream_options_include_usage_true_is_accepted() -> None:
@@ -110,6 +112,7 @@ def test_http_chat_stream_options_include_usage_true_is_accepted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_stream_options_include_usage_false_with_stream_ok() -> None:
@@ -130,6 +133,7 @@ def test_http_chat_stream_options_include_usage_false_with_stream_ok() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_stream_options_non_object_fail_closed() -> None:
@@ -149,6 +153,7 @@ def test_http_chat_stream_options_non_object_fail_closed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_omits_stream_options_ok() -> None:
@@ -166,6 +171,7 @@ def test_http_chat_omits_stream_options_ok() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

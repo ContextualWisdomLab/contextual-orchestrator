@@ -212,3 +212,50 @@ def test_build_defaults_when_redis_package_missing(
     factory = build_job_registry(UrlOnly())
     assert isinstance(factory, JobRegistryFactory)
     assert not factory.durable
+
+
+def test_configured_url_without_redis_package_warns_about_lost_durability(
+    monkeypatch, caplog
+) -> None:
+    """An opted-in deployment must not receive in-process registries silently.
+
+    An unset URL and a configured URL whose client package is missing both
+    yield the same non-durable factory, so without this signal an operator
+    who opted into durable registries cannot tell the two apart.
+    """
+
+    class UrlOnly:
+        @staticmethod
+        def get_secret(name: str, default: object) -> object:
+            return "valkey://queue_user@localhost:6379/4"
+
+    real_import = __import__
+
+    def blocked(name: str, *args: object, **kwargs: object) -> object:
+        if name == "redis":
+            raise ImportError("redis unavailable")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("builtins.__import__", blocked)
+    with caplog.at_level("WARNING", logger="contextual_orchestrator.batch_job_registry"):
+        factory = build_job_registry(UrlOnly())
+
+    assert not factory.durable
+    warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert any("batch_job_registry_valkey_url is configured" in message for message in warnings)
+    assert any("queue" in message for message in warnings)
+
+
+def test_unconfigured_registry_stays_silent(monkeypatch, caplog) -> None:
+    """A deployment that never opted in gets no warning: nothing degraded."""
+
+    class NoUrl:
+        @staticmethod
+        def get_secret(name: str, default: object) -> object:
+            return None
+
+    with caplog.at_level("WARNING", logger="contextual_orchestrator.batch_job_registry"):
+        factory = build_job_registry(NoUrl())
+
+    assert not factory.durable
+    assert [record for record in caplog.records if record.levelname == "WARNING"] == []

@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -67,6 +68,7 @@ def test_http_chat_rejects_seed_integer() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_seed_zero() -> None:
@@ -85,6 +87,7 @@ def test_http_chat_rejects_seed_zero() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_seed_non_integer() -> None:
@@ -103,6 +106,7 @@ def test_http_chat_rejects_seed_non_integer() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_seed_bool() -> None:
@@ -122,6 +126,7 @@ def test_http_chat_rejects_seed_bool() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_seed_omitted() -> None:
@@ -139,6 +144,7 @@ def test_http_chat_accepts_seed_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

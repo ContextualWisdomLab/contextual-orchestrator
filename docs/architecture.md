@@ -46,12 +46,41 @@ TRINITY contributes the compact coordinator idea: a small model representation p
 
 Conductor contributes the workflow representation: each step is a natural-language subtask, an assigned worker, and an access list of prior step outputs. This is the key piece for preventing every worker from being dragged into the same transcript while still allowing deliberate collaboration.
 
+The generated-plan step bound (`OrchestrationPolicy.max_workflow_steps`, default 6) is a product decision recorded in the policy source: the fixed template needs four steps, and six leaves a generated plan one extra worker plus one repair/verify step. It is not the Fugu-Ultra report's "up to 5 steps" training setting (arXiv:2606.21228 S3.2.3), which is not copied into any other layer here, and it is separate from the effort catalog's per-profile `max_workflow_steps`. The planner prompt and the plan parser read the same policy value (`tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`).
+
 The Fugu report combines these ideas into production constraints:
 
 - Fugu is optimized for latency by selecting a worker without expensive coordinator generation.
 - Fugu-Ultra is optimized for quality by generating deeper workflows over a broader agent pool.
 - The agent pool is swappable, allowing provider preference, model exclusion, and compliance controls.
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
+
+Fidelity note (2026-09-13, Fugu report arXiv:2606.21228 S3 / Fugu-Ultra
+Conductor): the paper's Conductor routes a tool loop back to the agent that
+emitted the tool call — when the client executes the tool and sends the
+results back, the continuation goes to the same worker, not a freshly
+selected one. This gateway previously did not do that: a follow-up carrying
+`role: "tool"` results was ranked like any new request, so a virtual selector
+(`orchestrator/free`, `orchestrator/auto`, `contextual-orchestrator`) could
+hand a different provider/model the results for calls it never emitted. This
+is now closed by `TaskOrchestrator`'s bounded `tool_loop_memory` map
+(`tool_call_id -> emitting agent id`, see `_apply_tool_loop_route` in
+`contextual_orchestrator/orchestrator.py`): a follow-up's remembered emitting
+agent is moved to the front of the already-filtered candidate order on
+`proxy_completion`'s single-agent passthrough, `route_once`, `conduct`'s
+worker step, and `_orchestrated_provider_completion`'s structured synthesis
+-- covering both of that path's callers (the Responses API and
+`response_format`-only chat passthrough) -- but only when it is still
+eligible under the request's own constraints (explicit concrete model,
+free/ZDR, circuit state); otherwise routing falls back to the normal order.
+On the Responses surface a served `function_call` item's `call_id` is
+recorded the same way a chat `tool_calls[].id` is, and a follow-up's
+`function_call_output` item needs no separate lookup: the existing
+input-to-chat conversion already turns it into a `role: "tool"` /
+`tool_call_id` message before candidate selection runs. The served
+response's `orchestration` extension records `tool_loop_route`
+(`"emitting_agent"`/`"fallback"`) and `tool_loop_agent_id` as evidence on
+every one of these paths.
 
 ## Implementation Mapping
 
@@ -68,7 +97,9 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - Virtual selectors (`orchestrator/free`, `orchestrator/auto`, `contextual-orchestrator`) keep every inference surface on that control plane: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/videos`, `/v1/audio/*`, and `/v1/rerank`. Tools, `stream=true`, or a non-text modality do not eject a virtual request into a sticky single-agent pin; a concrete model id remains a debug pin. Chat Completions and media endpoints cannot emit Responses `reasoning_text` events, so paper-role process output stays internal and only the modality result is returned.
 - `TaskOrchestrator._invoke`: the shared route/Conduct invocation path. A
   request-time failure of the primary provider call — 5xx, 429, network, a
-  413 request-size rejection, or a non-retryable 4xx such as 401/403/404
+  413 request-size rejection (a 400 context-window overflow —
+  `_is_context_length_exceeded_error` — is classified the same way), or a
+  non-retryable 4xx such as 401/403/404
   (this list is illustrative, not exhaustive: any failure the provider
   taxonomy classifies via `classify_provider_transport_failure` falls into
   either bucket) — advances to the next ranked candidate within the same
@@ -77,6 +108,59 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   model group — instead of surfacing an opaque error; exhausting every
   eligible candidate still fails closed with the last classified provider
   error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+- Context-window candidate filtering: `proxy_completion`'s passthrough loop,
+  `route_once`, and `conduct`'s worker step all funnel virtual-selector
+  candidate ranking through `TaskOrchestrator._failover_candidates`, which
+  optionally skips a candidate whose `ModelAgent.context_window` is a known
+  positive int provably smaller than a conservative lower bound on the
+  request's prompt tokens (`token_counting.prompt_token_lower_bound`: the
+  exact native tokenizer count when one is mapped for the candidate's model,
+  otherwise a character-count heuristic documented never to overestimate; see
+  planning ADR 0133). A `None` window is never treated as evidence of a
+  too-small window, and an explicitly requested concrete model is never
+  filtered -- only virtual selection opts in the bound. Filtering every
+  remaining candidate raises the same `ProviderRequestTooLargeError` (413)
+  the all-providers-413 path uses. A response whose filter excluded at least
+  one candidate carries the evidence in its `orchestration` extension:
+  `prompt_token_lower_bound`, `prompt_token_bound_source`
+  (`"exact"` or `"estimate_lower_bound"`), and `context_window_excluded`.
+- Rate-limit-aware admission (2026-09-14): a 429/503 candidate failure records
+  a per-agent quota cooldown from `Retry-After` (or a numeric
+  `x-ratelimit-reset*` fallback) separately from the health circuit breaker --
+  a 429 is quota exhaustion, not a model health failure, and does not trip it.
+  A 429 with neither header (RFC 9110 permits omitting it; NIM/OpenRouter
+  routinely do) records an *assumed* cooldown -- the administrator-owned
+  `rate_limit_unknown_cooldown_seconds` default -- instead of nothing, tagged
+  `cooldown_source: "assumed"` (vs `"provider"`) everywhere a cooldown is
+  surfaced; a 503 with neither header keeps requiring a real provider-stated
+  duration, since it is a possibly-permanent availability signal without a
+  429's inherent quota-recovery semantics. `TaskOrchestrator._failover_candidates`
+  skips a currently cooled-down candidate for every caller by default, falling
+  back to the full list only when every candidate is limited. The
+  wait-then-retry/honest-429 decision is one shared method,
+  `TaskOrchestrator._await_rate_limit_recovery`: the discriminator is not
+  candidate count but whether the caller delegated model selection at all --
+  a virtual/gateway-selected model (`GATEWAY_DEFAULT_MODEL`/`AUTO_MODEL`/
+  `FREE_MODEL`, or none) waits out the earliest cooldown even with only one
+  currently eligible candidate (a single-route free pool wiped to one
+  candidate by a 429 is real production evidence, not a hypothetical --
+  noema-review run 34772771262 on contextual-orchestrator#1177,
+  `ContextualWisdomLab/.github#2148`), while an explicit concrete model id
+  keeps its pre-existing immediate classified-error contract unconditionally.
+  Waiting is one bounded wait, never a busy-loop, applied when it fits the
+  request's administrator-owned
+  `model_timeout_seconds` deadline or the `rate_limit_wait_seconds`
+  caller-contract default, or raises an honest `429`/`provider_rate_limited`
+  with a `Retry-After` header (never a `502` connection-failure
+  misclassification) when waiting is impossible. Two callers reach it:
+  `proxy_completion`'s own passthrough failover loop, and
+  `TaskOrchestrator._invoke_with_rate_limit_recovery`, which wraps `_invoke`
+  -- the shared engine `route_once` and every `conduct` step (including the
+  worker step) use to reach a candidate -- so the real `orchestrator/free`
+  HTTP path is covered by the same admission contract, not a separate one.
+  See the 2026-09-14 entries in
+  [the gap baseline](product-technical-gap-baseline.md) for the production
+  evidence and full scope note.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.

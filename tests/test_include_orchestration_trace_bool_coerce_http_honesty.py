@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_chat_rejects_include_orchestration_trace_strings() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_include_orchestration_trace_integers() -> None:
@@ -88,6 +90,7 @@ def test_http_chat_rejects_include_orchestration_trace_integers() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_include_orchestration_trace_yes() -> None:
@@ -106,6 +109,7 @@ def test_http_chat_still_rejects_include_orchestration_trace_yes() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_attribution_null_empty_value_omit() -> None:
@@ -125,6 +129,7 @@ def test_http_chat_accepts_attribution_null_empty_value_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_attribution_all_null_values_as_empty_object() -> None:
@@ -143,6 +148,7 @@ def test_http_chat_accepts_attribution_all_null_values_as_empty_object() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
