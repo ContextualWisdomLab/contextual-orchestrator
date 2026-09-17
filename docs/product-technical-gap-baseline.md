@@ -45,7 +45,6 @@ tests/test_self_check.py tests/test_security_hardening.py
 tests/test_provider_reliability.py -q` passes. This is local, single-branch
 evidence, not a protected-main merge or hosted CI run; sidecar adoption and a
 live gateway round-trip from `.github` remain open.
->>>>>>> origin/main
 
 
 ## 2026-09-13 Response lifecycle repair candidate
