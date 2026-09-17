@@ -6643,3 +6643,15 @@ suite: 3663 passed, 1 skipped, 5 known local-only failures (the openai SDK
 2.54.0-pin tests and the `mcp.Client` privacy test), unchanged by this change.
 `python -m interrogate -v contextual_orchestrator/` remains 100% (no production
 code touched).
+
+## 2026-09-14 Generated-plan step bound origin (section 3.1 / 5.1 fidelity)
+
+`OrchestrationPolicy.max_workflow_steps = 6` bounded generated Conductor plans
+(prompt text and parser) without stating where the number came from, while the
+Fugu-Ultra report's "up to 5 steps" (arXiv:2606.21228 S3.2.3) is a training
+setting that must not be copied into other layers. This change records the
+origin as a product decision beside the field and in `docs/architecture.md`,
+keeps the value administrator-owned through `OrchestrationPolicy`, and adds
+`tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
+(prompt and parser follow the policy value; default stays 6). Not established:
+an ablation of the bound itself, which belongs to the #568 equal-budget lane.

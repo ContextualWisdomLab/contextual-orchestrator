@@ -1068,6 +1068,17 @@ class OrchestrationPolicy:
     # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
     # fixed 4-step plan. Generated plans that fail validation fall back to the template.
     workflow_planning: str = "template"
+    # Validation bound for *generated* plans (prompt and parser both read it).
+    # Origin: a product decision, not a paper value. The fixed template needs
+    # four steps (thinker, worker, verifier, synthesizer); six leaves a
+    # generated plan room for one extra worker and one repair/verify step
+    # without letting the planner emit unbounded fan-out. It is deliberately
+    # NOT the Fugu-Ultra report's "up to 5 steps" (arXiv:2606.21228 S3.2.3),
+    # which is a training setting for that report's learned conductor, nor the
+    # effort catalog's 4 (``reasoning_effort_profile``), which bounds
+    # role compute under an explicit effort profile. Administrators change it
+    # through OrchestrationPolicy; ablation of the value belongs to the #568
+    # equal-budget lane, not to a test fixture.
     max_workflow_steps: int = 6
     # Verifier verdicts are structured model judgments. Keyword matching is intentionally
     # unsupported: it cannot handle negation, language, or a report that quotes a risk.
