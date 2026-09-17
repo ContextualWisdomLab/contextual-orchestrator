@@ -47,6 +47,15 @@ def test_security_workflow_covers_core_repository_security_process():
         "github/codeql-action/init@v4",
         "github/codeql-action/analyze@v4",
         "security:",
+        "rust:",
+        "Rust workspace gate",
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "cargo test --workspace --locked",
+        "cargo audit --file Cargo.lock",
+        "upload: never",
+        "wait-for-processing: false",
+        "codeql github upload-results",
         "actions/setup-python@v6",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "python -m pip install --require-hashes -r requirements.lock",
@@ -76,12 +85,12 @@ def test_security_workflow_covers_core_repository_security_process():
         "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]"
         in workflow_text
     )
-    assert workflow_text.count("github.event.pull_request.draft == false") == 3
-    assert workflow_text.count("github.event.action != 'closed'") == 3
+    assert workflow_text.count("github.event.pull_request.draft == false") == 4
+    assert workflow_text.count("github.event.action != 'closed'") == 4
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
-    assert workflow_text.count("runs-on: ubuntu-24.04") == 3
+    assert workflow_text.count("runs-on: ubuntu-24.04") == 4
     assert "runs-on: ubuntu-latest" not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]

@@ -134,6 +134,55 @@ jobs:
           path: crash-*
           if-no-files-found: ignore
 
+  rust:
+    name: Rust workspace gate
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --workspace --locked
+
+      - name: Install cargo-audit
+        run: |
+          set -euo pipefail
+          audit_version="0.22.2"
+          archive="cargo-audit-x86_64-unknown-linux-gnu-v${audit_version}.tgz"
+          curl -sSLf \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${audit_version}/${archive}" \
+            -o "${RUNNER_TEMP}/${archive}"
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          install -m 0755 \
+            "${RUNNER_TEMP}/cargo-audit-x86_64-unknown-linux-gnu-v${audit_version}/cargo-audit" \
+            /usr/local/bin/cargo-audit
+          cargo audit --version
+
+      - name: Audit Cargo.lock advisories
+        run: cargo audit --file Cargo.lock
+
   security:
     name: CodeQL, supply chain, and SBOM
     if: >-
@@ -154,7 +203,7 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # github/codeql-action/init@v4.37.9
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # github/codeql-action/init@v4.38.0
         with:
           languages: python
           build-mode: none
@@ -182,7 +231,62 @@ jobs:
           name: cyclonedx-sbom
           path: cyclonedx-sbom.json
 
+      # Analyze without uploading, then upload with an explicit retry loop.
+      # Issue #1172: analysis completed and SARIF exported, then the code-scanning
+      # upload died silently (~17s, no step error line) during a GitHub API 5xx
+      # window; reruns passed. Keep the gate fail-closed (no continue-on-error).
       - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # github/codeql-action/analyze@v4.37.9
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # github/codeql-action/analyze@v4.38.0
         with:
           category: "/language:python"
+          output: ${{ runner.temp }}/codeql-sarif
+          upload: never
+          wait-for-processing: false
+
+      - name: Upload CodeQL SARIF with transient retries
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          GITHUB_REF_NAME: ${{ github.ref }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+          GITHUB_REPOSITORY_VALUE: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sarif="$(find "$SARIF_DIR" -name '*.sarif' -type f | head -n 1)"
+          if [ -z "$sarif" ] || [ ! -f "$sarif" ]; then
+            echo "No SARIF produced under $SARIF_DIR" >&2
+            ls -la "$SARIF_DIR" >&2 || true
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            ref="refs/pull/${PR_NUMBER}/merge"
+            sha="$GITHUB_SHA_VALUE"
+          else
+            ref="$GITHUB_REF_NAME"
+            sha="$GITHUB_SHA_VALUE"
+          fi
+          echo "Uploading $sarif for $ref @ $sha"
+          attempt=1
+          max_attempts=5
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "SARIF upload attempt ${attempt}/${max_attempts}"
+            if printf '%s' "$GITHUB_TOKEN" | codeql github upload-results \
+              --repository="$GITHUB_REPOSITORY_VALUE" \
+              --ref="$ref" \
+              --commit="$sha" \
+              --sarif="$sarif" \
+              --github-auth-stdin
+            then
+              echo "SARIF upload succeeded on attempt ${attempt}"
+              exit 0
+            fi
+            status=$?
+            echo "Upload attempt ${attempt} failed with status ${status}"
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              exit "$status"
+            fi
+            sleep $((attempt * 20))
+            attempt=$((attempt + 1))
+          done
