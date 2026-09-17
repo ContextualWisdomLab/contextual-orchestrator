@@ -54,6 +54,7 @@ from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+DEFAULT_TRACE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN"
 
 def _log_level(value: str) -> str:
     """Parse a case-insensitive stdlib logging level name for an argparse option."""
@@ -957,12 +958,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
     parser.add_argument("--admin-token", default="", help="Explicit local-development admin token; prefer a KV token name.")
     parser.add_argument("--inference-token", default="", help="Explicit local-development inference token; prefer a KV token name.")
+    parser.add_argument("--trace-token", default="",
+                        help="Explicit local-development trace token; prefer a KV token name. "
+                             "Required in split admin/inference mode to authorize the trace "
+                             "purpose (ADR 0026); without it, trace responses fail closed.")
     parser.add_argument("--auth-token-key", default=None,
                         help="KV credential name for the single server bearer token.")
     parser.add_argument("--admin-token-key", default=None,
                         help="KV credential name for the admin bearer token.")
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
+    parser.add_argument("--trace-token-key", default=None,
+                        help="KV credential name for the trace bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
         "--production",
@@ -1006,8 +1013,10 @@ def main(argv: list[str] | None = None) -> None:
         default=0.2,
         help="Default provider sampling temperature (default: 0.2; --temperature is a compatibility alias).",
     )
-    parser.add_argument("--max-output-tokens", type=int, default=2048,
-                        help="Default provider output token cap (default: 2048).")
+    parser.add_argument("--max-output-tokens", type=_positive_int, default=None,
+                        help="Provider output token cap. Omitted by default so the selected "
+                             "model's published maximum output governs; set it to impose an "
+                             "explicit override.")
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
@@ -1028,6 +1037,30 @@ def main(argv: list[str] | None = None) -> None:
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
+    parser.add_argument(
+        "--rate-limit-wait-seconds",
+        type=float,
+        default=30.0,
+        help=(
+            "Caller-contract bound (not a product limit) on how long a "
+            "passthrough request may wait out a provider rate-limit storm "
+            "when the primary candidate has no administrator-owned "
+            "model_timeout_seconds deadline (default: 30)."
+        ),
+    )
+    parser.add_argument(
+        "--rate-limit-unknown-cooldown-seconds",
+        type=float,
+        default=5.0,
+        help=(
+            "Assumed cooldown applied when a 429/503 provider response "
+            "states no Retry-After/x-ratelimit-reset* at all (RFC 9110 "
+            "permits omitting it, and some providers routinely do). This is "
+            "a caller-contract bound, not a discovered provider fact -- kept "
+            "short by default so an unknown cooldown is re-probed soon "
+            "rather than parked (default: 5)."
+        ),
+    )
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     parser.add_argument(
@@ -1073,6 +1106,8 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        rate_limit_wait_seconds=args.rate_limit_wait_seconds,
+        rate_limit_unknown_cooldown_seconds=args.rate_limit_unknown_cooldown_seconds,
         allow_empty_agents=args.auto_discover_model_agents,
         role_effort_catalog=(
             default_role_effort_catalog() if args.role_effort_catalog == "default" else None
@@ -1148,6 +1183,12 @@ def main(argv: list[str] | None = None) -> None:
                 if split_requested
                 else ""
             )
+            trace_requested = bool(args.trace_token or args.trace_token_key)
+            trace_token = (
+                _resolve_auth_token(args.trace_token, args.trace_token_key or DEFAULT_TRACE_CREDENTIAL_NAME)
+                if trace_requested
+                else ""
+            )
         except ValueError as exc:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):
@@ -1169,6 +1210,7 @@ def main(argv: list[str] | None = None) -> None:
                 auth_token=auth_token,
                 admin_token=admin_token,
                 inference_token=inference_token,
+                trace_token=trace_token,
                 max_body_bytes=args.max_body_bytes,
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,

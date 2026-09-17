@@ -46,9 +46,11 @@ FAKE_ENDPOINT = "https://nim.example.test/v1"
 
 
 @pytest.fixture(autouse=True)
-def _fresh_backend():
-    """Isolated in-memory KV and a clean benchmark env var for every test."""
+def _fresh_backend(monkeypatch: pytest.MonkeyPatch):
+    """Isolate credentials and keep offline contracts independent of wall time."""
     set_backend(InMemoryCredentialBackend())
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2000-01-01")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2999-12-31")
     saved_env = os.environ.pop(nb.NIM_CREDENTIAL_NAME, None)
     try:
         yield
@@ -1821,6 +1823,56 @@ def test_evaluation_contract_failure_publishes_no_artifacts(
         )
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_budgeted_client_delegates_validation_without_injected_transport() -> None:
+    """The ordinary ModelClient validation path remains intact without a seam."""
+    client = nb._BudgetedModelClient(nb.RequestBudget(1))
+    agent = ModelAgent(
+        "live_worker",
+        "provider/model",
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+    )
+    destination = (socket.AF_INET, ("93.184.216.34", 443))
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(ModelClient, "_validate_provider", lambda *_: destination)
+        assert client._validate_provider(agent) == destination
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "http://nim.example.test/v1",
+        "https://user@nim.example.test/v1",
+        "https://nim.example.test/v1?credential=secret",
+    ),
+)
+def test_injected_benchmark_transport_rejects_unsafe_provider_url(base_url: str) -> None:
+    """An injected transport bypasses DNS only after strict URL validation."""
+    client = nb._BudgetedModelClient(
+        nb.RequestBudget(1), transport=nb.build_dry_run_transport()
+    )
+    agent = ModelAgent("live_worker", "provider/model", base_url=base_url)
+
+    with pytest.raises(RuntimeError, match="base_url"):
+        client._validate_provider(agent)
+
+
+def test_injected_benchmark_transport_requires_kv_credential() -> None:
+    """The offline transport seam cannot bypass the runtime credential contract."""
+    client = nb._BudgetedModelClient(
+        nb.RequestBudget(1), transport=nb.build_dry_run_transport()
+    )
+    agent = ModelAgent(
+        "live_worker",
+        "provider/model",
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+    )
+
+    with pytest.raises(NotConfigured, match=nb.NIM_CREDENTIAL_NAME):
+        client._validate_provider(agent)
 
 
 def test_artifact_writer_refuses_secret_leak() -> None:

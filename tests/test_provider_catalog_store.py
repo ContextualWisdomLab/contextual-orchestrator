@@ -190,6 +190,66 @@ def test_model_normalization_withholds_limits_above_signed_64_bit() -> None:
     assert normalized.context_window is None
 
 
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [(True, True), (False, False), ("true", None), (1, None)],
+)
+def test_model_normalization_withholds_non_boolean_tool_call_evidence(
+    evidence: object, expected: bool | None
+) -> None:
+    normalized = normalize_discovered_model(
+        _source(),
+        replace(_model(_source(), "model-a"), supports_parallel_tool_calls=evidence),
+    )
+
+    assert normalized.supports_parallel_tool_calls is expected
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "supports_zero_data_retention",
+        "supports_no_training",
+        "supports_no_prompt_retention",
+    ],
+)
+def test_model_normalization_withholds_non_boolean_privacy_evidence(
+    field_name: str,
+) -> None:
+    model = replace(_model(_source(), "model-a"), **{field_name: "false"})
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert getattr(normalized, field_name) is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "malformed", "expected"),
+    [
+        ("is_free", "false", False),
+        ("is_free", 1, False),
+        ("spend_admitted", "true", False),
+        ("spend_admitted", 0, False),
+    ],
+)
+def test_model_normalization_fails_closed_on_malformed_economic_flags(
+    field_name: str, malformed: object, expected: bool
+) -> None:
+    model = replace(_model(_source(), "model-a"), **{field_name: malformed})
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert getattr(normalized, field_name) is expected
+
+
+def test_model_normalization_fails_closed_on_malformed_zdr_capability() -> None:
+    model = replace(_model(_source(), "model-a"), zdr_capable="false")
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert normalized.zdr_capable is False
+
+
 def test_underflowing_positive_price_is_rejected_not_treated_as_free() -> None:
     """A nonzero price that underflows to 0.0 in float must stay unknown."""
     source = _source()
@@ -257,6 +317,29 @@ def test_success_replaces_current_rows_and_failure_keeps_last_known_good() -> No
         "failed",
         "succeeded",
     ]
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "http_status_500",
+        "http_status_429",
+        "timeout",
+        "transport_error",
+        "invalid_response",
+        "empty_provider_catalog",
+    ],
+)
+def test_refresh_evidence_retains_only_allowlisted_discovery_codes(
+    error_code: str,
+) -> None:
+    """Operators get actionable failure classes without provider response text."""
+    store = InMemoryProviderCatalogStore()
+    source = _source(provider="bytez", credential="BYTEZ_API_KEY")
+
+    store.record_failure(source, error_code=error_code)
+
+    assert store.refresh_evidence()[-1].error_code == error_code
 
 
 def test_last_known_good_restores_free_and_modality_evidence() -> None:

@@ -203,8 +203,16 @@ class ProviderCatalogStore(Protocol):
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _ALLOWED_REFRESH_ERROR_CODES = frozenset(
-    {"provider_discovery_error", "empty_provider_catalog", "unknown_error"}
+    {
+        "provider_discovery_error",
+        "empty_provider_catalog",
+        "invalid_response",
+        "timeout",
+        "transport_error",
+        "unknown_error",
+    }
 )
+_HTTP_REFRESH_ERROR_CODE = re.compile(r"^http_status_[45][0-9]{2}$")
 
 
 def provider_account_id(source: ProviderModelSource) -> str:
@@ -300,7 +308,11 @@ def _normalize_error_code(value: object) -> str:
     if not isinstance(value, str):
         return "unknown_error"
     normalized = value.strip().casefold()
-    return normalized if normalized in _ALLOWED_REFRESH_ERROR_CODES else "unknown_error"
+    if normalized in _ALLOWED_REFRESH_ERROR_CODES or _HTTP_REFRESH_ERROR_CODE.fullmatch(
+        normalized
+    ):
+        return normalized
+    return "unknown_error"
 
 
 def _normalize_tags(tags: Sequence[str]) -> tuple[str, ...]:
@@ -365,13 +377,32 @@ def normalize_discovered_model(
         capabilities=tuple(model.capabilities),
         input_modalities=tuple(model.input_modalities),
         output_modalities=tuple(model.output_modalities),
-        is_free=bool(model.is_free),
-        supports_zero_data_retention=model.supports_zero_data_retention,
-        supports_no_training=model.supports_no_training,
-        supports_no_prompt_retention=model.supports_no_prompt_retention,
+        is_free=model.is_free if type(model.is_free) is bool else False,
+        supports_zero_data_retention=(
+            model.supports_zero_data_retention
+            if type(model.supports_zero_data_retention) is bool
+            else None
+        ),
+        supports_no_training=(
+            model.supports_no_training
+            if type(model.supports_no_training) is bool
+            else None
+        ),
+        supports_no_prompt_retention=(
+            model.supports_no_prompt_retention
+            if type(model.supports_no_prompt_retention) is bool
+            else None
+        ),
+        supports_parallel_tool_calls=(
+            model.supports_parallel_tool_calls
+            if type(model.supports_parallel_tool_calls) is bool
+            else None
+        ),
         privacy_policy_urls=tuple(model.privacy_policy_urls),
-        zdr_capable=bool(model.zdr_capable),
-        spend_admitted=bool(model.spend_admitted),
+        zdr_capable=model.zdr_capable if type(model.zdr_capable) is bool else False,
+        spend_admitted=(
+            model.spend_admitted if type(model.spend_admitted) is bool else False
+        ),
     )
 
 
@@ -410,8 +441,17 @@ def _restore_model_semantics(
         supports_no_prompt_retention=(
             True if "privacy:no_retention" in normalized else False if "privacy:retention_only" in normalized else None
         ),
+        supports_parallel_tool_calls=(
+            True
+            if "tool_call:multi" in normalized and "tool_call:single" not in normalized
+            else (
+                False
+                if "tool_call:single" in normalized and "tool_call:multi" not in normalized
+                else None
+            )
+        ),
         privacy_policy_urls=tuple(model.privacy_policy_urls),
-        zdr_capable=bool(model.zdr_capable),
+        zdr_capable=model.zdr_capable if type(model.zdr_capable) is bool else False,
     )
 
 
