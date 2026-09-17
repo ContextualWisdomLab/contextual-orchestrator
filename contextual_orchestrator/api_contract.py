@@ -74,6 +74,34 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": ["measured", "unavailable"],
                     },
+                    "prompt_count_source": {
+                        "type": "string",
+                        "enum": ["provenance_exact"],
+                        "description": (
+                            "Present only when an authoritative prompt-message "
+                            "token count was obtained for this exact served "
+                            "request from token_counting.COUNTING_PROVENANCE_"
+                            "REGISTRY; omitted (never fabricated) otherwise."
+                        ),
+                    },
+                    "shared_context_budget": {
+                        "type": "object",
+                        "required": ["context_window", "prompt_tokens", "output_ceiling", "source"],
+                        "properties": {
+                            "context_window": {"type": "integer", "minimum": 1},
+                            "prompt_tokens": {"type": "integer", "minimum": 0},
+                            "output_ceiling": {"type": "integer"},
+                            "source": {"type": "string", "enum": ["exact"]},
+                        },
+                        "description": (
+                            "Present only when the served agent's context window, "
+                            "its published output ceiling, and an exact prompt-"
+                            "message token count were all authoritative for this "
+                            "exact request (see "
+                            "token_counting.shared_context_output_budget); "
+                            "omitted (never estimated) otherwise."
+                        ),
+                    },
                     "orchestration": {"type": "object"},
                 },
             },
@@ -688,7 +716,7 @@ OPENAPI_SPEC = {
         "/api/v1/provider_readiness/latest": {
             "get": {
                 "operationId": "get_latest_provider_readiness",
-                "summary": "Read or explicitly refresh bounded provider chat readiness",
+                "summary": "Read or explicitly refresh provider chat readiness",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [{
                     "name": "refresh",
@@ -705,6 +733,31 @@ OPENAPI_SPEC = {
                 "summary": "Get source-backed local KPI and guardrail metrics",
                 "security": [{"admin_bearer_auth": []}],
                 "responses": {"200": {"description": "Analytics snapshot"}},
+            }
+        },
+        "/api/v1/request_outcome_exports": {
+            "get": {
+                "operationId": "export_request_outcomes",
+                "summary": "Export service-admin prompt-free retained request associations",
+                "description": "Requires service-wide admin authority; not owner-scoped. "
+                               "The audit_replay purpose is route-owned. Reuse the returned "
+                               "high-water on continuation. Unmatched and truncated evidence "
+                               "must not be interpreted as a complete correctness cohort.",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": "page_size", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}},
+                    {"name": "after_sequence", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 0, "default": 0}},
+                    {"name": "high_water_sequence", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 0}},
+                ],
+                "responses": {
+                    "200": {"description": "Bounded admission page with prompt-free workflow and batch associations"},
+                    "400": {"description": "Invalid or future pagination cursor"},
+                    "401": {"description": "Service-admin authority required"},
+                    "503": {"description": "Durable audit or export storage unavailable"},
+                },
             }
         },
         "/api/v1/sales_readiness/latest": {

@@ -1,5 +1,17 @@
 # CLAUDE.md
 
+Read `docs/doctoring/kpi_stack_integration.md` before changing cache measurements.
+One admission may contain cached and uncached items: finalize cache-only status
+at request close, retain failures and isolate request context. The runbook owns
+reproduction, native prerequisites and separate installed-package evidence.
+
+Batch request lineage evidence and unresolved registry failure semantics live
+in `docs/doctoring/batch_request_lineage.md`; HTTP 201 alone does not establish
+durable lineage. Preserve job-scoped item IDs and original submission identity.
+
+See `docs/doctoring/workflow_request_link.md` for request-to-workflow correlation
+tests, cache semantics, and the distinction between in-memory and durable outcomes.
+
 For HTTP test cleanup, reuse response context managers and explicit server
 closure. Test-resource fixes do not prove production transport closure; follow
 `docs/doctoring/http_test_resource_lifecycle.md` and preserve its unresolved
@@ -8,6 +20,23 @@ expanded-suite evidence boundary.
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read AGENTS.md first
+
+Decision receipt startup remains explicit opt-in; reuse builder validation and
+do not infer complete KPI coverage from the bounded export. See the
+[entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12)
+for the exact-head ownership audit and warning-sensitive test results.
+
+For title-only research citations, verify and register the persistent identifier
+in the source document and paper inventory. Passing DOI discovery does not prove
+full bibliography coverage; see the KPI runbook's citation reconciliation.
+
+For autonomous experiments, also read and maintain
+[the single KPI runbook](docs/doctoring/autonomous_kpi_runbook.md).
+It records commands, environment limits, failed interpretations, and evidence
+boundaries. Do not restart a live numerical test because polling is silent or
+claim customer improvement from synthetic recovery. Use the independently
+verifiable owner/consumer sequence recorded there instead of waiting for all
+foundation releases before developing a port.
 
 Equivalent model-group endpoints may race only through the normalized, explicit
 endpoint-equivalence contract. Preserve modality validation, bounded concurrency,
@@ -118,6 +147,18 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ## Key conventions
 
+- **Failure attribution**: one Noema caller attempt is not one internal provider
+  attempt. Verify deployed revision and request identity; do not mix preflight
+  failures with the review request or automatically replay ambiguous timeout/502.
+  See [the incident runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+- **Stacked quality checks**: zero check runs can result from the former
+  `pull_request.branches: [main]` filter excluding the PR base. Keep the quality
+  trigger unfiltered, run `tests/test_repository_security_metadata.py` and actionlint,
+  and verify hosted execution after each new head. Earlier-head results are
+  historical, not current approval. Reproduction and limits:
+  [owner runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
+
 - **TDD from papers**: paper claims (Fugu, TRINITY, Conductor — see `docs/architecture.md`) become executable contracts in `tests/` *before* implementation changes. Many tests assert doc/API contracts, so behavior changes usually require updating the matching `docs/*.md` in the same PR.
 - **Naming**: configurable, API, and DB object names must be lower snake_case with **two or more semantic words** (`agent_pool`, `workflow_run`; never `agent` or `agentPool`). Enforced by `conventions.require_object_name()` and `tests/test_conventions.py`. Paper role values (`thinker`, `worker`, `verifier`, `synthesizer`) are deliberate exceptions.
 - **Ponytail design gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the stdlib or an already selected library covers the need; no interface or factory until a second real implementation exists.
@@ -129,6 +170,13 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
   Planning filenames use four digits and must be unique across current `main`
   and every open PR. A same-number collision is a rename, not a redesign; the
   executable uniqueness contract lands in PR #848.
+
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
 
 ## Tool-call handoffs
 
