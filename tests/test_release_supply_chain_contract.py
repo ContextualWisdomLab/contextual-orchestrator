@@ -57,7 +57,11 @@ def test_sbom_asset_attachment_is_fail_closed() -> None:
 def test_sbom_attachment_checks_remote_bytes(tmp_path: Path, scenario: str, success: bool) -> None:
     """Execute the real attachment step; name equality cannot prove immutability."""
     block = _workflow_text().split("      - name: Attach required release SBOM\n", 1)[1]
-    script = textwrap.dedent(block.split("        run: |\n", 1)[1])
+    run_body = block.split("        run: |\n", 1)[1]
+    # The attach step is followed by later publish steps; execute only this run block.
+    if "\n      - name:" in run_body:
+        run_body = run_body.split("\n      - name:", 1)[0]
+    script = textwrap.dedent(run_body)
     evidence_dir = tmp_path / "sbom-download"
     evidence_dir.mkdir()
     temporary_dir = tmp_path / "temporary"

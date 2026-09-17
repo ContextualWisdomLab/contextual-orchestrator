@@ -6,7 +6,7 @@ Source checkpoint: `8443719334d31012d8306dbb517cce6e023443c7`.
 The older September 2 narrative below is historical, including its optional
 SBOM and manual-owner-dispatch descriptions; it is not the current contract.
 
-The release gate now requires the three actual integrated quality jobs rather
+The release gate now requires the four actual integrated quality jobs rather
 than six retired job names. A test compares this inventory with the current
 workflow. Existing SBOM assets must match the verified artifact byte-for-byte;
 same-name assets cannot bypass verification and are never overwritten.
