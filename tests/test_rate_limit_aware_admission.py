@@ -508,6 +508,8 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
     orchestrator = TaskOrchestrator(
         _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
     )
+    slept: list[float] = []
+    orchestrator._rate_limit_sleep = slept.append
     chat_outcomes = QueuedChatOutcomes(
         {
             "primary_free_agent": [_rate_limited_upstream_error(1.0), "served after wait"],
@@ -520,7 +522,6 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        started = time.monotonic()
         status, body, _response = _post_chat_completion(
             server.server_address[1],
             {
@@ -529,7 +530,6 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
             },
             token,
         )
-        elapsed = time.monotonic() - started
     finally:
         server.shutdown()
         worker.join(timeout=5)
@@ -538,7 +538,7 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
 
     assert status == 200, body
     assert body["choices"][0]["message"]["content"] == "served after wait"
-    assert elapsed < 3.0
+    assert slept == [pytest.approx(1.0, abs=0.5)]
     assert chat_outcomes.calls.count("primary_free_agent") == 2
     assert chat_outcomes.calls.count("fallback_free_agent") == 1
 
