@@ -2064,6 +2064,227 @@ normative ADR 0016 file remains. Privacy requirements additionally follow
 > checks, reviews, and base relationships can change after publication. Always
 > refetch the remote exact head and protected rules before acting on a row.
 
+## 2026-09-14 rate-limit-aware admission for a 429 storm
+
+Production evidence: org CI review lanes call this gateway with
+`orchestrator/free`. During a free-pool rate-limit storm every candidate
+returned HTTP 429 within ~50ms (noema run 34758641142, strix run 34758679736:
+preflight `ready_count: 0`, 7x 429 across OpenRouter and NIM accounts), and the
+gateway simply failed the request. `ContextualWisdomLab/.github#2148`
+independently root-caused the same failure mode against a private-target ZDR
+pool of three OpenRouter `:free` routes on one account, wiped by a single 429
+burst; `#2165` shows `noema-review`/`strix` failing closed on the resulting
+429/502 with `attempts=1`, blocking unchanged consumer PRs. The owner's
+requirement across all three reports is the same: the gateway's job under a
+429 storm is to not fail.
+
+Fixed: `orchestrator.py` now parses `Retry-After` (delta-seconds or an
+HTTP-date; `provider_errors.parse_retry_after`) and falls back to a numeric
+`x-ratelimit-reset*` header when absent, recording a per-agent cooldown
+(`TaskOrchestrator._record_rate_limit`/`_rate_limit_remaining`) kept separate
+from the health circuit breaker -- a 429 is quota exhaustion, not a model
+health failure, and no longer trips `_circuit` (a direct 503 still does).
+`classify_provider_failure` now attaches `retry_after_seconds` to any 429/503
+classification's `extra_detail`, so both the passthrough transport and the
+chat transport used by `_invoke` (route_once/conduct's shared engine) can
+record the same cooldown from one `ProviderUpstreamError`.
+`_failover_candidates` (shared by every caller, including `route_once`/
+`conduct`) now skips a currently cooled-down candidate by default, falling
+back to the full list only when every candidate is limited so a caller with no
+wait logic of its own still gets one honest attempt.
+
+The wait-then-retry/honest-429 admission decision itself is one shared
+implementation, `TaskOrchestrator._await_rate_limit_recovery(candidates, *,
+deadline, transport)`: it computes the earliest known cooldown among
+currently rate-limited members of `candidates`, waits for it (one bounded
+`time.sleep`-backed call, never a busy-loop) and returns `True` when it fits
+the remaining budget against `deadline` -- resolved from the request's
+administrator-owned `model_timeout_seconds` deadline (issue #1053) when set,
+else the new `rate_limit_wait_seconds` constructor/CLI default (30s, a
+documented caller-contract bound, not a hidden product limit) -- or raises the
+honest `provider_rate_limited` error code (429, `retryable=True`) instead of
+misclassifying quota exhaustion as a `502 provider_connection_error` when
+waiting is impossible. Two callers reach it:
+
+- `proxy_completion`'s own passthrough failover loop calls it directly each
+  round its ranked candidates are exhausted.
+- `TaskOrchestrator._invoke_with_rate_limit_recovery` wraps `_invoke` (the one
+  shared engine both `route_once` and every `conduct` step, including the
+  worker step, call to reach a candidate): when `_invoke`'s own candidate
+  exhaustion raises a 429/503 `ProviderUpstreamError` AND every candidate
+  currently eligible for that call is rate-limited (a genuine storm, not a
+  mixed failure set), it calls the same helper and retries the whole
+  `_invoke` call instead of propagating the exhaustion. A mixed failure set
+  re-raises exactly as `_invoke` would have, unchanged.
+
+`server.py` answers a raised `provider_rate_limited` error with `429` and a
+`Retry-After` header (or the equivalent field in the terminal SSE error frame
+when headers are already flushed) regardless of which of the two callers
+raised it. `provider_readiness_report` now also reports `rate_limited_until`
+and `earliest_ready_seconds` per agent so an external preflight/readiness
+sidecar (the org sidecar's own `contextual-orchestrator-preflight.json`
+already reports `candidate`/`probed`/`rejected_count` and
+`account_skip_after_429` as its RED/GREEN evidence for this class of change)
+can wait instead of exiting.
+
+Coverage note: this closes the real `orchestrator/free` HTTP path.
+`route_once`/`conduct` (via `_invoke`) is the path CI review lanes actually hit
+over `/v1/chat/completions` for a virtual model, since a virtual model with
+tools deliberately stays on Fugu route / TRINITY-Conductor conduct rather than
+single-agent passthrough
+(`tests/test_actions_model_fallback.py::test_http_virtual_free_tools_stay_on_route`);
+`proxy_completion`'s own multi-candidate virtual-selector branch remains
+reachable over HTTP only through direct API use, but now shares the identical
+wait/honest-429 decision through `_await_rate_limit_recovery` rather than a
+separate implementation. Every conduct step (thinker/worker/verifier/
+synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
+site, so the worker step required by the owner's report gets the fix, and so
+do the other roles for free, without a second implementation.
+
+### Follow-up (same day): an omitted cooldown header must still count as cooling
+
+`_record_rate_limit(agent_id, None)` originally returned without recording
+anything, so a 429/503 whose provider omitted both `Retry-After` and
+`x-ratelimit-reset*` (RFC 9110 10.2.3 permits omitting it entirely; NIM and
+OpenRouter routinely do) was never marked cooling -- `_await_rate_limit_recovery`
+saw no candidate to wait for and the request failed exactly as if this whole
+feature did not exist. The 2026-09-13 production storm may well have been
+exactly this shape.
+
+Fixed: an unknown-duration 429 now records the new administrator-owned
+`rate_limit_unknown_cooldown_seconds` (constructor/CLI default 5s -- short by
+design, so an unknown cooldown is re-probed soon rather than parked) as an
+*assumed* cooldown instead of nothing, tagged `cooldown_source: "assumed"` in
+both `provider_readiness_report` and the honest-429 error detail (vs
+`"provider"` for a real header-derived value); the existing "cooldowns only
+extend forward" rule also protects the source label, so a later assumed
+cooldown can never shorten or relabel an active provider-stated one.
+
+Two scope refinements, both made after concrete regression evidence rather
+than by design intent alone:
+
+- **429 only, not 503.** Extending the assumption to a headerless 503
+  made several pre-existing exhaustion tests
+  (`test_mixed_failures_surface_the_final_classified_provider_failure`,
+  `test_default_mock_endpoint_represents_one_fixture_provider`) loop through
+  repeated assumed waits before finally raising the wrong (storm) error
+  identity for what was actually a permanent, unrelated failure double. A
+  503 ("service unavailable") is a genuine, possibly permanent availability
+  signal with no inherent quota-recovery semantics the way a 429 is, so it
+  keeps requiring an explicit provider-stated duration to be treated as
+  cooling at all.
+- **Two or more candidates required (superseded 2026-09-14, see the
+  follow-up entry below).** `_await_rate_limit_recovery` at this point in the
+  timeline returned `False` (nothing to wait for) whenever fewer than two
+  candidates were passed in, regardless of rate-limit state: a "storm" was
+  read as implying coordinated failure across a pool of alternatives, and a
+  single pinned/named candidate with no failover pool kept its pre-existing
+  immediate classified-error contract -- the client already sees
+  `retryable=true` and can retry on its own with no server-side latency
+  added. Without this guard, `tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+  (one named model, always 429, no headers) hung waiting out an assumed
+  cooldown and blew past its 5s client-side read timeout -- the same
+  regression shape the coordinator warned the 2026-09-13 storm might be, now
+  reproduced directly against a stability-guaranteeing pre-existing test. A
+  bug in the initial fix for this guard (`_invoke_with_rate_limit_recovery`
+  looping unconditionally regardless of whether the shared helper actually
+  found anything to wait for) was caught by the same test and closed by
+  checking the helper's return value before retrying. This candidate-count
+  threshold was itself later found to be the wrong discriminator: it
+  misclassified a virtual selector's pool wiped down to exactly one eligible
+  candidate by a 429 (a real, common production shape) identically to a
+  genuinely pinned concrete model. See "explicit-vs-virtual selector, not
+  candidate count" below for the fix.
+
+Two pre-existing tests in `tests/test_passthrough_provider_failover.py`
+(`test_all_candidates_chain_the_last_failure`,
+`test_free_virtual_model_never_fails_over_to_a_paid_agent`) used a bare 429
+purely incidentally, as a stand-in for "some transient failover-eligible
+failure" unrelated to rate-limiting itself, across two real candidates each
+(so the two-candidate guard above did not save them); both were switched to
+500 to keep their actual intent isolated from this feature.
+
+Tests: `tests/test_rate_limit_aware_admission.py` (20 tests) -- adds a
+no-header 429 storm across two candidates that still waits the assumed
+cooldown and is served, the same with zero budget returning
+429/`provider_rate_limited` with `Retry-After` equal to the ceiled assumed
+value and `cooldown_source: "assumed"` in the error detail, and confirmation
+that a provider-stated cooldown is never shortened or relabeled by a later
+assumed one -- on top of the 17 tests from the entry above.
+`python -m pytest tests/test_provider_error_taxonomy.py
+tests/test_rate_limit_aware_admission.py tests/test_passthrough_provider_failover.py
+-q` passed except the pre-existing local-only `openai` SDK version pin
+(`test_sdk_passthrough_unknown_outcome_never_replays`); the repository-wide
+suite passed 3704/3705 (1 skipped) with only that same SDK-pin failure and
+the separately known local-only `mcp.Client` privacy test failure, neither
+touched by this change. `python -m interrogate -v contextual_orchestrator/`
+reported 100% docstring coverage.
+
+## 2026-09-14 rate-limit-aware admission: explicit-vs-virtual selector, not candidate count
+
+The "two or more candidates" guard added earlier the same day was itself a
+defect, not just a narrow scope choice: `_await_rate_limit_recovery` opened
+with `if len(candidates) < 2: return False`, so a pool with exactly one
+eligible candidate never waited out a rate-limit storm -- it failed
+immediately, which is the behavior this whole feature exists to remove.
+
+Production evidence this case is real and common, not hypothetical:
+noema-review run 34772771262 (2026-09-14, sidecar pin `767e67fb`) on
+`contextual-orchestrator#1177`: preflight reported `ready_count: 1`, and the
+review call then failed after 562s with `HTTP Error 429` served by
+`google/gemma-4-31b-it:free`. `ContextualWisdomLab/.github#2148` records that
+the private-target ZDR pool is three OpenRouter `:free` routes on a single
+account, so one 429 wipes the whole pool and leaves at most one eligible
+route.
+
+The guard was added for a good reason that had to be preserved:
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+pins ONE named concrete model that always answers 429 with no headers; under
+the assumed-cooldown path that test hung past its client-side read timeout.
+The correct discriminator was never the candidate count -- it is whether the
+caller delegated selection at all: an explicit concrete model must fail fast
+with the honest 429 (unchanged), while a virtual selector
+(`FREE_MODEL`/`AUTO_MODEL`/`GATEWAY_DEFAULT_MODEL`/no model) must wait even
+when only one candidate remains.
+
+Fixed (smallest diff): the count guard was replaced with an explicit-selector
+guard. `_await_rate_limit_recovery` gained a required keyword-only
+`virtual_selector: bool` parameter; `if len(candidates) < 2: return False`
+became `if not virtual_selector: return False`. Both call sites now pass a
+value they already compute rather than re-deriving it:
+`proxy_completion`'s own passthrough failover loop computes
+`virtual_selector = requested_model in {None, GATEWAY_DEFAULT_MODEL,
+AUTO_MODEL, FREE_MODEL}` right where `requested_model` is read (the same set
+its own explicit-model early-return branch already used inline), and
+`_invoke_with_rate_limit_recovery` gained the identical required keyword-only
+parameter, threaded in by `route_once` and `conduct`, each of which computes
+`model_name in {GATEWAY_DEFAULT_MODEL, AUTO_MODEL, FREE_MODEL}` once from
+their own `model_name` parameter. `_invoke_with_rate_limit_recovery`'s own
+"not a genuine storm" guard changed from `len(candidates) < 2 or any(...)` to
+`not virtual_selector or any(...)`, preserving the untouched "some eligible
+candidate is not rate-limited -- a mixed, unrelated failure" branch.
+
+Tests added to `tests/test_rate_limit_aware_admission.py`: a virtual selector
+(`FREE_MODEL`) with exactly ONE eligible candidate that answers 429 with
+`Retry-After: 1` then succeeds on retry waits once and is served (the single
+candidate is called twice); the same single-candidate virtual case with no
+wait budget returns an honest 429/`provider_rate_limited` with
+`Retry-After`, not a generic failure; an explicit concrete model with a
+single candidate that always 429s fails fast with no wait (the injected
+sleep hook is asserted never called). Every pre-existing test in that file
+stays green, and
+`tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error`
+was re-run to confirm the original client-timeout regression does not
+return.
+
+`python -m pytest tests/test_rate_limit_aware_admission.py
+tests/test_provider_error_taxonomy.py tests/test_passthrough_provider_failover.py
+tests/test_provider_reliability.py tests/test_api_contract.py
+tests/test_self_check.py -q` passed except the pre-existing local-only
+`openai` SDK version pin and the separately known local-only `mcp.Client`
+privacy test, neither touched by this change. `python -m interrogate -v
+contextual_orchestrator/` reported 100% docstring coverage.
+
 ## 1. Product requirements (PRD)
 
 Contextual Orchestrator must let an application keep using an OpenAI-compatible
