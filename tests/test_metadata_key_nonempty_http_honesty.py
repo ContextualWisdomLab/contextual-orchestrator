@@ -43,7 +43,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -96,6 +97,7 @@ def test_http_chat_rejects_empty_metadata_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_whitespace_metadata_key() -> None:
@@ -115,6 +117,7 @@ def test_http_chat_rejects_whitespace_metadata_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_normal_metadata() -> None:
@@ -133,6 +136,7 @@ def test_http_chat_accepts_normal_metadata() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_empty_metadata_key() -> None:
@@ -152,6 +156,7 @@ def test_http_responses_rejects_empty_metadata_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

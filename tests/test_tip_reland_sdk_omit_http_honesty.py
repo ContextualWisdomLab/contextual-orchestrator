@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -69,6 +70,7 @@ def test_http_chat_accepts_top_logprobs_empty_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_top_logprobs_empty_string() -> None:
@@ -83,6 +85,7 @@ def test_http_completions_accepts_top_logprobs_empty_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_calls_arguments_null() -> None:
@@ -113,6 +116,7 @@ def test_http_chat_accepts_tool_calls_arguments_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_instructions_empty_and_null() -> None:
@@ -132,6 +136,7 @@ def test_http_responses_accepts_instructions_empty_and_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_whitespace_suffix_as_omit() -> None:
@@ -146,6 +151,7 @@ def test_http_completions_accepts_whitespace_suffix_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_padded_mode_route() -> None:
@@ -164,6 +170,7 @@ def test_http_chat_accepts_padded_mode_route() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_metadata_null_value_as_omit_key() -> None:
@@ -182,6 +189,7 @@ def test_http_chat_accepts_metadata_null_value_as_omit_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_top_logprobs_nonzero() -> None:
@@ -201,6 +209,7 @@ def test_http_chat_rejects_top_logprobs_nonzero() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

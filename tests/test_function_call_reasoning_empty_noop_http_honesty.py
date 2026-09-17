@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -65,6 +66,7 @@ def test_http_chat_accepts_function_call_none_and_auto() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_reasoning_null_and_empty() -> None:
@@ -84,6 +86,7 @@ def test_http_responses_accepts_reasoning_null_and_empty() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_known_reasoning_effort() -> None:
@@ -102,6 +105,7 @@ def test_http_responses_accepts_known_reasoning_effort() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_still_rejects_unknown_reasoning_effort() -> None:
@@ -121,6 +125,7 @@ def test_http_responses_still_rejects_unknown_reasoning_effort() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_empty_response_format() -> None:
@@ -139,6 +144,7 @@ def test_http_chat_accepts_empty_response_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_empty_response_format() -> None:
@@ -157,6 +163,7 @@ def test_http_completions_accepts_empty_response_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_empty_text_object() -> None:
@@ -175,6 +182,7 @@ def test_http_responses_accepts_empty_text_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_nonempty_functions() -> None:
@@ -195,3 +203,4 @@ def test_http_chat_still_rejects_nonempty_functions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

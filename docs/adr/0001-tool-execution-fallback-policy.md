@@ -46,6 +46,27 @@ The primary model call `TaskOrchestrator._invoke` makes on every route/Conduct s
 
 `contextual_orchestrator.tool_fallback.classify_provider_transport_failure(retryable: bool)` now classifies this specific call directly from the provider taxonomy's own already-computed `retryable` flag — never from message text — and never returns `fail_closed`: retryable failures (429/500/502/503/504/408/network) get one bounded same-agent retry then sequential failover; non-retryable failures (401/403/404/413 handled earlier/422/...) fail over immediately. This is the same "generic provider transport failures keep the previous agent-failover behavior" intent this ADR already stated; it is now an explicit, provider-status-driven contract instead of an implicit one that depended on a failure message never mentioning a tool-fallback keyword. `classify_tool_failure` itself is unchanged and still governs genuine `ToolExecutionError` adapters and the provider's own explicit `tool_execution_stopped` signal (`_provider_tool_execution_stopped`), both of which keep failing closed exactly as this ADR specifies. Motivated by the `orchestrator/free` review-sidecar reliability gap tracked in `ContextualWisdomLab/.github` PR #1433.
 
+## Amendment (2026-09-02): no-heuristics default transport retry allocation
+
+`ModelClient` previously defaulted `max_retries` to `2` — a hand-picked provider transport retry
+count with no cited standard, paper, or the org's own research (Fugu, Conductor, TRINITY)
+establishing that number. RFC 9110 §9.2.2 (cited above) constrains *when* a client may safely
+replay a request — only for idempotent semantics, or when the original request is known never to
+have applied — but it does not name a specific attempt count. NIST SP 800-204 (also cited above)
+discusses retry and circuit-breaker resilience as a pattern, not a numeric allocation. Neither
+source, nor Fugu/Conductor/TRINITY, identifies a specific retry budget for this library to adopt
+as a default.
+
+That unjustified numeric default is therefore removed rather than re-justified:
+`ModelClient.__init__`'s `max_retries` default is now `0`. A default `ModelClient` allocates zero
+automatic provider transport retries, independent of provider, model, or reasoning-capability
+identity — `tests/test_no_heuristic_default_transport_retry.py` is the regression contract.
+Explicit nonzero retry budgets remain a caller-owned configuration surface (an explicit
+`max_retries=` argument at construction time), never a library-authored default. This amendment
+does not change the fallback matrix, the safety invariants, or `local_max_retries` (already `0`
+by default); it only removes an unproven default from the provider-transport retry path this ADR
+governs.
+
 ## Safety invariants
 
 1. Missing-tool handling changes agents; it never guesses an alias for the missing tool.

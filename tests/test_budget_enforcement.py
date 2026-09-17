@@ -277,6 +277,7 @@ def test_http_over_budget_returns_429() -> None:
             status, body = exc.code, json.loads(exc.read().decode("utf-8"))
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 429
     assert body["error"]["code"] == "budget_exceeded"

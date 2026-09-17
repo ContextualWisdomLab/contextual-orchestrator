@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -64,6 +65,7 @@ def test_http_responses_accepts_attribution() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_sync_routing_priority() -> None:
@@ -82,6 +84,7 @@ def test_http_responses_accepts_sync_routing_priority() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_forces_sync_for_bulk_routing_priority() -> None:
@@ -100,6 +103,7 @@ def test_http_responses_forces_sync_for_bulk_routing_priority() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_routing_batch_channel() -> None:
@@ -120,6 +124,7 @@ def test_http_responses_rejects_routing_batch_channel() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_routing_latency_tolerant_true() -> None:
@@ -138,6 +143,7 @@ def test_http_responses_rejects_routing_latency_tolerant_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_attribution_unknown_dimension() -> None:
@@ -156,6 +162,7 @@ def test_http_responses_rejects_attribution_unknown_dimension() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_baseline_without_attribution_routing() -> None:
@@ -168,3 +175,4 @@ def test_http_responses_baseline_without_attribution_routing() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

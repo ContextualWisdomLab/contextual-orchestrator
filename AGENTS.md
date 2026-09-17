@@ -1,7 +1,64 @@
 # AGENTS.md
 
+Preserve ordered `score_observations` in optimizer results: equal means can
+hide different task outcomes. This additive field does not approve the existing
+selection policy; keep its psychometric evidence gap explicit in the runbook.
+
+Optimizer batch results must match the complete task count before callbacks;
+retain usage on rejection. Explicitly select route mode in batch regressions.
+Installed tests may need their sibling test-helper directory, never the source
+package root. See `docs/doctoring/optimizer_score_recovery.md` for corrected RED
+receipts and the separate released-calibration boundary.
+
+For artifact runtime warnings, inspect the exact action manifest rather than
+its version comment. Preserve upload options and security gates; see
+`docs/doctoring/artifact_runtime_migration.md` for owner migration and checks.
+
+Cache reuse is an item observation, not a request terminal until close. Preserve
+mixed-batch selection timing, explicit failures and ContextVar cleanup. See
+`docs/doctoring/kpi_stack_integration.md` for the RED cases and separate source
+versus installed-core verification commands; do not weaken the native invariant.
+
+Deferred batch lineage: read `docs/doctoring/batch_request_lineage.md` for the
+HTTP reproduction, atomic submission-event projection, and remote/local failure
+boundary. Do not retry a remotely submitted job after local lineage failure.
+
+Workflow origin identity and persistence limitations are documented in
+`docs/doctoring/workflow_request_link.md`; preserve origin on replacements and reload.
+
+Trace HTTP test helpers own urllib-created error responses, independently of
+production provider cleanup. Preserve decoding failures when closing them and
+close listeners after shutdown/join. See the trace successor receipt in the
+existing HTTP resource runbook; its full strict suite is still nonclean.
+
+HTTP test owners must close error responses and listening sockets, not merely
+stop serving. Keep warnings-as-errors enabled; see
+`docs/doctoring/http_test_resource_lifecycle.md` for reproductions and the separate
+production-streaming follow-up and unresolved expanded-suite baseline comparison.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
+
+## Autonomous research handoff
+
+For LaRT count preprocessing, read the [upstream handoff](docs/doctoring/lart_measurement_review.md#upstream-patch-handoff).
+Preserve versioned encoded counts; do not copy an estimator or subtract a
+heuristic offset in CO. Dataframe loading is not estimator or KPI evidence.
+
+- Decision receipts are explicit opt-in at the supported server entrypoint.
+  Keep the default off, reuse builder validation, and retain incomplete-export
+  markers. Reproduction and ownership audit: [entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12).
+
+Identifier checks do not discover title-only citations. Verify their persistent
+identifier and register it in both the citing document and paper inventory;
+retain read-depth and reuse limits. See the KPI runbook's citation reconciliation.
+
+Read [the KPI runbook](docs/doctoring/autonomous_kpi_runbook.md) before numerical
+experiments and update its verified evidence before handoff. Choose KPI scope
+autonomously under `docs/analytics_spec.md`. Preserve live execution handles;
+high host load and silent numerical work are not proof of deadlock. Synthetic
+recovery is unit evidence, not customer accuracy. Break owner/consumer release
+cycles with isolated exact-revision contracts, never production source copies.
 
 <!-- BEGIN cwl-agent-guidance -->
 ## Agent guidance (CWL governance)
@@ -41,6 +98,10 @@ push or open a PR.
 
 ### Code exploration
 
+- Provider logs need server-generated per-request identity, not a session hash.
+  Preserve context cleanup and validate the central collector before adoption.
+  Reproduction and exact evidence: `docs/doctoring/provider_request_correlation.md`.
+
 - This repo has **no `.codegraph/` index**, so use normal search
   (grep/ripgrep/find, file reads) to locate and understand code. If a
   `.codegraph/` directory is ever added at the repo root, prefer CodeGraph
@@ -67,27 +128,76 @@ push or open a PR.
 
 ### This repo: the org LLM gateway
 
+- Classify retry safety by the failure boundary, not a generic timeout name.
+  Only a direct local-slot admission failure proves no upstream send began;
+  wrapped exceptions and post-send timeouts do not authorize replay. Test the
+  real slot-to-transport path with per-candidate transport call counts and keep
+  unknown-outcome no-replay controls alongside it. Transport spies are not wire
+  delivery evidence. Preserve the default-null model timeout.
+
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.
+- In structured fallback, keep the final error classification separate from
+  per-attempt circuit and model-group observations. Record each actual failed
+  candidate once before advancing or propagating a budget stop; a request-wide
+  flag must not hide a later hard failure or charge an earlier error to a later
+  413 candidate. Test real counters, not only mocked callback counts, including
+  recovery, exhaustion, mixed failure order, and billed malformed output.
+  Distinguish a malformed returned object from a client exception before
+  return: reset response state per attempt, never copy prior usage, and keep
+  unreported usage unavailable rather than fabricating a zero count.
+  Apply this to repair calls that fail before returning as well. Exhausted
+  malformed responses must not be classified as an all-provider size limit;
+  test all-malformed and mixed malformed/413 orders before accepting that error.
+- A stale-model response does not create a caller-selected endpoint constraint.
+  Virtual structured recovery must visit the already-eligible distinct models,
+  including later endpoint siblings, while preserving explicit model/endpoint,
+  free/ZDR, file-replica, and effort restrictions. Test all-local-candidates
+  failing, an initial candidate excluded during evidence collection, and billed
+  malformed output on a later endpoint. Do not reject a review solely because
+  an existing guard or successful-sibling test encodes the current behavior;
+  verify the requirement and the exhausted-candidate case first.
+- Review-gateway recovery tests must exercise `FREE_MODEL` with admitted free
+  candidates, not only `AUTO_MODEL`. A mocked synthesis test does not prove
+  the preceding conduct stages, HTTP boundary, or deployed Noema review.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
 - Provider API keys and server bearer tokens are resolved from the **KV /
-  credential registry** (`get_credential`), not from `os.environ`. Ensure the
-  org `OPENAI_API_KEY` (and `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
-  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`) is seeded into the KV at
-  bootstrap time so auto-discovery and routing can use them.
+  credential registry** (`get_credential`), not from `os.environ`. Seed
+  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+  `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY`, and any configured
+  `OPENAI_API_KEY` into the KV at bootstrap so auto-discovery and routing can
+  use them. One OpenCode Zen credential discovers the separate Zen and Go
+  catalogs; only explicit zero-cost capability evidence admits either source
+  to `orchestrator/free`.
+- Tool-bearing chat requests stay synchronous. Reject explicit deferred/batch
+  routing after applying `RoutingPolicy` precedence because the batch contract
+  does not carry tool controls or returned tool calls. Generated planners,
+  verifiers, and synthesizers suppress caller tools when the client supports
+  that optional scope; structured virtual requests keep them on worker calls
+  and strip them from final synthesis. Every grouped or `free_only`
+  structured-synthesis attempt updates group stability exactly once, including
+  failure followed by successful failover. A streamed failure before the first
+  byte remains a trace step and usage row; missing provider usage is
+  `unavailable`. HTTP 413 may fall back but never counts against member
+  stability because it describes the request, not provider health.
+- A live 2026-09-09 Bytez catalog check with a configured credential returned
+  zero `task=chat` rows, while unfiltered and `text-generation` requests
+  returned HTTP 500. Treat this as provider/runtime evidence, not proof of an
+  endpoint or credential defect; keep Bytez absent from the active catalog
+  until a non-empty authenticated listing succeeds.
 - **Policy change (2026-08-18, explicit org decision, supersedes the prior
   "stays on GitHub Models" rule):** OpenCode, Noema, and Strix — the org's
   three-stage CI review pipeline defined in `ContextualWisdomLab/.github`
   (`opencode.jsonc`, `noema-review.yml`, `strix.yml`) — are being migrated to
   use `contextual-orchestrator` as their shared backend, with
   `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
-  `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` registered in this repo's KV so
-  it auto-discovers models across all five and auto-optimizes routing by
+  `OPENROUTER_API_KEY`, and `OPENCODE_ZEN_API_KEY` registered in this repo's
+  KV so it auto-discovers their model catalogs and auto-optimizes routing by
   cost (see `contextual_orchestrator/model_discovery.py`, the
   `discover-models` CLI subcommand, and `ModelAgent.auth_scheme` for
   non-Bearer providers like Bytez). The provider-config change to the org
@@ -129,8 +239,244 @@ push or open a PR.
   scheduling (e.g. LLM-cascade / model-routing and queueing/load-balancing
   papers).
 - **Issue #568 slice:** `contextual_orchestrator.reasoning_effort_profile`
-  is the provider-neutral role catalog and equal-budget true-θ ablation.
-  RMSE is computed from θ̂ versus known true parameters, not a rank
-  constant. Do not change production route/conduct defaults until
-  `production_default_change_allowed` is true. Temperature is not effort.
+  retains provider-neutral configuration and legacy synthetic diagnostics.
+  The synthetic estimates are constructed from supplied true theta using
+  hand-authored effort/access coefficients; their RMSE is not observed model
+  quality or evidence of unknown-parameter recovery. The diagnostic-only
+  `production_default_change_allowed` API always refuses authorization.
+  An empirical successor needs actual observations, the released Rust/
+  fast-mlsirm estimation contract, exact learned-policy identity, a validated
+  evaluation design and separate deployment approval. Moving the remaining
+  synthetic routines to unit-test fixtures is still parent #1000 work.
+  Temperature is not effort. For an explicit request profile, only literal
+  boolean `True` is positive native-effort capability evidence; `False` and
+  `None` follow the explicit unsupported-provider fallback, and malformed
+  types are rejected before mutation without coercion. See
+  `docs/doctoring/learned_policy_authority_20260910.md` and
+  `docs/doctoring/effort_capability_evidence_20260912.md` for scope and evidence.
+- Request-scoped effort and evaluation policy must remain consistent across
+  execution, answer reuse, selection receipts, and saved runs. Preserve the
+  standalone single-role adapter contract; do not pad partial catalogs to hide
+  a validation regression. The implementation record remains Proposed until
+  protected delivery is verified.
+- Availability summaries may update transport evidence only, never judged
+  answer-quality priors. Preserved observation counts alone do not prove
+  unchanged posterior evidence; test subsequent judgment influence and member
+  order. See the Proposed availability-boundary record in
+  `docs/doctoring/measured-routing-evidence.md`.
 <!-- END cwl-agent-guidance -->
+
+## Stacked quality checks
+
+For Noema incidents, `caller attempts=1` does not count internal provider
+attempts. Match request identifiers and deployed revision before attributing
+fallback; preflight failures are not review-request evidence. Keep ambiguous
+timeout/502 replay separate from explicit rejection. See the
+[attribution runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+Zero check runs on a stacked PR can mean its base was excluded by
+`pull_request.branches: [main]`, not that checks passed. Keep the repository
+quality trigger unfiltered and validate `tests/test_repository_security_metadata.py`
+plus actionlint. After a new head, verify actual hosted execution; previous-head
+results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
+
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
+
+## Tool-call handoffs
+
+Optimizer quality callbacks must yield finite per-task values in [0, 1].
+Validate before aggregation so invalid pairs cannot hide behind a valid mean;
+keep Boolean predicates valid and never discard completed-call usage.
+Recovery evidence and reproduction: `docs/doctoring/optimizer_score_recovery.md`.
+
+Return worker tool calls before text-answer judging or later workflow roles;
+a handoff does not establish completed tool execution or answer quality.
+Preserve stream indices and request isolation. Reproduction and release-proof
+boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).
+
+## HTTP response and test resource ownership
+
+Python 3.14 may report an unclosed resource during a later test or final pytest
+cleanup; test-body passes alone are not process success. Keep explicit response
+handles in regression tests and assert closure before fallback/backoff. Close a
+consumed HTTPError only after diagnostics/classification; preserve caller ownership
+when returning the original error. Cleanup failures must not replace the primary
+provider failure. Test servers need server_close after shutdown; SQLite fixtures
+need transaction exit before close. Never mask production leaks with fake-client
+cleanup, warning filters or forced GC. Use the existing project interpreter from
+isolated worktrees, record exact head and process exit, and distinguish default
+suite success from strict-warning acceptance. Reproduction, discarded experiments,
+commands and bounded results: [HTTP resource runbook](docs/doctoring/http_test_resource_lifecycle.md).
+
+## Pushing to an open PR while required checks are backlogged
+
+Batch follow-up commits and push once when the required checks are not
+draining. Every push to an open pull request cancels that branch's in-flight
+runs, and while the verdict queue is backed up an intermediate head cannot
+merge anyway, so the cancelled runner time is taken from work that *could*
+have merged.
+
+This is measured, not assumed. On 2026-09-14T19:12Z, 50 of this repository's
+last 100 completed workflow runs were cancelled, and 27 of those 50 belonged
+to one open (non-draft) pull request whose head moved four times in about
+three hours while no verdict could be issued.
+
+Drafts are already handled: `.github/workflows/security.yml` gates its jobs on
+`github.event.pull_request.draft == false`, so a draft head that moves
+repeatedly does not consume the gate. This rule covers the other half — an
+open, review-ready pull request iterating faster than the queue drains.
+
+Push immediately, without batching, when the change is a fix for a failing
+required check, a conflict resolution that unblocks a merge, or anything a
+reviewer is actively waiting on.
+
+## Loop-goal execution control (all repo PRs and issues)
+
+Work in structure → Gap → measurement/baseline → KPI → experiment/verification
+order; never finalize KPIs before structure is recorded. External CI and
+independent review approval are merge conditions for their PR only, never a
+reason to stop the whole run — hold only the dependent path and keep executing
+allowed work elsewhere.
+
+- Keep a ledger (`loop_id`, `parent_id`, goal, owner/scope, dependencies,
+  status, pass/retry/block conditions, evidence SHA, `next_action`, `return_to`)
+  plus a Todo list; a Todo/plan/memory/report line is not execution. Link
+  `RUNNING` to real tool results and call identifiers.
+- Scope waits: `CI_PENDING` / `PR_REVIEW_PENDING` are external-result waits.
+  Put only the node and its real `depends_on` path in `WAITING_DEPENDENCY` and
+  return to parent work selection. Never mutate a head under review to make
+  work; do independent work on a separate branch/worktree.
+- Reuse valid evidence; do not repeat full surveys or same-SHA completed tests.
+  Revert only your own rejected delta — no `reset --hard` / force-push on
+  shared branches.
+
+## Recurring bug class: hardcoded review-cadence dates
+
+- `contextual_orchestrator/nim_benchmark.py`'s fail-closed evidence gates — the
+  module-level `ACTUAL_COST_EVIDENCE` dict's `valid_until_date` field (checked
+  by `_require_current_actual_cost_evidence`), and any pricing-scenario file's
+  own `valid_until_date` field (checked by `validate_live_pricing_scenario`) —
+  are deliberately literal calendar dates meant to lapse and force a human
+  re-review. **Never** "fix" a lapsed date by rewriting the production literal
+  to a later date without an actual re-review of the cited source; that
+  defeats the gate's purpose.
+- Once wall-clock time crosses the recorded date, unrelated tests that reach
+  `run_mode="live"` start failing — or, worse, silently lose branch coverage
+  while still reporting green — for a reason unrelated to what they assert,
+  because `_require_current_actual_cost_evidence`/`validate_live_pricing_scenario`
+  intercepts them first. This exact bug class was diagnosed and repaired
+  (on PR branches — see the currency caveat below) three separate times this
+  cycle:
+  - `tests/test_nim_benchmark.py` — five tests
+    (`test_evaluation_contract_failure_publishes_no_artifacts`,
+    `test_live_run_fails_closed_without_credential`,
+    `test_live_run_end_to_end_offline`,
+    `test_live_run_uses_default_transport_builder_when_none_given`,
+    `test_cli_live_fails_closed_without_secret`) reached the evidence gate by
+    accident (`PR #1070`, commit `b4cc6c6a`).
+  - `tests/test_spend_analytics.py` — a `usage_source` mislabeling that only
+    *looked* date-adjacent at first; the actual root cause was unrelated
+    (per-model prompt-evidence scoping, not a date) (`PR #1071`).
+  - `tests/test_nim_benchmark_release_acceptance.py` — two tests
+    (`test_live_run_rejects_unreviewed_pricing_before_egress`,
+    `test_live_run_rejects_incomplete_or_expired_pricing_before_egress`) whose
+    `pytest.raises(match=...)` substrings (`"reviewed"` / `"expired"`) also
+    match `_require_current_actual_cost_evidence`'s own expiry message once
+    `ACTUAL_COST_EVIDENCE` lapses — so once it does, both tests keep reporting
+    green while silently exercising the wrong gate and zeroing branch coverage
+    on `validate_live_pricing_scenario`'s two fail-closed lines. Invisible in
+    pass/fail output; only a branch-coverage report catches it (`PR #1070`'s
+    third commit, `0eaca9f1`).
+- Established fix pattern (reuse it, do not reinvent it): an **opt-in, NOT
+  autouse**, pytest fixture named `current_actual_cost_evidence`, using
+  `monkeypatch.setitem` on `ACTUAL_COST_EVIDENCE` to pin the window to real
+  "now" for the duration of one test, requested by name only from the tests
+  that need to get past the evidence-currency gate to reach the behavior they
+  actually test. Making it autouse silently defeats the fail-closed gate for
+  the whole file — do not do that. Before trusting a green run near this
+  literal date, check *branch* coverage on `nim_benchmark.py` specifically,
+  not just pass/fail counts.
+- **Verify before trusting this bullet list, don't just copy it.** Re-checked
+  directly against this exact checkout on 2026-09-05 (`origin/main` @
+  `a080297d`, `PR #1073`, itself a same-day refresh of `ACTUAL_COST_EVIDENCE`
+  to `reviewed_at_date=2026-09-05` / `valid_until_date=2026-10-05`): `PR
+  #1070` and `PR #1071` above are still **open/Draft, not merged**.
+  `tests/test_nim_benchmark.py`'s `_fresh_backend` fixture on `main` right now
+  is `@pytest.fixture(autouse=True)` and unconditionally patches both evidence
+  dates for every test in the file — the exact file-wide-autouse anti-pattern
+  `PR #1070` exists to remove; there is currently no
+  `current_actual_cost_evidence` opt-in fixture anywhere in that file on
+  `main`. `tests/test_spend_analytics.py::test_exact_output_without_prompt_usage_is_explicitly_unavailable`
+  is **currently failing** on `main` (`assert 'tokenizer' == 'mixed'`) — `PR
+  #1071`'s fix hasn't landed. `tests/test_nim_benchmark_release_acceptance.py`'s
+  two pricing-scenario tests still lack the fixture from `PR #1070`'s third
+  commit; they pass today only because the just-refreshed evidence window
+  hasn't lapsed yet — the coverage-zeroing failure re-arms itself on or after
+  **2026-10-05** unless that fix (or an equivalent) lands first. Check actual
+  PR/merge status yourself before relying on any "established fix" claim in
+  this file, including this one.
+- Before claiming a required-check failure on your own PR is not caused by
+  your diff, reproduce the exact CI command
+  (`.github/workflows/security.yml`'s "Tests and package quality" job,
+  specifically its "Prove complete benchmark coverage and public docstrings"
+  step) in a throwaway git worktree checked out at unmodified `origin/main`,
+  rather than guessing from the stack trace alone. Confirmed directly in this
+  session: that exact command block currently reports 99% branch coverage on
+  unmodified `origin/main` (missing `434, 645, 671->682` in
+  `contextual_orchestrator/nim_benchmark.py`) — pre-existing, reproduced
+  identically with zero relation to any one PR's diff, and tracked as `issue
+  #1075` rather than folded into `PR #1070`'s scope.
+
+## Central review sidecar/egress gap (tracked, not yet closed)
+
+- `scripts/ci/contextual_orchestrator_review_sidecar.sh` lives in
+  `ContextualWisdomLab/.github` and is vendored/called by that repo's
+  `noema-review.yml`, `strix.yml`, `opencode-review-dispatch.yml`, and
+  `pr-review-autofix.yml`. Confirmed by reading the script directly from
+  `.github`'s `main` on 2026-09-05, it still: requires at least one of the
+  five raw provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) injected as
+  plain Actions `env:` on the calling step; `git clone`s this repository fresh
+  (pinned via `ORCHESTRATOR_PIN_SHA`, which itself still defaults to an older
+  `2e414d1...` commit, not this repo's current `main`) and
+  `pip install --require-hashes`s it on the calling runner on every
+  invocation; and runs model discovery (`discover_all_models` /
+  `register_review_credentials`) in-process there. This is **not yet** the
+  pre-built, immutable, secrets-free gateway artifact the org wants those four
+  consumers to call instead.
+- `contextual-orchestrator` issue `#1041` comment `5550412102` lists six
+  concrete requirements a released gateway/client/schema/egress contract
+  needs to meet before those four consumers can drop the five secrets and
+  flip their runner egress policy from `audit` to `block`: an immutable
+  versioned artifact with source SHA, digest/SBOM/provenance, and rollback
+  identity; consumers holding only an explicit endpoint + scoped bearer/OIDC
+  credential, never provider keys; import/startup free of hidden network
+  traffic; typed outcomes that separate authoritative findings from
+  gateway/provider/infra failure; fixed virtual model `orchestrator/free` with
+  no consumer-selected fallback or repository-authored timeout; and an egress
+  contract narrow enough for `harden-runner` to move from `audit` to `block`.
+  `ContextualWisdomLab/.github` issue `#1759` tracks the consumer migration
+  order onto that contract once it ships.
+- **Do not describe this repo's routing as "already fully used via
+  `orchestrator/free` with no NIM exposure" without checking both layers.**
+  The model-selection config layer (`opencode.jsonc`'s `enabled_providers`,
+  `OPENCODE_MODEL_CANDIDATES` in `opencode-review-dispatch.yml`) can be, and
+  is, already correct — pinned to `contextual-orchestrator/orchestrator/free`
+  only. That is a separate fact from whether the runtime egress/secrets shape
+  (the sidecar bullet above) has closed; it has not. `ContextualWisdomLab/.github`
+  `PR #1884` is the concrete cautionary tale: it originally titled and framed
+  itself as confirming the review pipeline "already routes through
+  `orchestrator/free`... Confirmed already implemented; no code change
+  needed," conflating the two layers, and had to be corrected (commit
+  `50de5f63`) after an independent re-check disputed the framing and
+  re-verified it against exact `file:line` evidence (`strix.yml`'s injected
+  secrets, the sidecar script's own clone/build/in-process-discovery lines,
+  and `strix.yml`'s `harden-runner` still set to `egress-policy: audit`) that
+  the sidecar/egress layer was still open. State the two layers separately
+  every time; do not let "the config is correct" imply "the secrets/egress
+  gap is closed."
