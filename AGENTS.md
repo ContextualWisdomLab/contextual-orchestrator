@@ -1,7 +1,54 @@
 # AGENTS.md
 
+For artifact runtime warnings, inspect the exact action manifest rather than
+its version comment. Preserve upload options and security gates; see
+`docs/doctoring/artifact_runtime_migration.md` for owner migration and checks.
+
+Cache reuse is an item observation, not a request terminal until close. Preserve
+mixed-batch selection timing, explicit failures and ContextVar cleanup. See
+`docs/doctoring/kpi_stack_integration.md` for the RED cases and separate source
+versus installed-core verification commands; do not weaken the native invariant.
+
+Deferred batch lineage: read `docs/doctoring/batch_request_lineage.md` for the
+HTTP reproduction, atomic submission-event projection, and remote/local failure
+boundary. Do not retry a remotely submitted job after local lineage failure.
+
+Workflow origin identity and persistence limitations are documented in
+`docs/doctoring/workflow_request_link.md`; preserve origin on replacements and reload.
+
+Trace HTTP test helpers own urllib-created error responses, independently of
+production provider cleanup. Preserve decoding failures when closing them and
+close listeners after shutdown/join. See the trace successor receipt in the
+existing HTTP resource runbook; its full strict suite is still nonclean.
+
+HTTP test owners must close error responses and listening sockets, not merely
+stop serving. Keep warnings-as-errors enabled; see
+`docs/doctoring/http_test_resource_lifecycle.md` for reproductions and the separate
+production-streaming follow-up and unresolved expanded-suite baseline comparison.
+
 Cross-agent conventions for `contextual-orchestrator`, readable by any coding
 agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
+
+## Autonomous research handoff
+
+For LaRT count preprocessing, read the [upstream handoff](docs/doctoring/lart_measurement_review.md#upstream-patch-handoff).
+Preserve versioned encoded counts; do not copy an estimator or subtract a
+heuristic offset in CO. Dataframe loading is not estimator or KPI evidence.
+
+- Decision receipts are explicit opt-in at the supported server entrypoint.
+  Keep the default off, reuse builder validation, and retain incomplete-export
+  markers. Reproduction and ownership audit: [entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12).
+
+Identifier checks do not discover title-only citations. Verify their persistent
+identifier and register it in both the citing document and paper inventory;
+retain read-depth and reuse limits. See the KPI runbook's citation reconciliation.
+
+Read [the KPI runbook](docs/doctoring/autonomous_kpi_runbook.md) before numerical
+experiments and update its verified evidence before handoff. Choose KPI scope
+autonomously under `docs/analytics_spec.md`. Preserve live execution handles;
+high host load and silent numerical work are not proof of deadlock. Synthetic
+recovery is unit evidence, not customer accuracy. Break owner/consumer release
+cycles with isolated exact-revision contracts, never production source copies.
 
 <!-- BEGIN cwl-agent-guidance -->
 ## Agent guidance (CWL governance)
@@ -71,9 +118,39 @@ push or open a PR.
 
 ### This repo: the org LLM gateway
 
+- Classify retry safety by the failure boundary, not a generic timeout name.
+  Only a direct local-slot admission failure proves no upstream send began;
+  wrapped exceptions and post-send timeouts do not authorize replay. Test the
+  real slot-to-transport path with per-candidate transport call counts and keep
+  unknown-outcome no-replay controls alongside it. Transport spies are not wire
+  delivery evidence. Preserve the default-null model timeout.
+
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.
+- In structured fallback, keep the final error classification separate from
+  per-attempt circuit and model-group observations. Record each actual failed
+  candidate once before advancing or propagating a budget stop; a request-wide
+  flag must not hide a later hard failure or charge an earlier error to a later
+  413 candidate. Test real counters, not only mocked callback counts, including
+  recovery, exhaustion, mixed failure order, and billed malformed output.
+  Distinguish a malformed returned object from a client exception before
+  return: reset response state per attempt, never copy prior usage, and keep
+  unreported usage unavailable rather than fabricating a zero count.
+  Apply this to repair calls that fail before returning as well. Exhausted
+  malformed responses must not be classified as an all-provider size limit;
+  test all-malformed and mixed malformed/413 orders before accepting that error.
+- A stale-model response does not create a caller-selected endpoint constraint.
+  Virtual structured recovery must visit the already-eligible distinct models,
+  including later endpoint siblings, while preserving explicit model/endpoint,
+  free/ZDR, file-replica, and effort restrictions. Test all-local-candidates
+  failing, an initial candidate excluded during evidence collection, and billed
+  malformed output on a later endpoint. Do not reject a review solely because
+  an existing guard or successful-sibling test encodes the current behavior;
+  verify the requirement and the exhausted-candidate case first.
+- Review-gateway recovery tests must exercise `FREE_MODEL` with admitted free
+  candidates, not only `AUTO_MODEL`. A mocked synthesis test does not prove
+  the preceding conduct stages, HTTP boundary, or deployed Noema review.
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
@@ -158,9 +235,66 @@ push or open a PR.
   `production_default_change_allowed` is true. Temperature is not effort.
 <!-- END cwl-agent-guidance -->
 
+## Stacked quality checks
+
+For Noema incidents, `caller attempts=1` does not count internal provider
+attempts. Match request identifiers and deployed revision before attributing
+fallback; preflight failures are not review-request evidence. Keep ambiguous
+timeout/502 replay separate from explicit rejection. See the
+[attribution runbook](docs/doctoring/autonomous_kpi_runbook.md#noema-terminal-failure-attribution-2026-09-09).
+
+Zero check runs on a stacked PR can mean its base was excluded by
+`pull_request.branches: [main]`, not that checks passed. Keep the repository
+quality trigger unfiltered and validate `tests/test_repository_security_metadata.py`
+plus actionlint. After a new head, verify actual hosted execution; previous-head
+results are historical. See the [reproduction runbook](docs/doctoring/autonomous_kpi_runbook.md#stacked-quality-trigger-repair).
+
+## Export validation
+
+Export validation must distinguish transaction completion from connection
+closure and test-body passes from process exit. Reproduction, inherited warning
+owners, native build commands, and unverified acceptance boundaries are recorded
+in [the export validation runbook](docs/doctoring/request_outcome_export_validation.md).
+
 ## Tool-call handoffs
 
 Return worker tool calls before text-answer judging or later workflow roles;
 a handoff does not establish completed tool execution or answer quality.
 Preserve stream indices and request isolation. Reproduction and release-proof
 boundaries are in [the tool fallback runbook](docs/doctoring/TOOL_EXECUTION_FALLBACKS.md#virtual-worker-handoff-regression-2026-09-08).
+
+## HTTP response and test resource ownership
+
+Python 3.14 may report an unclosed resource during a later test or final pytest
+cleanup; test-body passes alone are not process success. Keep explicit response
+handles in regression tests and assert closure before fallback/backoff. Close a
+consumed HTTPError only after diagnostics/classification; preserve caller ownership
+when returning the original error. Cleanup failures must not replace the primary
+provider failure. Test servers need server_close after shutdown; SQLite fixtures
+need transaction exit before close. Never mask production leaks with fake-client
+cleanup, warning filters or forced GC. Use the existing project interpreter from
+isolated worktrees, record exact head and process exit, and distinguish default
+suite success from strict-warning acceptance. Reproduction, discarded experiments,
+commands and bounded results: [HTTP resource runbook](docs/doctoring/http_test_resource_lifecycle.md).
+
+## Pushing to an open PR while required checks are backlogged
+
+Batch follow-up commits and push once when the required checks are not
+draining. Every push to an open pull request cancels that branch's in-flight
+runs, and while the verdict queue is backed up an intermediate head cannot
+merge anyway, so the cancelled runner time is taken from work that *could*
+have merged.
+
+This is measured, not assumed. On 2026-09-14T19:12Z, 50 of this repository's
+last 100 completed workflow runs were cancelled, and 27 of those 50 belonged
+to one open (non-draft) pull request whose head moved four times in about
+three hours while no verdict could be issued.
+
+Drafts are already handled: `.github/workflows/security.yml` gates its jobs on
+`github.event.pull_request.draft == false`, so a draft head that moves
+repeatedly does not consume the gate. This rule covers the other half — an
+open, review-ready pull request iterating faster than the queue drains.
+
+Push immediately, without batching, when the change is a fix for a failing
+required check, a conflict resolution that unblocks a merge, or anything a
+reviewer is actively waiting on.

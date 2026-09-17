@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -66,6 +67,7 @@ def test_http_chat_accepts_assistant_tool_calls_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_assistant_content_null_with_tool_calls() -> None:
@@ -99,6 +101,7 @@ def test_http_chat_accepts_assistant_content_null_with_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_empty_tool_calls_array() -> None:
@@ -119,6 +122,7 @@ def test_http_chat_accepts_empty_tool_calls_array() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_user_content_null() -> None:
@@ -136,6 +140,7 @@ def test_http_chat_still_rejects_user_content_null() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_malformed_tool_calls() -> None:
@@ -161,3 +166,4 @@ def test_http_chat_still_rejects_malformed_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -71,6 +72,7 @@ def test_http_chat_accepts_padded_service_tier_auto() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_padded_service_tier_default() -> None:
@@ -89,6 +91,7 @@ def test_http_chat_accepts_padded_service_tier_default() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_padded_service_tier_default() -> None:
@@ -107,6 +110,7 @@ def test_http_completions_accepts_padded_service_tier_default() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_padded_service_tier_auto() -> None:
@@ -125,6 +129,7 @@ def test_http_responses_accepts_padded_service_tier_auto() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_padded_flex_service_tier() -> None:
@@ -143,6 +148,7 @@ def test_http_chat_accepts_padded_flex_service_tier() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_padded_encoding_format_float() -> None:
@@ -161,6 +167,7 @@ def test_http_embeddings_accepts_padded_encoding_format_float() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_padded_base64() -> None:
@@ -181,6 +188,7 @@ def test_http_embeddings_accepts_padded_base64() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

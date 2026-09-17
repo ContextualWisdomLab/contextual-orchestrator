@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -75,6 +76,7 @@ def test_http_responses_accepts_flat_tool_choice_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_flat_tool_choice_padded_casefold() -> None:
@@ -100,6 +102,7 @@ def test_http_responses_accepts_flat_tool_choice_padded_casefold() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_flat_tool_choice_with_nested_tools() -> None:
@@ -128,6 +131,7 @@ def test_http_chat_accepts_flat_tool_choice_with_nested_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_accepts_nested_tool_choice() -> None:
@@ -158,6 +162,7 @@ def test_http_chat_still_accepts_nested_tool_choice() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_tool_choice_rejects_mixed_nested_and_flat() -> None:
@@ -188,6 +193,7 @@ def test_http_tool_choice_rejects_mixed_nested_and_flat() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_flat_tool_choice_unknown_name_fails_closed() -> None:
@@ -214,6 +220,7 @@ def test_http_flat_tool_choice_unknown_name_fails_closed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

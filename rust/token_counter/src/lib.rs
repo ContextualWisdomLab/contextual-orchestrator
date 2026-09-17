@@ -217,7 +217,7 @@ fn pack_cl100k(
     let mut parts = Vec::new();
     for (source_index, tokens) in encoded.iter().enumerate() {
         let ranges = utf8_token_ranges(
-            &tokenizer,
+            tokenizer,
             tokens,
             max_tokens_per_input.min(max_total_tokens),
         )?;

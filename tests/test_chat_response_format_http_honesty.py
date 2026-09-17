@@ -9,6 +9,8 @@ import urllib.request
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -40,7 +42,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -66,6 +69,7 @@ def test_http_chat_accepts_response_format_text() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_json_object() -> None:
@@ -83,6 +87,7 @@ def test_http_chat_accepts_response_format_json_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_synthesis_classifies_upstream_404() -> None:
@@ -121,6 +126,7 @@ def test_http_structured_synthesis_classifies_upstream_404() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() -> None:
@@ -163,20 +169,97 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+def test_http_virtual_structured_mixed_failures_preserve_retryable_error(model: str) -> None:
+    """A 502 remains retryable only after every eligible endpoint is exhausted."""
+    for failure_order in ((502, 404), (404, 502)):
+        agents = [
+            ModelAgent(
+                "first_agent",
+                "first-model",
+                "mock://catalog",
+                tags=("reasoning", "writing", "cost:free"),
+            ),
+            ModelAgent(
+                "second_agent",
+                "second-model",
+                "mock://catalog",
+                tags=("reasoning", "writing", "cost:free"),
+            ),
+            ModelAgent(
+                "other_agent",
+                "other-model",
+                "mock://other",
+                tags=("reasoning", "writing", "cost:free"),
+            ),
+        ]
+        orchestrator = TaskOrchestrator(agents)
+        calls: list[str] = []
+        orchestrator.conduct = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+            "trace": []
+        }
+        orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
+        orchestrator._ranked_agents = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
+
+        def reject(agent, _endpoint, _payload):
+            calls.append(agent.id)
+            status = (*failure_order, 404)[len(calls) - 1]
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="api_error" if status == 502 else "model_not_found",
+                message="synthetic upstream failure",
+                client_status=status,
+                provider_status=status,
+                retryable=status == 502,
+                transport="structured_synthesis",
+            )
+
+        orchestrator.client.proxy_send_once = reject
+        server = build_server(
+            orchestrator,
+            port=0,
+            security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = _post(
+                server.server_address[1],
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "structured"}],
+                    "response_format": {"type": "json_object"},
+                    "session_id": "synthetic-session",
+                },
+            )
+            assert status == 502, (failure_order, body)
+            assert body["error"]["code"] == "api_error"
+            assert body["error"]["detail"]["provider_status"] == 502
+            assert body["error"]["detail"]["retryable"] is True
+            assert body["error"]["detail"]["transport"] == "structured_synthesis"
+            assert calls == ["first_agent", "second_agent", "other_agent"]
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
 
 def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> None:
-    """Schema-invalid synthesis and repair exhaust each same-endpoint model once."""
+    """Schema-invalid synthesis and repair exhaust every eligible model once."""
     agents = [
-        ModelAgent("first_agent", "first-model", "mock://catalog"),
-        ModelAgent("second_agent", "second-model", "mock://catalog"),
-        ModelAgent("other_agent", "other-model", "mock://other"),
+        ModelAgent("first_agent", "first-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("second_agent", "second-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("other_agent", "other-model", "mock://other", tags=("reasoning", "writing")),
     ]
     orchestrator = TaskOrchestrator(agents)
     calls: list[str] = []
     orchestrator.conduct = lambda *_args, **_kwargs: {"trace": []}  # type: ignore[method-assign]
     orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
-    orchestrator._failover_candidates = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
+    orchestrator._ranked_agents = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
 
     def invalid(agent, _endpoint, _payload):
         calls.append(agent.id)
@@ -220,11 +303,21 @@ def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> No
         )
         assert status == 502, body
         assert body["error"]["code"] == "invalid_structured_output"
-        assert calls == ["first_agent", "first_agent", "second_agent", "second_agent"]
-        assert "other_agent" not in calls
+        assert calls == [
+            "first_agent",
+            "first_agent",
+            "second_agent",
+            "second_agent",
+            "other_agent",
+            "other_agent",
+        ]
+        assert body["error"]["detail"]["failure_kind"] == (
+            "structured_output_exhausted"
+        )
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_structured_workflow_never_reuses_request_scoped_missing_model() -> None:
@@ -282,6 +375,7 @@ def test_virtual_structured_workflow_never_reuses_request_scoped_missing_model()
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_structured_workflow_exhausts_each_missing_model_once() -> None:
@@ -324,6 +418,7 @@ def test_virtual_structured_workflow_exhausts_each_missing_model_once() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_explicit_structured_model_preserves_model_not_found() -> None:
@@ -358,6 +453,7 @@ def test_explicit_structured_model_preserves_model_not_found() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_explicit_structured_model_preserves_authentication_error() -> None:
@@ -391,6 +487,7 @@ def test_explicit_structured_model_preserves_authentication_error() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_missing_models_record_each_circuit_failure_once() -> None:
@@ -430,6 +527,7 @@ def test_virtual_missing_models_record_each_circuit_failure_once() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_chat_rejects_batch_routing() -> None:
@@ -450,6 +548,7 @@ def test_http_structured_chat_rejects_batch_routing() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_chat_applies_sampling_to_evidence_calls() -> None:
@@ -485,6 +584,7 @@ def test_http_structured_chat_applies_sampling_to_evidence_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_image_rejects_text_only_model_as_client_error() -> None:
@@ -515,6 +615,7 @@ def test_http_structured_image_rejects_text_only_model_as_client_error() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> None:
@@ -545,6 +646,7 @@ def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_fails_closed_when_provider_violates_valid_json_schema() -> None:
@@ -574,6 +676,7 @@ def test_http_chat_fails_closed_when_provider_violates_valid_json_schema() -> No
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_surfaces_machine_readable_provider_response_failure_kind() -> None:
@@ -640,6 +743,7 @@ def test_http_chat_surfaces_machine_readable_provider_response_failure_kind() ->
         orchestrator.client.chat = original_chat
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_unknown_response_format_type() -> None:
@@ -658,6 +762,7 @@ def test_http_chat_rejects_unknown_response_format_type() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_json_object_with_sibling_keys() -> None:
@@ -679,6 +784,7 @@ def test_http_chat_rejects_json_object_with_sibling_keys() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_json_schema_without_schema_body() -> None:
@@ -702,6 +808,7 @@ def test_http_chat_rejects_json_schema_without_schema_body() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_non_object_response_format() -> None:
@@ -720,6 +827,7 @@ def test_http_chat_rejects_non_object_response_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_omitted() -> None:
@@ -736,6 +844,7 @@ def test_http_chat_accepts_response_format_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

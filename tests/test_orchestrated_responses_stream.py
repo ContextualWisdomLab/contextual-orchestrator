@@ -52,6 +52,7 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         stream = _post(server, token, model)
     finally:
         server.shutdown()
+        server.server_close()
 
     events = [
         json.loads(line[6:])
@@ -137,6 +138,7 @@ def test_streamed_responses_records_unavailable_usage_without_estimating_answer(
                 ])
     finally:
         server.shutdown()
+        server.server_close()
 
     for events in all_events:
         completed = events[-1]["response"]
@@ -228,6 +230,7 @@ def test_duplicate_workflow_roles_close_each_reasoning_summary_part() -> None:
         ]
     finally:
         server.shutdown()
+        server.server_close()
 
     assert [
         event["summary_index"]
@@ -393,6 +396,7 @@ def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
             urllib.request.urlopen(request, timeout=5)
     finally:
         server.shutdown()
+        server.server_close()
     assert raised.value.code == 400
     assert "no enabled zero-cost model" in raised.value.read().decode()
 
@@ -431,6 +435,7 @@ def test_http_zdr_only_request_filters_the_runtime_candidate_pool() -> None:
             assert response.status == 200
     finally:
         server.shutdown()
+        server.server_close()
 
     workflow = orchestrator.get_workflow_run(next(iter(orchestrator._run_order)))
     assert {step["agent_id"] for step in workflow["trace"]} == {private.id}
@@ -481,6 +486,7 @@ def test_http_virtual_responses_preserves_message_array_and_sampling_controls() 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert observed_messages
     # orchestrator/free's auto mode always stays on the single-step route
@@ -534,6 +540,7 @@ def test_nonstream_orchestrated_responses_support_structured_output(
             body = json.loads(response.read())
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["orchestration"]["mode"] == "conduct"
 
@@ -555,6 +562,7 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
         stream = _post(server, token, "orchestrator/free")
     finally:
         server.shutdown()
+        server.server_close()
     assert "event: response.failed" in stream
     assert "secret failure" not in stream
     assert stream.endswith("data: [DONE]\n\n")
@@ -592,6 +600,7 @@ def test_stream_usage_failure_remains_inside_the_started_sse_protocol(monkeypatc
         stream = _post(server, token, "orchestrator/auto")
     finally:
         server.shutdown()
+        server.server_close()
 
     events = [
         json.loads(line[6:])
@@ -624,6 +633,7 @@ def test_conduct_stream_emits_openai_reasoning_text_for_paper_roles() -> None:
         stream = _post(server, token, "orchestrator/auto")
     finally:
         server.shutdown()
+        server.server_close()
 
     events = [
         json.loads(line[6:])

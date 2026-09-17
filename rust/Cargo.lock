@@ -50,6 +50,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "contextual-decision-receipt"
+version = "0.1.0"
+dependencies = [
+ "pyo3",
+]
+
+[[package]]
 name = "contextual-token-packer"
 version = "0.1.0"
 dependencies = [

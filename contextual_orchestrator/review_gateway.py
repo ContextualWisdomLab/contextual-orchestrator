@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import replace
-from typing import Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Mapping, Sequence
 
 from .credentials import NotConfigured, get_credential, register_credential
 from .model_discovery import (
@@ -30,6 +30,7 @@ from .model_discovery import (
 from .orchestrator import ModelClient, TaskOrchestrator
 from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
+from .tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
 
 REVIEW_CREDENTIAL_NAMES = PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
@@ -38,6 +39,7 @@ REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
     "NVIDIA_NIM_API_KEY_SUB",
     "OPENROUTER_API_KEY",
     "OPENCODE_ZEN_API_KEY",
+    "EXPERIENTAL_LABS_API_KEY",
 )
 """Provider-account sources authorized to contribute to ``orchestrator/free``.
 
@@ -52,6 +54,79 @@ general-free serving contract enter the pool.
 """
 
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+
+REVIEW_READINESS_CONTRACT_VERSION = "1"
+"""Versioned owner readiness/admission contract for the free review pool.
+
+Consumers pin this version to know exactly which readiness/admission
+predicates the owner applied. It is bumped whenever a predicate, its
+evidence source, or the returned provenance shape changes, so a leaf
+caller can delete its own duplicated routing preflight instead of guessing
+which owner contract is live.
+"""
+
+
+@dataclass(frozen=True)
+class ReviewModelAdmission:
+    """Typed, request-scoped provenance for one admitted review-pool model.
+
+    Every field is owner-produced evidence about *why* the candidate is
+    admitted, so a consumer never has to re-derive eligibility, re-probe
+    readiness, or apply its own provider/model/fallback heuristics.
+    """
+
+    contract_version: str
+    model_id: str
+    provider_name: str
+    credential_key: str
+    tags: tuple[str, ...]
+    max_output_tokens: int | None
+    context_window: int | None
+
+
+def review_model_admission(
+    model: DiscoveredModel,
+    *,
+    tags: Sequence[str] = (),
+) -> ReviewModelAdmission:
+    """Return typed provenance for one already-admitted review-pool model.
+
+    Admission itself happened in :func:`build_review_orchestrator`; this only
+    serializes the owner's evidence so a consumer can consume it directly
+    instead of re-deriving eligibility, readiness, or ordering.
+    """
+    return ReviewModelAdmission(
+        contract_version=REVIEW_READINESS_CONTRACT_VERSION,
+        model_id=model.model_id,
+        provider_name=model.provider_name,
+        credential_key=model.credential_name,
+        tags=tuple(tags),
+        max_output_tokens=model.max_output_tokens,
+        context_window=model.context_window,
+    )
+
+
+def review_pool_admissions(
+    agents: Sequence[Any],
+) -> list[ReviewModelAdmission]:
+    """Project a built review pool into versioned, consumer-readable provenance.
+
+    The owner exposes this so a caller can send only the gateway token and
+    ``model: orchestrator/free`` -- no provider/model/fallback parameters,
+    no credential eligibility, no candidate catalog, no probing.
+    """
+    return [
+        ReviewModelAdmission(
+            contract_version=REVIEW_READINESS_CONTRACT_VERSION,
+            model_id=str(getattr(agent, "model", "")),
+            provider_name=str(getattr(agent, "provider_name", "") or ""),
+            credential_key=str(getattr(agent, "credential_key", "") or ""),
+            tags=tuple(getattr(agent, "tags", ()) or ()),
+            max_output_tokens=getattr(agent, "max_output_tokens", None),
+            context_window=getattr(agent, "context_window", None),
+        )
+        for agent in agents
+    ]
 
 
 def _validated_credential_names(
@@ -169,9 +244,20 @@ def build_review_orchestrator(
                 priority=0,
             )
         )
+    # ``TaskOrchestrator``'s generic default (1) caps internal failover at two
+    # candidates for every caller regardless of pool size. The org's
+    # opencode-review-dispatch workflow calls ``orchestrator/free`` exactly
+    # once per review and falls back to a model-unavailable evidence-only
+    # review on any rejected/failed answer (OPENCODE_MODEL_ATTEMPTS=1,
+    # OPENCODE_POOL_MAX_CYCLES=1 in ContextualWisdomLab/.github). Since this
+    # is the review pool's only external attempt, size the internal failover
+    # budget to the admitted catalog instead of the generic default, bounded
+    # by the documented hard ceiling.
+    tool_retry_attempts = min(max(len(agents) - 1, 0), MAX_TOOL_RETRY_ATTEMPTS)
     return TaskOrchestrator(
         agents,
-        client=ModelClient(max_output_tokens=32768),
+        client=ModelClient(),
+        tool_retry_attempts=tool_retry_attempts,
     )
 
 

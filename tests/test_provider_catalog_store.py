@@ -190,6 +190,66 @@ def test_model_normalization_withholds_limits_above_signed_64_bit() -> None:
     assert normalized.context_window is None
 
 
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [(True, True), (False, False), ("true", None), (1, None)],
+)
+def test_model_normalization_withholds_non_boolean_tool_call_evidence(
+    evidence: object, expected: bool | None
+) -> None:
+    normalized = normalize_discovered_model(
+        _source(),
+        replace(_model(_source(), "model-a"), supports_parallel_tool_calls=evidence),
+    )
+
+    assert normalized.supports_parallel_tool_calls is expected
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "supports_zero_data_retention",
+        "supports_no_training",
+        "supports_no_prompt_retention",
+    ],
+)
+def test_model_normalization_withholds_non_boolean_privacy_evidence(
+    field_name: str,
+) -> None:
+    model = replace(_model(_source(), "model-a"), **{field_name: "false"})
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert getattr(normalized, field_name) is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "malformed", "expected"),
+    [
+        ("is_free", "false", False),
+        ("is_free", 1, False),
+        ("spend_admitted", "true", False),
+        ("spend_admitted", 0, False),
+    ],
+)
+def test_model_normalization_fails_closed_on_malformed_economic_flags(
+    field_name: str, malformed: object, expected: bool
+) -> None:
+    model = replace(_model(_source(), "model-a"), **{field_name: malformed})
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert getattr(normalized, field_name) is expected
+
+
+def test_model_normalization_fails_closed_on_malformed_zdr_capability() -> None:
+    model = replace(_model(_source(), "model-a"), zdr_capable="false")
+
+    normalized = normalize_discovered_model(_source(), model)
+
+    assert normalized.zdr_capable is False
+
+
 def test_underflowing_positive_price_is_rejected_not_treated_as_free() -> None:
     """A nonzero price that underflows to 0.0 in float must stay unknown."""
     source = _source()
@@ -840,6 +900,18 @@ def test_postgres_privacy_evidence_is_parameterized_and_read_only() -> None:
     )
     store._connection_factory = lambda: read_connection
     assert store.privacy_assessments(source) == (assessment,)
+
+
+def test_last_known_good_dual_zdr_tags_restore_fail_closed():
+    """Persisted contradictory privacy tags restore to explicit no-ZDR."""
+    source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
+    model = replace(_model(source, "dual-zdr-model", 0), supports_zero_data_retention=False)
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source, [model], eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: ("discovered", "privacy:zdr", "privacy:no_zdr")},
+    )
+    assert store.serving_models(source)[0].supports_zero_data_retention is False
 
 
 if __name__ == "__main__":  # pragma: no cover
