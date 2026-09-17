@@ -53,7 +53,7 @@ jobs:
           uv run --no-sync maturin build --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml --out "$RUNNER_TEMP/decision-wheels"
 
       - name: Run full test suite
-        run: uv run --no-sync python -m pytest -q
+        run: uv run --no-sync python -m pytest -q -ra
 
       - name: Install hash-locked quality tools
         run: |
