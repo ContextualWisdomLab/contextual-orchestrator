@@ -6122,7 +6122,7 @@ class TaskOrchestrator:
                     self._record_failure(agent.id)
                     if agent.group_name:
                         self._group_router.observe_failure(agent.id)
-                    raise ProviderUpstreamError(
+                    unknown = ProviderUpstreamError(
                         agent_id=agent.id,
                         model=agent.model,
                         error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
@@ -6133,10 +6133,37 @@ class TaskOrchestrator:
                         client_status=502,
                         retryable=False,
                         transport="passthrough",
+                    )
+                    raise _set_passthrough_attempt_evidence(
+                        unknown,
+                        selected_candidate_ids=[agent.id],
+                        attempts=[
+                            _passthrough_attempt_record(
+                                unknown,
+                                provider_name=agent.provider_name.strip() or "unreported",
+                                attempt_number=1,
+                                failover_decision="sticky_candidate_failure",
+                            )
+                        ],
+                        terminal_reason="terminal_provider_failure",
                     ) from None
                 request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
                     self._group_router.observe_failure(agent.id)
+                if isinstance(exc, ProviderUpstreamError):
+                    raise _set_passthrough_attempt_evidence(
+                        exc,
+                        selected_candidate_ids=[agent.id],
+                        attempts=[
+                            _passthrough_attempt_record(
+                                exc,
+                                provider_name=agent.provider_name.strip() or "unreported",
+                                attempt_number=1,
+                                failover_decision="sticky_candidate_failure",
+                            )
+                        ],
+                        terminal_reason="terminal_provider_failure",
+                    ) from None
                 raise
             if measured:
                 self._group_router.observe_success(
@@ -6339,24 +6366,22 @@ class TaskOrchestrator:
                                 attempts=attempt_receipts,
                                 terminal_reason="terminal_provider_failure",
                             ) from None
-                        if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
-                            attempt_receipts.append(
-                                _passthrough_attempt_record(
-                                    classified,
-                                    provider_name=(
-                                        candidate.provider_name.strip() or "unreported"
-                                    ),
-                                    attempt_number=len(attempt_receipts) + 1,
-                                    failover_decision="sticky_candidate_failure",
-                                )
-                            )
-                            raise _set_passthrough_attempt_evidence(
+                        attempt_receipts.append(
+                            _passthrough_attempt_record(
                                 classified,
-                                selected_candidate_ids=selected_candidate_ids,
-                                attempts=attempt_receipts,
-                                terminal_reason="terminal_provider_failure",
-                            ) from None
-                        raise
+                                provider_name=(
+                                    candidate.provider_name.strip() or "unreported"
+                                ),
+                                attempt_number=len(attempt_receipts) + 1,
+                                failover_decision="sticky_candidate_failure",
+                            )
+                        )
+                        raise _set_passthrough_attempt_evidence(
+                            classified,
+                            selected_candidate_ids=selected_candidate_ids,
+                            attempts=attempt_receipts,
+                            terminal_reason="terminal_provider_failure",
+                        ) from None
                     attempt_receipts.append(
                         _passthrough_attempt_record(
                             classified,

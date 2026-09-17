@@ -1543,13 +1543,12 @@ def test_suppressed_transient_context_does_not_authorize_failover() -> None:
 def test_all_candidates_chain_the_last_failure() -> None:
     """Exhaustion reports one stable gateway error with the final provider cause."""
     final = _http_error(503)
-    # 500 here (not 429): this test is about which classified failure
-    # survives exhaustion, not rate-limiting -- a bare 429 with no
-    # Retry-After now assumes a short quota cooldown and waits, which would
-    # route this candidate's identity through the rate-limit-storm path
-    # instead of the plain exhaustion path this test actually exercises.
+    # 408 here (not 429 or 500): 429 can enter the rate-limit-storm wait path,
+    # and 500/502/504/529 stay sticky under the RFC-bounded rejection set from
+    # #1049. A proved request rejection (408) may advance, then the final 503
+    # is reported on exhaustion without waiting.
     orchestrator = _build(
-        SequencedProxyClient({"primary_agent": _http_error(500), "fallback_agent": final})
+        SequencedProxyClient({"primary_agent": _http_error(408), "fallback_agent": final})
     )
 
     with pytest.raises(ProviderUpstreamError) as caught:
