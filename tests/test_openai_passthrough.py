@@ -362,7 +362,8 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _serve() -> tuple[object, int, str]:
@@ -372,13 +373,15 @@ def _serve() -> tuple[object, int, str]:
     return server, server.server_address[1], token
 
 
-def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
+def test_http_all_auto_candidates_rejecting_size_returns_413(request) -> None:
     """Provider-size exhaustion remains an OpenAI-compatible 413 at the gateway."""
     class RejectingClient(ModelClient):
         def proxy_send_once(self, agent, endpoint, payload):
-            raise urllib.error.HTTPError(
+            provider_error = urllib.error.HTTPError(
                 "https://provider.example/v1", 413, "too large", None, None
             )
+            request.addfinalizer(provider_error.close)
+            raise provider_error
 
         proxy_send = proxy_send_once
 
@@ -431,6 +434,7 @@ def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 413
     assert body["error"]["code"] == "request_too_large"
@@ -504,6 +508,7 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
         )
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200  # previously rejected 400 'unknown_fields'
     assert body["object"] == "chat.completion"
     assert body["echo"]["response_format"] == {"type": "json_object"}
@@ -539,6 +544,7 @@ def test_lineage_structured_payload_accepts_session_without_provider_forwarding(
         )
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["echo"]["response_format"] == {"type": "json_object"}
     assert "session_id" not in body["echo"]
@@ -560,6 +566,7 @@ def test_http_rejects_invalid_top_level_session_id(session_id: object) -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 400
     assert body["error"]["code"] == "invalid_session_id"
 
@@ -579,6 +586,7 @@ def test_http_gateway_default_response_format_resolves_concrete_agent() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 200
     assert body["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
@@ -618,6 +626,7 @@ def test_http_structured_virtual_models_reject_ineligible_pools(
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 400
     assert expected_message in body["error"]["message"]
@@ -650,6 +659,7 @@ def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 400
     assert "vision" in body["error"]["message"]
@@ -662,6 +672,7 @@ def test_http_responses_endpoint_passes_through() -> None:
         status, body = _post(url, {"model": "mock-planner", "input": "hello"}, token)
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["object"] == "response"
 
@@ -688,6 +699,7 @@ def test_http_virtual_responses_tools_are_conducted_not_single_model_passthrough
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 200
     assert body["object"] == "response"
@@ -707,6 +719,7 @@ def test_http_models_endpoint_lists_configured_models() -> None:
             body = json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["object"] == "list"
     # Disabled models are omitted: an inference-scope caller should never see
@@ -744,6 +757,7 @@ def test_http_plain_prompt_still_uses_orchestration_path() -> None:
         status, body = _post(url, {"model": "mock-planner", "messages": [{"role": "user", "content": "hi"}]}, token)
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["object"] == "chat.completion"
     assert "echo" not in body  # orchestration path, not passthrough
