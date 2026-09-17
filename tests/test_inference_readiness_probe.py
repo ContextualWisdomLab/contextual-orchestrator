@@ -74,6 +74,7 @@ def test_inference_readiness_returns_per_candidate_diagnostics_with_inference_to
         assert "latency_ms" in ready_item
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
 
@@ -101,6 +102,7 @@ def test_inference_readiness_rejects_missing_or_wrong_scope_token() -> None:
         assert wrong_scope_status == wrong_scope_models_status == 401
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
 
@@ -149,6 +151,7 @@ def test_inference_readiness_never_leaks_admin_only_fields() -> None:
             assert "usage" not in item
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
 
