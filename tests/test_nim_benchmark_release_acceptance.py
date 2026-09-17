@@ -24,20 +24,23 @@ from contextual_orchestrator.credentials import (
 from contextual_orchestrator.orchestrator import ModelClient
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
+EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
+FAKE_ENDPOINT = "https://nim.example.test/v1"
+
 DECLARED_MAX_WORKFLOW_DEPTH = 5
 DECLARED_MAX_OUTPUT_TOKENS = 264
 DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
     DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
 )
 DECLARED_RUN_KWARGS = {
+    "resample_count": 2000,
+    "confidence_level": 0.95,
+    "comparison_pairs": (("conduct_bounded", "route_once"),),
     "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
     "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
 }
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json")
-EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
-FAKE_ENDPOINT = "https://nim.example.test/v1"
 
 
 @pytest.fixture(autouse=True)

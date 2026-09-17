@@ -1,5 +1,42 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-07 declared held-out bootstrap coverage (proposed)
+
+Successor of the declared workflow-budget slice removes hidden
+`BOOTSTRAP_SAMPLES = 2_000` and the baked-in 95% percentile from
+`scripts/benchmark_psychometric_heldout.py`. Resample count, exclusive-unit-interval
+coverage, and seed are required declarations. Missing, boolean, non-positive,
+or non-representable declarations fail closed. The script entry and full
+harness tests pass 2,000, 0.95, and seed 568 as this run's choices. ADR 0044
+is Proposed.
+
+Local contract tests on this working tree: 19 related declaration and
+boundary tests passed. This is not buyer-held-out accuracy, p95 latency, or
+protected merge evidence. Production route/conduct defaults stay locked.
+Other harness sample sizes and nested `*_ci95` key names remain later work.
+Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
+## 2026-09-07 declared paired-bootstrap coverage (proposed)
+
+Child successor of [#1074](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1074)
+removes the hidden 2,000-resample 95% interval and the baked-in
+`conduct_bounded` / `route_once` / cheapest / hindsight comparison subset from
+`contextual_orchestrator/nim_benchmark.py`. Resample count, exclusive-unit-interval
+coverage, seed, and policy pairs are required declarations. Missing, boolean,
+non-positive, non-finite, empty, duplicate, or degenerate declarations fail
+closed. The percentile method name no longer embeds 95. Report schema 4.0.0
+records the declarations in provenance. The workflow and CLI must pass them
+explicitly; 2,000 and 0.95 in those files are run declarations, not code
+defaults.
+
+Local three-file coverage on this working tree: NIM statements/branches 100%,
+interrogate 100%, 175 related tests passed. This is not buyer-held-out
+accuracy, p95 latency, or protected merge evidence. Production route/conduct
+defaults stay locked. Token and workflow-depth budgets are the successor
+slice. Parent [#1067](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1067)
+still needs independent review.
+
 ## 2026-09-07 declared workflow depth and token budgets (proposed)
 
 Removes hidden `MAX_WORKFLOW_DEPTH = 5` and `DEFAULT_MAX_OUTPUT_TOKENS = 264`

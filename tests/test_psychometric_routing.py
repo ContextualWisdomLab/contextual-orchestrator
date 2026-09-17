@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 import numpy as np
 from dataclasses import replace
@@ -58,10 +59,17 @@ def test_expected_brier_includes_bernoulli_outcome_variance() -> None:
     assert _expected_brier(1.0, 0.5) == 0.5
 
 
+DECLARED_HELDOUT_BOOTSTRAP = {
+    "resample_count": heldout_benchmark.DECLARED_BOOTSTRAP_RESAMPLE_COUNT,
+    "confidence_level": heldout_benchmark.DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL,
+    "seed": heldout_benchmark.DECLARED_BOOTSTRAP_SEED,
+}
+
+
 def test_paired_bootstrap_interval_uses_within_context_differences() -> None:
     """Keep a constant within-context delta constant in every bootstrap replicate."""
     assert _paired_bootstrap_mean_ci(
-        [0.1, 0.2, 0.3], [0.2, 0.3, 0.4]
+        [0.1, 0.2, 0.3], [0.2, 0.3, 0.4], **DECLARED_HELDOUT_BOOTSTRAP
     ) == pytest.approx([-0.1, -0.1])
 
 
@@ -69,6 +77,46 @@ def test_paired_bootstrap_interval_rejects_unpaired_samples() -> None:
     """Reject unequal or empty pair inputs before computing an interval."""
     with pytest.raises(ValueError, match="non-empty and equal length"):
         _paired_bootstrap_mean_ci([0.1], [])
+
+
+def test_paired_bootstrap_interval_requires_declared_coverage() -> None:
+    """Held-out intervals cannot invent a 2,000-sample 95% default."""
+    pairs = ([0.1, 0.2, 0.3], [0.2, 0.3, 0.4])
+    parameters = inspect.signature(_paired_bootstrap_mean_ci).parameters
+    assert parameters["resample_count"].default is None
+    assert parameters["confidence_level"].default is None
+    assert parameters["seed"].default is None
+    with pytest.raises(ValueError, match="resample_count"):
+        _paired_bootstrap_mean_ci(*pairs)
+    with pytest.raises(ValueError, match="confidence_level"):
+        _paired_bootstrap_mean_ci(*pairs, resample_count=20, seed=568)
+    with pytest.raises(ValueError, match="seed"):
+        _paired_bootstrap_mean_ci(*pairs, resample_count=20, confidence_level=0.95)
+    with pytest.raises(ValueError, match="resample_count"):
+        _paired_bootstrap_mean_ci(*pairs, resample_count=True, confidence_level=0.95, seed=1)
+    with pytest.raises(ValueError, match="confidence_level"):
+        _paired_bootstrap_mean_ci(*pairs, resample_count=20, confidence_level=1.0, seed=1)
+    with pytest.raises(ValueError, match="cannot be represented"):
+        _paired_bootstrap_mean_ci(*pairs, resample_count=1, confidence_level=0.95, seed=1)
+    assert _paired_bootstrap_mean_ci(
+        *pairs, resample_count=20, confidence_level=0.95, seed=568
+    ) == pytest.approx([-0.1, -0.1])
+
+
+def test_heldout_run_benchmark_requires_declared_bootstrap() -> None:
+    """The harness entry cannot restore hidden bootstrap constants."""
+    parameters = inspect.signature(heldout_benchmark.run_benchmark).parameters
+    assert parameters["resample_count"].default is None
+    assert parameters["confidence_level"].default is None
+    assert parameters["seed"].default is None
+    calibration = inspect.signature(
+        heldout_benchmark._validate_adaptive_candidate_calibration
+    ).parameters
+    assert calibration["resample_count"].default is None
+    with pytest.raises(ValueError, match="resample_count"):
+        heldout_benchmark.run_benchmark()
+    with pytest.raises(ValueError, match="resample_count"):
+        heldout_benchmark._validate_adaptive_candidate_calibration()
 
 
 def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None:
@@ -88,7 +136,7 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         ),
     )
 
-    report = heldout_benchmark.run_benchmark()
+    report = heldout_benchmark.run_benchmark(**DECLARED_HELDOUT_BOOTSTRAP)
 
     assert (
         report["latency_repetitions_per_context"]

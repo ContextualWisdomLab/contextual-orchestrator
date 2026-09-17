@@ -13,6 +13,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- The psychometric held-out harness now requires a declared resample count,
+  percentile coverage, and seed for paired intervals. Hidden 2,000-sample
+  95% defaults are removed. The script entry still writes 2,000, 0.95, and
+  seed 568 as this run's choices.
+- NIM paired comparisons now require a declared resample count, percentile
+  coverage, and policy-pair list. Hidden 2,000-resample 95% defaults and the
+  baked-in conduct/route/cheapest/hindsight subset are removed. Report schema
+  4.0.0 records those declarations; older reports must be regenerated.
+
 - NIM benchmark workflow depth and per-call output-token budgets are required
   declarations (`max_workflow_depth` / `max_output_tokens`); omitted values fail
   closed instead of inventing five steps or 264 tokens (ADR 0043).
