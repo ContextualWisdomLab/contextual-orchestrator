@@ -48,6 +48,26 @@ provisioned for that credential. Focused suite:
 docstring coverage. Issue #117 acceptance item 6 (tenant/resource binding)
 remains open.
 
+## 2026-09-13 Free-pool selection ignored single-tool-call evidence (#940)
+
+At `012beaac` the three mechanisms named in #940 stood at: capability
+evidence implemented (`DiscoveredModel.supports_parallel_tool_calls`, probe
+and 400 classifier from #1121, tags `tool_call:single|multi`), passthrough
+400 failover implemented (`_is_single_tool_call_limit_error`), selection-time
+exclusion missing: `_is_general_free_agent` checked only price and input
+modality, so a `tool_call:single` agent was still chosen first for a
+multi-tool request and one provider round-trip was wasted before failover.
+Candidate on `fix/free-pool-single-tool-call-exclusion-940` adds a
+request-shape predicate matching exactly the probe's rejected shape (two or
+more tools without `parallel_tool_calls: false`, or an explicit `true`) and
+passes the chat body at the two tool-carrying selection sites
+(`proxy_completion`, structured `free_only` synthesis). RED: two new tests
+failed with the single-call agent still served; GREEN after the change with
+the single-tool, opt-out, and no-evidence shapes still served by that agent.
+Not established: a live NIM confirmation that a one-tool request without the
+flag is accepted (left to failover by design), and any change to
+`general_free_serving_candidates`, which stays request-blind on purpose.
+
 ## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 
 PR #1053's valid default-null timeout and administrator-policy delta was 169
