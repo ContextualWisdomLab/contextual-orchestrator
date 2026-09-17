@@ -6072,10 +6072,17 @@ class TaskOrchestrator:
         # is actually needed; a warm cache entry must never pay for it.
         cheap_decision = self._would_route_without_triage(mode, model_name)
         cache = self._cache_provider if self._cache_provider is not None else self._cache
-        if cache is None or bypass_cache:
+        zdr_only = _REQUEST_ZDR_ONLY.get()
+        if cache is None or bypass_cache or zdr_only:
+            # A ZDR-flagged request must never read or write the response
+            # cache: that cache is retained storage, and a private-repository
+            # caller sets zdr_only precisely so its prompt/answer content is
+            # never retained outside the live provider call. Fail closed
+            # unconditionally here rather than trusting a caller-supplied
+            # bypass_cache to also cover the ZDR case.
             route_decision = self._resolved_route_decision(messages, mode, model_name, cheap_decision)
             result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
-            result["cache_status"] = "bypass" if bypass_cache else "disabled"
+            result["cache_status"] = "bypass" if (bypass_cache or zdr_only) else "disabled"
             return result
         resolved_mode = None if cheap_decision is None else ("route" if cheap_decision else "conduct")
         try:
