@@ -27,6 +27,7 @@ def test_server() -> Iterator[tuple[HTTPServer, int, str]]:
     finally:
         server.shutdown()
         t.join(timeout=2.0)
+        server.server_close()
 
 def test_naruon_structured_dom_decomposition_payload(test_server: tuple[HTTPServer, int, str]) -> None:
     """Naruon uses function calling and structured outputs to decompose emails."""

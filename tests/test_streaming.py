@@ -307,7 +307,8 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, str, str]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, response.headers.get("content-type", ""), response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
+        with exc:
+            return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
 
 
 def _serve(orchestrator: TaskOrchestrator | None = None) -> tuple[object, int, str]:
@@ -330,6 +331,7 @@ def test_http_stream_true_returns_event_stream_and_reconstructs_answer() -> None
         status, content_type, sse = _post(url, {**payload, "stream": True}, token)
     finally:
         server.shutdown()
+        server.server_close()
 
     assert "application/json" in ref_ct
     assert status == 200
@@ -365,6 +367,7 @@ def test_http_stream_include_usage_preserves_provider_usage() -> None:
         status, content_type, sse = _post(url, payload, token)
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 200
     assert content_type.startswith("text/event-stream")
@@ -388,6 +391,7 @@ def test_http_stream_false_is_unchanged_json() -> None:
         status, content_type, body = _post(url, {"model": "mock-generalist", "messages": [{"role": "user", "content": "hi"}], "stream": False}, token)
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert "application/json" in content_type
     payload = json.loads(body)
@@ -402,6 +406,7 @@ def test_http_stream_non_boolean_is_rejected() -> None:
         status, _, body = _post(url, {"model": "mock-generalist", "messages": [{"role": "user", "content": "hi"}], "stream": "yes"}, token)
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 400
     assert json.loads(body)["error"]["code"] == "invalid_request"
 

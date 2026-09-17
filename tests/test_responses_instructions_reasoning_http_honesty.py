@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -63,6 +64,7 @@ def test_http_responses_accepts_nonempty_instructions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_blank_instructions_as_omit() -> None:
@@ -81,6 +83,7 @@ def test_http_responses_accepts_blank_instructions_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_instructions_non_string() -> None:
@@ -99,6 +102,7 @@ def test_http_responses_rejects_instructions_non_string() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_instructions_too_long() -> None:
@@ -118,6 +122,7 @@ def test_http_responses_rejects_instructions_too_long() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_reasoning_effort_known_levels() -> None:
@@ -137,6 +142,7 @@ def test_http_responses_accepts_reasoning_effort_known_levels() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_still_rejects_unknown_reasoning_effort() -> None:
@@ -155,6 +161,7 @@ def test_http_responses_still_rejects_unknown_reasoning_effort() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_instructions_omitted() -> None:
@@ -171,6 +178,7 @@ def test_http_responses_accepts_instructions_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

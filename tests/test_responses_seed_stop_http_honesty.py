@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -59,6 +60,7 @@ def test_http_responses_accepts_valid_seed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_non_integer_seed() -> None:
@@ -73,6 +75,7 @@ def test_http_responses_rejects_non_integer_seed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_boolean_seed() -> None:
@@ -87,6 +90,7 @@ def test_http_responses_rejects_boolean_seed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_stop_string_and_array() -> None:
@@ -109,6 +113,7 @@ def test_http_responses_accepts_stop_string_and_array() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_empty_stop_string_as_omit() -> None:
@@ -123,6 +128,7 @@ def test_http_responses_accepts_empty_stop_string_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_stop_array_too_long() -> None:
@@ -141,6 +147,7 @@ def test_http_responses_rejects_stop_array_too_long() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_non_string_stop_item() -> None:
@@ -155,6 +162,7 @@ def test_http_responses_rejects_non_string_stop_item() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

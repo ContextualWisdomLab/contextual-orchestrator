@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -70,6 +71,7 @@ def test_http_chat_accepts_null_and_empty_functions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_nonempty_functions() -> None:
@@ -89,6 +91,7 @@ def test_http_chat_still_rejects_nonempty_functions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_null_max_tool_calls_and_functions() -> None:
@@ -108,6 +111,7 @@ def test_http_responses_accepts_null_max_tool_calls_and_functions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_still_rejects_max_tool_calls() -> None:
@@ -127,3 +131,4 @@ def test_http_responses_still_rejects_max_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

@@ -39,7 +39,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _post_raw(port: int, path: str, payload: dict) -> tuple[int, str, str]:
@@ -61,7 +62,8 @@ def _post_raw(port: int, path: str, payload: dict) -> tuple[int, str, str]:
                 response.read().decode("utf-8"),
             )
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
+        with exc:
+            return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
 
 
 def _server():
@@ -100,6 +102,7 @@ def test_http_chat_accepts_stream_options_null_flags_without_stream() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_stream_options_null_flags_without_stream() -> None:
@@ -122,6 +125,7 @@ def test_http_completions_accepts_stream_options_null_flags_without_stream() -> 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_stream_options_null_flags() -> None:
@@ -143,6 +147,7 @@ def test_http_responses_accepts_stream_options_null_flags() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_include_usage_true() -> None:
@@ -171,6 +176,7 @@ def test_http_chat_accepts_include_usage_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_tools_streams_include_reported_usage() -> None:
@@ -220,6 +226,7 @@ def test_http_chat_tools_streams_include_reported_usage() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 class _NoUsageToolProvider:
@@ -355,6 +362,7 @@ def test_http_chat_tools_streams_unavailable_usage_when_provider_omits_it() -> N
         finally:
             server.shutdown()
             thread.join(timeout=5)
+            server.server_close()
 
 
 def test_http_chat_tools_do_not_reconstruct_tool_schema_usage() -> None:
@@ -410,6 +418,7 @@ def test_http_chat_tools_do_not_reconstruct_tool_schema_usage() -> None:
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
+                server.server_close()
 
     small_tools = [
         {
@@ -467,6 +476,7 @@ def test_http_chat_response_format_only_streams_omit_unmeasured_usage() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_non_boolean_non_null_flag() -> None:
@@ -487,6 +497,7 @@ def test_http_chat_rejects_non_boolean_non_null_flag() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

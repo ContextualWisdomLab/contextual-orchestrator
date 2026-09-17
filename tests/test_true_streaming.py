@@ -810,6 +810,7 @@ def test_http_route_stream_carries_shared_context_budget_evidence_on_terminal_fr
                 body = response.read().decode("utf-8")
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     # remaining = 20 - 9 = 11; ceiling = min(50, 11) = 11 -- sent to the provider.
@@ -878,6 +879,7 @@ def test_http_route_stream_shared_context_budget_error_before_any_provider_bytes
                 body = response.read().decode("utf-8")
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     # No provider bytes: the decision fires before ModelClient ever opens the
@@ -1018,6 +1020,7 @@ def test_http_route_stream_terminal_frame_survives_realtime_judge_second_call(
                 body = response.read().decode("utf-8")
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     # remaining = 20 - 9 = 11; ceiling = min(50, 11) = 11 -- the SERVED

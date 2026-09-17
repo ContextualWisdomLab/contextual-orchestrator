@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -65,6 +66,7 @@ def test_http_chat_accepts_user_message_name() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_system_and_assistant_names() -> None:
@@ -86,6 +88,7 @@ def test_http_chat_accepts_system_and_assistant_names() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_empty_message_name_as_omit() -> None:
@@ -103,6 +106,7 @@ def test_http_chat_accepts_empty_message_name_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_message_name_too_long() -> None:
@@ -121,6 +125,7 @@ def test_http_chat_rejects_message_name_too_long() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_message_name_bad_charset() -> None:
@@ -140,6 +145,7 @@ def test_http_chat_rejects_message_name_bad_charset() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_name_on_tool_message() -> None:
@@ -167,6 +173,7 @@ def test_http_chat_rejects_name_on_tool_message() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_name_with_underscore_hyphen() -> None:
@@ -185,6 +192,7 @@ def test_http_chat_accepts_name_with_underscore_hyphen() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

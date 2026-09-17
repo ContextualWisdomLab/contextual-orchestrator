@@ -1,5 +1,20 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-13 Test-owned listener and HTTPError resource warnings
+
+`python -m pytest tests -q -W default` at `012beaac` emitted 2013 warnings,
+1221 of them unclosed listening sockets from test `_server()` helpers that call
+`shutdown()`/`join()` but never `server_close()`, plus `HTTPError` bodies read
+without closing. Production `server.py` already calls `server_close()` after
+`serve_forever()`, so this is test hygiene, not a runtime defect. Candidate
+`80dedd08` applies an exact-pattern transformation to the 215 test files that
+no open PR touches (1055 `server_close()` sites, 210 `with exc:` wraps): the
+same command reports 475 warnings with an identical pass/fail set. Remaining
+sockets (155) sit in files owned by open PRs #1152/#1140/#1159/#1155/#1149;
+unowned sqlite3 handles in `tests/test_cost_ledger.py` and six one-off
+`HTTPError` handlers are tracked in #1168 (review 2026-09-20). Aggregate
+warning counts are a hygiene KPI, not a latency or accuracy measurement.
+
 ## 2026-09-13 Served requests had no correlatable identity (#1016, partial)
 
 Gap table for #1016 at `012beaac`: request identity reached error payloads
@@ -1175,7 +1190,9 @@ with rustdoc 1.97.1 passed one synthetic unit example: original and transformed
 inner products both equal 3.5 while unaligned coordinate RMSE equals 1.0.
 This demonstrates the identification pitfall, not estimator accuracy or a
 latency improvement. It is a manual documentation check, not yet a hosted
-CI gate or a test of the released fast-mlsirm implementation.## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
+CI gate or a test of the released fast-mlsirm implementation.
+
+## 2026-09-12 timeout owner reconciliation and unknown-outcome safety
 
 PR #1053's valid default-null timeout and administrator-policy delta was 169
 commits behind protected `main@012beaacd0631f8cd3391c77744eeb626269b5de`

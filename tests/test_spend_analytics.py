@@ -81,6 +81,7 @@ def test_http_spend_endpoint_preserves_unavailable_status() -> None:
             status, body = response.status, json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["measurement_status"] == "unavailable"
     assert body["totals"]["prompt_tokens"] is None
