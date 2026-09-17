@@ -105,6 +105,244 @@ def test_select_capability_agent_skips_disabled_and_excluded_agents() -> None:
         raise AssertionError("an unavailable capability must fail closed")
 
 
+def test_embedding_capability_skips_circuit_open_endpoint_until_half_open_probe() -> None:
+    """Repeated endpoint failures quarantine one member without losing recovery."""
+    first = ModelAgent("first_embedding", "embed-v1", tags=("embedding",))
+    second = ModelAgent("second_embedding", "embed-v2", tags=("embedding",))
+    orchestrator = TaskOrchestrator([first, second])
+
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure(first.id)
+
+    assert [agent.id for agent in orchestrator._capability_agents("embedding")] == [
+        second.id
+    ]
+
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure(second.id)
+
+    try:
+        orchestrator._capability_agents("embedding")
+    except RuntimeError as exc:
+        assert str(exc) == "all enabled agents temporarily unavailable for capability=embedding"
+    else:
+        raise AssertionError("open embedding circuits must remain quarantined until cooldown")
+
+
+def test_embedding_request_too_large_does_not_quarantine_endpoint() -> None:
+    """A caller-specific 413 remains observable without penalizing endpoint health."""
+    agent = ModelAgent("embedding_agent", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([agent])
+
+    for _ in range(orchestrator.circuit_failure_threshold + 1):
+        orchestrator._record_embedding_failure(
+            agent,
+            "/v1/embeddings",
+            urllib.error.HTTPError("https://provider.invalid", 413, "too large", {}, None),
+        )
+
+    assert orchestrator._circuit_open(agent.id) is False
+    failures = [
+        event
+        for event in orchestrator._analytics_events
+        if event["event_name"] == "embedding_endpoint_failed"
+    ]
+    assert all(event["event_detail"]["provider_status"] == 413 for event in failures)
+
+
+def test_explicit_embedding_model_returns_503_while_all_circuits_are_open() -> None:
+    agent = ModelAgent("embedding_agent", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([agent])
+    for _ in range(orchestrator.circuit_failure_threshold):
+        orchestrator._record_failure(agent.id)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=CostRoutingCoordinator(orchestrator),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for path in ("/v1/embeddings", "/v1/batch/embeddings"):
+            status, body = _post(
+                server.server_address[1],
+                path,
+                {"model": agent.model, "input": "invoice search chunk"},
+            )
+            assert status == 503, body
+            assert body["error"]["code"] == "embeddings_unavailable"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() -> None:
+    """Stop selecting one repeatedly rejected endpoint and retain safe diagnostics.
+
+    The `/v1/embeddings` failover order is now cost-ordered (see
+    `CostRoutingCoordinator._cost_ordered_capability_candidates`): a single
+    recorded failure already drops the failing member's measured health
+    below the healthy threshold, demoting it behind every still-healthy
+    candidate on the very next request -- a strictly faster, price-aware
+    replacement for the older fixed `circuit_failure_threshold`-strikes
+    breaker this test originally pinned. The endpoint is still quarantined
+    (never selected again once a healthy alternative exists) and the
+    recorded failure evidence stays exception-message-free either way.
+    """
+    first = ModelAgent(
+        "rejected_embedding", "embed-v1", tags=("embedding",), priority=1
+    )
+    second = ModelAgent("healthy_embedding", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([first, second])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    attempted: list[str] = []
+
+    def complete_embeddings_batch(_inputs, *, agent_id, **_kwargs):
+        attempted.append(agent_id)
+        if agent_id == first.id:
+            raise urllib.error.HTTPError(
+                "https://provider.invalid/embeddings", 400, "Bad Request", {}, None
+            )
+        return {
+            "status": "completed",
+            "embeddings": [{"index": 0, "embedding": [0.25]}],
+            "total_tokens": 1,
+        }
+
+    coordinator.complete_embeddings_batch = complete_embeddings_batch
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for _ in range(orchestrator.circuit_failure_threshold + 1):
+            status, body = _post(
+                server.server_address[1],
+                "/v1/embeddings",
+                {"model": "embed-v1", "input": "invoice search chunk"},
+            )
+            assert status == 200, body
+
+        # The first request attempts the rejected member once (demoting it),
+        # then falls back to the healthy member; every later request in this
+        # loop selects only the now-healthier member and never retries the
+        # quarantined one.
+        assert attempted == [first.id] + [second.id] * (orchestrator.circuit_failure_threshold + 1)
+        failures = [
+            event
+            for event in orchestrator._analytics_events
+            if event["event_name"] == "embedding_endpoint_failed"
+        ]
+        assert len(failures) == 1
+        assert all(event["event_detail"]["provider_status"] == 400 for event in failures)
+        assert all("provider.invalid" not in json.dumps(event) for event in failures)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_quarantines_repeated_incomplete_document_with_failure_evidence() -> None:
+    """A non-completed/embedding-less sync result must quarantine too.
+
+    Only a *raised* member exception previously reached
+    ``orchestrator._record_embedding_failure``; a synchronous document that
+    comes back without raising (``status`` not ``completed``, or
+    ``embeddings`` is ``None``) bypassed it, so the circuit breaker never
+    opened and no ``embedding_endpoint_failed`` analytics event was ever
+    recorded for that failure mode -- a repeatedly incomplete member would
+    be retried forever. Mirrors
+    ``test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence``
+    but fails the first member by returning an incomplete document instead
+    of raising.
+    """
+    first = ModelAgent(
+        "incomplete_embedding", "embed-v1", tags=("embedding",), priority=1
+    )
+    second = ModelAgent("healthy_embedding", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([first, second])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    attempted: list[str] = []
+
+    def complete_embeddings_batch(_inputs, *, agent_id, **_kwargs):
+        attempted.append(agent_id)
+        if agent_id == first.id:
+            return {"status": "failed", "embeddings": None}
+        return {
+            "status": "completed",
+            "embeddings": [{"index": 0, "embedding": [0.25]}],
+            "total_tokens": 1,
+        }
+
+    coordinator.complete_embeddings_batch = complete_embeddings_batch
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for _ in range(orchestrator.circuit_failure_threshold + 1):
+            status, body = _post(
+                server.server_address[1],
+                "/v1/embeddings",
+                {"model": "embed-v1", "input": "invoice search chunk"},
+            )
+            assert status == 200, body
+
+        # Same demotion contract as the raised-exception case: one recorded
+        # failure already drops the failing member behind the healthy one.
+        assert attempted == [first.id] + [second.id] * (orchestrator.circuit_failure_threshold + 1)
+        failures = [
+            event
+            for event in orchestrator._analytics_events
+            if event["event_name"] == "embedding_endpoint_failed"
+        ]
+        assert len(failures) == 1
+        assert failures[0]["event_detail"]["agent_id"] == first.id
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_batch_embedding_submission_success_clears_prior_endpoint_failures() -> None:
+    """An accepted asynchronous job proves the endpoint is responsive."""
+    agent = ModelAgent("embedding_agent", "embed-v1", tags=("embedding",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator._record_failure(agent.id)
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator.complete_embeddings_batch = lambda *_args, **_kwargs: {
+        "status": "validating",
+        "batch_id": "batch_accepted",
+        "backend": "remote",
+    }
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            "/v1/batch/embeddings",
+            {"model": "embed-v1", "input": "invoice search chunk"},
+        )
+        assert status == 202, body
+        assert agent.id not in orchestrator._circuit
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_embeddings_rejects_model_outside_agent_pool() -> None:
     server, thread, port = _server()
     try:

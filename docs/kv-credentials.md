@@ -390,3 +390,4 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
+
