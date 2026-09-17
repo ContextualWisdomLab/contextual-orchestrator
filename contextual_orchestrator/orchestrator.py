@@ -2047,14 +2047,31 @@ def _is_ambiguous_passthrough_transport_failure(exc: BaseException) -> bool:
     """Recognize a transport failure whose provider outcome is unknown.
 
     A read or connect timeout, a reset or truncated connection, or a URL-level
-    failure that carries no HTTP status may follow provider acceptance, so a
-    passthrough request must fail closed on it and never be replayed on
-    another candidate (``test_ambiguous_timeout_is_not_replayed``). It is
-    still a failure *of this candidate*: the breaker must learn it and the
+    failure that carries no HTTP status may follow provider acceptance. It is
+    always a failure *of this candidate*: the breaker must learn it and the
     caller must receive a non-retryable ``502 provider_outcome_unknown`` -- not
     the bare exception, which the HTTP handler could only answer with
     ``500 internal_error`` (Strix run 33993155419: 83 such responses, ~90 s
     apart, the same never-recorded first-ranked route every time; #1045).
+
+    Whether the *request* may then move on to another candidate depends on
+    who chose this one:
+
+    * An explicit concrete model was named by the caller, so there is no
+      other candidate it is safe to substitute -- the request fails closed
+      on this single attempt and is never replayed
+      (``test_ambiguous_timeout_on_explicit_model_is_not_replayed``).
+    * A virtual selector (``None``/``GATEWAY_DEFAULT_MODEL``/``AUTO_MODEL``/
+      ``FREE_MODEL``) means the caller delegated candidate selection to the
+      gateway, so the gateway also owns failover across this ambiguous
+      attempt -- consistent with ``_orchestrated_provider_completion``,
+      whose docstring already states that virtual selectors advance across
+      retryable transport failures (502/429/timeout). Fixed by #1166 (Strix
+      run 34754423834 attempt 2): three ready free-pool candidates went
+      uncalled after one candidate's read timeout, even though the caller
+      (a virtual ``orchestrator/free`` request) never pinned a single
+      provider.
+
     A URLError around a DNS failure is not ambiguous (nothing was sent) and
     keeps its existing handling.
     """
@@ -5981,11 +5998,32 @@ class TaskOrchestrator:
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     if not _is_passthrough_failover_error(exc):
                         if _is_ambiguous_passthrough_transport_failure(exc):
-                            # The transport cannot prove whether the provider accepted
-                            # the request. Record the unhealthy route, but never replay.
+                            # This candidate's own outcome is unknown (the timeout
+                            # or reset may follow provider acceptance), so it is
+                            # always recorded as a failure -- the breaker learns
+                            # it either way. What differs is whether the *request*
+                            # may move on:
+                            #
+                            # * Virtual selector: the caller delegated candidate
+                            #   selection to the gateway, so the gateway owns
+                            #   failover the same way
+                            #   ``_orchestrated_provider_completion`` advances a
+                            #   virtual selector across retryable transport
+                            #   failures (502/429/timeout) -- continue to the
+                            #   next ranked candidate instead of failing the
+                            #   whole request on one ambiguous attempt when other
+                            #   ready candidates exist (Strix run 34754423834
+                            #   attempt 2, PR #1166).
+                            # * Explicit concrete model: never reaches this
+                            #   multi-candidate loop; kept as defense in depth
+                            #   with the typed ``provider_outcome_unknown``.
                             self._record_failure(candidate.id)
                             if candidate.group_name:
                                 self._group_router.observe_failure(candidate.id)
+                            if virtual_selector:
+                                last_failure = (exc, candidate)
+                                every_failure_was_request_too_large = False
+                                continue
                             raise ProviderUpstreamError(
                                 agent_id=candidate.id,
                                 model=candidate.model,

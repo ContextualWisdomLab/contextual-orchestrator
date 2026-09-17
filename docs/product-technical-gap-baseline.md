@@ -37,6 +37,34 @@ model checks do not establish observed accuracy or decision latency. The
 records the read scope and failed PDF rendering; no estimator or production
 policy is changed. Owner implementation and observed evaluation remain open.
 
+## 2026-09-13 Virtual-selector ambiguous-timeout failover (#1166, #1045)
+
+Noema review's org CI calls `POST /v1/chat/completions` with the virtual
+model `orchestrator/free`. Sidecar log evidence from run 34754423834 attempt
+2 (PR #1166) showed one `provider_attempt_failed ... TimeoutError` on
+`nvidia_nim_deepseek_ai_deepseek_v4_pro_0813`, followed by
+`circuit_failure` and `request_failed status=502` -- while three other
+free-pool candidates admitted by the same preflight were never called. The
+`_is_ambiguous_passthrough_transport_failure` fail-closed rule introduced for
+#1045 correctly classifies a timeout's outcome as unknown for *the candidate
+it happened to*, but `TaskOrchestrator.proxy_completion`'s passthrough
+candidate loop applied that same fail-closed decision to the whole *request*
+even when the request used a virtual selector with other ready, ranked
+candidates still available -- contradicting
+`_orchestrated_provider_completion`'s documented behavior that virtual
+selectors advance across retryable transport failures (502/429/timeout).
+
+The restack onto current `main` reuses the method's existing
+`virtual_selector` flag through the candidate loop's ambiguous-transport
+branch: the failing candidate is always recorded as a breaker observation,
+but a virtual selector now `continue`s to the next ranked candidate instead
+of raising immediately. An explicit concrete model keeps its single-shot,
+fail-closed `502 provider_outcome_unknown` path. Exhausting every candidate
+under a virtual selector still raises via `classify_provider_failure`.
+`tests/test_passthrough_provider_failover.py` covers explicit-model,
+`None`/`AUTO_MODEL`, `FREE_MODEL`, and all-candidates-exhausted cases.
+
+
 ## 2026-09-17 context-window candidate filter + overflow failover (#1178/#1174)
 
 `ModelAgent.context_window` is discovered and persisted but was not consulted

@@ -1457,8 +1457,8 @@ def test_only_temporary_dns_failures_advance(
 
 
 @pytest.mark.parametrize("error_type", [TimeoutError, ConnectionError])
-def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
-    """Unknown transport outcomes remain terminal and expose no raw diagnostics."""
+def test_ambiguous_timeout_on_explicit_model_is_not_replayed(error_type) -> None:
+    """An explicit concrete model still fails closed after exactly one call."""
     failure = error_type("provider outcome unknown token=private_test_value")
     client = SequencedProxyClient(
         {
@@ -1470,7 +1470,10 @@ def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
 
     with pytest.raises(ProviderUpstreamError) as raised:
         orchestrator.proxy_completion(
-            {"messages": [{"role": "user", "content": "x"}]}
+            {
+                "model": "primary-model",
+                "messages": [{"role": "user", "content": "x"}],
+            }
         )
 
     assert raised.value.error_code == "provider_outcome_unknown"
@@ -1481,6 +1484,109 @@ def test_ambiguous_timeout_is_not_replayed(error_type) -> None:
     assert "private_test_value" not in str(raised.value)
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
     assert "primary_agent" in orchestrator._circuit
+
+
+@pytest.mark.parametrize(
+    "model",
+    [None, TaskOrchestrator.AUTO_MODEL],
+    ids=["default_model", "auto_model"],
+)
+def test_ambiguous_timeout_on_virtual_selector_advances_to_next_candidate(
+    model: str | None,
+) -> None:
+    """A virtual selector may advance past one candidate's ambiguous timeout."""
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    body: dict[str, Any] = {"messages": [{"role": "user", "content": "x"}]}
+    if model is not None:
+        body["model"] = model
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    assert "primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_free_model_advances_to_next_free_candidate() -> None:
+    """``FREE_MODEL`` advances past an ambiguous timeout with admitted free candidates."""
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "free_primary_agent": failure,
+            "free_fallback_agent": {"model": "free-fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary_agent",
+                "free-primary-model",
+                priority=10,
+                provider_name="free_primary",
+                tags=("cost:free",),
+            ),
+            ModelAgent(
+                "free_fallback_agent",
+                "free-fallback-model",
+                priority=1,
+                provider_name="free_fallback",
+                tags=("cost:free",),
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "x"}],
+        }
+    )
+
+    assert result["model"] == "free-fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "free_primary_agent",
+        "free_fallback_agent",
+    ]
+    assert "free_primary_agent" in orchestrator._circuit
+
+
+def test_ambiguous_timeout_on_virtual_selector_exhausts_to_classified_502() -> None:
+    """When every virtual-selector candidate times out, the request still fails classified 502."""
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": TimeoutError("provider outcome unknown"),
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+
+    assert caught.value.client_status == 502
+    assert caught.value.error_code == "provider_connection_error"
+    assert caught.value.retryable is True
+    assert caught.value.transport == "passthrough"
+    assert caught.value.agent_id == "fallback_agent"
+    assert caught.value.__cause__ is None
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    assert "primary_agent" in orchestrator._circuit
+    assert "fallback_agent" in orchestrator._circuit
 
 
 @pytest.mark.parametrize("wrapper_type", [RuntimeError, TimeoutError])
@@ -1514,7 +1620,7 @@ def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send
 
     def raw_send(agent, *args, **kwargs):
         sent.append(agent.id)
-        if after_send:
+        if after_send and agent.id == "primary_agent":
             raise TimeoutError("response not received after transport invocation")
         return {"model": agent.model, "choices": []}
 
@@ -1522,11 +1628,12 @@ def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send
     slot = nullcontext() if after_send else _local_provider_slot(router.agents[0], 1, None)
     with slot:
         if after_send:
-            with pytest.raises(ProviderUpstreamError) as raised:
-                router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
-            assert raised.value.error_code == "provider_outcome_unknown"
-            assert raised.value.retryable is False
-            assert sent == ["primary_agent"]
+            # Virtual selector owns failover across an ambiguous post-send
+            # timeout (#1166/#1176); the failed candidate is still recorded.
+            result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+            assert result["model"] == "fallback-model"
+            assert sent == ["primary_agent", "fallback_agent"]
+            assert "primary_agent" in router._circuit
         else:
             result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
             assert result["model"] == "fallback-model"
@@ -1832,7 +1939,7 @@ def _wrapped_url_error(cause: OSError) -> urllib.error.URLError:
     ids=["read-timeout", "reset", "incomplete-read", "remote-disconnected", "connect-timeout"],
 )
 def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseException) -> None:
-    """Every ambiguous transport failure fails closed the same way: classified, recorded, not replayed."""
+    """Explicit-model ambiguous failures fail closed: classified, recorded, not replayed."""
     client = SequencedProxyClient(
         {
             "primary_agent": failure,
@@ -1844,7 +1951,7 @@ def test_ambiguous_transport_failure_is_classified_and_recorded(failure: BaseExc
     with pytest.raises(ProviderUpstreamError) as caught:
         orchestrator.proxy_completion(
             {
-                "model": "contextual-orchestrator",
+                "model": "primary-model",
                 "messages": [{"role": "user", "content": "use the tool"}],
                 "tools": [{"type": "function", "function": {"name": "inspect"}}],
             }
@@ -1881,11 +1988,14 @@ def test_ambiguous_transport_failure_is_observed_by_the_group_router() -> None:
         replace(agent, group_name="provider-group") for agent in orchestrator.agents
     ]
 
-    with pytest.raises(ProviderUpstreamError):
-        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+    result = orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
+    assert result["model"] == "fallback-model"
     assert orchestrator._group_router.member_observation_count("primary_agent") == 1
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
 
 
 def test_ambiguous_transport_predicate_stops_at_the_chain_limit() -> None:
