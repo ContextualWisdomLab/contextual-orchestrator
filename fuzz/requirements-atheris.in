@@ -1,4 +1,6 @@
-# Atheris coverage-guided job deps. Compile: uv pip compile fuzz/requirements-atheris.in --constraint requirements.lock --generate-hashes --python-version 3.12 --universal --no-strip-markers -o fuzz/requirements-atheris.txt
+# Atheris coverage-guided job deps. Compile: uv pip compile fuzz/requirements-atheris.in --constraint requirements.lock --generate-hashes --python-version 3.10 --universal --no-strip-markers -o fuzz/requirements-atheris.txt
+# Resolve from the project's minimum Python version so the generated marker
+# retains its lower bound; the native fuzz job still runs on Python 3.12.
 # Atheris 3.1.0 is pinned to the repository's CPython 3.12 fuzz runner. Other
 # interpreters must skip this optional native fuzz dependency until a compatible
 # wheel is available.
