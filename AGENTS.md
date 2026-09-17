@@ -17,6 +17,10 @@ agent (Claude, Codex, Cursor, opencode, …). Keep this file tool-agnostic.
 
 ## Autonomous research handoff
 
+For LaRT count preprocessing, read the [upstream handoff](docs/doctoring/lart_measurement_review.md#upstream-patch-handoff).
+Preserve versioned encoded counts; do not copy an estimator or subtract a
+heuristic offset in CO. Dataframe loading is not estimator or KPI evidence.
+
 - Decision receipts are explicit opt-in at the supported server entrypoint.
   Keep the default off, reuse builder validation, and retain incomplete-export
   markers. Reproduction and ownership audit: [entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12).

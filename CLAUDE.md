@@ -16,6 +16,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read AGENTS.md first
 
+LaRT count-encoding work is owned by the [upstream patch and handoff](docs/doctoring/lart_measurement_review.md#upstream-patch-handoff).
+Reuse its commands and distinguish scalar contract checks, real dataframe
+loading and unverified estimator integration; do not reapply a pseudocount.
+
 Decision receipt startup remains explicit opt-in; reuse builder validation and
 do not infer complete KPI coverage from the bounded export. See the
 [entrypoint runbook](docs/doctoring/decision_receipt_integration.md#supported-entrypoint-repair-2026-09-12)
