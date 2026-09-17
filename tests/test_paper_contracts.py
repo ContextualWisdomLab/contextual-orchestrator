@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -8,6 +10,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def test_explicit_arxiv_references_have_inventory_entries() -> None:
+    """Keep tracked-text paper discovery complete without claiming paper review."""
+    reference_pattern = re.compile(
+        r"(?:arxiv\.org/(?:abs|pdf|html)/|arxiv[:.])(\d{4}\.\d{4,5})(?:v\d+)?\b",
+        re.IGNORECASE,
+    )
+    for citation_text in (
+        "https://arxiv.org/abs/2601.17814",
+        "https://arxiv.org/pdf/2601.17814v1.pdf",
+        "https://arxiv.org/html/2601.17814v1",
+        "arXiv:2601.17814v2",
+    ):
+        assert reference_pattern.findall(citation_text) == ["2601.17814"]
+    tracked_paths = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT_DIR, text=True
+    ).split("\0")
+    inventory = (ROOT_DIR / "docs/papers/README.md").read_text(encoding="utf-8")
+    inventoried_ids = set(re.findall(r"\b(\d{4}\.\d{4,5})(?:v\d+)?\b", inventory, re.I))
+    missing_references = {}
+    for relative_path in tracked_paths:
+        source_path = ROOT_DIR / relative_path
+        if source_path.suffix not in {".py", ".rs", ".md", ".toml"}:
+            continue
+        references = set(reference_pattern.findall(source_path.read_text(encoding="utf-8")))
+        if missing_ids := references - inventoried_ids:
+            missing_references[relative_path] = sorted(missing_ids)
+    assert not missing_references, missing_references
+
+
+def test_explicit_doi_links_have_inventory_entries() -> None:
+    """Index DOI-only citations too; discovery does not establish source review."""
+    reference_pattern = re.compile(r"https?://(?:dx\.)?doi\.org/([^\s<>\"`)]+)", re.I)
+    inventory = (ROOT_DIR / "docs/papers/README.md").read_text(encoding="utf-8")
+    inventoried_ids = {value.rstrip(".,;").lower() for value in reference_pattern.findall(inventory)}
+    tracked_paths = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT_DIR, text=True
+    ).split("\0")
+    missing_references = {}
+    for relative_path in tracked_paths:
+        source_path = ROOT_DIR / relative_path
+        if source_path.suffix not in {".py", ".rs", ".md", ".toml"}:
+            continue
+        references = {
+            value.rstrip(".,;").lower()
+            for value in reference_pattern.findall(source_path.read_text(encoding="utf-8"))
+        }
+        if missing_ids := references - inventoried_ids:
+            missing_references[relative_path] = sorted(missing_ids)
+    assert not missing_references, missing_references
 
 
 class RecordingClient:

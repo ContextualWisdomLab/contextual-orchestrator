@@ -218,6 +218,15 @@ class BatchJob:
     # Prompt-token fallback estimates are safe metadata, stored atomically with
     # the job handle rather than retaining submitted prompt text.
     prompt_token_estimates: Dict[str, int] = field(default_factory=dict)
+    # Finalized before the registry snapshot is written; the append-only event
+    # supplies the durable request association independently of that registry.
+    request_link_status: str = "unavailable"
+    recovery_status: str = "unavailable"
+    # Deliberately not a dataclass field: HSET may succeed before expiry fails,
+    # so an operation result must never be serialized into its own snapshot.
+    registry_persistence_status = "unavailable"
+    backend_registry_persistence_status = "unavailable"
+    recovered_request_metadata = None
 
 
 @dataclass
@@ -453,16 +462,74 @@ class PgLlmBatchBackend:
         endpoint: str = "/v1/chat/completions",
         payload_assembler: Any = None,
         job_registry: Any = None,
+        recovery_identity: str | None = None,
     ) -> None:
         self._client = client
         self._endpoint_alias = endpoint_alias
         self._endpoint = endpoint
         self._assembler = payload_assembler
+        if recovery_identity is not None and (not isinstance(recovery_identity, str) or not recovery_identity.strip()):
+            raise ValueError("recovery identity must be a nonempty operator-controlled identifier")
+        self._recovery_identity = recovery_identity
         # Tracked requests survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
         self._jobs: Dict[str, Dict[str, Any]] = (
             job_registry.mapping("pg_llm_batch_jobs") if job_registry is not None else {}
         )
+
+    @property
+    def recovery_enabled(self) -> bool:
+        """Whether the operator supplied a stable deployment/account binding."""
+        return self._recovery_identity is not None
+
+    def has_job_metadata(self, job: BatchJob) -> bool:
+        """Check whether active registry metadata supports the existing job."""
+        try:
+            document = self._jobs.get(job.job_id)
+        except Exception:
+            return False
+        return (isinstance(document, dict)
+                and document.get("endpoint_alias") == self._endpoint_alias
+                and document.get("recovery_identity") == self._recovery_identity
+                and (document.get("endpoint") == self._endpoint
+                     or ("endpoint" not in document and self._recovery_identity is None))
+                and isinstance(document.get("requests"), dict)
+                and len(document["requests"]) == job.request_count)
+
+    def recovery_descriptor(self, requests: List[BatchRequest]) -> Dict[str, Any]:
+        """Describe exact target and item metadata without submitted prompt text."""
+        from .cost_ledger import AttributionDimensions
+        return {
+            "recovery_identity": self._recovery_identity,
+            "backend_name": self.name,
+            "endpoint_alias": self._endpoint_alias,
+            "endpoint": self._endpoint,
+            "items": [{"custom_id": item.custom_id, "model": item.model,
+                       "mode": item.mode, "attribution": AttributionDimensions.from_mapping(item.attribution).as_dict()}
+                      for item in requests],
+        }
+
+    def restore_descriptor(self, job: BatchJob, descriptor: Dict[str, Any]) -> None:
+        """Restore prompt-free item identity only for this exact configured target."""
+        if (not isinstance(descriptor, dict) or descriptor.get("backend_name") != self.name
+                or self._recovery_identity is None
+                or descriptor.get("recovery_identity") != self._recovery_identity
+                or descriptor.get("endpoint_alias") != self._endpoint_alias
+                or descriptor.get("endpoint") != self._endpoint):
+            raise ValueError("batch target mismatch")
+        items = descriptor.get("items")
+        if not isinstance(items, list) or len(items) != job.request_count:
+            raise ValueError("batch item count mismatch")
+        restored = {}
+        for item in items:
+            if not isinstance(item, dict) or set(item) != {"custom_id", "model", "mode", "attribution"}:
+                raise ValueError("invalid batch item descriptor")
+            if any(not isinstance(item[field], str) or not item[field] for field in ("custom_id", "model", "mode")):
+                raise ValueError("invalid batch item identity")
+            if item["custom_id"] in restored or not isinstance(item["attribution"], dict):
+                raise ValueError("invalid batch item metadata")
+            restored[item["custom_id"]] = {**item, "messages": []}
+        job.recovered_request_metadata = restored
 
     def _assemble_payload(self, requests: List[BatchRequest]) -> str:
         if self._assembler is not None:
@@ -496,18 +563,26 @@ class PgLlmBatchBackend:
         # Tracked requests are stored as JSON primitives (not dataclass
         # instances) so the registry can be a JSON-backed Valkey mapping;
         # retrieve() rebuilds the dataclass view it needs.
-        self._jobs[batch_id] = {
-            "endpoint_alias": self._endpoint_alias,
-            "requests": {
-                request.custom_id: dataclasses.asdict(request) for request in requests
-            },
-        }
-        return BatchJob(
+        registry_status = "stored"
+        try:
+            self._jobs[batch_id] = {
+                "endpoint_alias": self._endpoint_alias,
+                "recovery_identity": self._recovery_identity,
+                "endpoint": self._endpoint,
+                "requests": {
+                    request.custom_id: dataclasses.asdict(request) for request in requests
+                },
+            }
+        except Exception:
+            registry_status = "write_failed"
+        job = BatchJob(
             job_id=batch_id,
             backend=self.name,
             status=job_payload.get("status", "validating"),
             request_count=len(requests),
         )
+        job.backend_registry_persistence_status = registry_status
+        return job
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Poll batch status via the pg-llm-batch client."""
@@ -542,7 +617,8 @@ class PgLlmBatchBackend:
                 reason,
             )
             raise BatchDownloadError(job.job_id, reason)
-        tracked = self._jobs.get(job.job_id, {}).get("requests", {})
+        tracked = (job.recovered_request_metadata if job.recovered_request_metadata is not None
+                   else self._jobs.get(job.job_id, {}).get("requests", {}))
         responses = _validated_download_responses(
             payload,
             expected_custom_ids=set(tracked),
