@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -59,6 +60,7 @@ def test_http_completions_accepts_baseline_without_chat_era_fields() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_modalities_text_as_noop() -> None:
@@ -78,6 +80,7 @@ def test_http_completions_accepts_modalities_text_as_noop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_non_text_modalities() -> None:
@@ -98,6 +101,7 @@ def test_http_completions_rejects_non_text_modalities() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_prediction() -> None:
@@ -118,6 +122,7 @@ def test_http_completions_rejects_prediction() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_reasoning_effort_known_levels() -> None:
@@ -136,6 +141,7 @@ def test_http_completions_accepts_reasoning_effort_known_levels() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_still_rejects_unknown_reasoning_effort() -> None:
@@ -156,3 +162,4 @@ def test_http_completions_still_rejects_unknown_reasoning_effort() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

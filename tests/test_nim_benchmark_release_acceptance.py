@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
-from contextlib import contextmanager
-from pathlib import Path
 import subprocess
 import sys
 import threading
 import urllib.parse
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -27,6 +29,19 @@ TASK_MANIFEST_PATH = str(REPOSITORY_ROOT / "examples" / "nim_task_manifest.json"
 EXAMPLE_PRICING_PATH = REPOSITORY_ROOT / "examples" / "nim_pricing_scenario.json"
 FAKE_ENDPOINT = "https://nim.example.test/v1"
 
+DECLARED_MAX_WORKFLOW_DEPTH = 5
+DECLARED_MAX_OUTPUT_TOKENS = 264
+DECLARED_POLICY_TOTAL_TOKEN_BUDGET = (
+    DECLARED_MAX_WORKFLOW_DEPTH * DECLARED_MAX_OUTPUT_TOKENS
+)
+DECLARED_RUN_KWARGS = {
+    "resample_count": 2000,
+    "confidence_level": 0.95,
+    "comparison_pairs": (("conduct_bounded", "route_once"),),
+    "max_output_tokens": DECLARED_MAX_OUTPUT_TOKENS,
+    "max_workflow_depth": DECLARED_MAX_WORKFLOW_DEPTH,
+}
+
 
 @pytest.fixture(autouse=True)
 def _isolated_credentials() -> None:
@@ -36,6 +51,29 @@ def _isolated_credentials() -> None:
         yield
     finally:
         set_backend(None)
+
+
+@pytest.fixture
+def current_actual_cost_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in: keep the reviewed hosted-cost evidence window valid for one test.
+
+    ``nb.ACTUAL_COST_EVIDENCE["valid_until_date"]`` is a human-reviewed fact
+    about NVIDIA's published hosted-endpoint terms, not a test fixture, and
+    ``_require_current_actual_cost_evidence`` fails closed once that literal
+    calendar date lapses. This module's two pricing-scenario contract tests
+    need to get past that unrelated evidence-currency gate to reach the
+    ``validate_live_pricing_scenario`` assertions they actually exercise, so
+    they request this fixture by name rather than relying on the literal
+    production date staying valid (see the identically-named fixture in
+    ``test_nim_benchmark.py``, which owns the same pattern for that file).
+    """
+    today = datetime.date.today()
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", today.isoformat())
+    monkeypatch.setitem(
+        nb.ACTUAL_COST_EVIDENCE,
+        "valid_until_date",
+        (today + datetime.timedelta(days=1)).isoformat(),
+    )
 
 
 def _write_json(path: Path, payload: object) -> str:
@@ -83,13 +121,19 @@ def test_package_import_does_not_eagerly_load_optional_benchmark() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_live_run_rejects_unreviewed_pricing_before_egress(tmp_path: Path) -> None:
+def test_live_run_rejects_unreviewed_pricing_before_egress(
+    tmp_path: Path,
+    current_actual_cost_evidence: None,
+) -> None:
     """Schema-demo prices can support dry runs but can never drive a live policy."""
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
     scenario = json.loads(EXAMPLE_PRICING_PATH.read_text(encoding="utf-8"))
     scenario_path = _write_json(tmp_path / "unreviewed_pricing.json", scenario)
 
-    with pytest.raises(nb.BenchmarkContractError, match="reviewed"):
+    with pytest.raises(
+        nb.BenchmarkContractError,
+        match=r"^live benchmark pricing scenario must be independently reviewed$",
+    ):
         nb.run_benchmark(
             "live",
             TASK_MANIFEST_PATH,
@@ -99,11 +143,13 @@ def test_live_run_rejects_unreviewed_pricing_before_egress(tmp_path: Path) -> No
             git_sha="a" * 40,
             workflow_run_id="123",
             transport=_unexpected_transport,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
 
 def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
     tmp_path: Path,
+    current_actual_cost_evidence: None,
 ) -> None:
     """Live hypothetical prices need complete, current, independently reviewed evidence."""
     register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
@@ -120,7 +166,8 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             git_sha="b" * 40,
             workflow_run_id="124",
             transport=_unexpected_transport,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
     expired_path = _write_json(
         tmp_path / "expired_pricing.json",
@@ -128,7 +175,7 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             reviewed_at_date="1999-01-01", valid_until_date="2000-01-01"
         ),
     )
-    with pytest.raises(nb.BenchmarkContractError, match="expired"):
+    with pytest.raises(nb.BenchmarkContractError, match=r"^reviewed pricing evidence expired$"):
         nb.run_benchmark(
             "live",
             TASK_MANIFEST_PATH,
@@ -138,7 +185,8 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
             git_sha="c" * 40,
             workflow_run_id="125",
             transport=_unexpected_transport,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
 
 def test_probe_concurrency_executes_the_complete_cartesian_plan() -> None:
@@ -202,15 +250,41 @@ def test_probe_concurrency_executes_the_complete_cartesian_plan() -> None:
 def test_complete_request_plan_rejects_invalid_counts() -> None:
     """Planning inputs are positive integers, never booleans or empty counts."""
     invalid_cases = [
-        {"discovered_model_count": 0, "max_eval_models": 7, "locked_task_count": 10},
-        {"discovered_model_count": True, "max_eval_models": 7, "locked_task_count": 10},
-        {"discovered_model_count": 1, "max_eval_models": 0, "locked_task_count": 10},
-        {"discovered_model_count": 1, "max_eval_models": 7, "locked_task_count": 0},
+        {
+            "discovered_model_count": 0,
+            "max_eval_models": 7,
+            "locked_task_count": 10,
+            "maximum_calls": 5,
+        },
+        {
+            "discovered_model_count": True,
+            "max_eval_models": 7,
+            "locked_task_count": 10,
+            "maximum_calls": 5,
+        },
+        {
+            "discovered_model_count": 1,
+            "max_eval_models": 0,
+            "locked_task_count": 10,
+            "maximum_calls": 5,
+        },
+        {
+            "discovered_model_count": 1,
+            "max_eval_models": 7,
+            "locked_task_count": 0,
+            "maximum_calls": 5,
+        },
     ]
 
     for case in invalid_cases:
         with pytest.raises(nb.BenchmarkContractError, match="positive integer"):
             nb.plan_complete_request_budget(**case)
+    with pytest.raises(nb.BenchmarkContractError, match="maximum_calls"):
+        nb.plan_complete_request_budget(
+            discovered_model_count=1,
+            max_eval_models=7,
+            locked_task_count=10,
+        )
 
 
 def test_complete_request_plan_covers_a_127_model_catalog() -> None:
@@ -219,6 +293,7 @@ def test_complete_request_plan_covers_a_127_model_catalog() -> None:
         discovered_model_count=127,
         max_eval_models=7,
         locked_task_count=10,
+        maximum_calls=DECLARED_MAX_WORKFLOW_DEPTH,
     )
 
     assert plan == {
@@ -232,7 +307,9 @@ def test_complete_request_plan_covers_a_127_model_catalog() -> None:
 
 def test_buyer_facing_request_plan_matches_internal_plan() -> None:
     """The stable operator view exposes the same complete-run reservation."""
-    assert nb.planned_complete_run_requests(127, 30, 7) == {
+    assert nb.planned_complete_run_requests(
+        127, 30, 7, maximum_calls=DECLARED_MAX_WORKFLOW_DEPTH
+    ) == {
         "catalog_discovery_requests": 1,
         "capability_probe_requests": 127 * 9,
         "evaluation_worker_ceiling": 7,
@@ -274,7 +351,8 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
             max_total_requests=1923,
             max_eval_models=7,
             transport=transport,
-        )
+        **DECLARED_RUN_KWARGS
+    )
 
     assert calls == [("GET", "/v1/models")]
 
@@ -319,6 +397,7 @@ def test_exact_complete_request_boundary_runs_and_records_plan(tmp_path: Path) -
         max_total_requests=24,
         max_eval_models=1,
         transport=transport,
+        **DECLARED_RUN_KWARGS
     )
 
     assert report["request_budget"]["max_total_requests"] == 24
@@ -353,16 +432,17 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
         str(tmp_path),
         max_total_requests=600,
         max_eval_models=2,
+        **DECLARED_RUN_KWARGS
     )
     evaluation = report["evaluation"]
 
     assert evaluation["evidence_status"] == "synthetic_diagnostic_only"
     assert evaluation["decision_use"] == "benchmark_smoke_only"
-    assert evaluation["minimum_paired_task_count"] == 30
-    assert evaluation["required_completion_fraction"] == 0.9
+    assert evaluation["minimum_paired_task_count"] is None
+    assert evaluation["required_completion_fraction"] is None
     assert evaluation["routing_recommendation"] is None
     assert report["provenance"]["benchmark_parameters"]["policy_total_token_budget"] == (
-        nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
+        DECLARED_POLICY_TOTAL_TOKEN_BUDGET
     )
     assert report["honesty_labels"]["actual_cost_basis"] == (
         "deterministic_dry_run_no_provider_egress"
@@ -640,6 +720,32 @@ def test_live_pricing_rejects_future_review_and_accepts_current_evidence() -> No
     )
 
 
+@pytest.mark.parametrize("guard", ("pricing", "actual_cost"))
+@pytest.mark.parametrize("explicit_day", (False, True))
+def test_evidence_dates_preserve_local_day_and_explicit_override(
+    monkeypatch: pytest.MonkeyPatch, guard: str, explicit_day: bool
+) -> None:
+    """Aware clock lookup keeps the local day, while explicit dates bypass it."""
+    local_day = nb.datetime_module.date(2040, 1, 2)
+    clock = Mock()
+    clock.now.return_value.date.return_value = nb.datetime_module.date(2040, 1, 1)
+    clock.now.return_value.astimezone.return_value.date.return_value = local_day
+    monkeypatch.setattr(nb.datetime_module, "datetime", clock)
+    dates = {"reviewed_at_date": "2040-01-02", "valid_until_date": "2040-01-02"}
+    today = local_day if explicit_day else None
+    if guard == "pricing":
+        nb.validate_live_pricing_scenario(_reviewed_pricing_scenario(**dates), today)
+    else:
+        for key, value in dates.items():
+            monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, key, value)
+        nb._require_current_actual_cost_evidence(today)
+    if explicit_day:
+        clock.now.assert_not_called()
+    else:
+        clock.now.assert_called_once_with(nb.datetime_module.timezone.utc)
+        clock.now.return_value.astimezone.assert_called_once_with()
+
+
 def test_actual_cost_evidence_validation_and_expiry_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -659,11 +765,11 @@ def test_actual_cost_evidence_validation_and_expiry_paths(
 
     wrong_source = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
     wrong_source["actual_cost_evidence"]["source_url"] = "https://example.test"
-    with pytest.raises(nb.BenchmarkContractError, match="General FAQ"):
+    with pytest.raises(nb.BenchmarkContractError, match="NVIDIA NIM access terms"):
         nb._validate_actual_cost_evidence(wrong_source)
 
     invalid_dates = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
-    invalid_dates["actual_cost_evidence"]["valid_until_date"] = "2026-09-04"
+    invalid_dates["actual_cost_evidence"]["reviewed_at_date"] = "2026-10-05"
     with pytest.raises(nb.BenchmarkContractError, match="validity precedes"):
         nb._validate_actual_cost_evidence(invalid_dates)
 
@@ -681,8 +787,8 @@ def test_actual_cost_evidence_validation_and_expiry_paths(
         )
 
 
-def test_sufficient_evidence_is_still_human_review_gated() -> None:
-    """Meeting sample thresholds changes status but never auto-selects a route."""
+def test_observed_evidence_never_auto_selects_a_route() -> None:
+    """Observed successful pairs cannot supply a validated decision design."""
     cells = []
     for task_index in range(nb.MINIMUM_PAIRED_TASK_COUNT):
         task_id = f"paired_task_{task_index}"
@@ -691,6 +797,7 @@ def test_sufficient_evidence_is_still_human_review_gated() -> None:
                 {
                     "policy_name": policy_name,
                     "task_id": task_id,
+                    "task_split": "locked",
                     "run_outcome": "success",
                 }
             )
@@ -698,8 +805,8 @@ def test_sufficient_evidence_is_still_human_review_gated() -> None:
         cells,
         nb.MINIMUM_PAIRED_TASK_COUNT,
     )
-    assert summary["evidence_status"] == "evidence_review_required"
-    assert summary["decision_use"] == "production_candidate_review"
+    assert summary["evidence_status"] == "measurement_evidence_only"
+    assert summary["decision_use"] == "measurement_evidence_only"
     assert summary["routing_recommendation"] is None
 
 
@@ -712,4 +819,5 @@ def test_live_run_requires_provenance_before_transport(tmp_path: Path) -> None:
             None,
             str(tmp_path),
             transport=_unexpected_transport,
-        )
+        **DECLARED_RUN_KWARGS
+    )

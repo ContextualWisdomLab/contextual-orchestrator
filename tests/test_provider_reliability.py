@@ -22,6 +22,10 @@ from dataclasses import replace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.credentials import (  # noqa: E402
+    InMemoryCredentialBackend,
+    set_backend,
+)
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
@@ -490,9 +494,24 @@ class _AgentDownClient(ModelClient):
 
 
 def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDownClient]:
+    """Build a scripted two-worker failover fixture without extra judge calls."""
     agents = [
-        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
-        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+        ModelAgent(
+            "primary_worker",
+            "mock",
+            base_url="mock://private-primary.example",
+            api_key_env="PRIVATE_PRIMARY_CREDENTIAL",
+            tags=("reasoning", "writing"),
+            priority=5,
+        ),
+        ModelAgent(
+            "backup_worker",
+            "mock",
+            base_url="mock://private-backup.example",
+            api_key_env="PRIVATE_BACKUP_CREDENTIAL",
+            tags=("reasoning", "writing"),
+            priority=1,
+        ),
     ]
     client = _AgentDownClient(down_id)
     orchestrator = TaskOrchestrator(agents, client=client)
@@ -503,6 +522,7 @@ def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDown
 
 
 def test_failover_to_backup_agent_when_primary_fails() -> None:
+    """Record ordered failover without claiming propensity or leaking configuration."""
     orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
     result = orchestrator.route_once([{"role": "user", "content": "route this"}])
     assert result["answer"] == "[backup_worker] answer"
@@ -510,6 +530,24 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert row["served_agent_id"] == "backup_worker"
     assert row["failover_from"] == "primary_worker"
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
+    design = row["selection_design"]
+    assert design["assignment_mechanism"] == "deterministic_ranked"
+    assert design["propensity_status"] == "not_identified"
+    assert design["selected_probability"] is None
+    assert [value.split(":", 1)[0] for value in design["candidate_deployment_ids"]] == [
+        "primary_worker",
+        "backup_worker",
+    ]
+    assert [value.split(":", 1)[0] for value in design["attempted_deployment_ids"]] == [
+        "primary_worker",
+        "backup_worker",
+    ]
+    assert design["selected_deployment_id"].startswith("backup_worker:")
+    serialized_design = json.dumps(design)
+    assert "base_url" not in serialized_design
+    assert "api_key" not in serialized_design
+    assert "private-primary.example" not in serialized_design
+    assert "PRIVATE_PRIMARY_CREDENTIAL" not in serialized_design
 
 
 def test_route_advances_on_413_and_preserves_exhausted_size_error() -> None:
@@ -875,6 +913,152 @@ def test_free_model_exhausted_pool_fails_closed_never_promotes_to_priced_agent()
 
     assert excinfo.value.client_status == 503
     assert excinfo.value.agent_id == "free_route_b"
+    assert client.calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in client.calls
+
+
+def test_unallowlisted_provider_host_is_classified_upstream_error() -> None:
+    """Live orchestrator/free 500s were raw RuntimeError from host allowlisting."""
+    client = ModelClient(allowed_provider_hosts={"ok.example"})
+    agent = ModelAgent(
+        "blocked_agent",
+        "blocked-model",
+        base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+    )
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            client._validate_provider(agent)
+    finally:
+        set_backend(None)
+    assert excinfo.value.client_status == 502
+    assert excinfo.value.retryable is False
+    assert excinfo.value.error_code == "provider_connection_error"
+    assert "allowlisted" in str(excinfo.value)
+    assert "blocked.example" not in str(excinfo.value)
+
+
+def test_passthrough_allowlist_failure_reports_passthrough_transport() -> None:
+    """Passthrough validation evidence must name the surface that invoked it."""
+    client = ModelClient(allowed_provider_hosts={"ok.example"})
+    agent = ModelAgent(
+        "blocked_agent",
+        "blocked-model",
+        base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+    )
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            client.proxy_send_once(
+                agent,
+                "chat/completions",
+                {"messages": [{"role": "user", "content": "hello"}]},
+            )
+    finally:
+        set_backend(None)
+
+    assert excinfo.value.transport == "passthrough"
+
+
+def test_free_model_advances_past_unallowlisted_provider_host() -> None:
+    """A host-allowlist miss must skip to the next free candidate, not 500."""
+    calls: list[str] = []
+    blocked = ModelAgent(
+        "free_route_a",
+        "free_route_a-model",
+        base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+        tags=("reasoning", "cost:free"),
+    )
+
+    class AllowlistThenOk(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(allowed_provider_hosts={"ok.example"})
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                self._validate_provider(blocked)
+            return f"[{agent.id}] answer"
+
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        orchestrator = _free_pool_orchestrator(
+            AllowlistThenOk(), free_ids=("free_route_a", "free_route_b")
+        )
+        orchestrator.tool_retry_attempts = 0
+        result = orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+    finally:
+        set_backend(None)
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+    assert calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in calls
+
+
+def test_free_model_exhausted_allowlist_pool_fails_closed_as_502() -> None:
+    """Every free candidate missing the host allowlist must not collapse to HTTP 500."""
+    blocked_by_id = {
+        "free_route_a": ModelAgent(
+            "free_route_a",
+            "free_route_a-model",
+            base_url="https://blocked-a.example/v1",
+            credential_key="MODEL_KEY",
+            tags=("reasoning", "cost:free"),
+        ),
+        "free_route_b": ModelAgent(
+            "free_route_b",
+            "free_route_b-model",
+            base_url="https://blocked-b.example/v1",
+            credential_key="MODEL_KEY",
+            tags=("reasoning", "cost:free"),
+        ),
+    }
+
+    class AllBlocked(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(allowed_provider_hosts={"ok.example"})
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            self.calls.append(agent.id)
+            self._validate_provider(blocked_by_id[agent.id])
+            raise AssertionError("allowlisted host was not supposed to be reached")
+
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    client = AllBlocked()
+    try:
+        orchestrator = _free_pool_orchestrator(
+            client, free_ids=("free_route_a", "free_route_b")
+        )
+        orchestrator.tool_retry_attempts = 0
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            orchestrator.route_once(
+                [{"role": "user", "content": "route this"}],
+                model_name=TaskOrchestrator.FREE_MODEL,
+            )
+    finally:
+        set_backend(None)
+
+    assert excinfo.value.client_status == 502
+    assert "all " not in str(excinfo.value)
+    assert "role=" not in str(excinfo.value)
     assert client.calls == ["free_route_a", "free_route_b"]
     assert "priced_worker" not in client.calls
 

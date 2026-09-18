@@ -296,6 +296,7 @@ def test_audit_replay_rejects_when_durable_audit_write_fails() -> None:
             assert json.loads(error.value.read().decode("utf-8"))["error"]["code"] == "authorization_audit_unavailable"
         finally:
             server.shutdown()
+            server.server_close()
             orchestrator.close()
 
 

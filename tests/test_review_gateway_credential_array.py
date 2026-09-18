@@ -40,7 +40,7 @@ def _discovered(provider: str, credential_name: str, *, is_free: bool = True) ->
     )
 
 
-def test_register_review_credentials_accepts_all_five_supplied_credentials() -> None:
+def test_register_review_credentials_accepts_all_supplied_credentials() -> None:
     """OpenAI may be registered and globally discovered; admission is separate."""
     environment = {
         "BYTEZ_API_KEY": "bytez-secret",
@@ -48,6 +48,7 @@ def test_register_review_credentials_accepts_all_five_supplied_credentials() -> 
         "NVIDIA_NIM_API_KEY_SUB": "nim-sub-secret",
         "OPENROUTER_API_KEY": "router-secret",
         "OPENAI_API_KEY": "openai-secret",
+        "EXPERIENTAL_LABS_API_KEY": "experiential-secret",
     }
     requested = list(environment)
 
@@ -78,8 +79,8 @@ def test_review_free_pool_admits_opencode_zen_key_and_excludes_openai() -> None:
     assert "OPENAI_API_KEY" in review_gateway.REVIEW_CREDENTIAL_NAMES
 
 
-def test_free_review_candidates_exclude_openai_source_even_when_globally_discovered() -> None:
-    """OPENAI_API_KEY discovery never becomes an orchestrator/free candidate."""
+def test_free_review_candidates_exclude_unverified_free_sources() -> None:
+    """Registration and zero advertised prices do not grant free admission."""
     discovered = [
         _discovered("bytez", "BYTEZ_API_KEY"),
         _discovered("nvidia_nim", "NVIDIA_NIM_API_KEY"),
@@ -87,6 +88,7 @@ def test_free_review_candidates_exclude_openai_source_even_when_globally_discove
         _discovered("openrouter", "OPENROUTER_API_KEY"),
         _discovered("opencode_zen", "OPENCODE_ZEN_API_KEY"),
         _discovered("opencode_go", "OPENCODE_ZEN_API_KEY"),
+        _discovered("experiential_labs", "EXPERIENTAL_LABS_API_KEY"),
         _discovered("openai", "OPENAI_API_KEY"),
     ]
 
@@ -94,7 +96,7 @@ def test_free_review_candidates_exclude_openai_source_even_when_globally_discove
 
     assert {model.credential_name for model in admitted} == set(
         review_gateway.REVIEW_FREE_POOL_CREDENTIAL_NAMES
-    )
+    ) - {"EXPERIENTAL_LABS_API_KEY"}
     assert {model.provider_name for model in admitted} == {
         "bytez",
         "nvidia_nim",
@@ -244,6 +246,7 @@ def test_register_review_credentials_rejects_unknown_array_entries() -> None:
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
         "OPENCODE_ZEN_API_KEY",
+        "EXPERIENTAL_LABS_API_KEY",
     ],
 )
 def test_register_review_credentials_allows_each_individual_credential_to_be_absent(
@@ -257,6 +260,7 @@ def test_register_review_credentials_allows_each_individual_credential_to_be_abs
         "OPENROUTER_API_KEY": "router-secret",
         "OPENAI_API_KEY": "openai-secret",
         "OPENCODE_ZEN_API_KEY": "zen-secret",
+        "EXPERIENTAL_LABS_API_KEY": "experiential-secret",
     }
     requested = list(environment)
     environment.pop(missing_name)

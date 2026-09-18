@@ -42,7 +42,8 @@ def _get(port: int, path: str, token: str | None = None) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server(orchestrator: TaskOrchestrator | None = None):
@@ -62,6 +63,7 @@ def test_http_models_list_requires_bearer() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_models_list_unique_enabled_pool_models() -> None:
@@ -88,6 +90,7 @@ def test_http_models_list_unique_enabled_pool_models() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_models_get_by_id() -> None:
@@ -100,6 +103,7 @@ def test_http_models_get_by_id() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_models_get_url_encoded_virtual_id() -> None:
@@ -112,6 +116,7 @@ def test_http_models_get_url_encoded_virtual_id() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_models_get_missing_is_404() -> None:
@@ -123,6 +128,7 @@ def test_http_models_get_missing_is_404() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_models_domain_helper_matches_http() -> None:
@@ -136,6 +142,7 @@ def test_http_models_domain_helper_matches_http() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

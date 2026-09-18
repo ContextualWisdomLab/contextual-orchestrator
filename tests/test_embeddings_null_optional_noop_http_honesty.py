@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -66,6 +67,7 @@ def test_http_embeddings_accepts_null_encoding_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_null_dimensions() -> None:
@@ -84,6 +86,7 @@ def test_http_embeddings_accepts_null_dimensions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_accepts_null_dimensions() -> None:
@@ -102,6 +105,7 @@ def test_http_batch_embeddings_accepts_null_dimensions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_still_rejects_nonzero_dimensions() -> None:
@@ -121,6 +125,7 @@ def test_http_embeddings_still_rejects_nonzero_dimensions() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_base64_encoding() -> None:
@@ -143,3 +148,4 @@ def test_http_embeddings_accepts_base64_encoding() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

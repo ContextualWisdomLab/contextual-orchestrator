@@ -16,7 +16,7 @@ primitives use maintained libraries when the enterprise target requires them.
 | Database | [PostgreSQL](https://www.postgresql.org/docs/current/sql-syntax-lexical.html) | Default relational store. | PostgreSQL identifiers allow letters, digits, and underscores; the project standardizes on unquoted lower snake_case. |
 | API contract | [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0.html) | Contract format for API review and client generation. | OAS defines a language-agnostic HTTP API description for humans and machines. |
 | TLS trust | [certifi](https://pypi.org/project/certifi/) | Add Mozilla's public CA bundle to the platform trust store when no operator `ca_bundle` is configured. An explicit bundle replaces both; system-only trust is insufficient where Python does not expose a complete public-root store. | `ssl.create_default_context()` preserves native enterprise roots, while `load_verify_locations(certifi.where())` adds maintained public roots without disabling verification. |
-| Rendered policy browser | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | Keep as a pinned deployment-provided optional package for the existing Camoufox MCP transport; do not claim a repository `policy-browser` extra until this project owns that lock and publish contract. | Reuses the protocol client and Streamable HTTP lifecycle instead of implementing a second transport; static policy analysis does not install it. |
+| Rendered policy browser | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | Keep as a pinned deployment-provided optional package for the existing Camoufox MCP transport; do not claim a repository `policy-browser` extra until this project owns that lock and publish contract. The transport targets the SDK 2.x API (`mcp.Client`, `streamable_http_client(url, http_client=...)`, verified against `mcp==2.2.0`); a 1.x SDK is rejected with an explicit `ImportError` that names the installed version, so a silent static-text fallback is traceable to the dependency contract. | Reuses the protocol client and Streamable HTTP lifecycle instead of implementing a second transport; static policy analysis does not install it. |
 | Structured-output validation | `jsonschema` | Use the maintained validator for provider-returned JSON against caller-supplied JSON Schema; keep parsing and the single repair policy in the existing orchestrator. | Reusing `validator_for`, schema checks, and bounded validation avoids an incomplete custom JSON Schema implementation. Provider output and schemas remain untrusted and fail closed. |
 | SSE usage capture | Python stdlib streaming parser already used by `ModelClient._stream_send` | Reuse the existing line-delimited SSE parser and capture only provider-declared usage frames; do not add an SSE or provider SDK dependency. | OpenAI's Responses and Chat Completions references define terminal usage fields, while interrupted streams may omit the final usage frame. |
 | Verbose/debug logging | Python stdlib `logging` (researched: `structlog`, `loguru`) | Use stdlib `logging` exclusively -- `logging.basicConfig(..., force=True)` for one configuration entrypoint, a `logging.Filter` on the installed handler for redaction, `%`-style lazy formatting for cost-free DEBUG below its threshold. `structlog`/`loguru` add structured/prettier output this repo's existing `print(json.dumps(...))` CLI-report convention and `_LOGGER = logging.getLogger(__name__)` precedent (3 modules) do not need yet. | Python's own `logging` HOWTO documents `basicConfig`'s one-shot-unless-`force` behavior, handler-level `Filter`s, and that `isEnabledFor` gates expensive argument construction, not just formatting -- covering every requirement (level control, lazy evaluation, a redaction hook) with zero new dependency surface. |
@@ -77,8 +77,15 @@ reasoning effort.
 | Doctoring | Sakana Fugu (2026); Xu et al. (2025) TRINITY arXiv:2512.04695; Nielsen et al. (2025) Conductor arXiv:2512.04388 | APA 7th citations in `docs/architecture.md` and `docs/papers/README.md`. PDFs are not vendored when redistribution is unclear. | Training a learned coordinator. |
 
 Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_ablation()`
-and keep route/conduct defaults unchanged until `production_default_change_allowed`
-returns true.
+for unit checks; keep route/conduct defaults unchanged. Automatic promotion
+is unavailable pending a validated, released decision contract.
+
+The default-change helper now returns false for every supplied report. Its
+former 55% declaration-only threshold is removed, not replaced by another
+constant or a blacklist of synthetic-origin labels. The retained callable does
+not validate evidence or apply a default change.
+The deterministic ablation above remains estimated; relabeling it cannot
+establish measurement validity, buyer accuracy, or protected release approval.
 
 ## Discovery output ceilings and context windows (2026-08-31)
 
@@ -162,3 +169,31 @@ browsing already ships in this repository today gated behind **Wardnet**
 "Wardnet policy-document boundary" sections of `docs/kv-credentials.md`), not
 `quarantine-sandbox-runtime`. ADR 0123 records this as an open reconciliation
 question rather than silently picking one.
+
+## Message-count provenance registry (2026-09-14, issue #1157)
+
+Issue #1157 requires provider/model-specific counting provenance instead of a
+raw-text heuristic pretending to be message accounting. The question
+researched: is there an official, citable per-message chat-framing token
+formula, and for exactly which models does its publisher say it applies?
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| OpenAI chat-framing formula | [OpenAI Cookbook: "How to count tokens with tiktoken"](https://cookbook.openai.com/examples/how_to_count_tokens_with_tiktoken) (redirects to `developers.openai.com/cookbook/...`), fetched live 2026-09-14. Its `num_tokens_from_messages` function declares `tokens_per_message = 3`, `tokens_per_name = 1`, and a `+= 3` reply-priming term for an exact `model in {...}` membership check against `gpt-3.5-turbo-0125`, `gpt-4-0314`, `gpt-4-32k-0314`, `gpt-4-0613`, `gpt-4-32k-0613`, `gpt-4o-mini-2024-07-18`, `gpt-4o-2024-08-06`; every other model name falls through to a same-function warning ("may update over time") or `NotImplementedError`, and the page itself calls the result "an estimate, not a timeless guarantee." | Added `CountingProvenance` entries in `contextual_orchestrator/token_counting.py` scoped to exactly those seven dated identifiers, each carrying `tokenizer`, `framing_source`, `framing_source_url`, `framing_read_date`, `framing_scope`, `supported_fields` (`role`/`content`/`name`, string-valued only), and `unsupported_fields` (tools, tool/function calls, non-text content parts, instructions, prior response/conversation references). `NativeExactTokenCounter.describe_messages`/`count_messages` return an exact count only inside this scope; every other model or field raises `TokenCountUnavailable` naming the field. | A per-provider "reasonable estimate" table for the hedged family aliases (bare `gpt-4o`, `gpt-4`, `gpt-3.5-turbo`, ...) the source itself says may drift — that is exactly the heuristic-framing-constant pattern operating rules 3.1/9.1 prohibit. Also skipped: any accounting for `tools`, multimodal content parts, or Responses-API prior-response/conversation references, since no verified official source for their token cost is cited yet (tracked as remaining unavailable, not estimated). |
+| Provenance shape | Existing `TokenCountUnavailable` fail-closed seam in `token_counting.py`; no new dependency | Added `describe_message_count()` as the least-invasive parallel API returning a `MessageCountResult` (`token_count`, `tokenizer`, `framing_source`, `count_source`) alongside the existing plain-`int` `count_messages()`, rather than changing `count_messages`'s return type or the `TokenCountingStrategy` protocol. | A new counting-strategy class hierarchy, or a breaking change to `count_text`/`count_messages` call sites already relying on an `int` return. |
+
+### Shared-context output budgeting (2026-09-14, issue #1157 part 2)
+
+The question researched: given an exact prompt count, how should the
+remaining shared-context capacity for output be computed and enforced
+without inventing a ratio or silently truncating a caller's request?
+Operating rule 9.1 (quoted in the issue) settles the arithmetic itself
+(`remaining after actual input + API reserve, bounded by max output`, no
+hidden shrinkage, explicit error on conflict); the research was into where
+to compute and apply that decision inside this codebase's existing seams.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Where the decision lives | The existing `_clamp_agent_token_budget`/`effective_max_output_tokens` catalog-ceiling clamp already runs once per `ModelClient.chat()` call, right before the provider HTTP request, and already has both `agent` and `messages` in scope; `TaskOrchestrator.token_counter` is a separate, already-built authoritative counter with no existing path into `ModelClient`. | Added `token_counting.shared_context_output_budget()` as a small pure function (agent/messages/requested-budget in, a `SharedContextBudget` or `None` out) called from `ModelClient.chat()` at the exact site the catalog clamp already ran; gave `ModelClient` an optional `token_counter` constructor argument so it can call the function itself, with `TaskOrchestrator` wiring its own counter into its default client. | A new orchestration-layer service/manager class for budget decisions, or moving the decision into `TaskOrchestrator` and threading the resolved value back down through every `chat()` call site as an extra parameter — both add indirection the existing single-call-site clamp does not need. |
+| Evidence threading to the HTTP response | The existing `usage`/`prompt_count_source` evidence both flow from `ModelClient`'s thread-local state (`_local.usage`, read by `take_usage()`) back out to `server.py` after `coordinator.complete()` returns, since one HTTP request runs synchronously on one thread through to its final `chat()` call. | Added `_local.shared_context_budget` + `take_shared_context_budget()` on `ModelClient`, mirroring `take_usage()` exactly, and a `server._take_shared_context_budget()` reader that mirrors `_prompt_count_source()`. | A response-object field threaded explicitly through every intermediate `route`/`conduct`/structured-output return dict — the existing thread-local pattern already solves this for `usage` and needs no new plumbing. |
+| Failure taxonomy for "cannot honor this budget" | `ProviderRequestTooLargeError` already exists (413, `request_too_large`) and is already raised for provider-reported oversized-request failures, with existing failover/retry classification (`_is_request_too_large_error`) treating it specially. | Reused `ProviderRequestTooLargeError` for the new pre-flight "explicit budget/shared-context shortfall" case, with a message naming `context_window`, `prompt_tokens`, and the requested output budget, instead of a new exception type. | A new exception class — would duplicate an existing, already-classified 413 error shape for what is semantically the same caller-facing situation (the request as given cannot be honored). |
