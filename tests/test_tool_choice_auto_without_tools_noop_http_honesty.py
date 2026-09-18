@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -64,6 +65,7 @@ def test_http_chat_accepts_tool_choice_auto_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_choice_none_without_tools() -> None:
@@ -82,6 +84,7 @@ def test_http_chat_accepts_tool_choice_none_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_tool_choice_auto_with_empty_tools() -> None:
@@ -101,6 +104,7 @@ def test_http_chat_accepts_tool_choice_auto_with_empty_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_tool_choice_auto_without_tools() -> None:
@@ -119,6 +123,46 @@ def test_http_responses_accepts_tool_choice_auto_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
+
+
+def test_noop_tool_controls_are_omitted_from_provider_request() -> None:
+    """Omit no-op tool controls instead of forwarding an invalid provider payload."""
+    orchestrator = build()
+    observed_settings: list[dict[str, object]] = []
+    original_chat = orchestrator.client.chat
+
+    def observed_chat(agent, messages, **kwargs):
+        observed_settings.append(orchestrator.client.request_settings_snapshot())
+        return original_chat(agent, messages, **kwargs)
+
+    orchestrator.client.chat = observed_chat  # type: ignore[method-assign]
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for tool_choice in ("auto", "none"):
+            status, body = _post(
+                server.server_address[1],
+                "/v1/chat/completions",
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "no tools"}],
+                    "tool_choice": tool_choice,
+                    "parallel_tool_calls": False,
+                },
+            )
+            assert status == 200, body
+        assert observed_settings
+        assert all("tools" not in settings for settings in observed_settings)
+        assert all("tool_choice" not in settings for settings in observed_settings)
+        assert all("parallel_tool_calls" not in settings for settings in observed_settings)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_tool_choice_required_without_tools() -> None:
@@ -138,3 +182,4 @@ def test_http_chat_still_rejects_tool_choice_required_without_tools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

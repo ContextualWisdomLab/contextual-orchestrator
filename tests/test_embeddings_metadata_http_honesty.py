@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -66,6 +67,7 @@ def test_http_embeddings_accepts_string_metadata() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_rejects_metadata_non_object() -> None:
@@ -84,6 +86,7 @@ def test_http_embeddings_rejects_metadata_non_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_rejects_metadata_non_string_value() -> None:
@@ -112,6 +115,7 @@ def test_http_embeddings_rejects_metadata_non_string_value() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_rejects_metadata_too_many_string_pairs() -> None:
@@ -131,3 +135,4 @@ def test_http_embeddings_rejects_metadata_too_many_string_pairs() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

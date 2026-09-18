@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -68,6 +69,7 @@ def test_http_embeddings_accepts_empty_encoding_format_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_whitespace_encoding_format_as_omit() -> None:
@@ -82,6 +84,7 @@ def test_http_embeddings_accepts_whitespace_encoding_format_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_accepts_empty_encoding_format_as_omit() -> None:
@@ -96,6 +99,7 @@ def test_http_batch_embeddings_accepts_empty_encoding_format_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_empty_tool_choice_string_as_omit() -> None:
@@ -115,6 +119,7 @@ def test_http_chat_accepts_empty_tool_choice_string_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_empty_function_call_string_as_omit() -> None:
@@ -133,6 +138,7 @@ def test_http_chat_accepts_empty_function_call_string_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_empty_response_format_string_as_omit() -> None:
@@ -151,6 +157,7 @@ def test_http_chat_accepts_empty_response_format_string_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_empty_tool_choice_string_as_omit() -> None:
@@ -165,6 +172,7 @@ def test_http_responses_accepts_empty_tool_choice_string_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_base64_ok_and_tool_choice_required_still_needs_tools() -> None:
@@ -193,6 +201,7 @@ def test_http_embeddings_base64_ok_and_tool_choice_required_still_needs_tools() 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

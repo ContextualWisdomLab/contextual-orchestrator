@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -67,6 +68,7 @@ def test_http_chat_rejects_background_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_background_true() -> None:
@@ -88,6 +90,7 @@ def test_http_responses_rejects_background_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_rejects_reasoning_object() -> None:
@@ -109,6 +112,7 @@ def test_http_completions_rejects_reasoning_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_baseline_without_background() -> None:
@@ -126,6 +130,7 @@ def test_http_chat_baseline_without_background() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_background_false() -> None:
@@ -144,6 +149,7 @@ def test_http_chat_accepts_background_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_background_false() -> None:
@@ -162,3 +168,4 @@ def test_http_responses_accepts_background_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

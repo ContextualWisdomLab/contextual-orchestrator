@@ -43,7 +43,8 @@ def post_json(url: str, payload: dict[str, object], token: str) -> tuple[int, di
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def get_json(url: str, token: str) -> tuple[int, dict[str, object]]:
@@ -56,7 +57,8 @@ def get_json(url: str, token: str) -> tuple[int, dict[str, object]]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def criteria_by_name(report: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -182,6 +184,7 @@ def test_commercial_readiness_endpoint_openapi_admin_and_docs_contract() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert chat_status == 200
     assert unauth_status == 401

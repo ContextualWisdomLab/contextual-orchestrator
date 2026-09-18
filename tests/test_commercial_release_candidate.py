@@ -92,7 +92,8 @@ def get_json(url: str, token: str) -> tuple[int, dict[str, object]]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def artifact_by_name(report: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -253,6 +254,7 @@ def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert unauth_status == 401
     assert unauth_body["error"]["code"] == "unauthorized"
@@ -280,6 +282,7 @@ def test_server_blocks_an_unsigned_release_authority_snapshot() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
     assert status == 200
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
 
@@ -305,6 +308,7 @@ def test_server_accepts_only_a_kv_signed_release_authority_snapshot() -> None:
         finally:
             server.shutdown()
             thread.join(timeout=5)
+            server.server_close()
         assert status == 200
         assert report["release_authorization"]["authorized"] is True
     finally:

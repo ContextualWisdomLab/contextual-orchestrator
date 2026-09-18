@@ -55,7 +55,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -118,6 +119,7 @@ def test_http_responses_accepts_official_text_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_unknown_text_format_type() -> None:
@@ -136,6 +138,7 @@ def test_http_responses_rejects_unknown_text_format_type() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_text_format_json_object() -> None:
@@ -155,6 +158,7 @@ def test_http_responses_accepts_text_format_json_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_omits_json_schema_null_optionals_on_text_format() -> None:
@@ -187,6 +191,7 @@ def test_http_responses_omits_json_schema_null_optionals_on_text_format() -> Non
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_text_verbosity() -> None:
@@ -205,6 +210,7 @@ def test_http_responses_accepts_text_verbosity() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_unknown_text_format_key() -> None:
@@ -223,6 +229,7 @@ def test_http_responses_rejects_unknown_text_format_key() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_text_plus_response_format() -> None:
@@ -243,6 +250,7 @@ def test_http_responses_rejects_text_plus_response_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

@@ -44,7 +44,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -76,6 +77,7 @@ def test_http_embeddings_accepts_token_id_array() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_accepts_batch_of_token_arrays() -> None:
@@ -92,6 +94,7 @@ def test_http_embeddings_accepts_batch_of_token_arrays() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_still_rejects_bool_and_negative_tokens() -> None:
@@ -108,6 +111,7 @@ def test_http_embeddings_still_rejects_bool_and_negative_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_accepts_token_arrays() -> None:
@@ -122,6 +126,7 @@ def test_http_batch_embeddings_accepts_token_arrays() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

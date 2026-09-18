@@ -47,7 +47,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -78,6 +79,7 @@ def test_http_chat_accepts_store_whole_float_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_store_whole_float_true() -> None:
@@ -99,6 +101,7 @@ def test_http_chat_rejects_store_whole_float_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_stream_whole_float_false() -> None:
@@ -118,6 +121,7 @@ def test_http_chat_accepts_stream_whole_float_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_parallel_tool_calls_whole_float_false() -> None:
@@ -137,6 +141,7 @@ def test_http_chat_accepts_parallel_tool_calls_whole_float_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_logprobs_whole_float_false() -> None:
@@ -156,6 +161,7 @@ def test_http_chat_accepts_logprobs_whole_float_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_logprobs_whole_float_true() -> None:
@@ -176,6 +182,7 @@ def test_http_chat_rejects_logprobs_whole_float_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_non_whole_float_bools() -> None:
@@ -202,6 +209,7 @@ def test_http_chat_rejects_non_whole_float_bools() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_echo_stream_whole_float_false() -> None:
@@ -222,6 +230,7 @@ def test_http_completions_accepts_echo_stream_whole_float_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_include_orchestration_trace_whole_float_values() -> None:
@@ -242,6 +251,7 @@ def test_http_chat_rejects_include_orchestration_trace_whole_float_values() -> N
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_routing_latency_tolerant_whole_float_false() -> None:
@@ -261,6 +271,7 @@ def test_http_chat_accepts_routing_latency_tolerant_whole_float_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_background_store_whole_float_false() -> None:
@@ -281,3 +292,4 @@ def test_http_responses_accepts_background_store_whole_float_false() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
