@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
@@ -95,6 +95,15 @@ _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
 _REQUEST_ENDPOINT_IDENTITY: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_request_endpoint_identity", default=None
 )
+#: Agent ids the active request is allowed to send its content to, or None when
+#: unrestricted. Set by :func:`_request_eligibility_scope` from the very same
+#: allow-list the request's own serving path is already constrained by, so
+#: request-scoped *side* calls that carry request content but take no
+#: ``allowed_agent_ids`` argument of their own -- today the routing-evidence
+#: embedding in :meth:`TaskOrchestrator._embedding_agent_id` -- honor it too.
+_REQUEST_ELIGIBLE_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
+    "contextual_orchestrator_request_eligible_agent_ids", default=None
+)
 _INVALID_REQUESTED_MODEL = object()
 
 
@@ -149,12 +158,61 @@ def _agent_matches_request_endpoint(agent: ModelAgent) -> bool:
     )
 
 
+@contextmanager
+def _request_eligibility_scope(allowed_agent_ids: Iterable[str] | None):
+    """Narrow request-scoped side calls to the agents this request may already reach.
+
+    Mirrors :meth:`TaskOrchestrator.routing_endpoint_scope`: ``None`` means
+    "no restriction to add" and leaves any enclosing scope untouched, so this
+    can only ever narrow, never widen.
+    """
+    if allowed_agent_ids is None:
+        yield
+        return
+    token = _REQUEST_ELIGIBLE_AGENT_IDS.set(frozenset(allowed_agent_ids))
+    try:
+        yield
+    finally:
+        _REQUEST_ELIGIBLE_AGENT_IDS.reset(token)
+
+
 def _request_endpoint_partition() -> str:
     """Return a non-reversible cache partition for the configured endpoint."""
     identity = _REQUEST_ENDPOINT_IDENTITY.get()
     if identity is None:
         return "endpoint:auto"
     return "endpoint:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _request_evidence_partition() -> str:
+    """Return a cache partition for every restriction that picks the embedder.
+
+    A routing-evidence vector is produced by whichever provider
+    :meth:`TaskOrchestrator._embedding_agent_id` resolves under the active
+    request's own restrictions, so a cached vector may only be reused by a
+    later request whose restrictions resolve the same way: a restricted
+    request can never read a vector an unrestricted -- or differently
+    restricted -- one produced (Devin review on #1032). ZDR is part of it
+    because :meth:`TaskOrchestrator._zdr_agent_allowed` narrows the same
+    ranking, matching what ``_cache_key`` and ``_triage_workflow_required``
+    already partition on.
+
+    This is the *eligibility* half of an evidence cache key and is not
+    sufficient on its own: the same restriction shape can resolve to a
+    different embedding member (an agent-pool change, or a measured-member
+    reordering inside one group), whose vectors live in a different space
+    entirely. :meth:`TaskOrchestrator._embed_cached` and
+    :meth:`TaskOrchestrator._descriptor_vector_cached` therefore key on this
+    partition *and* the resolved embedding member's own identity.
+    """
+    eligible = _REQUEST_ELIGIBLE_AGENT_IDS.get()
+    return "\x1f".join(
+        (
+            _request_endpoint_partition(),
+            "zdr_only" if _REQUEST_ZDR_ONLY.get() else "zdr_any",
+            "eligible:*" if eligible is None else "eligible:" + ",".join(sorted(eligible)),
+        )
+    )
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -4425,6 +4483,9 @@ class TaskOrchestrator:
         virtual selector may advance to another eligible provider only after an
         HTTP 413 proves that the prior provider rejected the request before
         generation; other synthesis failures remain single-shot and fail closed.
+        Once a synthesis succeeds, the realtime fast-mlsirm judge observes the
+        served answer for quality-ledger and psychometric routing evidence
+        only -- it never changes the response already decided above.
         """
         response_request = endpoint == "responses"
         api_surface = "responses" if response_request else "chat.completions"
@@ -4558,11 +4619,36 @@ class TaskOrchestrator:
             _excluded_agent_ids=request_exclusions,
             _allowed_agent_ids=None if virtual_model else {final_agent.id},
         )
-        in_flight_tokens, in_flight_cost = self._trace_budget_spend(workflow["trace"])
-        self._raise_if_spend_budget_exceeded(
-            additional_output_tokens=in_flight_tokens,
-            additional_cost_usd=in_flight_cost,
-        )
+        # conduct()'s own verifier-role judge is a completed provider call
+        # that never appears in workflow["trace"], so every checkpoint on
+        # this request's not-yet-persisted spend has to fold it in the same
+        # way the persisted meter does (Devin review on #1032).
+        in_flight_judges = self._run_judge_accounting_blocks(workflow)
+
+        def budget_checkpoint(trace: list[dict[str, Any]]) -> None:
+            """Block the next provider call, metering what this one already spent.
+
+            ``_replace_workflow_run`` is the only path that moves spend onto
+            the budget meter, and this request persists nothing until it
+            succeeds -- so raising here used to drop every provider call
+            ``conduct`` had already made, including its verifier-role judge.
+            The next request was then admitted against understated spend and
+            could repeat that forever (Devin review on #1032). Metering the
+            completed work as an unserved run first makes the rejection cost
+            what it actually cost.
+            """
+            tokens, cost = self._trace_budget_spend(
+                trace, completed_judges=in_flight_judges
+            )
+            try:
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=tokens, additional_cost_usd=cost
+                )
+            except BudgetExceededError:
+                self._meter_unserved_spend(task, trace, workflow.get("verification"))
+                raise
+
+        budget_checkpoint(workflow["trace"])
 
         evidence = "\n\n".join(
             f"Workflow step {step['id']} ({step['role']}):\n{step['output']}"
@@ -4633,29 +4719,38 @@ class TaskOrchestrator:
             self.AUTO_MODEL,
             self.FREE_MODEL,
         }
-        allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-            }
-            if free_only
+        # The one effective restriction this request's synthesis actually runs
+        # under, covering *every* way a request can be pinned rather than the
+        # `_required_agent_id` special case alone: a caller-named explicit
+        # model is exactly as pinned as a required file provider, because
+        # `synthesis_candidates` below is literally `[final_agent]` whenever
+        # `virtual_model` is false. Leaving that case unrestricted let an
+        # explicitly pinned request's prompt and served answer reach an
+        # unrelated -- possibly less trusted -- provider through the
+        # observation-only judge/embedding calls that reuse this set (Devin
+        # review on #1032). `free_only` implies `virtual_model` (FREE_MODEL is
+        # itself a virtual name), so the free pool and the ZDR-filtered
+        # virtual pool remain the only unpinned outcomes.
+        allowed_agent_ids = (
+            {final_agent.id}
+            if isinstance(required_agent_id, str) or not virtual_model
             else (
                 {
                     candidate.id
                     for candidate in self.agents
+                    if self._is_general_free_agent(candidate)
+                    and self._zdr_agent_allowed(candidate)
+                }
+                if free_only
+                else {
+                    candidate.id
+                    for candidate in self.agents
                     if self._zdr_agent_allowed(candidate)
                 }
-                if virtual_model
-                else None
             )
-        ))
+        )
         if replica_agent_ids is not None:
-            allowed_agent_ids = (
-                replica_agent_ids
-                if allowed_agent_ids is None
-                else allowed_agent_ids & replica_agent_ids
-            )
+            allowed_agent_ids = allowed_agent_ids & replica_agent_ids
         synthesis_candidates = (
             self._failover_candidates(
                 final_agent,
@@ -4811,6 +4906,17 @@ class TaskOrchestrator:
 
         response_format = chat_body.get("response_format")
         synthesis_started = time.perf_counter()
+        # Provider calls this request already paid for and then walked away
+        # from: a model whose synthesis *and* repair both violated the
+        # caller's schema before a different member of the same virtual pool
+        # succeeded. `synthesis_step`/`repair_step` below are rebound on every
+        # pass of this loop, so without accumulating them the earlier model's
+        # two completed calls vanished from the final trace, from every later
+        # budget checkpoint, from the persisted run, and from spend analytics
+        # -- real provider spend, silently unmetered (Devin review on #1032).
+        # They are budget/analytics rows only: served-answer latency and usage
+        # stay bound to the successful attempt alone, below.
+        failed_attempts: list[dict[str, Any]] = []
         while True:
             synthesis_failure_recorded = False
             try:
@@ -4828,10 +4934,22 @@ class TaskOrchestrator:
                     and not isinstance(exc, EffortProfileError)
                 ):
                     self._group_router.observe_failure(final_agent.id)
+                # A transport failure here (as opposed to the schema-violation
+                # exits below, already fixed in round 6) still raises before
+                # any later budget_checkpoint runs -- so conduct()'s workflow
+                # spend and any earlier candidates' failed_attempts in this
+                # same loop would otherwise vanish from the meter exactly like
+                # budget_checkpoint's own except-clause guards against
+                # (Devin review on #1032, round 7).
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts],
+                    workflow.get("verification"),
+                )
                 raise
             synthesis_output = provider_output(final_agent, raw)
             synthesis_step = {
-                "id": len(workflow["trace"]),
+                "id": len(workflow["trace"]) + len(failed_attempts),
                 "role": "synthesizer",
                 "agent_id": final_agent.id,
                 "subtask": "Provider-facing structured synthesis",
@@ -4852,13 +4970,7 @@ class TaskOrchestrator:
             if contract_error is None:
                 break
 
-            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
-                [*workflow["trace"], synthesis_step]
-            )
-            self._raise_if_spend_budget_exceeded(
-                additional_output_tokens=in_flight_tokens,
-                additional_cost_usd=in_flight_cost,
-            )
+            budget_checkpoint([*workflow["trace"], *failed_attempts, synthesis_step])
             repair_upstream = copy.deepcopy(upstream)
             repair_instruction = (
                 "The prior synthesis violated the caller's strict JSON Schema "
@@ -4883,28 +4995,47 @@ class TaskOrchestrator:
             repair_started = time.perf_counter()
             try:
                 repaired, final_agent = send_synthesis(repair_upstream)
-            except ProviderUpstreamError as exc:
-                if not _is_request_too_large_error(exc):
+            except Exception as exc:
+                if not _is_request_too_large_error(exc) and not isinstance(exc, EffortProfileError):
                     self._record_failure(final_agent.id)
-                if final_agent.group_name and not _is_request_too_large_error(exc):
+                if (
+                    final_agent.group_name
+                    and not _is_request_too_large_error(exc)
+                    and not isinstance(exc, EffortProfileError)
+                ):
                     self._group_router.observe_failure(final_agent.id)
+                # synthesis_step is a real, paid-for call that produced the
+                # schema-violating output prompting this repair -- it has not
+                # yet reached failed_attempts (that only happens further
+                # below, once a repair response exists to check). No
+                # attempted_repair_step exists to add: this call itself never
+                # returned a response (Devin review on #1032, round 7).
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts, synthesis_step],
+                    workflow.get("verification"),
+                )
                 raise
             repaired_output = provider_output(final_agent, repaired)
             repair_error = _structured_output_error(repaired_output, response_format)
+            # Built whether or not it satisfied the schema: this call reached
+            # the provider and consumed tokens either way, so it is a real
+            # accounting row even when its output is discarded below.
+            attempted_repair_step: dict[str, Any] = {
+                "id": synthesis_step["id"] + 1,
+                "role": "repair",
+                "agent_id": final_agent.id,
+                "subtask": "Strict JSON Schema repair",
+                "access": [synthesis_step["id"]],
+                "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
+                "output": repaired_output,
+            }
+            if isinstance(repaired.get("usage"), dict):
+                attempted_repair_step["usage"] = _canonical_provider_usage(
+                    repaired["usage"], responses=response_request
+                )
             if repair_error is None:
-                repair_step = {
-                    "id": synthesis_step["id"] + 1,
-                    "role": "repair",
-                    "agent_id": final_agent.id,
-                    "subtask": "Strict JSON Schema repair",
-                    "access": [synthesis_step["id"]],
-                    "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
-                    "output": repaired_output,
-                }
-                if isinstance(repaired.get("usage"), dict):
-                    repair_step["usage"] = _canonical_provider_usage(
-                        repaired["usage"], responses=response_request
-                    )
+                repair_step = attempted_repair_step
                 raw = repaired
                 synthesis_output = repaired_output
                 break
@@ -4913,7 +5044,24 @@ class TaskOrchestrator:
             self._record_failure(failed_agent.id)
             if failed_agent.group_name:
                 self._group_router.observe_failure(failed_agent.id)
+            # Tagged once and reused by every exit below -- fail closed on a
+            # pinned model, fail closed with no same-endpoint candidate left,
+            # or continue the failover loop -- so these two completed calls
+            # (real provider spend) always reach either the persisted trace
+            # (``failed_attempts``, below) or an unserved-spend meter row
+            # (``_meter_unserved_spend``) before this iteration ends. Only the
+            # continue path used to do so; both raises dropped them silently
+            # (Devin review on #1032, round 6).
+            rejected_attempts = (
+                {**synthesis_step, "structured_output_error": contract_error},
+                {**attempted_repair_step, "structured_output_error": repair_error},
+            )
             if not virtual_model:
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts, *rejected_attempts],
+                    workflow.get("verification"),
+                )
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
@@ -4929,15 +5077,127 @@ class TaskOrchestrator:
                 None,
             )
             if next_agent is None:
+                self._meter_unserved_spend(
+                    task,
+                    [*workflow["trace"], *failed_attempts, *rejected_attempts],
+                    workflow.get("verification"),
+                )
                 raise ProviderResponseError(
                     "every eligible model on the selected endpoint violated response_format"
                 )
+            # Only reached when another model is about to be tried, so these
+            # two completed calls are spend with no served answer attached.
+            # ``structured_output_error`` marks them so an auditor reading the
+            # persisted trace can tell a discarded attempt from the row that
+            # actually produced ``answer``.
+            failed_attempts.extend(rejected_attempts)
             final_agent = next_agent
             synthesis_started = time.perf_counter()
+        # The wall clock of the call whose output is actually served, not of
+        # the whole loop: on the schema-repair path `synthesis_started` still
+        # precedes the *rejected* first synthesis, so publishing that span
+        # would pair an inflated duration with the repair call's own (correct,
+        # smaller) usage and understate the serving model's real throughput in
+        # both measured ledgers -- the exact honesty this observation exists
+        # to provide (Devin review on #1032). `repair_step["latency_ms"]`
+        # times exactly the call that produced the answer and reported the
+        # usage published beside it.
+        synthesis_latency_seconds = (
+            repair_step["latency_ms"] / 1000
+            if repair_step is not None
+            else time.perf_counter() - synthesis_started
+        )
         self._record_success(final_agent.id)
         if final_agent.group_name:
-            self._group_router.observe_success(
-                final_agent.id, time.perf_counter() - synthesis_started
+            self._group_router.observe_success(final_agent.id, synthesis_latency_seconds)
+        # Feed the judged-quality ledger (and, when a prompt_context is
+        # available, the psychometric router) from this already-decided
+        # answer -- observation-only, matching stream_route/_finalize_batch_row:
+        # the verdict is recorded for future routing evidence, never branched
+        # on here, since send_synthesis's own retry/failover already ran to
+        # completion by this point.
+        #
+        # Research grounding for the mechanism itself is already recorded --
+        # this wiring adds no new technique, it connects an existing
+        # measurement pipeline to a path that was not calling it. See
+        # docs/doctoring/measured-routing-evidence.md ("Real-time judging
+        # before returning answers"; "Multi-layer simple-structure
+        # measurement (fast-mlsirm)") and Baker (2001) in
+        # docs/papers/README.md for the IRT ability fitting.
+        # `usage` follows the same rule as the latency above: the served
+        # call's own numbers, never a discarded attempt's. `trace` is the
+        # spend side, and carries every completed attempt.
+        usage = (repair_step or synthesis_step).get("usage")
+        trace = [
+            *workflow["trace"],
+            *failed_attempts,
+            synthesis_step,
+            *([repair_step] if repair_step is not None else []),
+        ]
+        # This call must stay pinned to the same eligibility constraint the
+        # request's own synthesis already honored (an explicit model pin,
+        # the free pool, a ZDR-only virtual request, or a file-replica
+        # subset), minus every agent this request already proved unavailable
+        # -- otherwise an observation-only judge call could reach a provider
+        # the caller's own request was never allowed to use, or a
+        # known-failing one whose failure would record a false-negative
+        # quality observation against the answer that actually succeeded
+        # (Devin review on #1032).
+        #
+        # The already-decided, already-served answer above must never be
+        # discarded just because this purely observation-only extra call
+        # would push spend over budget -- unlike batch_route's pre-call
+        # gate (which blocks a not-yet-incurred worker call before the
+        # caller has anything), this call happens after the response is
+        # fully decided, matching stream_route's own no-budget-check
+        # precedent for already-committed output. An exhausted budget skips
+        # the extra judge call outright instead of raising (Devin review on
+        # #1032). The gate reuses _raise_if_spend_budget_exceeded so this
+        # request's own not-yet-persisted spend (workflow trace + conduct's
+        # own verifier-role judge + synthesis + repair) counts, exactly as
+        # the pre-synthesis checkpoint above already counts it.
+        #
+        # Accepted limitation (Devin review on #1032, informational): this is
+        # a pre-call gate, not a reservation, so the one judge call it permits
+        # can still finish above the allowance by its own unknown output size.
+        # That is the gateway's budget contract everywhere -- every
+        # _raise_if_spend_budget_exceeded call site admits a call whose output
+        # length nobody knows yet -- and the judge is not special. The only
+        # available tightening, a hard max_output_tokens cap sized to the
+        # remaining allowance, would truncate the judge's structured verdict
+        # mid-JSON, which _model_judge_verification fails closed on: a
+        # false-negative quality/IRT observation would then be recorded
+        # against an answer that actually succeeded, corrupting the exact
+        # ledger this call exists to feed. Overshoot is bounded to one judge
+        # call admitted while spend was still inside the cap, and the next
+        # request's own pre-call gate stops there.
+        judge_budget_exceeded = False
+        if self.policy.realtime_judge and (
+            self.budget_max_output_tokens is not None
+            or self.budget_max_cost_usd is not None
+        ):
+            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                trace, completed_judges=in_flight_judges
+            )
+            try:
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
+            except BudgetExceededError:
+                judge_budget_exceeded = True
+        realtime_verification: dict[str, Any] | None = None
+        if not judge_budget_exceeded:
+            realtime_verification = self._realtime_route_judge(
+                text=task,
+                answer=synthesis_output,
+                served_id=final_agent.id,
+                latency_seconds=synthesis_latency_seconds,
+                usage=usage,
+                free_only=free_only,
+                prompt_context=prompt_context,
+                allowed_agent_ids=allowed_agent_ids,
+                excluded_agent_ids=request_exclusions or None,
             )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
@@ -4952,11 +5212,6 @@ class TaskOrchestrator:
             elif "messages" in echo:
                 echo["messages"] = copy.deepcopy(messages)
         workflow_run_id = f"run_{uuid.uuid4().hex}"
-        trace = [
-            *workflow["trace"],
-            synthesis_step,
-            *([repair_step] if repair_step is not None else []),
-        ]
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
@@ -4969,6 +5224,12 @@ class TaskOrchestrator:
                 "trace": trace,
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": workflow.get("verification"),
+                # The extra observation-only judge above is a second,
+                # independent provider call: conduct()'s own verifier-step
+                # judge already occupies "verification", so its spend needs
+                # its own record slot to reach the budget meter and buyer
+                # analytics (Devin review on #1032).
+                "realtime_verification": realtime_verification,
             }
         )
         self._replace_workflow_run(record)
@@ -5436,9 +5697,24 @@ class TaskOrchestrator:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
 
     def _trace_budget_spend(
-        self, trace: list[dict[str, Any]]
+        self,
+        trace: list[dict[str, Any]],
+        *,
+        completed_judges: Sequence[Mapping[str, Any]] = (),
     ) -> tuple[int | None, float | None]:
-        """Return completed provider-call spend for a workflow budget checkpoint."""
+        """Return completed provider-call spend for a workflow budget checkpoint.
+
+        ``completed_judges`` carries judge calls this request has already made
+        whose spend lives *outside* ``trace``: ``conduct``'s own verifier-role
+        judge records itself in ``workflow["verification"]``, never as a trace
+        row, so a checkpoint counting trace rows alone lets a request that has
+        already consumed its whole allowance admit yet another provider call
+        (Devin review on #1032). Callers pass
+        :meth:`_run_judge_accounting_blocks`, the same presence test the
+        persisted-run meter uses, and each block is priced through the same
+        :meth:`_judge_block_output_tokens` -- so both the token and the cost
+        budget fail closed when that first judge's usage is unavailable.
+        """
         model_by_agent = {agent.id: agent.model for agent in self.agents}
         counts: list[tuple[int, str]] = []
         for step in trace:
@@ -5449,6 +5725,13 @@ class TaskOrchestrator:
             if count is None:
                 return None, None
             counts.append((count, model))
+        for verification in completed_judges:
+            judge_model, judge_count = self._judge_block_output_tokens(
+                verification, model_by_agent
+            )
+            if judge_count is None:
+                return None, None
+            counts.append((judge_count, judge_model))
         output_tokens = sum(count for count, _model in counts)
         if any(model not in self.price_per_million for _count, model in counts):
             return output_tokens, None
@@ -5457,6 +5740,51 @@ class TaskOrchestrator:
             for count, model in counts
         )
         return output_tokens, round(output_cost, 6)
+
+    def _meter_unserved_spend(
+        self,
+        prompt_text: str,
+        trace: list[dict[str, Any]],
+        verification: Mapping[str, Any] | None,
+    ) -> None:
+        """Meter provider calls a rejected request already made but never served.
+
+        Reuses ``batch_route``'s ``pending_verification`` shape (Devin review
+        on #961) for the same reason it exists there: ``_replace_workflow_run``
+        is the sole path onto the in-memory budget meter, so completed spend
+        that never reaches it silently vanishes and later requests are
+        admitted against understated totals. The marker keeps the row out of
+        ``_completed_workflow_runs``, and skipping ``_run_order``/audit/
+        analytics keeps it out of every user-visible listing -- a rejected
+        request must never surface as a finished workflow (Devin review on
+        #1032).
+
+        Spend this run cannot measure flips the meter to
+        ``blocked_unavailable`` through the same
+        ``_budget_unavailable_run_ids`` path any *served* run with the same
+        unmeasurable steps already takes: real money left the account either
+        way, and fail-closed is the budget contract's deliberate answer to
+        not knowing how much.
+        """
+        run_id = f"run_{uuid.uuid4().hex}"
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "conduct",
+                "policy_mode": "conduct",
+                "prompt_text": prompt_text,
+                "answer": "",
+                "cache_status": "bypass",
+                "trace": copy.deepcopy(trace),
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": dict(verification) if verification else {},
+                "pending_verification": True,
+            }
+        )
+        self._replace_workflow_run(record)
+        if self._store is not None:
+            self._store.save("workflow_run", run_id, record)
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -6363,6 +6691,8 @@ class TaskOrchestrator:
         usage: dict[str, Any] | None,
         free_only: bool,
         prompt_context: str | None = None,
+        allowed_agent_ids: set[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
 
@@ -6373,25 +6703,51 @@ class TaskOrchestrator:
         ``None`` when the caller has no single-attempt wall-clock timing to
         honestly attribute to this one answer (see
         ``ModelGroupRouter.observe_success``); the success/failure signal is
-        still recorded, just not a misleading latency sample.
+        still recorded, just not a misleading latency sample. ``allowed_agent_ids``/
+        ``excluded_agent_ids`` forward the caller's own synthesis eligibility
+        constraints (e.g. an explicit model pin) to the verifier selection so
+        this observation-only call cannot reach a provider the request itself
+        was never allowed to use. ``allowed_agent_ids`` additionally opens a
+        :func:`_request_eligibility_scope` around both the verdict call and
+        the ledger write, because the psychometric observation embeds the
+        prompt itself for routing evidence and that embedding takes no
+        allow-list argument of its own (Devin review on #1032).
         """
         output_tokens = self._usage_completion_tokens(usage)
 
         def _record(accepted: bool, irt_row: tuple[int, ...] = ()) -> None:
-            if accepted:
-                self._quality_router.observe_success(
-                    served_id, latency_seconds, output_tokens=output_tokens
-                )
-            else:
-                self._quality_router.observe_failure(served_id)
-            if prompt_context is not None:
-                self._observe_contextual_quality(
-                    prompt_context,
+            """Write the ledgers best-effort: evidence must never cost an answer.
+
+            Every caller runs this *after* its answer is already produced and
+            paid for, and the psychometric observation writes through
+            ``_StateStore.save``/``prune_keyed`` (and may embed the prompt),
+            so a storage or embedding failure here could discard a perfectly
+            good completed answer and, with it, the spend accounting that
+            depends on the caller reaching its own persistence step (Devin
+            review on #1032). Losing one routing observation is the cheaper
+            failure by far, so it is the one that happens.
+            """
+            try:
+                if accepted:
+                    self._quality_router.observe_success(
+                        served_id, latency_seconds, output_tokens=output_tokens
+                    )
+                else:
+                    self._quality_router.observe_failure(served_id)
+                if prompt_context is not None:
+                    self._observe_contextual_quality(
+                        prompt_context,
+                        served_id,
+                        accepted=accepted,
+                        latency_seconds=latency_seconds,
+                        output_tokens=output_tokens,
+                        irt_row=irt_row,
+                    )
+            except Exception:  # noqa: BLE001 - observation-only ledger write
+                _LOGGER.warning(
+                    "routing quality observation for %s failed; answer unaffected",
                     served_id,
-                    accepted=accepted,
-                    latency_seconds=latency_seconds,
-                    output_tokens=output_tokens,
-                    irt_row=irt_row,
+                    exc_info=True,
                 )
 
         if not self.policy.realtime_judge:
@@ -6402,18 +6758,23 @@ class TaskOrchestrator:
                 "judge": "model",
             }
         fallback_report = {"verifier_output": answer}
-        base = self._model_judge_verification(
-            text, fallback_report, free_only=free_only
-        )
-        accepted = bool(base.get("accepted"))
-        raw_irt_row = base.get("judge_irt_row")
-        irt_row = (
-            tuple(raw_irt_row)
-            if isinstance(raw_irt_row, list)
-            and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
-            else ()
-        )
-        _record(accepted, irt_row)
+        with _request_eligibility_scope(allowed_agent_ids):
+            base = self._model_judge_verification(
+                text,
+                fallback_report,
+                free_only=free_only,
+                allowed_agent_ids=allowed_agent_ids,
+                excluded_agent_ids=excluded_agent_ids,
+            )
+            accepted = bool(base.get("accepted"))
+            raw_irt_row = base.get("judge_irt_row")
+            irt_row = (
+                tuple(raw_irt_row)
+                if isinstance(raw_irt_row, list)
+                and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
+                else ()
+            )
+            _record(accepted, irt_row)
         return base
 
     @staticmethod
@@ -7153,39 +7514,254 @@ class TaskOrchestrator:
                 cache.popitem(last=False)
 
     def _embedding_agent_id(self) -> str | None:
-        """First measured embedding-capable member id, or None when unconfigured."""
+        """First embedding-capable member this request may reach, or None.
+
+        Every embedding this gateway makes for routing evidence
+        (:meth:`_embed_cached`, :meth:`_descriptor_vector_cached`) sends
+        request-derived text -- the prompt itself, in the psychometric and
+        semantic-affinity paths -- to the returned provider. It therefore
+        honors the active request's own eligibility exactly like the serving
+        path does: an explicit model pin, the free pool, or a file-replica
+        subset all narrow this choice, and ZDR/endpoint pinning already
+        narrow it inside :meth:`_ranked_agents`. Without this, an
+        observation-only call could hand a restricted request's prompt to an
+        unrelated provider the caller was never allowed to use (Devin review
+        on #1032).
+
+        An eligible agent's own configured endpoint counts as reachable: that
+        provider is already serving this request's content, so an embedding
+        deployment behind the same endpoint discloses nothing new. Anything
+        else yields None, and every caller already degrades to
+        declaration-only evidence when embedding is unavailable.
+
+        That endpoint-sharing allowance is privacy-only, though, and says
+        nothing about cost: when the eligible set is entirely free (exactly
+        what ``free_only`` builds -- see the ``allowed_agent_ids`` branch in
+        ``_orchestrated_provider_completion``), a *paid* embedding deployment
+        co-located with a free agent must not ride along, or a free request
+        incurs real, unmetered spend outside every budget check (Devin
+        review on #1032, round 6). An explicit paid pin's own eligible set is
+        never all-free, so its endpoint fallback keeps admitting a co-located
+        deployment regardless of price, unchanged from before this gate.
+        """
         try:
-            return self.select_capability_agent("embedding").id
+            candidates = self._capability_agents("embedding")
         except (RuntimeError, ValueError):
             return None
+        eligible = _REQUEST_ELIGIBLE_AGENT_IDS.get()
+        if eligible is None:
+            return candidates[0].id
+        eligible_agents = [agent for agent in self.agents if agent.id in eligible]
+        endpoints = {
+            agent.base_url.rstrip("/").casefold() for agent in eligible_agents
+        }
+        free_scope = bool(eligible_agents) and all(
+            self._is_free_agent(agent) for agent in eligible_agents
+        )
+        return next(
+            (
+                agent.id
+                for agent in candidates
+                if agent.id in eligible
+                or (
+                    agent.base_url.rstrip("/").casefold() in endpoints
+                    and (not free_scope or self._is_free_agent(agent))
+                )
+            ),
+            None,
+        )
 
-    def _embed_cached(self, text: str) -> list[float] | None:
-        """Embedding vector for text via the configured embedding member; None on failure."""
+    def _meter_embedding_spend(
+        self, embedder: ModelAgent, prompt_tokens: int | None
+    ) -> None:
+        """Record one cache-miss embedding call's real provider spend.
+
+        Called only from the miss branch of ``_embed_cached`` and
+        ``_descriptor_vector_cached`` -- a cache hit reuses a vector this
+        already metered and must never be counted twice -- and only when
+        ``embed_with_usage`` returned an authoritative ``prompt_tokens``;
+        the mock transport and any provider that omits usage both return
+        None, and this stays a graceful no-op rather than guess a count
+        (Devin review on #1032).
+
+        These calls have no enclosing task, record, or workflow_run_id to
+        attach to -- the public ``select_model_group_members`` can trigger
+        one with none of those in scope at all -- so this mints its own run
+        and writes it straight onto the meter via
+        :meth:`_replace_workflow_run`, the same primitive every other
+        spend-recording path in this file uses; it works identically
+        whether or not a live request exists.
+
+        Reuses the ``pending_verification: True`` shape ``batch_route`` and
+        :meth:`_meter_unserved_spend` already established for exactly this
+        split: :meth:`_replace_workflow_run`/``spend_analytics`` iterate
+        ``_workflow_runs`` directly, so the real spend is always counted,
+        while the marker keeps this synthetic row out of ``_run_order`` and
+        every consumer that goes through :meth:`_completed_workflow_runs`
+        instead (run counts, analytics KPIs, admin listings) -- it was
+        never a request, so it must never look like one.
+        ``completion_tokens`` is explicit ``0`` (embeddings have no
+        completion), which keeps this row "reported" rather than
+        "unavailable" so it can never flip a real run's -- or the whole
+        meter's -- availability.
+
+        That per-step availability isn't the whole story: the budget
+        meter also requires every model appearing in *any* run to be
+        priced whenever ``budget_max_cost_usd`` is set, with no exception
+        for a model whose output is provably always zero tokens. An
+        operator who adds a cost budget without ever having priced their
+        embedder (embedding spend was invisible before this fix, so there
+        was never a reason to) would otherwise see the *entire* meter flip
+        to ``blocked_unavailable`` the first time this fires. Skip
+        metering in that one case -- true zero-cost either way -- instead
+        of writing a row that blinds unrelated requests' enforcement.
+
+        :meth:`_replace_workflow_run` is pure in-memory dict/Decimal
+        arithmetic under ``_budget_spend_lock`` -- nothing that plausibly
+        raises in normal operation, and shared by every other of its call
+        sites, so it is left unguarded here: a real bug in it should stay
+        loud, not get mislabeled a durability issue. ``self._store.save``
+        is a real sqlite3 write, so a state-store outage there is caught
+        and logged rather than propagated -- reusing the same
+        ``except Exception: _LOGGER.warning(..., exc_info=True)``
+        best-effort-write convention :meth:`_observe_contextual_quality`
+        already established for its own ``self._store.save`` call. The
+        failure is deliberately *not* routed through
+        ``_budget_unavailable_run_ids``: that flag means "this record's
+        usage is not derivable," which is a measurement gap, not a
+        durability one -- an embedding row's ``completion_tokens`` is
+        always the explicit ``0`` above, so its usage is always fully
+        known regardless of whether the write behind it later succeeds,
+        and by the time the write is attempted :meth:`_replace_workflow_run`
+        has already updated the in-process spend meter, so enforcement is
+        never blind to it. ``_budget_unavailable_run_ids`` is a blunt,
+        global switch -- flipping it here would freeze real
+        chat-completion budget enforcement org-wide over one transient
+        disk hiccup on a best-effort, zero-completion-token routing-evidence
+        row. The only thing actually lost on a write failure is *restart*
+        survivability of that one row; logging it is the honest response.
+        """
+        if prompt_tokens is None:
+            return
+        if (
+            self.budget_max_cost_usd is not None
+            and embedder.model not in self.price_per_million
+        ):
+            return
+        run_id = f"run_{uuid.uuid4().hex}"
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "embedding",
+                "policy_mode": "embedding",
+                "prompt_text": "",
+                "answer": "",
+                "cache_status": "bypass",
+                "trace": [
+                    {
+                        "id": 0,
+                        "role": "embedding",
+                        "agent_id": embedder.id,
+                        "subtask": "Routing-evidence embedding",
+                        "access": [],
+                        "output": "",
+                        "model_name": embedder.model,
+                        "usage": {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": 0,
+                        },
+                    }
+                ],
+                "policy_snapshot": self.policy.as_dict(),
+                "pending_verification": True,
+            }
+        )
+        self._replace_workflow_run(record)
+        if self._store is not None:
+            try:
+                self._store.save("workflow_run", run_id, record)
+            except Exception:  # noqa: BLE001 - durable write is best-effort here
+                _LOGGER.warning(
+                    "embedding spend persistence for run %s failed; in-memory "
+                    "meter already updated, spend not durable across a restart",
+                    run_id,
+                    exc_info=True,
+                )
+
+    def _embed_cached(
+        self, text: str, embedding_member: str | None = None
+    ) -> list[float] | None:
+        """Embedding vector for text via the configured embedding member; None on failure.
+
+        Keyed on two independent things, because either alone leaks:
+
+        * :func:`_request_evidence_partition` -- the active request's own
+          restrictions, so a cache hit can only ever return a vector some
+          provider *this* request may itself reach produced. Without it a
+          restricted request read the cache before :meth:`_embedding_agent_id`
+          was consulted at all, and an earlier unrestricted request's vector
+          -- the routing evidence baked into it included -- crossed the
+          isolation boundary (Devin review on #1032).
+        * the resolved embedding member itself, which is the identity of the
+          *vector space* the entry lives in. An identical restriction shape
+          can still resolve to a different embedding model/deployment later
+          (an agent-pool change, or :meth:`_measured_member_order` reordering
+          the members of one eligible group), and a cosine between two
+          different embedding spaces is meaningless -- it would silently
+          corrupt affinity-based routing rather than fail (a later Devin
+          review on the same PR; a refinement of the eligibility partition
+          above, not a duplicate of it).
+
+        ``embedding_member`` lets a caller that makes several comparable
+        embeddings resolve the member once and pin every vector in one
+        comparison to the same space; ``None`` resolves it here.
+        """
+        if embedding_member is None:
+            embedding_member = self._embedding_agent_id()
+            if embedding_member is None:
+                return None
         digest = hashlib.sha256(
-            f"{_request_endpoint_partition()}\x1f{text}".encode("utf-8")
+            "\x1f".join(
+                (_request_evidence_partition(), f"embedder:{embedding_member}", text)
+            ).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._task_vector_cache.get(digest)
         if cached is not None:
             return cached
-        embedding_member = self._embedding_agent_id()
-        if embedding_member is None:
-            return None
         try:
-            vectors = self.client.embed(self._agent(embedding_member), [text])
+            embedder = self._agent(embedding_member)
+            vectors, prompt_tokens = self.client.embed_with_usage(embedder, [text])
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
         if vector is not None:
             self._cache_put(self._task_vector_cache, digest, vector)
+            self._meter_embedding_spend(embedder, prompt_tokens)
         return vector
 
-    def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
-        """Cached embedding of one agent's operator-declared metadata document."""
+    def _descriptor_vector_cached(
+        self, agent: ModelAgent, embedding_member: str | None = None
+    ) -> list[float] | None:
+        """Cached embedding of one agent's operator-declared metadata document.
+
+        Keyed exactly like :meth:`_embed_cached`, on both the request's
+        restrictions and the resolved embedding member: both halves of a
+        semantic affinity have to come from a provider the active request may
+        reach, *and* from the same vector space, or the restricted request
+        still routes on an ineligible provider's evidence -- or on a cosine
+        between two unrelated embedding spaces (Devin reviews on #1032).
+        """
+        if embedding_member is None:
+            embedding_member = self._embedding_agent_id()
+            if embedding_member is None:
+                return None
         fingerprint = hashlib.sha256(
             "\x1f".join(
                 [
-                    _request_endpoint_partition(),
+                    _request_evidence_partition(),
+                    f"embedder:{embedding_member}",
                     agent.id,
                     self._agent_descriptor_text(agent),
                 ]
@@ -7195,18 +7771,17 @@ class TaskOrchestrator:
             cached = self._descriptor_vector_cache.get(fingerprint)
         if cached is not None:
             return cached
-        embedding_member = self._embedding_agent_id()
-        if embedding_member is None:
-            return None
         try:
-            vectors = self.client.embed(
-                self._agent(embedding_member), [self._agent_descriptor_text(agent)]
+            embedder = self._agent(embedding_member)
+            vectors, prompt_tokens = self.client.embed_with_usage(
+                embedder, [self._agent_descriptor_text(agent)]
             )
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
         if vector is not None:
             self._cache_put(self._descriptor_vector_cache, fingerprint, vector)
+            self._meter_embedding_spend(embedder, prompt_tokens)
         return vector
 
     def _semantic_affinities(
@@ -7217,16 +7792,26 @@ class TaskOrchestrator:
         Returns ``{agent_id: float|None}``; all values are None whenever there
         is no task text, no embedding-capable member, or embedding transport
         fails -- callers then fall back to declaration-only ordering.
+
+        The embedding member is resolved once, here, and pinned into every
+        vector this comparison uses: a cosine is only meaningful between two
+        vectors from the same embedding space, and resolving per call would
+        both re-rank the pool once per candidate and leave the task vector
+        free to come from a different space than a descriptor vector when the
+        pool changes mid-comparison (Devin review on #1032).
         """
         stripped = text.strip() if isinstance(text, str) else ""
         if not stripped or not agents:
             return {agent.id: None for agent in agents}
-        task_vector = self._embed_cached(stripped)
+        embedding_member = self._embedding_agent_id()
+        if embedding_member is None:
+            return {agent.id: None for agent in agents}
+        task_vector = self._embed_cached(stripped, embedding_member)
         if task_vector is None:
             return {agent.id: None for agent in agents}
         affinities: dict[str, float | None] = {}
         for agent in agents:
-            descriptor_vector = self._descriptor_vector_cached(agent)
+            descriptor_vector = self._descriptor_vector_cached(agent, embedding_member)
             affinities[agent.id] = (
                 None
                 if descriptor_vector is None
@@ -8601,40 +9186,73 @@ class TaskOrchestrator:
             if output_tokens is None:
                 return {}, False
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
-        verification = record.get("verification")
-        if isinstance(verification, Mapping):
-            judge_agent_id = verification.get("judge_agent_id")
-            if judge_agent_id is not None:
-                # A completed judge call (judge_agent_id is only ever set
-                # once one has) whose response carried no valid usage must
-                # still count toward the budget meter, or a run of
-                # unmeasured judge calls could exceed a spend cap this
-                # conservative-by-design check exists to enforce. Fall back
-                # to the same estimate-from-real-text _step_output_tokens
-                # already applies to worker steps with no reported usage
-                # (Devin review on #961: an earlier revision of this fix
-                # fabricated a "reported" zero-token dict instead). Estimate
-                # from judge_output_text (the judge's own generated
-                # rationale), not verifier_output (the worker answer it was
-                # judging) -- a second Devin review on this same fallback
-                # caught estimating from the wrong side of the call.
-                judge_model = verification.get("judge_model") or model_by_agent.get(
-                    judge_agent_id, "unknown"
-                )
-                completion_tokens, _judge_reported = _step_output_tokens(
-                    {
-                        "usage": verification.get("judge_usage"),
-                        "output": verification.get("judge_output_text", ""),
-                    },
-                    self.token_counter,
-                    judge_model,
-                )
-                if completion_tokens is None:
-                    return {}, False
-                output_by_model[judge_model] = (
-                    output_by_model.get(judge_model, 0) + completion_tokens
-                )
+        for verification in self._run_judge_accounting_blocks(record):
+            judge_model, completion_tokens = self._judge_block_output_tokens(
+                verification, model_by_agent
+            )
+            if completion_tokens is None:
+                return {}, False
+            output_by_model[judge_model] = (
+                output_by_model.get(judge_model, 0) + completion_tokens
+            )
         return output_by_model, True
+
+    def _judge_block_output_tokens(
+        self, verification: Mapping[str, Any], model_by_agent: Mapping[str, str]
+    ) -> tuple[str, int | None]:
+        """Return one completed judge call's model and authoritative output tokens.
+
+        A completed judge call (``judge_agent_id`` is only ever set once one
+        has) whose response carried no valid usage must still count toward
+        the budget meter, or a run of unmeasured judge calls could exceed a
+        spend cap this conservative-by-design check exists to enforce. Fall
+        back to the same estimate-from-real-text ``_step_output_tokens``
+        already applies to worker steps with no reported usage (Devin review
+        on #961: an earlier revision of this fix fabricated a "reported"
+        zero-token dict instead). Estimate from ``judge_output_text`` (the
+        judge's own generated rationale), not ``verifier_output`` (the worker
+        answer it was judging) -- a second Devin review on this same fallback
+        caught estimating from the wrong side of the call.
+
+        Shared by the persisted-run meter (:meth:`_run_budget_output_by_model`)
+        and the in-flight checkpoint (:meth:`_trace_budget_spend`), so a judge
+        call already made by *this* request is accounted exactly as the same
+        call is once persisted. ``None`` tokens means unmeasurable; both
+        callers fail closed on it.
+        """
+        judge_model = verification.get("judge_model") or model_by_agent.get(
+            verification["judge_agent_id"], "unknown"
+        )
+        output_tokens, _judge_reported = _step_output_tokens(
+            {
+                "usage": verification.get("judge_usage"),
+                "output": verification.get("judge_output_text", ""),
+            },
+            self.token_counter,
+            judge_model,
+        )
+        return judge_model, output_tokens
+
+    @staticmethod
+    def _run_judge_accounting_blocks(
+        record: Mapping[str, Any],
+    ) -> list[Mapping[str, Any]]:
+        """Every completed judge call recorded on one run, in record order.
+
+        ``verification`` holds the workflow's own verifier-step judge;
+        ``realtime_verification`` holds the separate observation-only
+        realtime judge ``_orchestrated_provider_completion`` fires after
+        synthesis. Both are real, already-incurred provider calls, so both
+        must reach the budget meter and buyer-facing spend analytics
+        (Devin review on #1032). ``judge_agent_id`` is set only once a call
+        actually completed, so it is the presence test for both.
+        """
+        blocks: list[Mapping[str, Any]] = []
+        for key in ("verification", "realtime_verification"):
+            block = record.get(key)
+            if isinstance(block, Mapping) and block.get("judge_agent_id") is not None:
+                blocks.append(block)
+        return blocks
 
     def _replace_workflow_run(self, record: dict[str, Any]) -> None:
         """Store one run and update its constant-time budget meter atomically."""
@@ -8742,13 +9360,8 @@ class TaskOrchestrator:
                     bucket["output_tokens"] += effective
                     total_output_tokens += effective
 
-            verification = run.get("verification")
-            judge_agent_id = (
-                verification.get("judge_agent_id")
-                if isinstance(verification, Mapping)
-                else None
-            )
-            if judge_agent_id is not None:
+            for verification in self._run_judge_accounting_blocks(run):
+                judge_agent_id = verification["judge_agent_id"]
                 # A completed judge call (judge_agent_id is only ever set
                 # once one has) must stay visible here even when its
                 # response carried no valid usage, or a real, incurred
