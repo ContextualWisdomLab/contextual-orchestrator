@@ -663,7 +663,7 @@ def test_actual_cost_evidence_validation_and_expiry_paths(
         nb._validate_actual_cost_evidence(wrong_source)
 
     invalid_dates = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
-    invalid_dates["actual_cost_evidence"]["reviewed_at_date"] = "2026-10-05"
+    invalid_dates["actual_cost_evidence"]["valid_until_date"] = "2026-09-04"
     with pytest.raises(nb.BenchmarkContractError, match="validity precedes"):
         nb._validate_actual_cost_evidence(invalid_dates)
 

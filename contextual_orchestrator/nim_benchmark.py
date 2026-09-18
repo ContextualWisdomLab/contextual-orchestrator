@@ -115,7 +115,7 @@ ACTUAL_COST_EVIDENCE: dict[str, Any] = {
     "source_title": "Run NIM Anywhere",
     "source_url": "https://docs.api.nvidia.com/nim/docs/run-anywhere",
     "reviewed_at_date": "2026-09-05",
-    "valid_until_date": "2026-10-04",
+    "valid_until_date": "2026-10-05",
     "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
     "access_scope": "free API endpoint access for prototyping",
     "production_access_note": (

@@ -46,9 +46,11 @@ FAKE_ENDPOINT = "https://nim.example.test/v1"
 
 
 @pytest.fixture(autouse=True)
-def _fresh_backend():
-    """Isolated in-memory KV and a clean benchmark env var for every test."""
+def _fresh_backend(monkeypatch: pytest.MonkeyPatch):
+    """Isolate credentials and keep offline contracts independent of wall time."""
     set_backend(InMemoryCredentialBackend())
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "reviewed_at_date", "2000-01-01")
+    monkeypatch.setitem(nb.ACTUAL_COST_EVIDENCE, "valid_until_date", "2999-12-31")
     saved_env = os.environ.pop(nb.NIM_CREDENTIAL_NAME, None)
     try:
         yield

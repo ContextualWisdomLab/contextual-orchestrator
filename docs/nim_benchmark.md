@@ -154,7 +154,7 @@ As reviewed on 2026-09-05, NVIDIA's Run NIM Anywhere page states that NVIDIA
 Developer Program members have free access to hosted NIM API endpoints for
 prototyping. The report records that exact source, review date, validity horizon,
 program context, production distinction, and uncertainty. A live run fails
-closed after 2026-10-04 until the official source is reviewed again. Production
+closed after 2026-10-05 until the official source is reviewed again. Production
 support and licensing are not inferred from prototype access and require
 NVIDIA AI Enterprise under the reviewed documentation.
 

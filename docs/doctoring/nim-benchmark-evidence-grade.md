@@ -134,7 +134,7 @@ from production and states that production requires NVIDIA AI Enterprise. The
 report therefore records `actual_cost_usd = 0.0` only for the reviewed hosted
 endpoint access context, includes the exact source, review date, validity
 horizon, program scope, production distinction, and uncertainty, and refuses a
-live run after 2026-10-04 until the source is reviewed again.
+live run after 2026-10-05 until the source is reviewed again.
 
 No NVIDIA model price is embedded or inferred. A live hypothetical pricing
 scenario is optional; absence means `unknown`. If supplied, it must be marked
