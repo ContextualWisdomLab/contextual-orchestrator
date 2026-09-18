@@ -318,6 +318,7 @@ version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "cryptography" },
+    { name = "egressweave" },
     { name = "fast-mlsirm" },
     { name = "jsonschema" },
     { name = "opentelemetry-api" },
@@ -361,6 +362,7 @@ requires-dist = [
     { name = "alembic", marker = "extra == 'db'", specifier = ">=1.17" },
     { name = "atheris", marker = "python_full_version >= '3.12' and extra == 'fuzz'", specifier = "==3.1.0" },
     { name = "cryptography", specifier = ">=43.0" },
+    { name = "egressweave", specifier = ">=0.1.0,<0.2.0" },
     { name = "fast-mlsirm", marker = "python_full_version >= '3.12'", git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git?rev=09f762ded35786dd1078222a4577ff09d649816f" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.128.0" },
     { name = "greenlet", marker = "extra == 'db'", specifier = ">=3.2" },
@@ -441,6 +443,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "egressweave"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpcore" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/98/2302136a7f35d216b4e019d1f3b4b9688bed488a06c1cd9b2022e68aded7/egressweave-0.1.0.tar.gz", hash = "sha256:e1e3a6dbabd4084fb03f19a95931ab96e4beeef96bc8fc7cf0d8e5b91e266057", size = 15680, upload-time = "2026-07-12T03:57:42.218Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/5a/ec82b385d2997796fabaaa3f827b4dc0fe46b466d5a99003e3f69d0a0065/egressweave-0.1.0-py3-none-any.whl", hash = "sha256:6bcb07109bdee25a6d49e5516f4c99ecd172ffe8536455d2cac860c44a4492f6", size = 15089, upload-time = "2026-07-12T03:57:40.989Z" },
 ]
 
 [[package]]
