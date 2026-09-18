@@ -163,8 +163,11 @@ jobs:
       - name: Install Rust toolchain
         run: |
           set -euo pipefail
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+          # rust-toolchain.toml (repo root) pins 1.97.1 and overrides a floating
+          # stable default. Install rustfmt/clippy on that pin so cargo fmt and
+          # clippy do not fail with "cargo-fmt is not installed for 1.97.1".
+          rustup show
+          rustup component add rustfmt clippy
           rustc --version
           cargo --version
 
