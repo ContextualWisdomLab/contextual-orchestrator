@@ -33,13 +33,41 @@ class RecordingClient(ModelClient):
         self.provider_calls: list[tuple[str, dict]] = []
 
     def chat(self, agent, messages, **request_options):
-        """Serve orchestration stages locally before their final structured call."""
+        """Serve orchestration stages; preserve virtual free-pool worker tools.
+
+        On current main, ``orchestrator/free`` keeps tools on the control plane
+        as worker ``request_settings`` rather than named-model passthrough.
+        Record those settings and hand tool calls back the same way a live
+        provider would (via ``assistant_message`` extras).
+        """
         del messages, request_options
-        self.provider_calls.append((agent.id, {}))
+        settings = self.request_settings_snapshot()
+        recorded = {
+            key: deepcopy(settings[key])
+            for key in ("tools", "tool_choice", "parallel_tool_calls")
+            if key in settings
+        }
+        self.provider_calls.append((agent.id, recorded))
         if self.reject_calls:
             raise urllib.error.HTTPError(
                 "https://provider.invalid/v1", 429, "unavailable", {}, None
             )
+        tools = settings.get("tools")
+        if tools:
+            self._local.assistant_message = {
+                "tool_calls": [
+                    {
+                        "id": "probe_call",
+                        "type": "function",
+                        "function": {
+                            "name": "review_probe",
+                            "arguments": '{"probe_status":"ready"}',
+                        },
+                    }
+                ],
+                "finish_reason": "tool_calls",
+            }
+            return ""
         return '{"probe_status":"ready"}'
 
     def proxy_send_once(self, agent, endpoint, payload):
@@ -168,7 +196,18 @@ def test_inference_preflight_preserves_capability_requests(probe_name):
         assert {agent_id for agent_id, _payload in client.provider_calls} == {
             "free_agent"
         }
-        forwarded_request = client.provider_calls[-1][1]
+        # Capability fields may land on a worker chat settings snapshot (tools
+        # on virtual selectors) or a structured proxy payload (response_format).
+        capability_payloads = [
+            payload
+            for _agent_id, payload in client.provider_calls
+            if any(
+                field_name in payload
+                for field_name in ("tools", "tool_choice", "response_format")
+            )
+        ]
+        assert capability_payloads, client.provider_calls
+        forwarded_request = capability_payloads[-1]
         for field_name in ("tools", "tool_choice", "response_format"):
             if field_name in probe_request:
                 assert forwarded_request[field_name] == probe_request[field_name]
