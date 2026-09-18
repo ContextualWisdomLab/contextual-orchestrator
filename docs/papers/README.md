@@ -145,6 +145,18 @@ redistribution is unclear.
   (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
   Grounds workflow steps, recursion depth, decomposition, and access-list
   scope as first-class ablation factors.
+- Zhang, A. L., Kraska, T., & Khattab, O. (2026). *Recursive language models*
+  (arXiv:2512.24601, Version 3). https://arxiv.org/abs/2512.24601
+  Cited by the request-partitioning ADR and doctoring receipts as external
+  motivation for bounded ownership of long inputs. Citation only; this is not
+  a reproduction of RLM experiments.
+- Thompson, W. R. (1933). On the likelihood that one unknown probability
+  exceeds another in view of the evidence of two samples. *Biometrika,
+  25*(3–4), 285–294. https://doi.org/10.1093/biomet/25.3-4.285
+  Grounds posterior probability-matching for live model-group member
+  selection. See
+  [Thompson-sampling routing traceability](thompson-sampling-model-group-routing.md).
+  Citation only; PDF not vendored.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
@@ -286,6 +298,7 @@ that the papers were fully reviewed, their claims reproduced, or PDFs licensed.
 | 2506.22316 | [Polytomous judge benchmark](../benchmarks/2026-08-11-polytomous-llm-judge.md) and [judge calibration ADR](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md) |
 | 2110.15150 | [Purpose-limited protection ADR](../planning/adrs/0028-purpose-limited-pii-protection.md) |
 | 2601.17814 | [Model-group specification](../model-group-product-technical-spec.md) and [free-pool admission research](../research/review-gateway-free-pool-admission.md) |
+| 2512.24601 | [Request partitioning ADR](../planning/adrs/2026-09-10-request-partitioning.md) and [learned-policy authority receipt](../doctoring/learned_policy_authority_20260910.md) |
 
 Scope: explicit arXiv URL, colon, and DOI-style identifiers in tracked Python,
 Rust, Markdown, and TOML files. This is a discovery census, not a complete
@@ -406,6 +419,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
 - [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
 - [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
+- [DOI 10.1093/biomet/25.3-4.285](https://doi.org/10.1093/biomet/25.3-4.285)
 - [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
 - [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
 - [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
@@ -430,6 +444,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [arXiv 2406.18665 DOI](https://doi.org/10.48550/arXiv.2406.18665)
 - [arXiv 2512.04388 DOI](https://doi.org/10.48550/arXiv.2512.04388)
 - [arXiv 2512.04695 DOI](https://doi.org/10.48550/arXiv.2512.04695)
+- [arXiv 2512.24601 DOI](https://doi.org/10.48550/arXiv.2512.24601)
 - [arXiv 2601.17814 DOI](https://doi.org/10.48550/arXiv.2601.17814)
 - [arXiv 2606.21228 DOI](https://doi.org/10.48550/arXiv.2606.21228)
 - [arXiv 2608.06867 DOI](https://doi.org/10.48550/arXiv.2608.06867)
