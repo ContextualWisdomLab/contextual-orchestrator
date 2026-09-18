@@ -85,9 +85,11 @@ declared configuration. `ProviderModelSource` gains
 `"opencode"` (replacing the deleted `_MODELS_DEV_OPENCODE_PROVIDER` module
 constant and its `provider_name == "opencode_zen"` special case with the same
 value, now expressed as data), `nvidia_nim` and `nvidia_nim_sub` both set it
-to `"nvidia"`, and `openai` sets it to `"openai"`. `openrouter` and `bytez`
-keep the `None` default: OpenRouter already reports its own real per-token
-pricing, and there is no
+to `"nvidia"`, `openai` sets it to `"openai"`, and `openrouter` sets it to
+`"openrouter"`. OpenRouter's availability row and provider-reported fields are
+unioned with Models.dev metadata; neither source erases fields omitted by the
+other. Models.dev remains authoritative only for `is_free`. `bytez` keeps the
+`None` default because there is no
 Models.dev signal to join for Bytez.
 
 The invocation site in `discover_provider_models` becomes `if
@@ -176,6 +178,38 @@ still leaves `is_free = False` once the retry budget is genuinely exhausted;
 nothing about the retry can turn a paid model free. Motivated by the
 `orchestrator/free` review-sidecar reliability gap in
 `ContextualWisdomLab/.github` PR #1433.
+
+## Amendment (2026-08-31): OpenRouter is no longer `evidence_only`
+
+This ADR's Context section characterized OpenRouter's `evidence_only=True`
+(commit `952996ec`) as settled, deliberate ZDR-privacy hardening "that stays
+untouched." That characterization was false; it was reversed on direct
+review this pass: ZDR eligibility is a route/model-level property
+(`is_zdr_model`, exact feed matching), never grounds to block an entire
+provider account from serving. OpenRouter's `ProviderModelSource` entry no
+longer sets `evidence_only=True`.
+
+This directly closes the gap this ADR's Context section itself identified
+("only OpenRouter's own API ever reports real pricing... and OpenRouter...
+never serves inference... `orchestrator/free` was therefore structurally
+empty in practice"): OpenRouter can now serve like every other discovered
+provider, independent of and in addition to this ADR's Models.dev join for
+the other five sources. The provider-neutral ZDR-evidence-application
+contract (OpenRouter's feed also crediting matching rows from *other*
+providers, insisted on during PR #901's review) is unchanged; what changed
+is that OpenRouter's own rows are no longer the one arbitrary exception to
+it. See `docs/product-technical-gap-baseline.md`'s 2026-08-31 entry for the
+full mechanism, the request-time ZDR-pinning enforcement this required, and
+its stated scope limits.
+
+## Amendment (2026-09-05): preserve both OpenRouter and Models.dev evidence
+
+The join now unions pricing and architecture at field granularity. OpenRouter
+fields survive when Models.dev omits them, while a present Models.dev field
+wins for the same key. The independent `is_free` decision remains derived only
+from the complete Models.dev cost object, so preserving provider data cannot
+self-certify a model as free. Models.dev's per-model SDK override is retained as
+protocol evidence for consumers that expose more than one wire protocol.
 
 ## References
 

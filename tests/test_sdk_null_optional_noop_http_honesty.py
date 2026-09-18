@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -75,6 +76,7 @@ def test_http_chat_accepts_null_service_tier_store_seed_stop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_null_seed_stop_store_n() -> None:
@@ -100,6 +102,7 @@ def test_http_completions_accepts_null_seed_stop_store_n() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_null_seed_stop_store_n() -> None:
@@ -124,6 +127,7 @@ def test_http_responses_accepts_null_seed_stop_store_n() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_nonzero_seed() -> None:
@@ -143,6 +147,7 @@ def test_http_chat_still_rejects_nonzero_seed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_store_true() -> None:
@@ -162,6 +167,7 @@ def test_http_chat_still_rejects_store_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_still_rejects_nonnull_stop() -> None:
@@ -181,3 +187,4 @@ def test_http_completions_still_rejects_nonnull_stop() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

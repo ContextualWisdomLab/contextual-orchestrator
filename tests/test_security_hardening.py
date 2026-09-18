@@ -21,6 +21,73 @@ def build() -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
 
 
+def test_concurrent_error_responses_share_only_their_own_log_id(caplog) -> None:
+    """Concurrent HTTP failures correlate without logging credentials or bodies."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="private_test_credential"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with (
+            patch.object(server.RequestHandlerClass, "_authorize", side_effect=RuntimeError("test failure")),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            responses = list(executor.map(
+                lambda _: request_json(
+                    f"{base}/v1/models", "GET",
+                    headers={"authorization": "Bearer private_test_credential"},
+                ),
+                range(2),
+            ))
+        request_ids = []
+        for status, payload, _ in responses:
+            assert status == 500
+            assert payload["error"]["code"] == "internal_error"
+            request_id = payload["error"]["detail"]["request_id"]
+            assert payload["error_detail"]["request_id"] == request_id
+            assert len(request_id) == 32
+            request_ids.append(request_id)
+        assert len(set(request_ids)) == 2
+        records = [record.getMessage() for record in caplog.records if "request_failed" in record.getMessage()]
+        assert sorted(records) == sorted(
+            f"request_failed status=500 code=internal_error request_id={request_id}"
+            for request_id in request_ids
+        )
+        assert "private_test_credential" not in caplog.text
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_error_log_bounds_existing_response_request_ids(caplog) -> None:
+    """Diagnostics survive while one trusted correlation ID binds body and log."""
+    server = build_server(build(), port=0)
+    handler = object.__new__(server.RequestHandlerClass)
+    try:
+        for request_id in ("a" * 32, "secret\nforged_log", "g" * 32, 42, None):
+            caplog.clear()
+            detail = {"request_id": request_id, "diagnostic": "private_diagnostic"}
+            with patch.object(handler, "_send") as send:
+                handler._send_error(400, "invalid_request", "invalid request", detail)
+            sent_detail = send.call_args.args[0]["error_detail"]
+            assert sent_detail["diagnostic"] == "private_diagnostic"
+            trusted_id = sent_detail["request_id"]
+            assert len(trusted_id) == 32
+            assert all(character in "0123456789abcdef" for character in trusted_id)
+            assert send.call_args.args[0]["error"]["detail"]["request_id"] == trusted_id
+            assert send.call_args.args[1] == 400
+            assert caplog.records[-1].getMessage() == (
+                f"request_failed status=400 code=invalid_request request_id={trusted_id}"
+            )
+            assert "private_diagnostic" not in caplog.text
+            assert "forged_log" not in caplog.text
+    finally:
+        server.server_close()
+
+
 def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
     seen: list[tuple[str, str]] = []
 
@@ -52,6 +119,48 @@ def test_external_principal_resolver_survives_bearer_rotation() -> None:
     security.authorize(old_headers, "inference", "127.0.0.1")
     security.authorize(rotated_headers, "inference", "127.0.0.1")
     assert security.principal_id(old_headers) == security.principal_id(rotated_headers)
+
+
+def test_single_token_mode_keeps_the_documented_trace_escape_hatch() -> None:
+    """With only auth_token configured, it still authorizes the trace purpose."""
+    security = SecurityConfig(auth_token="only-token")
+    headers = {"authorization": "Bearer only-token"}
+    assert security.authorize(headers, "trace", "127.0.0.1") == "trace.read"
+
+
+def test_split_token_mode_without_trace_token_fails_closed_for_trace() -> None:
+    """Split admin/inference mode has no verified trace claim without trace_token."""
+    security = SecurityConfig(admin_token="admin-token", inference_token="inference-token")
+    for token in ("admin-token", "inference-token"):
+        try:
+            security.authorize({"authorization": f"Bearer {token}"}, "trace", "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"{token} incorrectly authorized the trace scope")
+
+
+def test_split_token_mode_trace_token_authorizes_only_trace() -> None:
+    """A configured trace_token authorizes trace and nothing else."""
+    security = SecurityConfig(
+        admin_token="admin-token", inference_token="inference-token", trace_token="trace-token"
+    )
+    trace_headers = {"authorization": "Bearer trace-token"}
+    assert security.authorize(trace_headers, "trace", "127.0.0.1") == "trace.read"
+    for scope in ("admin", "inference"):
+        try:
+            security.authorize(trace_headers, scope, "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"trace_token incorrectly authorized the {scope} scope")
+    for token in ("admin-token", "inference-token"):
+        try:
+            security.authorize({"authorization": f"Bearer {token}"}, "trace", "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"{token} incorrectly authorized the trace scope")
 
 
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
@@ -256,6 +365,47 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert inference_status == 200
     assert inference_body["orchestration"]["mode"] == "route"
     assert "trace" not in inference_body["orchestration"]
+
+
+def test_inference_readiness_is_read_only_and_admin_refresh_stays_privileged() -> None:
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(
+            auth_token="", admin_token="admin_secret", inference_token="inference_secret"
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    def get(path: str, token: str) -> tuple[int, dict]:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            headers={"authorization": f"Bearer {token}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    try:
+        inference_status, inference_body = get(
+            "/api/v1/provider_readiness?refresh=true", "inference_secret"
+        )
+        admin_status, admin_body = get(
+            "/api/v1/provider_readiness/latest?refresh=false", "admin_secret"
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert inference_status == 400
+    assert inference_body["error"]["code"] == "readiness_refresh_forbidden"
+    assert admin_status == 200
+    assert admin_body["probe"] == "none"
 
 
 def test_single_and_split_token_modes_cannot_be_combined() -> None:

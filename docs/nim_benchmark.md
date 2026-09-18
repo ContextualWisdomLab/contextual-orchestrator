@@ -18,14 +18,25 @@ The detailed engineering and evidence record is
 # no network calls and never receives NVIDIA_NIM_API_KEY.
 python -m contextual_orchestrator nim-benchmark --dry-run \
   --pricing-scenario examples/nim_pricing_scenario.json \
-  --output-dir benchmark_artifacts
+  --output-dir benchmark_artifacts \
+  --bootstrap-resample-count 2000 \
+  --confidence-level 0.95 \
+  --comparison-pair conduct_bounded,route_once \
+  --max-workflow-depth 5 \
+  --max-output-tokens 264
 
 # Live CI run: the workflow injects NVIDIA_NIM_API_KEY only into the live step.
 # The process bootstraps it into the credential registry and runtime access
-# resolves the credential by name.
+# resolves the credential by name. Resample count, coverage, comparison pairs,
+# workflow depth, and output-token cap are required declarations; the values
+# below are this run's choices, not hidden code defaults.
 python -m contextual_orchestrator nim-benchmark \
   --max-total-requests 2000 \
+  --max-workflow-depth 5 \
   --max-output-tokens 264 \
+  --bootstrap-resample-count 2000 \
+  --confidence-level 0.95 \
+  --comparison-pair conduct_bounded,route_once \
   --git-sha "$GITHUB_SHA" \
   --workflow-run-id "$GITHUB_RUN_ID"
 ```
@@ -33,10 +44,11 @@ python -m contextual_orchestrator nim-benchmark \
 The provider secret is never accepted through argv, printed, or serialized.
 Artifact writing fails closed if the resolved secret appears in any output.
 
-`--max-output-tokens` is the per-provider-call output cap. The equal
-cell-wide prompt-plus-completion budget is five times that cap by default
-(`1,320` tokens), which leaves the fixed five-call conduct workflow enough room
-for its prompts while keeping the same cell budget for every policy.
+`--max-output-tokens` is the declared per-provider-call output cap.
+`--max-workflow-depth` is the declared equal-call envelope. The equal
+cell-wide prompt-plus-completion budget is their product. Historical dry-run
+flags used 264 and 5 (`1,320` tokens) so the locked smoke manifest stayed
+inside that envelope; omitting the flags fails closed.
 
 ## Provider-egress security boundary
 
@@ -118,10 +130,10 @@ Every policy × task cell receives the same:
 
 - locked task and scorer version;
 - total prompt-plus-completion token allowance configured by
-  `--max-output-tokens`;
-- five-call maximum envelope;
+  `--max-output-tokens` times `--max-workflow-depth`;
+- declared call envelope from `--max-workflow-depth`;
 - timeout policy; and
-- five-step workflow-depth ceiling.
+- declared workflow-depth ceiling.
 
 Provider retries and orchestration tool retries are disabled inside the benchmark
 cell so the declared request budget bounds actual egress and the measured call
@@ -168,16 +180,16 @@ dry-run schemas and must never be presented as real model pricing.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled thirty-task manifest is an evidence-floor fixture with two exploratory
-tasks kept outside the decision set. It proves integration behavior but does not
-authorize production routing. A report reaches
-`evidence_review_required` only when it contains at least 30 paired locked tasks
-and at least 90% successful comparison cells. Otherwise it reports
-`insufficient_evidence` and explains the shortfall.
-
-These thresholds are explicit conservative governance floors, not universal
-statistical guarantees. Every report keeps `routing_recommendation` null even
-when the floor is met; a human review remains required.
+The bundled thirty-task manifest is an integration fixture with two exploratory
+tasks kept outside the measurement set. Observed task counts and completion
+fractions cannot establish statistical sufficiency or authorize production
+routing. Reports use `measurement_evidence_only`, retain null threshold fields
+for schema compatibility, and keep `routing_recommendation` null. Consumers must
+not reinterpret the absence of a cutoff as unrestricted production permission.
+A production decision requires an independently justified, pre-registered and
+validated evaluation design appropriate to the estimand and deployment scope.
+The completion fraction describes emitted cells, not a validated response rate
+for a target population or proof of an expected task-by-policy matrix.
 
 - Seeded paired bootstrap intervals preserve task pairing.
 - Pareto frontiers cover quality versus latency and quality versus reviewed
@@ -186,6 +198,54 @@ when the floor is met; a human review remains required.
 - The manifest rejects expected-answer leakage according to each task's scorer.
 - Only locked tasks enter reported comparisons; exploratory tasks remain outside
   the decision evidence.
+
+### Comparison report version 3
+
+Version 3 preserves a task/policy/split plan made before evaluation, including
+each direct worker and the optional cheapest policy only when eligible.
+Assembly and artifact publication reject missing, duplicate, or unexpected
+observations. Missing observations are not treated as failed deliveries.
+The plan must also match the locked task count and the complete policy matrix
+for the selected catalog workers, model limit, and cheapest-policy skip reason.
+This is an internal completeness check, not independently verified
+preregistration; coordinated changes to the plan, observations, and supporting
+metadata are outside its proof.
+Regenerate older reports because they lack this required plan.
+
+The version 2 comparison semantics are retained: every locked task attempted by both policies, including
+failures and timeouts. The delivered-task score is the scorer's value after a
+successful run and zero when no answer was delivered successfully. The original
+failure record retains `task_score: null`; zero delivery reward is not an
+estimate of an unobserved answer's correctness or a psychometric response.
+
+Each comparison reports A-minus-B mean delivered-score and elapsed-time
+differences with paired percentile bootstrap intervals, successful outcome
+counts on the shared tasks, and unmatched task counts. Coverage, resample
+count, and the compared policy pairs are declared in provenance; they are not
+hidden 2,000-resample or 95% defaults and not a baked-in conduct/route subset.
+Elapsed time ends at the recorded terminal outcome, including a failure or
+timeout. A fast failure is therefore visible alongside its zero delivery
+reward; lower elapsed time alone is not an improvement in service. The
+intervals condition on the common task set and the declared policy pairs.
+Hindsight worker identity remains a separate measurement field; comparing
+against it requires an explicit pair declaration.
+
+### Comparison report version 4
+
+Version 4 requires declared `bootstrap_resample_count`, `confidence_level`,
+and `comparison_pairs` in report provenance. The percentile method name is
+`paired_bootstrap_percentile`; coverage is a separate numeric field. A
+declared coverage that cannot be represented with the resample count fails
+closed. Older reports must be regenerated.
+
+Reports using version 1 compared only jointly successful tasks. Their values
+must not be pooled with version 2, 3, or 4, and the validator rejects old schemas.
+Version 2 observations require their independently preserved evaluation plan
+before migration; do not infer a complete plan from surviving observations.
+No task-count or completion-fraction threshold authorizes production promotion.
+The report remains measurement evidence only, with no routing recommendation.
+These mean intervals do not establish p95 performance, population
+representativeness, or uncertainty from choosing the hindsight winner.
 
 ## Fail-closed contract
 

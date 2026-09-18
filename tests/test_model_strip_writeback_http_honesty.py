@@ -48,7 +48,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -136,6 +137,7 @@ def test_http_chat_tools_accepts_padded_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_advertised_gateway_default_model() -> None:
@@ -181,6 +183,7 @@ def test_http_chat_accepts_advertised_gateway_default_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_legacy_completions_defaults_missing_model() -> None:
@@ -204,6 +207,7 @@ def test_http_legacy_completions_defaults_missing_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -238,6 +242,7 @@ def test_http_responses_accepts_advertised_gateway_default_model(stream: bool) -
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_response_format_accepts_padded_model() -> None:
@@ -256,6 +261,7 @@ def test_http_chat_response_format_accepts_padded_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_padded_model() -> None:
@@ -271,6 +277,7 @@ def test_http_responses_accepts_padded_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_tools_accepts_padded_model() -> None:
@@ -295,6 +302,7 @@ def test_http_responses_tools_accepts_padded_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_padded_model() -> None:
@@ -309,6 +317,7 @@ def test_http_completions_accepts_padded_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_unknown_padded_model() -> None:
@@ -340,6 +349,7 @@ def test_http_chat_still_rejects_unknown_padded_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
