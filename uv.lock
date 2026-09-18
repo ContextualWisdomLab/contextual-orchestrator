@@ -328,6 +328,7 @@ dependencies = [
 
 [package.optional-dependencies]
 api = [
+    { name = "anyio" },
     { name = "fastapi" },
     { name = "uvicorn" },
 ]
@@ -360,6 +361,7 @@ native-build = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", marker = "extra == 'db'", specifier = ">=1.17" },
+    { name = "anyio", marker = "extra == 'api'", specifier = "==4.14.2" },
     { name = "atheris", marker = "python_full_version >= '3.12' and extra == 'fuzz'", specifier = "==3.1.0" },
     { name = "cryptography", specifier = ">=43.0" },
     { name = "egressweave", specifier = ">=0.1.0,<0.2.0" },
