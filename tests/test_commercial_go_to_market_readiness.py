@@ -86,7 +86,7 @@ def test_commercial_go_to_market_readiness_report_indexes_sellable_packet_and_fo
     assert "not a valuation guarantee" in report["source_note"]
     assert "revenue proof" in report["source_note"]
     assert report["go_to_market_summary"]["blocked_count"] == 3
-    assert report["go_to_market_summary"]["warning_count"] == 2
+    assert report["go_to_market_summary"]["warning_count"] == 3
     assert report["go_to_market_summary"]["buyer_signature_gap_count"] == 4
     assert report["go_to_market_summary"]["external_or_production_gap_count"] == 5
     assert report["go_to_market_summary"]["review_process_is_blocker"] is True
@@ -112,6 +112,8 @@ def test_commercial_go_to_market_readiness_report_indexes_sellable_packet_and_fo
         "external_or_production_input_required"
     )
     assert items["packaging_decision"]["completion_state"] == "ready"
+    assert items["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in items["review_process_policy"]["evidence"]
     assert report["related_runtime_reports"]["commercial_close_status"] == "commercial_close_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["go_to_market_links"]["runtime_endpoint"] == "/api/v1/commercial_go_to_market_readiness/latest"

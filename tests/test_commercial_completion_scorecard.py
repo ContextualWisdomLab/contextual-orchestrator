@@ -86,7 +86,7 @@ def test_commercial_completion_scorecard_report_aggregates_program_completion() 
     assert "not a valuation guarantee" in report["source_note"]
     assert "production compliance certificate" in report["source_note"]
     assert report["completion_summary"]["blocked_count"] == 2
-    assert report["completion_summary"]["warning_count"] == 1
+    assert report["completion_summary"]["warning_count"] == 2
     assert report["completion_summary"]["external_input_group_count"] == 3
     assert report["completion_summary"]["review_process_is_blocker"] is True
     assert report["completion_summary"]["code_connect_used"] is False
@@ -98,9 +98,10 @@ def test_commercial_completion_scorecard_report_aggregates_program_completion() 
         "ponytail_packaging_decision",
         "data_analytics_truthfulness",
         "verification_packet",
-        "review_process_policy",
     ]:
         assert items[item_name]["completion_state"] == "ready"
+    assert items["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in items["review_process_policy"]["evidence"]
     assert items["runtime_endpoint_chain"]["completion_state"] == "blocked"
     assert items["production_buyer_followups"]["completion_state"] == "warning"
     assert items["production_buyer_followups"]["source_gap_status"] == "external_input_required"

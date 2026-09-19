@@ -86,7 +86,7 @@ def test_commercial_launch_readiness_report_tracks_launch_inputs() -> None:
     assert "not a valuation guarantee" in report["source_note"]
     assert "production compliance certificate" in report["source_note"]
     assert report["launch_summary"]["blocked_count"] == 2
-    assert report["launch_summary"]["warning_count"] == 3
+    assert report["launch_summary"]["warning_count"] == 4
     assert report["launch_summary"]["external_input_group_count"] == 3
     assert report["launch_summary"]["buyer_environment_gap_count"] == 1
     assert report["launch_summary"]["production_telemetry_gap_count"] == 1
@@ -107,7 +107,8 @@ def test_commercial_launch_readiness_report_tracks_launch_inputs() -> None:
     assert items["production_telemetry_inputs"]["source_gap_status"] == "production_input_required"
     assert items["commercial_signature_inputs"]["completion_state"] == "warning"
     assert items["commercial_signature_inputs"]["source_gap_status"] == "buyer_signature_required"
-    assert items["review_process_policy"]["completion_state"] == "ready"
+    assert items["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in items["review_process_policy"]["evidence"]
     assert items["packaging_decision"]["completion_state"] == "ready"
     assert report["related_runtime_reports"]["commercial_go_to_market_status"] == (
         "commercial_go_to_market_blocked"

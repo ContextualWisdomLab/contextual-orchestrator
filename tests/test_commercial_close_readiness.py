@@ -86,7 +86,7 @@ def test_commercial_close_readiness_report_separates_local_packet_from_buyer_sig
     assert "not a valuation guarantee" in report["source_note"]
     assert "purchase commitment" in report["source_note"]
     assert report["close_summary"]["blocked_count"] == 2
-    assert report["close_summary"]["warning_count"] == 4
+    assert report["close_summary"]["warning_count"] == 5
     assert report["close_summary"]["buyer_signature_gap_count"] == 4
     assert report["close_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
@@ -102,6 +102,8 @@ def test_commercial_close_readiness_report_separates_local_packet_from_buyer_sig
     ]:
         assert items[item_name]["completion_state"] == "warning"
         assert items[item_name]["source_gap_status"] == "buyer_signature_required"
+    assert items["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in items["review_process_policy"]["evidence"]
     assert report["related_runtime_reports"]["commercial_value_status"] == "commercial_value_ready_with_warnings"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["close_links"]["runtime_endpoint"] == "/api/v1/commercial_close_readiness/latest"

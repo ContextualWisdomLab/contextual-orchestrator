@@ -16012,10 +16012,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_close_readiness.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review process delay is not a close blocker unless a concrete product, security, API-contract, or document failure is produced.",
-                "action": "Keep commercial close work moving while queued review processes are pending.",
-                "exit_criteria": "Only concrete failures block close readiness.",
+                "completion_state": "warning" if value["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    value["review_process_policy"]["blocker_definition"]
+                    if value["review_process_policy"]["is_blocker"]
+                    else "Review process delay is not a close blocker unless a concrete product, security, API-contract, or document failure is produced."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if value["review_process_policy"]["is_blocker"]
+                    else "Keep commercial close work moving while queued review processes are pending."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if value["review_process_policy"]["is_blocker"]
+                    else "Only concrete failures block close readiness."
+                ),
             },
             {
                 "item_name": "packaging_decision",
@@ -16324,10 +16336,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_go_to_market_readiness.md", "docs/commercial_saleability_decision.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review process delay is not a GTM blocker unless a concrete failure is produced.",
-                "action": "Continue GTM readiness work while queued reviews are pending.",
-                "exit_criteria": "Only concrete product, security, API contract, or document failures block GTM readiness.",
+                "completion_state": "warning" if close["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    close["review_process_policy"]["blocker_definition"]
+                    if close["review_process_policy"]["is_blocker"]
+                    else "Review process delay is not a GTM blocker unless a concrete failure is produced."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if close["review_process_policy"]["is_blocker"]
+                    else "Continue GTM readiness work while queued reviews are pending."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if close["review_process_policy"]["is_blocker"]
+                    else "Only concrete product, security, API contract, or document failures block GTM readiness."
+                ),
             },
             {
                 "item_name": "packaging_decision",
@@ -16629,10 +16653,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_launch_readiness.md", "docs/commercial_go_to_market_readiness.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review process delay is not a launch blocker unless a concrete failure is produced.",
-                "action": "Continue launch readiness work while queued review processes are pending.",
-                "exit_criteria": "Only concrete product, security, API contract, or document failures block launch readiness.",
+                "completion_state": "warning" if gtm["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    gtm["review_process_policy"]["blocker_definition"]
+                    if gtm["review_process_policy"]["is_blocker"]
+                    else "Review process delay is not a launch blocker unless a concrete failure is produced."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if gtm["review_process_policy"]["is_blocker"]
+                    else "Continue launch readiness work while queued review processes are pending."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if gtm["review_process_policy"]["is_blocker"]
+                    else "Only concrete product, security, API contract, or document failures block launch readiness."
+                ),
             },
             {
                 "item_name": "packaging_decision",
@@ -16913,10 +16949,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_completion_scorecard.md", "docs/commercial_launch_readiness.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review delay, model-review delay, and queued review automation are not product blockers.",
-                "action": "Block only on concrete security, API contract, document, or functional defects.",
-                "exit_criteria": "Review process delay remains non-blocking without concrete failure evidence.",
+                "completion_state": "warning" if launch["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    launch["review_process_policy"]["blocker_definition"]
+                    if launch["review_process_policy"]["is_blocker"]
+                    else "Review delay, model-review delay, and queued review automation are not product blockers."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if launch["review_process_policy"]["is_blocker"]
+                    else "Block only on concrete security, API contract, document, or functional defects."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if launch["review_process_policy"]["is_blocker"]
+                    else "Review process delay remains non-blocking without concrete failure evidence."
+                ),
             },
             {
                 "item_name": "production_buyer_followups",
