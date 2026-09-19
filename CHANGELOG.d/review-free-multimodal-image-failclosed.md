@@ -50,3 +50,9 @@ Endpoint preflight now normalizes accepted false forms of
 `tool_call:single` vision endpoint therefore remains eligible for
 `"false"` and `0` requests, while invalid forms still fail closed before
 provider I/O.
+
+Worker preflight now excludes agents whose operator policy lists `worker` in
+`provider_exclusions`, so a role-ineligible vision-only pool returns HTTP 400
+before streaming commits SSE. The related judge and Responses fixtures now
+model an admitted text+image chat deployment and keep virtual passthrough in
+the synthetic transport, preventing fixture defects from hiding owner failures.
