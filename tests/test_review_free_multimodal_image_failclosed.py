@@ -636,7 +636,7 @@ def test_runtime_image_pool_requires_text_and_image_input() -> None:
     )
     text_and_image = ModelAgent(
         "text_and_image",
-        "text-and-image-model",
+        "multimodal-chat-model",
         tags=_IMAGE_FREE_TAGS,
     )
     orchestrator = TaskOrchestrator([image_only, text_and_image])
