@@ -262,6 +262,32 @@ def test_free_image_stream_fails_before_sse_when_only_text_free_agents_exist() -
         server.server_close()
 
 
+def test_free_image_stream_fails_before_sse_when_vision_agent_excludes_worker() -> None:
+    """A role-ineligible vision row cannot prove streamed worker capacity."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_excluded_vision",
+                "worker-excluded-vision-model",
+                tags=_IMAGE_FREE_TAGS,
+                provider_exclusions=("worker",),
+                base_url="mock://vision",
+            )
+        ]
+    )
+    server, thread, port = _serve(orchestrator)
+    try:
+        payload = _figure_payload()
+        payload["stream"] = True
+        status, media_type, body = _post_raw(port, payload)
+        assert status == 400, body
+        assert media_type != "text/event-stream"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_free_image_request_serves_image_capable_free_agent() -> None:
     """When a free text+image agent exists, figure-bearing free traffic reaches it."""
     orchestrator = TaskOrchestrator(
