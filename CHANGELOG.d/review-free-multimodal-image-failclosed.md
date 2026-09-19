@@ -12,3 +12,8 @@ and model-judge selection. Discovery capability/modality evidence is now
 case-normalized before routing, the changed admission predicate is published
 as review-readiness contract v2, and the review request ceiling is pinned by
 test to the documented 32 MiB owner contract.
+
+Direct-route judging and proxy replica/failover ranking now retain the same
+image requirement, and runtime image pools require both `input:text` and
+`input:image` evidence so a mixed figure review cannot fall through to a
+text-only or image-only model after initial selection.
