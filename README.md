@@ -92,7 +92,7 @@ This does not require administrator readiness access or provider credentials.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
 
-Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/kv-credentials.md)):
+Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/kv-credentials.md)):
 
 ```json
 {
@@ -124,7 +124,7 @@ For a local `mlx-lm` OpenAI-compatible server, use the explicit `mlx://` scheme.
 }
 ```
 
-The full local candidate registry is [examples/agents.local.json](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/examples/agents.local.json).
+The full local candidate registry is [examples/agents.local.json](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/examples/agents.local.json).
 It contains the public `contextual-orchestrator` candidate, discovered MLX
 worker models, and every discovered llama.cpp/LM Studio candidate. Discovery
 does not decide governance state: seed candidates are enabled by default, while
@@ -136,10 +136,10 @@ explicit; runtime discovery does not silently change the pool.
 
 Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests (`1..64`; the current measured starting point for this server is `8`); when serving HTTP, set `--max-concurrent-runs N` explicitly as well if the measured batch concurrency exceeds the secure default of `8`. Keep interactive route/conduct requests on the default sequential path.
 
-Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/planning/adrs/0001-fail-closed-model-judgment.md).
+Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/planning/adrs/0001-fail-closed-model-judgment.md).
 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
-Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez, and an allowlisted OpenAI-compatible gateway) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. Bytez discovery queries only the documented `chat` and `text-generation` task catalogs, in that order; an empty or failed refresh is not accepted as a healthy zero-model catalog, and an existing last-known-good catalog remains available. See [docs/kv-credentials.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
+Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez, and an allowlisted OpenAI-compatible gateway) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. Bytez discovery queries only the documented `chat` and `text-generation` task catalogs, in that order; an empty or failed refresh is not accepted as a healthy zero-model catalog, and an existing last-known-good catalog remains available. See [docs/kv-credentials.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
 
 Seed the credential into the KV once at bootstrap:
 
@@ -205,7 +205,7 @@ One fused orchestration loop:
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
 - Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast; a provider's explicit tool-description size rejection is treated as a provider limit and can fail over. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
 
-See [docs/architecture.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/architecture.md) for the source-backed analysis.
+See [docs/architecture.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/architecture.md) for the source-backed analysis.
 
 ## Observability & spend
 
@@ -308,7 +308,7 @@ is read from a **KV config store**, never `os.getenv`.
   repository split here.
 
 Grounding papers (LLM cost, routing, load balancing, evaluation) live in
-[docs/papers](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/papers/README.md) with citations.
+[docs/papers](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/papers/README.md) with citations.
 
 ### NIM cost-quality benchmark (optional harness)
 
@@ -327,7 +327,7 @@ not import or mutate it. Deterministic `--dry-run` receives no network access or
 NVIDIA secret. Live execution resolves `NVIDIA_NIM_API_KEY` from the credential
 registry, pins HTTPS connections to validation-time public addresses, rejects
 redirects and proxy routing, and fails closed on missing/expired evidence. See
-[docs/nim_benchmark.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/nim_benchmark.md).
+[docs/nim_benchmark.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/nim_benchmark.md).
 
 ```bash
 python -m contextual_orchestrator nim-benchmark --dry-run \
@@ -340,25 +340,25 @@ python -m contextual_orchestrator nim-benchmark --dry-run \
 Public design and operations records (absolute links; only `LICENSE` and package
 sources ship in a distribution):
 
-- [Architecture](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/architecture.md)
-- [KV credentials](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/kv-credentials.md)
-- [REST API design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/rest_api_design.md)
-- [ADRs](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/adr/README.md)
-- [Library research](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/library_research.md)
-- [Screen design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/screen_design.md)
-- [User stories](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/user_stories.md)
-- [Code conventions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/code_conventions.md)
-- [Database conventions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/database_conventions.md)
-- [i18n design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/i18n_design.md)
-- [Plugin-driven design brief](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/plugin_driven_design_brief.md)
-- [Plugin visual directions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/plugin_visual_directions.md)
-- [Analytics spec](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/analytics_spec.md)
-- [Figma artifacts](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/figma_artifacts.md)
-- [Fuzzing](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/fuzzing.md)
-- [NIM benchmark](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/nim_benchmark.md)
-- [Papers](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/docs/papers/README.md)
-- [Security policy](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/SECURITY.md)
-- [Changelog](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/main/CHANGELOG.md)
+- [Architecture](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/architecture.md)
+- [KV credentials](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/kv-credentials.md)
+- [REST API design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/rest_api_design.md)
+- [ADRs](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/adr/README.md)
+- [Library research](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/library_research.md)
+- [Screen design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/screen_design.md)
+- [User stories](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/user_stories.md)
+- [Code conventions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/code_conventions.md)
+- [Database conventions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/database_conventions.md)
+- [i18n design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/i18n_design.md)
+- [Plugin-driven design brief](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/plugin_driven_design_brief.md)
+- [Plugin visual directions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/plugin_visual_directions.md)
+- [Analytics spec](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/analytics_spec.md)
+- [Figma artifacts](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/figma_artifacts.md)
+- [Fuzzing](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/fuzzing.md)
+- [NIM benchmark](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/nim_benchmark.md)
+- [Papers](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/papers/README.md)
+- [Security policy](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/SECURITY.md)
+- [Changelog](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/CHANGELOG.md)
 
 ## Project Status
 
