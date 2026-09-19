@@ -1388,3 +1388,63 @@ if __name__ == "__main__":
             fn()
             print(f"ok {name}")
     print("ok")
+
+
+def test_model_judge_adapter_preserves_image_free_failover_pool() -> None:
+    """Inner judge failover cannot leave the request's free image pool."""
+    captured: dict[str, set[str] | None] = {}
+
+    class _PoolCapturingJudge:
+        def __init__(self, adapter, *, mode: str, accept_threshold: float) -> None:
+            del mode, accept_threshold
+            captured["allowed_agent_ids"] = adapter.allowed_agent_ids
+
+        def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
+            del task, answer, criteria
+            return SimpleNamespace(
+                accepted=True,
+                rationale="synthetic",
+                criterion_scores={},
+                usage=None,
+                orchestration_mode="route",
+                to_irt_row=lambda *, item_type: (1, 1),
+            )
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "image_free",
+                "image-free",
+                tags=("cost:free", "reasoning", "writing", "input:image"),
+            ),
+            ModelAgent(
+                "text_free",
+                "text-free",
+                tags=("cost:free", "reasoning", "writing"),
+            ),
+            ModelAgent(
+                "image_paid",
+                "image-paid",
+                tags=("reasoning", "writing", "input:image"),
+            ),
+        ],
+        client=_ScriptedClient("unused"),
+    )
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_PoolCapturingJudge,
+            criterion_cls=_ScriptedCriterion,
+            format_error=ValueError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification(
+            "task",
+            {"verifier_output": "report"},
+            free_only=True,
+            required_tags=("input:image",),
+        )
+
+    assert result["accepted"] is True
+    assert captured["allowed_agent_ids"] == {"image_free"}
