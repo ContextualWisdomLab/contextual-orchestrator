@@ -687,6 +687,19 @@ def test_runtime_image_pool_preserves_legacy_vision_admission() -> None:
     }
 
 
+def test_runtime_image_pool_rejects_legacy_vision_when_explicit_input_is_text_only() -> None:
+    """Explicit input modalities override contradictory legacy vision evidence."""
+    contradictory_vision = ModelAgent(
+        "contradictory_vision",
+        "contradictory-vision-model",
+        tags=("cost:free", "vision", "input:text", "output:text"),
+    )
+    orchestrator = TaskOrchestrator([contradictory_vision])
+
+    assert not orchestrator._agent_supports_image_input(contradictory_vision)
+    assert orchestrator._free_pool_agent_ids(messages=_figure_messages()) == set()
+
+
 if __name__ == "__main__":
     test_free_image_request_fails_closed_when_only_text_free_agents_exist()
     test_free_image_request_serves_image_capable_free_agent()
