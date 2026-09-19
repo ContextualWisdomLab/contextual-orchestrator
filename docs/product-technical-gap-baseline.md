@@ -55,7 +55,9 @@ forms still fail closed. The focused endpoint plus multimodal suites completed
 46 tests with warnings treated as errors. This is local source evidence, not
 hosted or release evidence.
 
-Judge-failover RED `7f69bacb0d35f00e6902df8e440efeafbe08dbe3` proved that a selected free image judge could fail over to an ineligible text-only or paid sibling after the outer selector had already enforced capability and price. GREEN `37435b5e82e9fe53abc67b032c67df83425c0250` persists the exact outer free/image-qualified agent ID set into the adapter failover port, so an inner retry cannot escape that authority boundary. This evidence remains distinct from the later HTTP worker-preflight repair.\n\nCurrent-head P1 RED `2b5c290ca56526c26f390949aecd87d85c2462b6`
+Judge-failover RED `7f69bacb0d35f00e6902df8e440efeafbe08dbe3` proved that a selected free image judge could fail over to an ineligible text-only or paid sibling after the outer selector had already enforced capability and price. GREEN `37435b5e82e9fe53abc67b032c67df83425c0250` persists the exact outer free/image-qualified agent ID set into the adapter failover port, so an inner retry cannot escape that authority boundary. This evidence remains distinct from the later HTTP worker-preflight repair.
+
+Current-head P1 RED `2b5c290ca56526c26f390949aecd87d85c2462b6`
 proved that a free image candidate excluded from the `worker` role could still
 satisfy HTTP preflight and commit HTTP 200/SSE before routing rejected it. The
 same generation corrected two stale fixtures: the judge now represents an
