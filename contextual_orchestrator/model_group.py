@@ -55,9 +55,8 @@ BETA_PRIOR_FAILURE_COUNT = 1.0
 MIN_ROUTING_LATENCY_SECONDS = 1e-3
 RATE_OBSERVATION_WINDOW_SECONDS = 60.0
 
-#: Neutral score assigned to members with no observations yet. All unobserved
-#: members share it exactly, which makes intra-group ordering fall back to the
-#: caller's static ranking instead of inventing a preference.
+#: Neutral deterministic report score for members with no observations.
+#: Live routing samples every member's explicit Beta prior instead.
 UNOBSERVED_MEMBER_SCORE = BETA_PRIOR_SUCCESS_COUNT / (
     BETA_PRIOR_SUCCESS_COUNT + BETA_PRIOR_FAILURE_COUNT
 )
