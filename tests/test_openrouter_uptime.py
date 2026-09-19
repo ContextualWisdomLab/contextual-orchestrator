@@ -266,14 +266,15 @@ def test_availability_poll_cannot_change_answer_quality(uptime, judged):
     assert group_router.member_observation_count(member_id) == 0
 
 
-def test_availability_does_not_reverse_judged_member_order(monkeypatch):
-    """Fixed judged outcomes retain their order despite opposite uptime histories."""
+def test_availability_does_not_change_judged_quality_evidence(monkeypatch):
+    """Opposite uptime histories cannot alter judged-answer evidence or its report order."""
     monkeypatch.setattr(OpenRouterUptimeCollector, "start", lambda _self: None)
     agents = [
         ModelAgent("judged_strong", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
         ModelAgent("judged_weak", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
     ]
     gateway = TaskOrchestrator(agents)
+    member_ids = [agent.id for agent in agents]
     try:
         for agent, accepted in zip(agents, (8, 2), strict=True):
             for _ in range(accepted):
@@ -281,12 +282,12 @@ def test_availability_does_not_reverse_judged_member_order(monkeypatch):
             for _ in range(10 - accepted):
                 gateway._quality_router.observe_failure(agent.id)
         before = gateway._quality_router.snapshot()
-        assert gateway._refine_partition(agents, "worker") == agents
+        assert gateway._quality_router.ranked_member_ids(member_ids) == member_ids
         for agent, uptime in zip(agents, (0.0, 100.0), strict=True):
             monkeypatch.setattr(gateway._openrouter_collector, "_fetch_uptime", lambda _model, value=uptime: value)
             for _ in range(50):
                 gateway._openrouter_collector._poll_agent(agent)
-        assert gateway._refine_partition(agents, "worker") == agents
+        assert gateway._quality_router.ranked_member_ids(member_ids) == member_ids
         assert gateway._quality_router.snapshot() == before
     finally:
         gateway.close()
