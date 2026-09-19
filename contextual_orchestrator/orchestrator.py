@@ -11199,7 +11199,20 @@ class TaskOrchestrator:
                     if decision.circuit_failure:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
-                        raise ToolFallbackStoppedError(agent.id, decision) from None
+                        _append_typed_route_failure(
+                            route_attempts, agent, exc, transport="chat"
+                        )
+                        raise ToolFallbackStoppedError(
+                            agent.id,
+                            decision,
+                            detail={
+                                "route": _route_evidence_payload(
+                                    eligible_agent_ids=eligible_agent_ids,
+                                    attempted=route_attempts,
+                                    terminal_reason="fail_closed",
+                                )
+                            },
+                        ) from None
                     _append_typed_route_failure(
                         route_attempts, agent, exc, transport="chat"
                     )

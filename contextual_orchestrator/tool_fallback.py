@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import socket
+from typing import Any
 import urllib.error
 
 # Hard ceiling prevents configuration drift from turning one request into an
@@ -83,9 +84,16 @@ class ToolExecutionError(RuntimeError):
 class ToolFallbackStoppedError(RuntimeError):
     """Raised when retry or cross-agent failover would risk an unsafe replay."""
 
-    def __init__(self, agent_id: str, decision: ToolFailureDecision) -> None:
+    def __init__(
+        self,
+        agent_id: str,
+        decision: ToolFailureDecision,
+        *,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
         self.agent_id = agent_id
         self.decision = decision
+        self.detail = dict(detail or {})
         super().__init__(
             "tool execution stopped safely "
             f"(agent={agent_id}, reason={decision.reason_code})"
