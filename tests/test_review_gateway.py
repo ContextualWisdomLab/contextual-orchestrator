@@ -143,8 +143,15 @@ def test_build_review_orchestrator_excludes_explicit_non_chat_models(monkeypatch
     assert [agent.model for agent in orchestrator.agents] == ["review-model"]
 
 
-def test_build_review_orchestrator_excludes_free_multimodal_input_model(monkeypatch):
-    """Blind review selection must reuse the general-free modality boundary."""
+def test_build_review_orchestrator_admits_free_image_chat_model_for_figure_review(
+    monkeypatch,
+):
+    """Free text+image chat rows join the review pool for figure-bearing requests.
+
+    Blind text ``orchestrator/free`` still cannot select them
+    (:meth:`TaskOrchestrator._is_general_free_agent`); image-bearing free
+    traffic uses :meth:`TaskOrchestrator._free_pool_agent_ids` instead.
+    """
     discovered = [
         _discovered(
             "openrouter",
@@ -155,10 +162,40 @@ def test_build_review_orchestrator_excludes_free_multimodal_input_model(monkeypa
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
-    with pytest.raises(NotConfigured, match="eligible zero-cost"):
-        review_gateway.build_review_orchestrator(
-            {"OPENROUTER_API_KEY": "router-secret"}
-        )
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENROUTER_API_KEY": "router-secret"}
+    )
+
+    assert [agent.model for agent in orchestrator.agents] == ["vision-review-model"]
+    assert "input:image" in orchestrator.agents[0].tags
+    assert not orchestrator._is_general_free_agent(orchestrator.agents[0])
+    assert orchestrator._is_free_agent(orchestrator.agents[0])
+    assert orchestrator._agent_supports_image_input(orchestrator.agents[0])
+
+
+def test_build_review_orchestrator_unions_blind_free_and_image_chat_models(
+    monkeypatch,
+):
+    """Text-only and text+image free rows both remain available after bootstrap."""
+    discovered = [
+        _discovered("openrouter", "text-review", "OPENROUTER_API_KEY"),
+        _discovered(
+            "openrouter",
+            "vision-review",
+            "OPENROUTER_API_KEY",
+            input_modalities=("text", "image"),
+        ),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENROUTER_API_KEY": "router-secret"}
+    )
+
+    assert {agent.model for agent in orchestrator.agents} == {
+        "text-review",
+        "vision-review",
+    }
 
 
 def test_build_review_orchestrator_fails_closed_without_credentials():

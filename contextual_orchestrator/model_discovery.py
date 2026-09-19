@@ -2478,6 +2478,44 @@ def general_free_serving_candidates(
     return candidates
 
 
+def free_image_chat_serving_candidates(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Return free chat models with explicit image-input evidence.
+
+    This selector is not for blind ``orchestrator/free`` text serving: a
+    vision-input deployment must not absorb tool-calling or text-only traffic
+    (see :func:`general_free_serving_candidates` and .github#1198). It admits
+    zero-cost, routable chat rows whose catalog evidence already declares
+    ``image`` among input modalities so a request that *already carries*
+    ``image_url`` parts (DOCX/HWPX figure review) can fail over among those
+    models instead of a text-only free agent that would ignore pixels.
+
+    Output must remain text-producing chat (the review answer is text). Audio-
+    or video-only input rows stay excluded because this contract covers still
+    figure review, not arbitrary media.
+    """
+    candidates: list[DiscoveredModel] = []
+    for model in free_discovered_models(discovered):
+        if model.provider_name == "experiential_labs":
+            continue
+        if not is_routable_discovered_model(model):
+            continue
+        inputs = {
+            modality.strip().casefold()
+            for modality in model.input_modalities
+            if isinstance(modality, str) and modality.strip()
+        }
+        if "image" not in inputs:
+            continue
+        # Reject image-only deployments that cannot accept the accompanying
+        # paper text the leaf always sends with figures.
+        if "text" not in inputs:
+            continue
+        candidates.append(model)
+    return candidates
+
+
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
     """Return whether two ISO-style currency codes can be compared directly."""
     return (

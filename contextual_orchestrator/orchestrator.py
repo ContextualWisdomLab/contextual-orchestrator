@@ -1220,6 +1220,13 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
 # positive declarations only), so selection never infers a limit from a missing tag.
 SINGLE_TOOL_CALL_EVIDENCE_TAG = "tool_call:single"
 
+# Discovery-stamped entitlement for chat requests that carry image_url
+# parts. Prefer this over the legacy operator "vision" capability tag;
+# both are accepted by _agent_supports_image_input so durable pools that
+# only recorded "vision" keep working.
+IMAGE_INPUT_EVIDENCE_TAG = "input:image"
+LEGACY_VISION_CAPABILITY_TAG = "vision"
+
 
 def _request_requires_parallel_tool_calls(body: Mapping[str, Any]) -> bool:
     """Return whether a chat body needs a model that accepts several tool calls at once.
@@ -6212,12 +6219,7 @@ class TaskOrchestrator:
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
-            {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate, chat_body=body)
-                and self._zdr_agent_allowed(candidate)
-            }
+            self._free_pool_agent_ids(chat_body=body)
             if requested_model == self.FREE_MODEL
             else (
                 {
@@ -6570,7 +6572,7 @@ class TaskOrchestrator:
         # silent fallback. Deferred (virtual/gateway-default) model names must
         # resolve to a concrete synthesizer even without that tag.
         prompt_context = self._prompt_interaction(messages)
-        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        required_tags = self._image_input_required_tags(messages)
         response_format_requested = bool(chat_body.get("response_format"))
         requested_model = body.get("model")
         virtual_model = requested_model in {
@@ -6660,7 +6662,7 @@ class TaskOrchestrator:
             )
             if final_agent is None:
                 raise RuntimeError("required file provider is unavailable")
-        elif any(tag not in final_agent.tags for tag in required_tags):
+        elif not self._agent_matches_required_tags(final_agent, required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
                 + ", ".join(required_tags)
@@ -6791,12 +6793,7 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate, chat_body=chat_body)
-                and self._zdr_agent_allowed(candidate)
-            }
+            self._free_pool_agent_ids(messages=messages, chat_body=chat_body)
             if free_only
             else (
                 {
@@ -7763,11 +7760,7 @@ class TaskOrchestrator:
         if pinned is not None:
             candidates = [primary]
         else:
-            free_ids = {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-            }
+            free_ids = self._free_pool_agent_ids(messages=messages)
             candidates = self._failover_candidates(
                 primary,
                 text,
@@ -9139,11 +9132,7 @@ class TaskOrchestrator:
                 text, ranked_pool[0].model
             )
         context_window_excluded: list[str] = []
-        free_ids = {
-            candidate.id
-            for candidate in self.agents
-            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-        }
+        free_ids = self._free_pool_agent_ids(messages=messages)
         allowed_agent_ids = free_ids if free_only else None
         # A tool-result follow-up returns to its emitting agent when that
         # agent is still one of the already role/free/ZDR-filtered
@@ -9380,7 +9369,7 @@ class TaskOrchestrator:
         }
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
-        required_tags = ("vision",) if source_images else ()
+        required_tags = self._image_input_required_tags(messages)
         caller_instructions = "\n\n".join(
             instruction
             for message in messages
@@ -9411,11 +9400,7 @@ class TaskOrchestrator:
         trace: list[dict[str, Any]] = []
         tool_result: dict[str, Any] | None = None
         tool_loop_evidence: dict[str, str] | None = None
-        free_ids = {
-            candidate.id
-            for candidate in self.agents
-            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-        }
+        free_ids = self._free_pool_agent_ids(messages=messages)
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
             _allowed_agent_ids
@@ -9449,7 +9434,7 @@ class TaskOrchestrator:
                     additional_cost_usd=in_flight_cost,
                 )
             agent = self._agent(step.agent_id)
-            if any(tag not in agent.tags for tag in required_tags):
+            if not self._agent_matches_required_tags(agent, required_tags):
                 try:
                     capable = self._ranked_agents(
                         step.subtask,
@@ -9915,10 +9900,24 @@ class TaskOrchestrator:
             and self._zdr_agent_allowed(agent)
             if (
                 not free_only
-                or (self._is_general_free_agent(agent) if chat_only else self._is_free_agent(agent))
+                or (
+                    (
+                        self._is_free_agent(agent)
+                        and self._agent_supports_image_input(agent)
+                    )
+                    if (
+                        IMAGE_INPUT_EVIDENCE_TAG in required_tags
+                        or LEGACY_VISION_CAPABILITY_TAG in required_tags
+                    )
+                    else (
+                        self._is_general_free_agent(agent)
+                        if chat_only
+                        else self._is_free_agent(agent)
+                    )
+                )
             )
             and (not chat_only or _is_general_chat_agent(agent))
-            and all(tag in agent.tags for tag in required_tags)
+            and self._agent_matches_required_tags(agent, required_tags)
         ]
         if chat_only:
             candidates = _eligible_role_effort_candidates(
@@ -10364,7 +10363,7 @@ class TaskOrchestrator:
                 effort_profile=effort_profile,
             )
             if _is_general_chat_agent(agent)
-            and all(tag in agent.tags for tag in required_tags)
+            and self._agent_matches_required_tags(agent, required_tags)
         ]
         if prefer_tags and ranked:
             preferred = [
@@ -10796,7 +10795,7 @@ class TaskOrchestrator:
         self._last_assistant_message = None
         self._last_output_budget = None
         self._last_context_window_excluded = []
-        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        required_tags = self._image_input_required_tags(messages)
         prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
             primary,
@@ -10807,15 +10806,6 @@ class TaskOrchestrator:
             prompt_context=prompt_context,
             prompt_token_lower_bound=prompt_token_lower_bound,
         )
-        if not candidates and required_tags:
-            candidates = self._failover_candidates(
-                primary,
-                text,
-                eligibility_role or role,
-                allowed_agent_ids=allowed_agent_ids,
-                prompt_context=prompt_context,
-                prompt_token_lower_bound=prompt_token_lower_bound,
-            )
         if excluded_agent_ids:
             candidates = [
                 candidate
@@ -10823,6 +10813,11 @@ class TaskOrchestrator:
                 if candidate.id not in excluded_agent_ids
             ]
         if not candidates:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                )
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
@@ -11273,7 +11268,7 @@ class TaskOrchestrator:
             if not agent.disabled
             and self._zdr_agent_allowed(agent)
             and _is_general_chat_agent(agent)
-            and all(tag in agent.tags for tag in required_tags)
+            and self._agent_matches_required_tags(agent, required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
@@ -11774,7 +11769,7 @@ class TaskOrchestrator:
             except ProviderUpstreamError as exc:
                 if exc.provider_status not in (429, 503):
                     raise
-                required_tags = ("vision",) if self._source_image_parts(messages) else ()
+                required_tags = self._image_input_required_tags(messages)
                 prompt_context = self._prompt_interaction(messages)
                 candidates = self._failover_candidates(
                     primary,
@@ -11907,6 +11902,77 @@ class TaskOrchestrator:
             for part in message["content"]
             if isinstance(part, dict) and part.get("type") == "image_url"
         ]
+
+    @staticmethod
+    def _image_input_required_tags(messages: list[ChatMessage]) -> tuple[str, ...]:
+        """Return the hard image-input entitlement when the request carries pixels.
+
+        Uses the discovery evidence tag ``input:image`` (not the legacy
+        ``vision`` capability name) so selection matches what
+        ``agent_from_discovered`` actually stamps. Empty when no image parts
+        are present — text-only free serving stays modality-blind.
+        """
+        if TaskOrchestrator._source_image_parts(messages):
+            return (IMAGE_INPUT_EVIDENCE_TAG,)
+        return ()
+
+    @staticmethod
+    def _agent_supports_image_input(agent: ModelAgent) -> bool:
+        """True when an agent carries discovery or legacy image-input evidence."""
+        return (
+            IMAGE_INPUT_EVIDENCE_TAG in agent.tags
+            or LEGACY_VISION_CAPABILITY_TAG in agent.tags
+        )
+
+    @staticmethod
+    def _agent_matches_required_tags(
+        agent: ModelAgent, required_tags: tuple[str, ...]
+    ) -> bool:
+        """Hard entitlement check; image tags accept discovery or legacy forms."""
+        if not required_tags:
+            return True
+        if required_tags in {
+            (IMAGE_INPUT_EVIDENCE_TAG,),
+            (LEGACY_VISION_CAPABILITY_TAG,),
+        }:
+            return TaskOrchestrator._agent_supports_image_input(agent)
+        return all(tag in agent.tags for tag in required_tags)
+
+    def _free_pool_agent_ids(
+        self,
+        *,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
+    ) -> set[str]:
+        """Ids eligible for ``orchestrator/free`` given the known request shape.
+
+        Blind text requests keep :meth:`_is_general_free_agent` (excludes
+        non-text-input deployments). When the request already carries
+        ``image_url`` parts, the modality is no longer unknown: admit
+        zero-cost agents with explicit image-input evidence via
+        :meth:`_is_free_agent` so figure-bearing review traffic can reach a
+        vision-capable free model instead of a text-only one that would
+        silently ignore pixels.
+        """
+        require_image = False
+        if messages is not None:
+            require_image = bool(self._source_image_parts(messages))
+        elif isinstance(chat_body, Mapping):
+            body_messages = chat_body.get("messages")
+            if isinstance(body_messages, list):
+                require_image = bool(self._source_image_parts(body_messages))
+        ids: set[str] = set()
+        for candidate in self.agents:
+            if not self._zdr_agent_allowed(candidate):
+                continue
+            if require_image:
+                if self._is_free_agent(candidate) and self._agent_supports_image_input(
+                    candidate
+                ):
+                    ids.add(candidate.id)
+            elif self._is_general_free_agent(candidate, chat_body=chat_body):
+                ids.add(candidate.id)
+        return ids
 
     def _model_judge_verification(
         self,
