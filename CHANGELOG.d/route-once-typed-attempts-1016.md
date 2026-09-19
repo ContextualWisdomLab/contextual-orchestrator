@@ -5,3 +5,5 @@ candidate in the shared `_invoke` loop carries `outcome`
 `fail_closed`), `error_code`, `provider_status`, `retryable`, and `transport`
 on `orchestration.route.attempted[]`. A successful first attempt still omits
 route evidence entirely so no empty failed rows are invented.
+Terminal tool stops attach the accumulated receipt to the existing 409 error
+without exposing the raw provider or tool exception.

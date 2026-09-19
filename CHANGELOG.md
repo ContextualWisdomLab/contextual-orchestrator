@@ -12,6 +12,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Terminal `route_once` tool stops now retain every prior candidate attempt and
+  the final `fail_closed` attempt in the existing secret-free HTTP 409 route
+  receipt. API-contract tests no longer use deprecated `jsonschema.RefResolver`.
 - Route evidence now preserves the original error subtype for malformed-response
   and all-413 exhaustion, survives rate-limit recovery retries, and remains on
   the persisted workflow record returned by the Chat Completions API. A
