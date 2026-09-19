@@ -28,18 +28,21 @@ and Responses now apply that same request-shaped pool boundary; endpoints
 without local eligible capacity still fail closed. Exact head
 `79fef32bda4dd599ea973e790b09e58ed02dd9b1` (tree
 `645b468916ddb3c4437a96151c6740ab08d9f646`) completed 127 related
-RED-to-GREEN tests; `compileall` and diff checks passed. Current exact head
-`d4c1065720d8efc87b7f146c7318c6f1cf36265e` (tree
-`c5b95492b251f397b514801d0d14b1217e2569a1`) additionally removes the two
+RED-to-GREEN tests; `compileall` and diff checks passed. Current source head
+`738ab3689d110685ca07f09b7c51031f11d3f07f` (tree
+`404b820ac844c0133cd18a32f6833d5082db7c6b`) additionally removes the two
 stale collection blockers, preserves null as an unbounded provider-batch wait,
-and closes the touched loopback listeners after shutdown. Those focused lanes
-completed 97 tests with warnings treated as errors; compileall and diff checks
-passed. Earlier
+closes the remaining touched loopback listeners at their owning boundaries,
+and aligns image-bearing HTTP fixtures with explicit `input:image` capability.
+The expanded warnings-as-errors lane completed 117 tests; `compileall` and diff
+checks passed. Earlier
 head `f8783af9` completed 244 related tests with warnings treated as errors and
 Ruff. The full local collection is not claimed: a provider-key-free fail-fast
-run reached 856 passed / 1 skipped before exposing another stale completions
-listener cleanup, which was repaired and then passed its 4-test file; the
-borrowed verifier also lacks the configured asyncio plugin.
+run reached 1,156 passed / 1 skipped after the listener and capability-fixture
+repairs, then stopped because the borrowed verifier lacks the required Rust
+`_decision_receipt` extension. The borrowed verifier also lacks the configured
+asyncio plugin; neither missing environment dependency is bypassed in product
+code.
 
 HTTP-boundary RED `1527821a5b61d2e114e8d34e5f9bc5163a4b9b0a`
 proved that endpoint preflight consumed raw accepted false forms
