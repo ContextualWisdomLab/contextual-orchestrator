@@ -11,9 +11,9 @@ purchase commitment, revenue claim, or production compliance certificate.
 
 Figma Code Connect is not used.
 
-Review process is not a blocker. Review delay, queued model review, pending
-automation review, or a pending check with no concrete failure is a process
-state, not a saleability blocker.
+Review process matches release authorization. A missing or failing snapshot
+is a blocker. Review delay is not a blocker only after exact-head checks,
+independent approval, and findings evidence pass.
 
 Do not create a separate library, Git submodule, or extracted package now. The
 decision gate reviews one product: a compatible inference API plus an admin
@@ -40,8 +40,9 @@ evidence control plane.
 - `decision_basis`: the readiness and handoff reports used for the decision;
 - `concrete_blockers`: blocked included artifacts from the buyer handoff bundle;
 - `warning_conditions`: production and buyer-specific follow-up items;
-- `review_process_policy`: explicit rule that review process delay is not a
-  blocker;
+- `review_process_policy`: matches release authorization. A missing or failing
+  snapshot is a blocker; review delay is not a blocker only after exact-head
+  checks, independent approval, and findings evidence pass.
 - `library_split_decision`: current single-product packaging decision.
 
 ## Decision Rules

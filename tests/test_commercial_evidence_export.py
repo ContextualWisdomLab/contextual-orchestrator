@@ -118,7 +118,7 @@ def test_commercial_evidence_export_endpoint_openapi_admin_and_docs_contract() -
     assert "/api/v1/commercial_evidence_exports/latest" in export_doc
     assert "KRW 2B Commercial Evidence Export" in export_doc
     assert "Figma Code Connect is not used" in export_doc
-    assert "Review process is not a blocker" in export_doc
+    assert "matches release authorization" in export_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in export_doc
 
     server = build_server(

@@ -427,10 +427,21 @@ def test_valid_authority_flows_through_commercial_readiness_wrappers() -> None:
         release_authority=authority(),
     )
 
+    acceptance = orchestrator.commercial_acceptance_check_report(
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile=security_profile,
+        release_authority=authority(),
+    )
+    acceptance_items = {item["item_name"]: item for item in acceptance["acceptance_items"]}
+
     assert release["release_authorization"]["blockers"] == []
     assert release["release_status"] == "commercial_release_ready_with_warnings"
     assert release["review_process_policy"]["is_blocker"] is False
     assert release["review_process_policy"]["authorization_status"] == "release_authorized"
+    assert acceptance["acceptance_status"] == "commercial_acceptance_ready_with_warnings"
+    assert acceptance["acceptance_summary"]["blocked_count"] == 0
+    assert acceptance_items["review_process_policy"]["completion_state"] == "ready"
+    assert "are not blockers" in acceptance_items["review_process_policy"]["evidence"]
     assert procurement["release_authorization"]["status"] == "release_authorized"
     assert procurement["review_process_policy"]["is_blocker"] is False
     assert contract["related_runtime_reports"]["release_authorization_status"] == "release_authorized"

@@ -300,17 +300,34 @@ def test_server_accepts_only_a_kv_signed_release_authority_snapshot() -> None:
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        port = server.server_address[1]
         try:
             status, report = get_json(
-                f"http://127.0.0.1:{server.server_address[1]}/api/v1/commercial_release_candidates/latest",
+                f"http://127.0.0.1:{port}/api/v1/commercial_release_candidates/latest",
                 "admin_secret",
             )
+            buyer_paths = [
+                "/api/v1/saleability_decisions/latest",
+                "/api/v1/commercial_evidence_exports/latest",
+                "/api/v1/commercial_acceptance_checks/latest",
+                "/api/v1/commercial_buyer_acceptance_workflows/latest",
+                "/api/v1/commercial_demo_scenarios/latest",
+                "/api/v1/commercial_proposal_packets/latest",
+                "/api/v1/commercial_purchase_approval_packets/latest",
+                "/api/v1/commercial_due_diligence_rooms/latest",
+                "/api/v1/commercial_investment_committee_memos/latest",
+            ]
+            buyer_reports = [get_json(f"http://127.0.0.1:{port}{path}", "admin_secret") for path in buyer_paths]
         finally:
             server.shutdown()
             thread.join(timeout=5)
             server.server_close()
         assert status == 200
         assert report["release_authorization"]["authorized"] is True
+        for path, (buyer_status, buyer_report) in zip(buyer_paths, buyer_reports):
+            assert buyer_status == 200, path
+            assert buyer_report["review_process_policy"]["is_blocker"] is False, path
+            assert buyer_report["review_process_policy"]["authorization_status"] == "release_authorized", path
     finally:
         set_backend(None)
 

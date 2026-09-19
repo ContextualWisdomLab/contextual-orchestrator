@@ -105,7 +105,7 @@ def test_saleability_decision_endpoint_openapi_admin_and_docs_contract() -> None
     assert "/api/v1/saleability_decisions/latest" in decision_doc
     assert "KRW 2B Saleability Decision Gate" in decision_doc
     assert "Figma Code Connect is not used" in decision_doc
-    assert "Review process is not a blocker" in decision_doc
+    assert "matches release authorization" in decision_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in decision_doc
 
     server = build_server(

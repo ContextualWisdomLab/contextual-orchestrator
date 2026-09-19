@@ -132,7 +132,7 @@ def test_commercial_launch_readiness_endpoint_openapi_admin_and_docs_contract() 
         "Commercial Launch Readiness",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Launch Inputs",
         "Runtime Shape",
