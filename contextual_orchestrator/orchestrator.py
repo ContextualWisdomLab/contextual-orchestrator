@@ -7947,6 +7947,8 @@ class TaskOrchestrator:
             latency_seconds=latency_seconds,
             usage=usage,
             free_only=free_only,
+            required_tags=required_tags,
+            prompt_context=prompt_context,
         )
         trace_step = {
             "id": len(failed_trace_steps),
@@ -10310,6 +10312,7 @@ class TaskOrchestrator:
         input_tags = {tag for tag in agent.tags if tag.startswith("input:")}
         if not (
             self._is_free_agent(agent)
+            and _is_general_chat_agent(agent)
             and self._agent_supports_image_input(agent)
             and (not input_tags or "input:text" in input_tags)
         ):
