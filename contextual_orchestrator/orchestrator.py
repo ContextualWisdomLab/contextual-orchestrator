@@ -5269,15 +5269,17 @@ class _StateStore:
             phases = []
             diagnostics = []
             if request_ids:
+                # placeholders are only literal "?" markers; request_ids bind as
+                # parameters and never enter the SQL text (Semgrep IN-clause FP).
                 placeholders = ",".join("?" for _ in request_ids)
-                phases = self._conn.execute(
+                phases = self._conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('initial_decision', 'decision_receipt') "
                     "AND key IN (" + placeholders + ") "
                     "ORDER BY seq DESC LIMIT ?",
                     (*request_ids, 2 * limit + 1),
                 ).fetchall()
-                diagnostics = self._conn.execute(
+                diagnostics = self._conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
                     "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
