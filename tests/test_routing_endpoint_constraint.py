@@ -59,6 +59,12 @@ class _RecordingClient(ModelClient):
             ],
         }
 
+    def proxy_send_once(  # type: ignore[override]
+        self, agent: ModelAgent, endpoint: str, payload: dict
+    ) -> dict:
+        """Keep virtual passthrough inside the synthetic transport."""
+        return self.proxy_send(agent, endpoint, payload)
+
 
 def _orchestrator() -> TaskOrchestrator:
     return TaskOrchestrator(
