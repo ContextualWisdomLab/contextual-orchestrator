@@ -28,3 +28,7 @@ pool and an endpoint without eligible local capacity still fails closed.
 Chat image aliases are normalized before admission, disabled agents cannot
 prove capacity, and an empty request-aware image pool returns HTTP 400 before
 either streaming surface commits SSE headers.
+
+Streamed route judging now inherits the request's image entitlement, and runtime
+image admission excludes non-chat image-edit/video agents before any HTTP/SSE
+success response or judge call.
