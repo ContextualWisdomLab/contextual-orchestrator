@@ -4,7 +4,7 @@ Status: research traceability for `ModelGroupRouter.sampled_ranked_member_ids` o
 
 ## Decision boundary
 
-Live serving uses posterior sampling to avoid deterministic winner-take-all selection after measured outcomes exist. Administrative and reporting reads remain deterministic. The implementation draws from each observed member's Beta posterior and combines that draw with the repository's measured latency term; it does not change the stored posterior or fabricate observations.
+Live serving uses posterior sampling to avoid deterministic winner-take-all selection after measured outcomes exist. Administrative and reporting reads remain deterministic. The implementation draws from every member's Beta posterior, including a cold-start member's explicit prior, and combines that draw with the repository's measured latency term; it does not change the stored posterior or fabricate observations.
 
 The cited literature supports the probability-matching / exploration-exploitation mechanism, but its guarantees must not be overstated. Thompson (1933) supplies the original posterior probability-matching construction. Chapelle and Li (2011) provide empirical evidence that Thompson sampling is a competitive baseline on simulated and real bandit data. Agrawal and Goyal (2012) prove logarithmic expected regret for stochastic Bernoulli multi-armed bandits under their analyzed Thompson-sampling setting.
 
@@ -22,7 +22,7 @@ The cited literature supports the probability-matching / exploration-exploitatio
 ## Risks and follow-up acceptance
 
 - The theory cited here does not validate the latency-normalized composite score. Measure routing regret / successful responses per second on right-cleared traffic or an approved replay before making an optimality claim.
-- Members with no real outcomes currently retain the repository's neutral static score rather than receiving a sampled prior draw. This preserves the existing no-evidence ordering contract but is a repository-specific cold-start policy, not a consequence of the cited Thompson-sampling theory. A future change must test starvation and first-observation acquisition explicitly.
+- Members with no real outcomes receive a draw from their explicit Beta prior. Caller order is not evidence and cannot decide cold-start selection.
 - Prior pseudo-counts may be fractional while completed outcomes are integral. Binary floating-point subtraction can drift below an integer; PR #1034 therefore recovers the domain-invariant completed-outcome count before deciding whether a member is observed.
 
 PDFs are not vendored solely for this change because redistribution permission is not assumed. The primary publication pages below are the traceable sources.
