@@ -58,7 +58,7 @@ def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> N
 
     backend = coordinator._provider_embedding_backend()
 
-    assert backend._execution_timeout_seconds == 604_800
+    assert backend._execution_timeout_seconds is None
     assert backend._claim_lease_seconds is None
     backend.close()
 
@@ -415,12 +415,15 @@ def test_server_shutdown_closes_embedding_workers() -> None:
         coordinator=coordinator,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread.start()
 
-    server.shutdown()
-    thread.join(timeout=1)
+        server.shutdown()
+        thread.join(timeout=1)
 
-    assert backend.closed is True
+        assert backend.closed is True
+    finally:
+        server.server_close()
 
 
 def test_server_close_closes_embedding_workers_after_abnormal_exit() -> None:
