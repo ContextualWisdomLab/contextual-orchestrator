@@ -538,6 +538,13 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
 
     assert status == 200, body
     assert body["choices"][0]["message"]["content"] == "served after wait"
+    route = body["orchestration"]["route"]
+    assert route["terminal_reason"] == "served"
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport",
+        "retryable_transport",
+        "served",
+    ]
     assert slept == [pytest.approx(1.0, abs=0.5)]
     assert chat_outcomes.calls.count("primary_free_agent") == 2
     assert chat_outcomes.calls.count("fallback_free_agent") == 1
