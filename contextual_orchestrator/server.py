@@ -859,7 +859,7 @@ def _tool_fallback_error_detail(error: ToolFallbackStoppedError) -> dict[str, An
     observed_kind = decision.observed_kind or decision.kind
     if observed_kind is not decision.kind:
         detail["observed_failure_kind"] = observed_kind.value
-    route = getattr(error, "route", None)
+    route = error.detail.get("route")
     if isinstance(route, dict):
         detail["route"] = route
     return detail

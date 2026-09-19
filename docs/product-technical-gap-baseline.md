@@ -2,6 +2,23 @@
 
 ## 2026-09-20 route evidence ownership repair (proposed)
 
+Exact-head review at PR #1205 commit
+`e0d3827a3d24ae51a659845f82be1ef7d24f015c` found that a bounded route could
+record a retryable provider failure, then raise `ToolFallbackStoppedError` for
+a later unsafe tool outcome before recording or publishing either attempt.
+RED `46efcb2d9c52908472dde3fe932b311dc1b63471` reproduces the missing
+`ToolFallbackStoppedError.detail["route"]` and HTTP error detail. GREEN
+`c01a1dcd43160af948c1a4e9c6351cb1cacf3f71` records the terminal candidate
+once, attaches the accumulated typed receipt without retaining the raw cause,
+and exposes that receipt through the existing secret-free 409 serializer. The
+same GREEN removes the deprecated `jsonschema.RefResolver` test path without
+weakening schema validation. The focused regression and 148 adjacent
+tool-fallback, HTTP, and API-contract tests pass with warnings treated as
+errors; another 46 provider-reliability tests pass, while four pre-existing
+environment/owner-dependent cases remain separately excluded. Hosted
+exact-head gates and independent review remain required, so this evidence is
+Proposed rather than production authority.
+
 PR #1205 RED head `b5ebdb24cbacf6a859c397f60aceec43679e74cd`
 reproduces a worker failover receipt being erased when the realtime judge
 performs a nested `_invoke`: the returned route omitted

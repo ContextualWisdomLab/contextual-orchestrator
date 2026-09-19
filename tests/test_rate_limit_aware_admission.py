@@ -716,7 +716,7 @@ def test_route_once_fail_closed_keeps_attempts_from_the_wait_round() -> None:
         )
 
     assert type(excinfo.value) is ToolFallbackStoppedError
-    route = excinfo.value.route
+    route = excinfo.value.detail["route"]
     assert route["terminal_reason"] == "fail_closed"
     assert [attempt["outcome"] for attempt in route["attempted"]] == [
         "retryable_transport",

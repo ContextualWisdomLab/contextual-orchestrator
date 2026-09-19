@@ -1527,7 +1527,7 @@ def _attach_route_evidence_to_tool_stop(
     route_payload: dict[str, Any],
 ) -> ToolFallbackStoppedError:
     """Attach route evidence without converting a tool stop into another error."""
-    error.route = route_payload
+    error.detail = {**error.detail, "route": route_payload}
     return error
 
 
@@ -11223,17 +11223,17 @@ class TaskOrchestrator:
                         _append_typed_route_failure(
                             route_attempts, agent, exc, transport="chat"
                         )
-                        stopped = ToolFallbackStoppedError(agent.id, decision)
-                        if route_attempts:
-                            _attach_route_evidence_to_tool_stop(
-                                stopped,
-                                _route_evidence_payload(
+                        raise ToolFallbackStoppedError(
+                            agent.id,
+                            decision,
+                            detail={
+                                "route": _route_evidence_payload(
                                     eligible_agent_ids=eligible_agent_ids,
                                     attempted=route_attempts,
                                     terminal_reason="fail_closed",
-                                ),
-                            )
-                        raise stopped from None
+                                )
+                            },
+                        ) from None
                     _append_typed_route_failure(
                         route_attempts, agent, exc, transport="chat"
                     )
@@ -12115,7 +12115,11 @@ class TaskOrchestrator:
             except ToolFallbackStoppedError as exc:
                 if not recovered_attempts:
                     raise
-                current_route = exc.route if isinstance(exc.route, dict) else None
+                current_route = (
+                    exc.detail.get("route") if isinstance(exc.detail, dict) else None
+                )
+                if not isinstance(current_route, dict):
+                    current_route = None
                 current_attempts = (
                     list(current_route.get("attempted", ()))
                     if current_route is not None

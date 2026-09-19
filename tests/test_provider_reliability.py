@@ -38,7 +38,11 @@ from contextual_orchestrator.provider_errors import (  # noqa: E402
     ProviderUpstreamError,
     classify_provider_failure,
 )
-from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
+from contextual_orchestrator.tool_fallback import (
+    ToolExecutionError,
+    ToolFailureKind,
+    ToolFallbackStoppedError,
+)
 
 
 def _http_error(code: int) -> urllib.error.HTTPError:
@@ -665,6 +669,60 @@ def test_all_structurally_invalid_bounded_members_preserve_provider_error() -> N
         )
     assert caught.value.detail["route"]["terminal_reason"] == "eligible_set_exhausted"
     assert len(caught.value.detail["route"]["attempted"]) == 2
+
+
+def test_bounded_pool_tool_stop_preserves_prior_route_attempts() -> None:
+    """A terminal tool stop carries both the earlier failover and final attempt."""
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+    ]
+
+    class RetryableThenToolStopClient(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            if agent.id == "primary_worker":
+                raise ProviderUpstreamError(
+                    agent_id=agent.id,
+                    model=agent.model,
+                    error_code="service_unavailable",
+                    message="provider rejected the request with HTTP 503",
+                    client_status=503,
+                    provider_status=503,
+                    retryable=True,
+                    transport="chat",
+                )
+            raise ToolExecutionError(
+                "permission denied",
+                tool_name="send_message",
+                kind=ToolFailureKind.PERMISSION_DENIED,
+            )
+
+    orchestrator = TaskOrchestrator(
+        agents,
+        client=RetryableThenToolStopClient(),
+        tool_retry_attempts=0,
+    )
+
+    with pytest.raises(ToolFallbackStoppedError) as caught:
+        orchestrator._invoke(
+            agents[0],
+            [{"role": "user", "content": "route this"}],
+            text="route this",
+            role="worker",
+            allowed_agent_ids={agent.id for agent in agents},
+        )
+
+    route = caught.value.detail["route"]
+    assert route["eligible_agent_ids"] == ["primary_worker", "backup_worker"]
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    assert route["terminal_reason"] == "fail_closed"
+    from contextual_orchestrator.server import _tool_fallback_error_detail
+
+    assert _tool_fallback_error_detail(caught.value)["route"] == route
 
 
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:

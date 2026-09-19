@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from jsonschema import RefResolver, ValidationError, validate
+from jsonschema import ValidationError, validate
 from pathlib import Path
 import pytest
 import sys
@@ -335,7 +335,7 @@ def test_orchestration_route_schema_validates_structured_synthesis_fallback() ->
     )
     route = result["orchestration"]["route"]
     schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
-    validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    validate(route, {**schema, "components": OPENAPI_SPEC["components"]})
     outcomes = [attempt["outcome"] for attempt in route["attempted"]]
     assert outcomes == ["retryable_transport", "served"]
 
@@ -353,7 +353,7 @@ def test_orchestration_route_attempt_schema_validates_streaming_fallback() -> No
         key: trace[0][key]
         for key in ("agent_id", "model", "outcome", "error_code", "provider_status", "retryable", "transport")
     }
-    validate(failed_attempt, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    validate(failed_attempt, {**schema, "components": OPENAPI_SPEC["components"]})
     assert failed_attempt["outcome"] == "retryable_transport"
 
 
@@ -390,7 +390,7 @@ def test_orchestration_route_schema_validates_route_once_failover() -> None:
     assert result["answer"] == "served by fallback"
     route = result["route"]
     schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
-    validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    validate(route, {**schema, "components": OPENAPI_SPEC["components"]})
     outcomes = [attempt["outcome"] for attempt in route["attempted"]]
     assert outcomes == ["retryable_transport", "served"]
     assert route["terminal_reason"] == "served"
