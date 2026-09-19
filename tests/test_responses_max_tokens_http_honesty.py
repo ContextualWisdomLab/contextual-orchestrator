@@ -59,6 +59,7 @@ def test_http_responses_accepts_valid_max_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_valid_max_completion_tokens() -> None:
@@ -76,6 +77,7 @@ def test_http_responses_accepts_valid_max_completion_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_zero_max_tokens() -> None:
@@ -90,6 +92,7 @@ def test_http_responses_rejects_zero_max_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_non_integer_max_tokens() -> None:
@@ -104,6 +107,7 @@ def test_http_responses_rejects_non_integer_max_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 
@@ -123,6 +127,7 @@ def test_http_responses_rejects_boolean_max_completion_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

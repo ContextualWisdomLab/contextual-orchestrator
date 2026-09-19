@@ -39,6 +39,12 @@ embedding claim-lease constant, treats a null batch wait timeout as unbounded,
 and closes every touched loopback listener after shutdown. Multimodal HTTP
 fixtures declare image input explicitly instead of relying on a text-only mock.
 
+Expanded warnings-as-errors verification now closes the remaining HTTP and
+provider test listeners at their owning boundaries, including context-managed
+provider threads, and makes the content-part casefold fixtures declare
+`input:image`. This keeps the fail-closed capability contract while removing
+test-owned socket leaks instead of suppressing `ResourceWarning`.
+
 Endpoint preflight now normalizes accepted false forms of
 `parallel_tool_calls` before request-shaped pool admission. A
 `tool_call:single` vision endpoint therefore remains eligible for
