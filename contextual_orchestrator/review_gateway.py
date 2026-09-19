@@ -25,6 +25,7 @@ from .model_discovery import (
     DiscoveredModel,
     agent_from_discovered,
     discover_all_models,
+    free_image_chat_serving_candidates,
     general_free_serving_candidates,
 )
 from .orchestrator import ModelClient, TaskOrchestrator
@@ -53,9 +54,16 @@ OpenCode Zen and OpenCode Go; only rows that already satisfy the shared
 general-free serving contract enter the pool.
 """
 
+# Aligned with ContextualWisdomLab/.github Noema document review leaf
+# (``MAX_DOCUMENT_IMAGES=8``, ``MAX_DOCUMENT_IMAGE_BYTES=2 MiB``). Base64
+# expands ~4/3, and the JSON also carries paper text/tables — 32 MiB is the
+# owner-side request ceiling so eight 2 MiB figures plus text fit without
+# inventing a second per-part quota on the gateway.
+REVIEW_MAX_BODY_BYTES = 32 * 1024 * 1024
+
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
-REVIEW_READINESS_CONTRACT_VERSION = "1"
+REVIEW_READINESS_CONTRACT_VERSION = "2"
 """Versioned owner readiness/admission contract for the free review pool.
 
 Consumers pin this version to know exactly which readiness/admission
@@ -176,13 +184,27 @@ def register_review_credentials(
 def _free_review_candidates(
     discovered: Sequence[DiscoveredModel],
 ) -> list[DiscoveredModel]:
-    """Apply source policy after the shared blind-free serving eligibility rule."""
+    """Apply source policy after free serving eligibility rules.
+
+    Blind text review keeps :func:`general_free_serving_candidates`. Figure-
+    bearing Noema/DOCX/HWPX review also needs zero-cost chat models with
+    explicit ``image`` input evidence; those rows are admitted via
+    :func:`free_image_chat_serving_candidates` and selected only when the
+    request already carries ``image_url`` parts (see
+    ``TaskOrchestrator._free_pool_agent_ids``). Text-only ``orchestrator/free``
+    traffic still cannot reach them through the blind general-free predicate.
+    """
     admitted_credentials = frozenset(REVIEW_FREE_POOL_CREDENTIAL_NAMES)
-    return [
-        model
-        for model in general_free_serving_candidates(list(discovered))
-        if model.credential_name in admitted_credentials
-    ]
+    discovered_list = list(discovered)
+    by_key: dict[tuple[str, str, str], DiscoveredModel] = {}
+    for model in (
+        *general_free_serving_candidates(discovered_list),
+        *free_image_chat_serving_candidates(discovered_list),
+    ):
+        if model.credential_name not in admitted_credentials:
+            continue
+        by_key[(model.provider_name, model.model_id, model.credential_name)] = model
+    return list(by_key.values())
 
 
 def build_review_orchestrator(
@@ -196,7 +218,8 @@ def build_review_orchestrator(
     available subset. All requested credentials, including ``OPENAI_API_KEY``,
     may be registered and globally discovered. Candidate admission is a
     separate boundary: candidates must satisfy the shared general-free serving
-    contract, be sourced from ``REVIEW_FREE_POOL_CREDENTIAL_NAMES``, and belong
+    contract and/or the free image-chat serving contract (figure-bearing
+    review), be sourced from ``REVIEW_FREE_POOL_CREDENTIAL_NAMES``, and belong
     to a provider credential actually registered by this bootstrap call.
     Therefore a previously stored OpenAI credential cannot enter the free pool,
     and an unrelated previously stored free-provider credential cannot escape
@@ -306,7 +329,10 @@ def main() -> None:
         orchestrator,
         host=args.host,
         port=args.port,
-        security=SecurityConfig(auth_token=auth_token),
+        security=SecurityConfig(
+            auth_token=auth_token,
+            max_body_bytes=REVIEW_MAX_BODY_BYTES,
+        ),
     )
 
 

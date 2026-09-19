@@ -1220,6 +1220,13 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
 # positive declarations only), so selection never infers a limit from a missing tag.
 SINGLE_TOOL_CALL_EVIDENCE_TAG = "tool_call:single"
 
+# Discovery-stamped entitlement for chat requests that carry image_url
+# parts. Prefer this over the legacy operator "vision" capability tag;
+# both are accepted by _agent_supports_image_input so durable pools that
+# only recorded "vision" keep working.
+IMAGE_INPUT_EVIDENCE_TAG = "input:image"
+LEGACY_VISION_CAPABILITY_TAG = "vision"
+
 
 def _request_requires_parallel_tool_calls(body: Mapping[str, Any]) -> bool:
     """Return whether a chat body needs a model that accepts several tool calls at once.
@@ -6049,6 +6056,7 @@ class TaskOrchestrator:
         else:
             text = _coerce_input_text(body.get("input"))
             response_messages = _responses_to_chat_payload(body).get("messages", [])
+            messages = response_messages
             prompt_context = self._prompt_interaction(response_messages)
         requested_model = body.get("model")
         # Selector nature for the rate-limit-storm admission decision below
@@ -6073,6 +6081,11 @@ class TaskOrchestrator:
         # is specific to why the request can't be served.
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
+        image_tags = (
+            self._image_input_required_tags(messages)
+            if isinstance(messages, list)
+            else ()
+        )
         agent = (
             next(
                 (
@@ -6093,13 +6106,22 @@ class TaskOrchestrator:
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
         if agent is None:
-            agent = self._select_agent(
-                text,
-                "worker",
-                free_only=requested_model == self.FREE_MODEL,
-                prompt_context=prompt_context,
-                effort_profile=effort_profile,
-            )
+            try:
+                agent = self._select_agent(
+                    text,
+                    "worker",
+                    free_only=requested_model == self.FREE_MODEL,
+                    required_tags=image_tags,
+                    prompt_context=prompt_context,
+                    effort_profile=effort_profile,
+                )
+            except RuntimeError as exc:
+                if image_tags:
+                    raise ValueError(
+                        "no enabled model supports required tags: "
+                        + ", ".join(image_tags)
+                    ) from exc
+                raise
         replica_agent_ids = (
             set.intersection(*(set(value) for value in file_replicas.values()))
             if isinstance(file_replicas, dict) and file_replicas
@@ -6120,6 +6142,7 @@ class TaskOrchestrator:
                     text,
                     "worker",
                     free_only=requested_model == self.FREE_MODEL,
+                    required_tags=image_tags,
                     prompt_context=prompt_context,
                     effort_profile=effort_profile,
                     )
@@ -6212,12 +6235,7 @@ class TaskOrchestrator:
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
-            {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate, chat_body=body)
-                and self._zdr_agent_allowed(candidate)
-            }
+            self._free_pool_agent_ids(messages=messages, chat_body=body)
             if requested_model == self.FREE_MODEL
             else (
                 {
@@ -6249,6 +6267,7 @@ class TaskOrchestrator:
             agent,
             text,
             "worker",
+            required_tags=image_tags,
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
             effort_profile=effort_profile,
@@ -6570,7 +6589,7 @@ class TaskOrchestrator:
         # silent fallback. Deferred (virtual/gateway-default) model names must
         # resolve to a concrete synthesizer even without that tag.
         prompt_context = self._prompt_interaction(messages)
-        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        required_tags = self._image_input_required_tags(messages)
         response_format_requested = bool(chat_body.get("response_format"))
         requested_model = body.get("model")
         virtual_model = requested_model in {
@@ -6660,7 +6679,7 @@ class TaskOrchestrator:
             )
             if final_agent is None:
                 raise RuntimeError("required file provider is unavailable")
-        elif any(tag not in final_agent.tags for tag in required_tags):
+        elif not self._agent_matches_required_tags(final_agent, required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
                 + ", ".join(required_tags)
@@ -6791,12 +6810,7 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate, chat_body=chat_body)
-                and self._zdr_agent_allowed(candidate)
-            }
+            self._free_pool_agent_ids(messages=messages, chat_body=chat_body)
             if free_only
             else (
                 {
@@ -7492,8 +7506,10 @@ class TaskOrchestrator:
         requested_model: Any,
         *,
         model_was_provided: bool = True,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
     ):
-        """Constrain this request to agents whose configured endpoint matches exactly."""
+        """Constrain this request to endpoint-local, request-capable agents."""
         if endpoint is None:
             yield
             return
@@ -7513,7 +7529,9 @@ class TaskOrchestrator:
             if not self._request_endpoint_supports_model(
                 self._normalize_endpoint_requested_model(
                     requested_model, model_was_provided=model_was_provided
-                )
+                ),
+                messages=messages,
+                chat_body=chat_body,
             ):
                 raise EndpointUnavailableError("endpoint_unavailable")
             yield
@@ -7534,7 +7552,13 @@ class TaskOrchestrator:
             return _INVALID_REQUESTED_MODEL
         return normalized
 
-    def _request_endpoint_supports_model(self, requested_model: Any) -> bool:
+    def _request_endpoint_supports_model(
+        self,
+        requested_model: Any,
+        *,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
+    ) -> bool:
         """Check endpoint-local eligibility without ranking or provider I/O."""
         if requested_model is _INVALID_REQUESTED_MODEL:
             return True
@@ -7545,6 +7569,17 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }:
             free_only = requested_model == self.FREE_MODEL
+            if free_only and messages is not None:
+                request_ids = self._free_pool_agent_ids(
+                    messages=messages,
+                    chat_body=chat_body,
+                    role="worker",
+                )
+                return any(
+                    agent.id in request_ids
+                    and _agent_matches_request_endpoint(agent)
+                    for agent in self.agents
+                )
             return any(
                 not agent.disabled
                 and _agent_matches_request_endpoint(agent)
@@ -7751,27 +7786,37 @@ class TaskOrchestrator:
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
         effort_profile = self._role_effort_profile("worker")
+        required_tags = self._image_input_required_tags(messages)
         stream_kwargs: dict[str, Any] = {}
         if effort_profile is not None:
             stream_kwargs["effort_profile"] = effort_profile
         if include_usage:
             stream_kwargs["include_usage"] = True
         pinned = self._requested_agent(model_name)
-        primary = pinned or self._select_agent(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
-        )
+        try:
+            primary = pinned or self._select_agent(
+                text,
+                "worker",
+                free_only=free_only,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+            )
+        except RuntimeError as exc:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                ) from exc
+            raise
         if pinned is not None:
             candidates = [primary]
         else:
-            free_ids = {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-            }
+            free_ids = self._free_pool_agent_ids(messages=messages)
             candidates = self._failover_candidates(
                 primary,
                 text,
                 "worker",
+                required_tags=required_tags,
                 allowed_agent_ids=free_ids if free_only else None,
                 prompt_context=prompt_context,
                 effort_profile=effort_profile,
@@ -7903,6 +7948,8 @@ class TaskOrchestrator:
             latency_seconds=latency_seconds,
             usage=usage,
             free_only=free_only,
+            required_tags=required_tags,
+            prompt_context=prompt_context,
         )
         trace_step = {
             "id": len(failed_trace_steps),
@@ -9123,11 +9170,24 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         requested = self._requested_agent(model_name)
-        ranked_pool: list[ModelAgent] = (
-            [requested] if requested is not None else []
-        ) or self._ranked_agents(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
-        )
+        required_tags = self._image_input_required_tags(messages)
+        try:
+            ranked_pool: list[ModelAgent] = (
+                [requested] if requested is not None else []
+            ) or self._ranked_agents(
+                text,
+                "worker",
+                free_only=free_only,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+            )
+        except RuntimeError as exc:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                ) from exc
+            raise
         # Context-window candidate filtering only applies to virtual/role-based
         # selection: an explicitly requested concrete model (``requested`` is
         # not None) is the caller's own choice, and the provider's own error
@@ -9139,11 +9199,7 @@ class TaskOrchestrator:
                 text, ranked_pool[0].model
             )
         context_window_excluded: list[str] = []
-        free_ids = {
-            candidate.id
-            for candidate in self.agents
-            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-        }
+        free_ids = self._free_pool_agent_ids(messages=messages)
         allowed_agent_ids = free_ids if free_only else None
         # A tool-result follow-up returns to its emitting agent when that
         # agent is still one of the already role/free/ZDR-filtered
@@ -9227,6 +9283,7 @@ class TaskOrchestrator:
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
+                    required_tags=required_tags,
                     prompt_context=prompt_context,
                 )
             row["realtime_judge"] = {
@@ -9282,6 +9339,7 @@ class TaskOrchestrator:
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
+        required_tags: tuple[str, ...] = (),
         prompt_context: str | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
@@ -9323,7 +9381,10 @@ class TaskOrchestrator:
             }
         fallback_report = {"verifier_output": answer}
         base = self._model_judge_verification(
-            text, fallback_report, free_only=free_only
+            text,
+            fallback_report,
+            free_only=free_only,
+            required_tags=required_tags,
         )
         accepted = bool(base.get("accepted"))
         raw_irt_row = base.get("judge_irt_row")
@@ -9379,8 +9440,7 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         task = self._latest_user_text(messages)
-        source_images = self._source_image_parts(messages)
-        required_tags = ("vision",) if source_images else ()
+        required_tags = self._image_input_required_tags(messages)
         caller_instructions = "\n\n".join(
             instruction
             for message in messages
@@ -9389,7 +9449,9 @@ class TaskOrchestrator:
         )
         plan_source = "template"
         if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
-            steps = self._plan(task, model_name=model_name)
+            steps = self._plan(
+                task, model_name=model_name, required_tags=required_tags
+            )
         elif self.policy.workflow_planning == "generated":
             try:
                 tool_scope = (
@@ -9403,19 +9465,15 @@ class TaskOrchestrator:
             except BudgetExceededError:
                 raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
-                steps = self._plan(task)
+                steps = self._plan(task, required_tags=required_tags)
                 plan_source = "template_fallback"
         else:
-            steps = self._plan(task)
+            steps = self._plan(task, required_tags=required_tags)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
         tool_result: dict[str, Any] | None = None
         tool_loop_evidence: dict[str, str] | None = None
-        free_ids = {
-            candidate.id
-            for candidate in self.agents
-            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
-        }
+        free_ids = self._free_pool_agent_ids(messages=messages)
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
             _allowed_agent_ids
@@ -9449,7 +9507,7 @@ class TaskOrchestrator:
                     additional_cost_usd=in_flight_cost,
                 )
             agent = self._agent(step.agent_id)
-            if any(tag not in agent.tags for tag in required_tags):
+            if not self._agent_matches_required_tags(agent, required_tags):
                 try:
                     capable = self._ranked_agents(
                         step.subtask,
@@ -9579,6 +9637,7 @@ class TaskOrchestrator:
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
                     excluded_agent_ids=_excluded_agent_ids,
+                    required_tags=required_tags,
                 )
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
@@ -9592,6 +9651,7 @@ class TaskOrchestrator:
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
                     excluded_agent_ids=_excluded_agent_ids,
+                    required_tags=required_tags,
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
@@ -9803,14 +9863,38 @@ class TaskOrchestrator:
         return steps
 
     def _plan(
-        self, task: str, *, model_name: str = GATEWAY_DEFAULT_MODEL
+        self,
+        task: str,
+        *,
+        model_name: str = GATEWAY_DEFAULT_MODEL,
+        required_tags: tuple[str, ...] = (),
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
         free_only = model_name == self.FREE_MODEL
-        thinker = (requested or self._select_agent(task, "thinker", free_only=free_only)).id
-        worker = (requested or self._select_agent(task, "worker", free_only=free_only)).id
-        verifier = (requested or self._select_agent(task, "verifier", free_only=free_only)).id
-        synthesizer = (requested or self._select_agent(task, "synthesizer", free_only=free_only)).id
+        thinker = (
+            requested
+            or self._select_agent(
+                task, "thinker", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        worker = (
+            requested
+            or self._select_agent(
+                task, "worker", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        verifier = (
+            requested
+            or self._select_agent(
+                task, "verifier", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        synthesizer = (
+            requested
+            or self._select_agent(
+                task, "synthesizer", free_only=free_only, required_tags=required_tags
+            )
+        ).id
         return [
             WorkflowStep(0, "thinker", thinker, "Decompose the task and identify the best execution strategy."),
             WorkflowStep(1, "worker", worker, "Execute the core task using the plan.", (0,)),
@@ -9907,6 +9991,7 @@ class TaskOrchestrator:
         is deliberately left out of this filter.
         """
         source = self.agents if candidate_pool is None else list(candidate_pool)
+        shaped_body = self._request_shaped_chat_body(None)
         candidates = [
             agent
             for agent in source
@@ -9915,10 +10000,21 @@ class TaskOrchestrator:
             and self._zdr_agent_allowed(agent)
             if (
                 not free_only
-                or (self._is_general_free_agent(agent) if chat_only else self._is_free_agent(agent))
+                or (
+                    self._is_image_capable_free_agent(agent, chat_body=shaped_body)
+                    if (
+                        IMAGE_INPUT_EVIDENCE_TAG in required_tags
+                        or LEGACY_VISION_CAPABILITY_TAG in required_tags
+                    )
+                    else (
+                        self._is_general_free_agent(agent, chat_body=shaped_body)
+                        if chat_only
+                        else self._is_free_agent(agent)
+                    )
+                )
             )
             and (not chat_only or _is_general_chat_agent(agent))
-            and all(tag in agent.tags for tag in required_tags)
+            and self._agent_matches_required_tags(agent, required_tags)
         ]
         if chat_only:
             candidates = _eligible_role_effort_candidates(
@@ -10122,6 +10218,49 @@ class TaskOrchestrator:
             candidate.model == agent.model for candidate in self.candidates
         ) == 1
 
+    @staticmethod
+    def _agent_rejected_by_single_tool_call_evidence(
+        agent: ModelAgent, chat_body: Mapping[str, Any] | None
+    ) -> bool:
+        """True when discovery proved this agent cannot serve the request's tool shape.
+
+        Issue #940: ``tool_call:single`` is positive evidence that a multi-call
+        / ``parallel_tool_calls: true`` request will 400. Shared by blind
+        general-free and image-capable free admission so multimodal selection
+        cannot reopen the doomed round-trip.
+        """
+        return (
+            chat_body is not None
+            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
+            and _request_requires_parallel_tool_calls(chat_body)
+        )
+
+    def _request_shaped_chat_body(
+        self, chat_body: Mapping[str, Any] | None
+    ) -> Mapping[str, Any] | None:
+        """Prefer an explicit chat body; else tools from request-scoped client settings.
+
+        Route/conduct paths carry tools on ``ModelClient.request_settings`` rather
+        than a passthrough body. Rebuilding the tool-shape fields here keeps
+        :meth:`_free_pool_agent_ids` and :meth:`_ranked_agents` on the same
+        #940 exclusion as ``proxy_completion``.
+        """
+        if isinstance(chat_body, Mapping):
+            return chat_body
+        snapshot = getattr(self.client, "request_settings_snapshot", None)
+        if not callable(snapshot):
+            return None
+        settings = snapshot()
+        if not isinstance(settings, Mapping):
+            return None
+        tools = settings.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return None
+        shaped: dict[str, Any] = {"tools": tools}
+        if "parallel_tool_calls" in settings:
+            shaped["parallel_tool_calls"] = settings["parallel_tool_calls"]
+        return shaped
+
     def _is_general_free_agent(
         self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None
     ) -> bool:
@@ -10152,11 +10291,34 @@ class TaskOrchestrator:
         """
         if not (self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)):
             return False
-        if (
-            chat_body is not None
-            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
-            and _request_requires_parallel_tool_calls(chat_body)
+        if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
+            return False
+        return True
+
+    def _is_image_capable_free_agent(
+        self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None
+    ) -> bool:
+        """Return true for zero-cost agents with image-input evidence for known image traffic.
+
+        Image entitlement is an *additional* predicate on top of
+        :meth:`_is_free_agent`, not a replacement for request-shaped tool-call
+        admission (#940). When ``chat_body`` (or reconstructed request settings)
+        requires parallel/multi tool calls, a ``tool_call:single`` image-capable
+        free agent is excluded before provider I/O — the same composition
+        :meth:`_is_general_free_agent` applies for blind text free traffic.
+        A legacy ``vision`` tag without ``input:*`` evidence remains eligible;
+        explicit ``input:image`` without ``input:text`` is image-only and is
+        rejected for the mixed text/image review envelope.
+        """
+        input_tags = {tag for tag in agent.tags if tag.startswith("input:")}
+        if not (
+            self._is_free_agent(agent)
+            and _is_general_chat_agent(agent)
+            and self._agent_supports_image_input(agent)
+            and (not input_tags or "input:text" in input_tags)
         ):
+            return False
+        if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
             return False
         return True
 
@@ -10364,7 +10526,7 @@ class TaskOrchestrator:
                 effort_profile=effort_profile,
             )
             if _is_general_chat_agent(agent)
-            and all(tag in agent.tags for tag in required_tags)
+            and self._agent_matches_required_tags(agent, required_tags)
         ]
         if prefer_tags and ranked:
             preferred = [
@@ -10796,7 +10958,7 @@ class TaskOrchestrator:
         self._last_assistant_message = None
         self._last_output_budget = None
         self._last_context_window_excluded = []
-        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        required_tags = self._image_input_required_tags(messages)
         prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
             primary,
@@ -10807,15 +10969,6 @@ class TaskOrchestrator:
             prompt_context=prompt_context,
             prompt_token_lower_bound=prompt_token_lower_bound,
         )
-        if not candidates and required_tags:
-            candidates = self._failover_candidates(
-                primary,
-                text,
-                eligibility_role or role,
-                allowed_agent_ids=allowed_agent_ids,
-                prompt_context=prompt_context,
-                prompt_token_lower_bound=prompt_token_lower_bound,
-            )
         if excluded_agent_ids:
             candidates = [
                 candidate
@@ -10823,6 +10976,11 @@ class TaskOrchestrator:
                 if candidate.id not in excluded_agent_ids
             ]
         if not candidates:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                )
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
@@ -11273,7 +11431,7 @@ class TaskOrchestrator:
             if not agent.disabled
             and self._zdr_agent_allowed(agent)
             and _is_general_chat_agent(agent)
-            and all(tag in agent.tags for tag in required_tags)
+            and self._agent_matches_required_tags(agent, required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
@@ -11774,7 +11932,7 @@ class TaskOrchestrator:
             except ProviderUpstreamError as exc:
                 if exc.provider_status not in (429, 503):
                     raise
-                required_tags = ("vision",) if self._source_image_parts(messages) else ()
+                required_tags = self._image_input_required_tags(messages)
                 prompt_context = self._prompt_interaction(messages)
                 candidates = self._failover_candidates(
                     primary,
@@ -11908,6 +12066,97 @@ class TaskOrchestrator:
             if isinstance(part, dict) and part.get("type") == "image_url"
         ]
 
+    @staticmethod
+    def _image_input_required_tags(messages: list[ChatMessage]) -> tuple[str, ...]:
+        """Return the hard image entitlement before content normalization.
+
+        Chat validation accepts stripped, case-insensitive ``image_url`` and
+        the Responses-style ``input_image`` alias. Admission must recognize
+        that same surface before any streaming response is committed.
+        """
+        for message in messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if isinstance(part_type, str) and part_type.strip().casefold() in {
+                    "image_url",
+                    "input_image",
+                }:
+                    return (IMAGE_INPUT_EVIDENCE_TAG,)
+        return ()
+
+    @staticmethod
+    def _agent_supports_image_input(agent: ModelAgent) -> bool:
+        """True when an agent carries discovery or legacy image-input evidence."""
+        return (
+            IMAGE_INPUT_EVIDENCE_TAG in agent.tags
+            or LEGACY_VISION_CAPABILITY_TAG in agent.tags
+        )
+
+    @staticmethod
+    def _agent_matches_required_tags(
+        agent: ModelAgent, required_tags: tuple[str, ...]
+    ) -> bool:
+        """Hard entitlement check; image tags accept discovery or legacy forms."""
+        if not required_tags:
+            return True
+        if required_tags in {
+            (IMAGE_INPUT_EVIDENCE_TAG,),
+            (LEGACY_VISION_CAPABILITY_TAG,),
+        }:
+            return TaskOrchestrator._agent_supports_image_input(agent)
+        return all(tag in agent.tags for tag in required_tags)
+
+    def _free_pool_agent_ids(
+        self,
+        *,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
+        role: str | None = None,
+    ) -> set[str]:
+        """Ids eligible for ``orchestrator/free`` given the known request shape.
+
+        Blind text requests keep :meth:`_is_general_free_agent` (excludes
+        non-text-input deployments). When the request already carries
+        ``image_url`` parts, the modality is no longer unknown: admit
+        zero-cost agents with explicit image-input evidence via
+        :meth:`_is_image_capable_free_agent` so figure-bearing review traffic
+        can reach a vision-capable free model instead of a text-only one that
+        would silently ignore pixels. Image entitlement is composed with the
+        same #940 tool-call exclusion — never a replacement for it.
+        """
+        require_image = False
+        if messages is not None:
+            require_image = bool(self._image_input_required_tags(messages))
+        elif isinstance(chat_body, Mapping):
+            body_messages = chat_body.get("messages")
+            if isinstance(body_messages, list):
+                require_image = bool(self._image_input_required_tags(body_messages))
+        shaped_body = self._request_shaped_chat_body(chat_body)
+        ids: set[str] = set()
+        for candidate in self.agents:
+            if candidate.disabled:
+                continue
+            if role is not None and role in candidate.provider_exclusions:
+                continue
+            if not (
+                _agent_matches_request_endpoint(candidate)
+                and self._zdr_agent_allowed(candidate)
+            ):
+                continue
+            if require_image:
+                if self._is_image_capable_free_agent(
+                    candidate, chat_body=shaped_body
+                ):
+                    ids.add(candidate.id)
+            elif self._is_general_free_agent(candidate, chat_body=shaped_body):
+                ids.add(candidate.id)
+        return ids
+
     def _model_judge_verification(
         self,
         task: str,
@@ -11916,6 +12165,7 @@ class TaskOrchestrator:
         free_only: bool = False,
         allowed_agent_ids: set[str] | None = None,
         excluded_agent_ids: set[str] | None = None,
+        required_tags: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
@@ -11944,12 +12194,19 @@ class TaskOrchestrator:
             }
         judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
-            judge = next(
+            eligible_judges = [
                 agent
-                for agent in self._ranked_agents(task, "verifier", free_only=free_only)
+                for agent in self._ranked_agents(
+                    task,
+                    "verifier",
+                    free_only=free_only,
+                    required_tags=required_tags,
+                )
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
-            )
+            ]
+            judge = eligible_judges[0]
+            judge_allowed_agent_ids = {agent.id for agent in eligible_judges}
             # The judge is one bounded provider call.  Do not pass the
             # planning strategy ("template"/"generated") as an
             # orchestration mode or recursively conduct another workflow.
@@ -11958,7 +12215,7 @@ class TaskOrchestrator:
                 task,
                 judge.id,
                 mode="route",
-                allowed_agent_ids=allowed_agent_ids,
+                allowed_agent_ids=judge_allowed_agent_ids,
                 excluded_agent_ids=excluded_agent_ids,
             )
             fast_judge = components.judge_cls(

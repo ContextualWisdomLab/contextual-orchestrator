@@ -1,5 +1,87 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-19 free multimodal review routing — Proposed
+
+Canonical owner PR
+[#1203](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1203)
+with functional repair `7f30351ccb36bb676ad0b23fe71ea1cce9f98645`
+(tree `157468c88470e93dc2f3e19f03acbf34ff32219f`) repairs the
+`orchestrator/free` image-admission boundary used by the proposed
+`ContextualWisdomLab/.github` DOCX/HWPX review leaf #2281. Five RED
+regressions proved that Responses conversion selected a higher-priority
+text-only model, template planning and the model judge dropped
+`input:image`, mixed-case discovery evidence was unroutable, and the changed
+admission predicate was still published as readiness contract v1. Follow-up
+RED cases then proved that proxy failover and realtime judging could lose the
+image requirement, explicit image-only rows entered the mixed envelope, and
+the first fix also rejected documented legacy `vision` agents with no
+`input:*` evidence. A later endpoint regression proved that preflight and
+pool admission still rejected an endpoint-local image-capable free agent
+before request-aware selection.
+
+The owner now carries normalized image evidence through Responses, template
+roles, conducted invocation, proxy failover, realtime judging, and model
+judging; readiness contract v2 records the predicate change. Explicit
+`input:image` without `input:text` is rejected, while legacy `vision` with no
+`input:*` declaration remains eligible. Endpoint preflight, Chat Completions,
+and Responses now apply that same request-shaped pool boundary; endpoints
+without local eligible capacity still fail closed. Exact head
+`79fef32bda4dd599ea973e790b09e58ed02dd9b1` (tree
+`645b468916ddb3c4437a96151c6740ab08d9f646`) completed 127 related
+RED-to-GREEN tests; `compileall` and diff checks passed. Current source head
+`738ab3689d110685ca07f09b7c51031f11d3f07f` (tree
+`404b820ac844c0133cd18a32f6833d5082db7c6b`) additionally removes the two
+stale collection blockers, preserves null as an unbounded provider-batch wait,
+closes the remaining touched loopback listeners at their owning boundaries,
+and aligns image-bearing HTTP fixtures with explicit `input:image` capability.
+The expanded warnings-as-errors lane completed 117 tests; `compileall` and diff
+checks passed. Earlier
+head `f8783af9` completed 244 related tests with warnings treated as errors and
+Ruff. The full local collection is not claimed: a provider-key-free fail-fast
+run reached 1,156 passed / 1 skipped after the listener and capability-fixture
+repairs, then stopped because the borrowed verifier lacks the required Rust
+`_decision_receipt` extension. The borrowed verifier also lacks the configured
+asyncio plugin; neither missing environment dependency is bypassed in product
+code.
+
+HTTP-boundary RED `1527821a5b61d2e114e8d34e5f9bc5163a4b9b0a`
+proved that endpoint preflight consumed raw accepted false forms
+(`parallel_tool_calls: "false"` and `0`) before the serving path normalized
+them. With two tools, that falsely rejected the endpoint's only
+`tool_call:single` image-capable free agent as unavailable. GREEN
+`a7ed3364eb2c40b543ed0d0421d1aa14ea1ed985` normalizes the flag once at
+the shared Chat/Responses HTTP boundary before endpoint admission; invalid
+forms still fail closed. The focused endpoint plus multimodal suites completed
+46 tests with warnings treated as errors. This is local source evidence, not
+hosted or release evidence.
+
+Current-head P1 RED `2b5c290ca56526c26f390949aecd87d85c2462b6`
+proved that a free image candidate excluded from the `worker` role could still
+satisfy HTTP preflight and commit HTTP 200/SSE before routing rejected it. The
+same generation corrected two stale fixtures: the judge now represents an
+admitted text+image chat candidate with a valid two-criterion IRT result, and
+the Responses endpoint fake owns `proxy_send_once` instead of reaching a real
+transport. GREEN `1b31f8cd6a73cf98ac873e7f569caeddcd234257`
+(tree `5d45fc5395e4b5ccfa2e7f47ea30f74a13e75418`) makes request-aware
+free-pool preflight role-aware without changing ordinary internal pool
+selection. The three affected suites complete **91 tests** with warnings as
+errors; compileall and diff checks pass. Hosted exact-head protection remains
+required.
+
+A preservation regression at ordinary-forward RED `33e3998ac9f6b1373cdfda83a760f19214f2237c`
+proved that the branch snapshot had dropped 87 of 148 protected level-two
+sections, including PRD, TRD, Context Map, roadmap, delivery-gate, and incident
+authority. The repair restores the complete protected `main` baseline and
+keeps this Proposed owner section additive; it does not promote the lane to
+Accepted or claim hosted acceptance.
+
+Status remains **Proposed**. Protected exact-head Checks, independent review,
+ordinary merge, immutable owner release, and consumer pin are still required.
+Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,
+but remains Draft/Proposed until exact-head hosted protection, independent
+review, this owner's ordinary merge and immutable release, and a consumer pin
+all complete. The owner fix does not bypass those gates.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`

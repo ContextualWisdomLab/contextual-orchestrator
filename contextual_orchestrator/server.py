@@ -2425,7 +2425,12 @@ def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
 
 
 def _require_pool_model(
-    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+    orchestrator: Any,
+    model_name: str,
+    *,
+    required_capability: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    chat_body: Mapping[str, Any] | None = None,
 ) -> str:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
@@ -2455,6 +2460,20 @@ def _require_pool_model(
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
+            if messages is not None and orchestrator._free_pool_agent_ids(
+                messages=messages,
+                chat_body=chat_body,
+                role="worker",
+            ):
+                return model_name
+            if messages is not None and orchestrator._image_input_required_tags(
+                messages
+            ):
+                raise RequestError(
+                    400,
+                    "invalid_model",
+                    "no enabled zero-cost model supports required tags: input:image",
+                )
             if any(zdr_allowed(agent) and orchestrator._is_general_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
@@ -6777,13 +6796,37 @@ def build_server(
                 request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
                 if path in {"/v1/chat/completions", "/v1/responses"}:
+                    if "parallel_tool_calls" in body:
+                        normalized_parallel_tool_calls = _coerce_optional_bool(
+                            body.get("parallel_tool_calls"),
+                            error_code="invalid_parallel_tool_calls",
+                            message="parallel_tool_calls must be a boolean",
+                        )
+                        if normalized_parallel_tool_calls is not None:
+                            body["parallel_tool_calls"] = normalized_parallel_tool_calls
                     endpoint_routing = _validate_routing(
                         body.get("routing"), allow_endpoint=True
                     )
+                    endpoint_messages = body.get("messages")
+                    if path == "/v1/chat/completions":
+                        endpoint_messages = _validate_messages(endpoint_messages)
+                    else:
+                        try:
+                            endpoint_messages = _responses_to_chat_payload(body)[
+                                "messages"
+                            ]
+                        except ValueError:
+                            endpoint_messages = None
                     endpoint_policy = orchestrator.routing_endpoint_scope(
                         endpoint_routing.get("endpoint") if endpoint_routing else None,
                         body.get("model"),
                         model_was_provided="model" in body,
+                        messages=(
+                            endpoint_messages
+                            if isinstance(endpoint_messages, list)
+                            else None
+                        ),
+                        chat_body=body,
                     )
                     try:
                         endpoint_policy.__enter__()
@@ -7124,7 +7167,16 @@ def build_server(
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    _require_pool_model(
+                        orchestrator,
+                        model_name,
+                        messages=(
+                            endpoint_messages
+                            if isinstance(endpoint_messages, list)
+                            else None
+                        ),
+                        chat_body=body,
+                    )
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -7985,7 +8037,16 @@ def build_server(
                         TaskOrchestrator.AUTO_MODEL,
                         TaskOrchestrator.FREE_MODEL,
                     }:
-                        _require_pool_model(orchestrator, model_name)
+                        _require_pool_model(
+                            orchestrator,
+                            model_name,
+                            messages=(
+                                endpoint_messages
+                                if isinstance(endpoint_messages, list)
+                                else None
+                            ),
+                            chat_body=body,
+                        )
                     responses_attribution = dict(
                         _validate_attribution(body.get("attribution")) or {}
                     )

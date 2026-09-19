@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -17,6 +18,23 @@ from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.video_jobs import VideoJobContractError
 
 TOKEN = "multimodal_group_token"
+
+
+@pytest.fixture(autouse=True)
+def close_test_listeners(monkeypatch):
+    """Close every listener after its serving loop has stopped."""
+    original_builder = build_server
+    servers = []
+
+    def tracked_builder(*args, **kwargs):
+        server = original_builder(*args, **kwargs)
+        servers.append(server)
+        return server
+
+    monkeypatch.setattr(sys.modules[__name__], "build_server", tracked_builder)
+    yield
+    for server in servers:
+        server.server_close()
 
 
 def _equivalence(capability: str) -> dict[str, object]:

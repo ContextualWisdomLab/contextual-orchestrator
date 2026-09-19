@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from jsonschema import RefResolver, ValidationError, validate
+from jsonschema import ValidationError, validate
 from pathlib import Path
 import pytest
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -12,6 +14,22 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.api_contract import OPENAPI_SPEC  # noqa: E402
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
+
+
+_OPENAPI_REGISTRY_URI = "urn:cwl:openapi"
+_OPENAPI_REGISTRY = Registry().with_resource(
+    _OPENAPI_REGISTRY_URI,
+    Resource.from_contents(OPENAPI_SPEC, default_specification=DRAFT202012),
+)
+
+
+def _validate_openapi_component(instance: dict, component_name: str) -> None:
+    """Validate an instance against one OpenAPI component schema."""
+    validate(
+        instance,
+        {"$ref": f"{_OPENAPI_REGISTRY_URI}#/components/schemas/{component_name}"},
+        registry=_OPENAPI_REGISTRY,
+    )
 
 
 def test_rest_resource_paths_use_two_word_snake_case() -> None:
@@ -331,8 +349,7 @@ def test_orchestration_route_schema_validates_structured_synthesis_fallback() ->
         single_agent=False,
     )
     route = result["orchestration"]["route"]
-    schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
-    validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    _validate_openapi_component(route, "OrchestrationRoute")
     outcomes = [attempt["outcome"] for attempt in route["attempted"]]
     assert outcomes == ["retryable_transport", "served"]
 
@@ -345,10 +362,9 @@ def test_orchestration_route_attempt_schema_validates_streaming_fallback() -> No
     )
     assert answer == "served output"
     trace = next(iter(orchestrator._workflow_runs.values()))["trace"]
-    schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRouteAttempt"]
     failed_attempt = {
         key: trace[0][key]
         for key in ("agent_id", "model", "outcome", "error_code", "provider_status", "retryable", "transport")
     }
-    validate(failed_attempt, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    _validate_openapi_component(failed_attempt, "OrchestrationRouteAttempt")
     assert failed_attempt["outcome"] == "retryable_transport"
