@@ -18,11 +18,10 @@ endpoint actually serves each request using only measured evidence:
   reports completion token counts, tokens-per-second samples are retained as
   diagnostic evidence. Routing consistently uses latency-derived
   responses-per-second.
-- **Score** is ``P(success | data) / EWMA latency``: expected successful
-  responses per second. It has consistent physical units, uses no hand-tuned weights, and
-  degenerates gracefully -- members without any observation share one
-  identical neutral score, so ordering falls back to the caller's static
-  ranking until real evidence exists.
+- **Deterministic report score** is ``P(success | data) / EWMA latency``:
+  expected successful responses per second. It has consistent physical units
+  and uses no hand-tuned weights. Unobserved report rows share one neutral
+  score; live selection does not use caller order as evidence.
 - **Live selection** (:meth:`ModelGroupRouter.sampled_ranked_member_ids`) draws
   one Thompson sample (Thompson, 1933) per member from its own Beta(alpha,
   beta) posterior instead of comparing the posterior mean, so traffic keeps
