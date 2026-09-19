@@ -19,7 +19,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retains every attempt from both rounds without changing its
   `ProviderResponseError` taxonomy. Mixed malformed-response/413 exhaustion
   likewise retains that taxonomy in either candidate order, and the HTTP 413
-  response now exposes the attached all-413 route receipt.
+  response now exposes the attached all-413 route receipt. Judge-rejected
+  worker rounds no longer overwrite earlier failover attempts, and a
+  rate-limit wait-budget exhaustion returns the attempts that consumed it.
 - Non-streaming `route_once` now snapshots worker failover evidence before the
   realtime judge performs its own model call, so judge routing cannot erase or
   replace the worker's typed `orchestration.route.attempted[]` receipt.

@@ -56,6 +56,20 @@ its inherited unknown-config warning is recorded rather than suppressed or
 reported warning-clean. Hosted exact-head gates and independent review remain
 required.
 
+Two later exact-head findings covered cross-round terminal loss. A
+judge-rejected worker answer left a valid route receipt, but the next worker
+round overwrote it (or replaced it with `None` after a direct success).
+Separately, `_await_rate_limit_recovery` raised a new 429/503 when its wait
+budget could not cover the cooldown, bypassing the already merged attempt
+receipt. RED `5aa46ccda58d0f2c6bb9f72028ef70c6ae7a694b` reproduces both boundaries.
+GREEN `2b54ca76258366c5f55aeabd973e399067ec11cb` accumulates worker receipts
+across realtime-judge rounds and attaches all recovered/current attempts to
+the wait-budget error. The three route/API suites pass 51 tests; the local
+environment's missing locked `pytest-asyncio` and inherited deprecated
+`jsonschema.RefResolver` warnings remain explicit. Hosted exact-head gates,
+independent review, protected merge, immutable release, and consumer adoption
+remain required.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
