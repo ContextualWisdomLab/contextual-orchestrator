@@ -389,10 +389,52 @@ def test_free_image_stream_rejects_before_sse_without_image_pool(
 
 
 @pytest.mark.parametrize("false_form", ["false", 0])
+@pytest.mark.parametrize(
+    ("path", "request_content"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Review this figure."},
+                            {
+                                "type": "image_url",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Review this figure."},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+    ],
+)
 def test_http_endpoint_scope_normalizes_parallel_tool_false_before_image_admission(
+    path: str,
+    request_content: dict,
     false_form: object,
 ) -> None:
-    """Endpoint preflight must use the same normalized tool shape as serving."""
+    """Both endpoint preflights must normalize accepted false tool-call forms."""
     orchestrator = TaskOrchestrator(
         [
             ModelAgent(
@@ -433,21 +475,10 @@ def test_http_endpoint_scope_normalizes_parallel_tool_false_before_image_admissi
     try:
         status, document = _post_json(
             server,
-            "/v1/chat/completions",
+            path,
             {
                 "model": TaskOrchestrator.FREE_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Review this figure."},
-                            {
-                                "type": "image_url",
-                                "image_url": "data:image/png;base64,AA==",
-                            },
-                        ],
-                    }
-                ],
+                **request_content,
                 "tools": tools,
                 "parallel_tool_calls": false_form,
                 "routing": {"endpoint": "https://vision.example"},
@@ -459,7 +490,6 @@ def test_http_endpoint_scope_normalizes_parallel_tool_false_before_image_admissi
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
-
 
 def test_endpoint_is_limited_to_supported_surfaces_and_forces_sync() -> None:
     with pytest.raises(RequestError) as exc_info:
