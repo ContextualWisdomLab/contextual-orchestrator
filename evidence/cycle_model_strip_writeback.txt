@@ -1,0 +1,15 @@
+cycle: model strip writeback HTTP honesty
+tip_base: #728 feat/reasoning-effort-minimal-omit-http-honesty-20260817164839
+change:
+  - _validate_completions_model / _validate_responses_model / _validate_embeddings_model:
+    strip + write body["model"] so proxy_completion pool match sees canonical id
+  - chat tools/response_format passthrough: call _validate_completions_model before
+    PASSTHROUGH_TRIGGER_KEYS proxy (was after, so padded models 400'd only on tools path)
+  - parallel_tool_calls bool coerce writeback on chat path (proxy egress honesty)
+tests: tests/test_model_strip_writeback_http_honesty.py
+  - unit writeback on all three validators
+  - chat tools + response_format padded model 200
+  - responses (+ tools) padded model 200
+  - completions padded model 200
+  - unknown padded model rejects without echoing pad
+product_gates: Full unit + Semgrep only (Strix ignored)

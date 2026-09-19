@@ -1,0 +1,760 @@
+"""End-to-end contract test for the batch embeddings endpoint.
+
+This is a *real* contract test, not a mock: it drives the actual HTTP server
+(``build_server``) over a live loopback socket, submits the shared contract
+request through the in-process ``LocalEmbeddingBatchBackend``, and asserts the
+response matches the ``{batch_id, status, embeddings, cost_micro_usd,
+token_counts}`` shape naruon's ``batch_embedding_service`` parses.
+
+The request and the response keys are loaded from
+``tests/fixtures/batch_embeddings_contract.json`` — the same fixture naruon
+keeps a byte-identical copy of and asserts its client against — so the two
+services cannot drift out of contract.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import json
+import sys
+import threading
+import urllib.error
+import urllib.request
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from contextual_orchestrator import (  # noqa: E402
+    CostRoutingCoordinator,
+    InMemoryConfigStore,
+    ModelAgent,
+    PriceBook,
+    PriceEntry,
+    TaskOrchestrator,
+)
+from contextual_orchestrator.batch_routing import (  # noqa: E402
+    BatchJob,
+    EmbeddingBatchRequest,
+    EmbeddingBatchResultItem,
+)
+from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+
+
+class _ExactTestCounter:
+    """Deterministic injected counter for synthetic embedding fixtures."""
+
+    def __init__(self, tokens_per_word: float = 1.0) -> None:
+        self.tokens_per_word = tokens_per_word
+
+    def count_text(self, text: str, model: str = "") -> int:
+        return int(len(text.split()) * self.tokens_per_word)
+
+
+CONTRACT = json.loads(
+    (Path(__file__).resolve().parent / "fixtures" / "batch_embeddings_contract.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def _serve():
+    agents = [
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning", "coding", "writing"),
+            priority=1,
+        ),
+        ModelAgent(
+            id="embedding_worker",
+            model="text-embedding-test",
+            base_url="mock://embed",
+            provider_name="acme-provider",
+            tags=("embedding", "offline_test", "privacy:zdr"),
+            priority=2,
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    # Price the embeddings provider so cost is a real, non-zero number.
+    price_book.set_price(
+        PriceEntry("acme-provider", "text-embedding-test", prompt_price_per_1k=0.13, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "cost_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, server.server_address[1], token, coordinator
+
+
+def _request(method, url, token=None, body=None):
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, method=method, headers=headers, data=data)
+    try:
+        with urllib.request.urlopen(req) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:  # pragma: no cover - surfaced in asserts
+        return exc.code, json.loads(exc.read())
+
+
+class _RecordingEmbeddingBackend:
+    """Embedding backend that records the exact mapped requests it receives."""
+
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.requests: list[EmbeddingBatchRequest] = []
+        self._results: list[EmbeddingBatchResultItem] = []
+
+    def submit(self, requests, metadata=None):
+        self.requests = list(requests)
+        self._results = [
+            EmbeddingBatchResultItem(
+                custom_id=request.custom_id,
+                index=position,
+                embedding=[
+                    float(request.source_index),
+                    float(request.part_index),
+                    float(request.token_count),
+                ],
+                prompt_tokens=request.token_count,
+                model=request.model,
+            )
+            for position, request in enumerate(self.requests)
+        ]
+        return BatchJob(
+            job_id="recording-embeddings",
+            backend=self.name,
+            status="completed",
+            request_count=len(self.requests),
+        )
+
+    def poll(self, job):
+        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+
+    def retrieve(self, job):
+        return list(self._results)
+
+
+class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
+    poll_after_ms = 250
+
+    def submit(self, requests, metadata=None):
+        super().submit(requests, metadata)
+        return BatchJob("pending-embeddings", self.name, "in_progress", len(requests))
+
+    def poll(self, job):
+        return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
+
+
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_try_cheapest_eligible_member_first(path: str, input_key: str) -> None:
+    expensive = ModelAgent(
+        "ranked_first", "expensive-embedding", "mock://expensive",
+        provider_name="expensive-provider", tags=("embedding",), priority=10,
+    )
+    cheap = ModelAgent(
+        "cheapest_member", "cheap-embedding", "mock://cheap",
+        provider_name="cheap-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([expensive, cheap])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("expensive-provider", expensive.model, 5.0, 0.0))
+    price_book.set_price(PriceEntry("cheap-provider", cheap.model, 0.01, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "cheapest_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            token,
+            {input_key: ["cost aware"]},
+        )
+        assert status == 200, document
+        assert backend.requests[0].agent_id == cheap.id
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_demote_a_failed_cheapest_member(
+    path: str, input_key: str
+) -> None:
+    cheap = ModelAgent(
+        "cheap_member", "cheap-embedding", "mock://cheap",
+        provider_name="cheap-provider", tags=("embedding",), group_name="shared_embedding",
+    )
+    fallback = ModelAgent(
+        "fallback_member", "fallback-embedding", "mock://fallback",
+        provider_name="fallback-provider", tags=("embedding",), group_name="shared_embedding",
+    )
+    orchestrator = TaskOrchestrator([cheap, fallback])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("cheap-provider", cheap.model, 0.01, 0.0))
+    price_book.set_price(PriceEntry("fallback-provider", fallback.model, 5.0, 0.0))
+
+    class _FailCheapBackend(_RecordingEmbeddingBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts: list[str | None] = []
+
+        def submit(self, requests, metadata=None):
+            self.attempts.append(requests[0].agent_id)
+            if requests[0].agent_id == cheap.id:
+                raise RuntimeError("cheap member unavailable")
+            return super().submit(requests, metadata)
+
+    backend = _FailCheapBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "health_order_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}{path}"
+        payload = {input_key: ["cost aware"]}
+        assert _request("POST", url, token, payload)[0] == 200
+        assert _request("POST", url, token, payload)[0] == 200
+        assert backend.attempts == [cheap.id, fallback.id, fallback.id]
+        orchestrator._group_router.observe_success(cheap.id, 1.0)
+        assert _request("POST", url, token, payload)[0] == 200
+        assert backend.attempts[-2:] == [cheap.id, fallback.id]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_omitted_model_reports_the_actually_served_model(
+    path: str, input_key: str
+) -> None:
+    """Devin follow-up: an omitted model's response/attribution must match who served it.
+
+    ``ranked_first`` outranks ``cheap`` under the orchestrator's own static
+    priority order, so ``_validate_embeddings_model``'s price-blind
+    auto-selection resolves the omitted ``model`` to ``ranked_first`` before
+    cost-based candidate discovery ever runs. Candidate discovery (using
+    ``TaskOrchestrator.AUTO_MODEL`` for the omitted case) then correctly picks
+    the cheaper ``cheap`` to actually serve the request — so the initially
+    "validated" model and the actually-served model genuinely differ. The
+    HTTP response's ``model`` field must report ``cheap`` (who actually
+    served it), not ``ranked_first`` (the pre-failover, price-blind guess).
+
+    Also asserts the cost ledger's own ``model_name`` attribution (the
+    dimension used for spend rollups) is ``cheap``, not ``ranked_first``:
+    ``CostLedger.record_usage`` deliberately strips and overwrites a caller-
+    supplied ``attribution["model_name"]`` with the actual served ``model``
+    argument ("execution identity always wins" — buyer-bill honesty), so
+    this is already protected independently of the response-body fix above;
+    this assertion locks that existing protection in as a regression test.
+    """
+    ranked_first = ModelAgent(
+        "served_ranked_first", "expensive-served-embedding", "mock://expensive-served",
+        provider_name="expensive-served-provider", tags=("embedding",), priority=10,
+    )
+    cheap = ModelAgent(
+        "served_cheapest_member", "cheap-served-embedding", "mock://cheap-served",
+        provider_name="cheap-served-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheap])
+    with orchestrator.request_policy(False):
+        ranked = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in ranked] == [ranked_first.id, cheap.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("expensive-served-provider", ranked_first.model, 5.0, 0.0))
+    price_book.set_price(PriceEntry("cheap-served-provider", cheap.model, 0.01, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "served_model_identity_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # Deliberately no "model" key: the omitted-model case.
+        status, response_body = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            token,
+            {input_key: ["served model identity check"]},
+        )
+        assert status == 200, response_body
+        assert backend.requests[0].agent_id == cheap.id
+        assert response_body.get("model") == cheap.model
+
+        records = coordinator.ledger.records()
+        assert records, "expected one usage record for the served request"
+        assert records[-1]["model_name"] == cheap.model
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",)),
+            ModelAgent(
+                "zdr_embedding",
+                "zdr-embedding",
+                tags=("embedding", "privacy:zdr"),
+            ),
+        ]
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    with pytest.raises(RuntimeError, match="no enabled agent available"):
+        coordinator.submit_embeddings_batch(
+            ["private"], model="paid-embedding", zdr_only=True
+        )
+
+    assert backend.requests == []
+
+
+def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
+    server, thread, port, token, coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    request = CONTRACT["request"]
+    submit_path = CONTRACT["endpoint"]["submit_path"]
+    response_keys = CONTRACT["response"]["required_keys"]
+    item_keys = CONTRACT["response"]["embedding_item_keys"]
+    try:
+        # Submit through the real endpoint with a provider dimension so the
+        # ledger prices the priced provider/model above (non-zero cost).
+        payload = {
+            "model": request["model"],
+            "zdr_only": request["zdr_only"],
+            "endpoint": request["endpoint"],
+            "inputs": request["inputs"],
+            "metadata": {**request["metadata"], "provider": "acme-provider"},
+        }
+        status, document = _request("POST", f"{base}{submit_path}", token, payload)
+        assert status == 200, document
+
+        # Exact response shape naruon parses.
+        for key in response_keys:
+            assert key in document, f"missing contract key: {key}"
+        assert document["status"] == CONTRACT["response"]["status_completed"]
+
+        embeddings = document["embeddings"]
+        assert isinstance(embeddings, list)
+        assert len(embeddings) == len(request["inputs"])
+        for position, item in enumerate(embeddings):
+            for key in item_keys:
+                assert key in item
+            assert item["index"] == position
+            assert isinstance(item["embedding"], list) and item["embedding"]
+
+        token_counts = document["token_counts"]
+        assert len(token_counts) == len(request["inputs"])
+        assert all(count > 0 for count in token_counts)
+        assert document["total_tokens"] == sum(token_counts)
+
+        # Cost was actually computed and recorded in micro-USD.
+        assert isinstance(document["cost_micro_usd"], int)
+        assert document["cost_micro_usd"] > 0
+
+        batch_id = document["batch_id"]
+
+        # Polling the batch id returns the same completed document (idempotent),
+        # and does NOT double-record usage in the ledger.
+        records_after_submit = len(coordinator.ledger.records())
+        poll_path = CONTRACT["endpoint"]["poll_path_template"].format(batch_id=batch_id)
+        status, polled = _request("GET", f"{base}{poll_path}", token)
+        assert status == 200
+        assert polled["batch_id"] == batch_id
+        assert polled["status"] == "completed"
+        assert polled["embeddings"] == embeddings
+        assert len(coordinator.ledger.records()) == records_after_submit
+
+        # Cost is attributed across every dimension naruon sends in metadata.
+        for dimension in CONTRACT["attribution_dimensions_in_metadata"]:
+            status, report = _request(
+                "GET", f"{base}/api/v1/cost_reports/rollup?dimension={dimension}", token
+            )
+            assert status == 200, report
+            values = {item["dimension_value"] for item in report["items"]}
+            expected = request["metadata"][dimension]
+            assert expected in values, f"dimension {dimension} not attributed to {expected}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_batch_embeddings_accepts_openai_style_input_field() -> None:
+    """The endpoint also accepts the OpenAI-style ``input`` (string or list)."""
+    server, thread, port, token, _coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/batch/embeddings",
+            token,
+            {"model": "text-embedding-test", "input": "single string input"},
+        )
+        assert status == 200, document
+        assert len(document["embeddings"]) == 1
+        assert document["status"] == "completed"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_agent() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("plain_embedding", "plain-embedding", tags=("embedding",), priority=10),
+            ModelAgent(
+                "zdr_embedding",
+                "zdr-embedding",
+                tags=("embedding", "privacy:zdr"),
+                priority=1,
+            ),
+        ]
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    token = "zdr_batch_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}/v1/batch/embeddings",
+            token,
+            {"inputs": ["alpha", "beta"], "zdr_only": True},
+        )
+        assert status == 200, body
+        assert body["model"] == "zdr-embedding"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
+    agent = ModelAgent(
+        "zdr_embedding",
+        "text-embedding-3-small",
+        provider_name="openrouter",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].to_jsonl_line()["body"]["provider"] == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_infers_legacy_provider_name() -> None:
+    agent = ModelAgent(
+        "legacy_zdr_embedding",
+        "text-embedding-3-small",
+        base_url="https://openrouter.ai/api/v1",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_overrides_mistyped_provider_name() -> None:
+    """The batch ZDR pin is applied even for a nonempty but wrong ``provider_name``.
+
+    Mirrors ``orchestrator._resolved_openrouter_provider``'s fix for the same
+    pattern: an agent whose ``base_url`` is OpenRouter's own endpoint but
+    whose ``provider_name`` is a typo/mislabel ("openai") must still resolve
+    to "openrouter" for the ZDR-pin decision, since ``base_url`` — not the
+    free-text ``provider_name`` — determines the actual outbound destination
+    (CodeRabbit review on #953, discussion_r3898659143).
+    """
+    agent = ModelAgent(
+        "mistyped_zdr_embedding",
+        "text-embedding-3-small",
+        provider_name="openai",
+        base_url="https://openrouter.ai/api/v1",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
+def test_openrouter_zdr_embedding_batch_uses_atomic_target_snapshot(monkeypatch) -> None:
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("removed_agent", "text-embedding-3-small")]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+        embedding_token_counter=_ExactTestCounter(),
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "_resolve_embedding_target",
+        lambda *_args: ("text-embedding-3-small", "removed_agent", "openrouter"),
+    )
+
+    coordinator.submit_embeddings_batch(["private"], zdr_only=True)
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
+def test_pending_batch_preserves_resolved_model_identity() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_token_counter=_ExactTestCounter(),
+        embedding_batch_backend=_PendingEmbeddingBackend(),
+    )
+
+    created = coordinator.complete_embeddings_batch(["alpha"], model="resolved-embedding")
+    polled = coordinator.embeddings_batch_document(created["batch_id"])
+
+    assert created["model"] == "resolved-embedding"
+    assert polled["model"] == "resolved-embedding"
+    assert created["poll_after_ms"] == _PendingEmbeddingBackend.poll_after_ms
+    assert created["job_retention_ms"] == coordinator.job_registry.retention_seconds * 1000
+
+
+def test_http_queued_embedding_admission_declares_owned_poll_and_retention() -> None:
+    """The public queued carrier exposes backend and registry lifecycle values."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("embedding_worker", "resolved-embedding", tags=("embedding",))]
+    )
+    backend = _PendingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_token_counter=_ExactTestCounter(),
+        embedding_batch_backend=backend,
+    )
+    token = "synthetic_batch_token"
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, document = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}/v1/batch/embeddings",
+            token,
+            {"inputs": ["synthetic"], "model": "resolved-embedding"},
+        )
+        assert status == 202
+        assert document["poll_after_ms"] == backend.poll_after_ms
+        assert document["job_retention_ms"] == coordinator.job_registry.retention_seconds * 1000
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_empty_batch_preserves_resolved_model_identity() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+
+    document = coordinator.complete_embeddings_batch([], model="resolved-embedding")
+
+    assert document["model"] == "resolved-embedding"
+
+
+def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
+    """Large embedding inputs are mapped into provider-safe parts, then reduced."""
+    agents = [
+        ModelAgent(
+            id="zdr_embedding",
+            model="text-embedding-test",
+            base_url="mock://embed",
+            provider_name="acme-provider",
+            tags=("embedding", "privacy:zdr"),
+            priority=1,
+        )
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    config.set("routing", "embedding_max_tokens_per_request", 4)
+    config.set("routing", "embedding_max_chars_per_part", 200)
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("acme-provider", "text-embedding-test", 1.0, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        token_counter=_ExactTestCounter(tokens_per_word=1.0),
+        embedding_batch_backend=backend,
+    )
+
+    document = coordinator.complete_embeddings_batch(
+        ["one two three four five six seven eight", "short input"],
+        model="text-embedding-test",
+        attribution={"provider": "acme-provider", "team": "platform"},
+        zdr_only=True,
+    )
+
+    assert len(backend.requests) > 2
+    assert all(request.zdr_only is True for request in backend.requests)
+    assert all(request.token_count <= 4 for request in backend.requests)
+    assert document["part_count"] == len(backend.requests)
+    assert document["input_part_counts"][0] > 1
+    assert document["input_part_counts"][1] == 1
+    assert [item["index"] for item in document["embeddings"]] == [0, 1]
+
+    expected_token_counts = []
+    for source_index in range(2):
+        expected_token_counts.append(
+            sum(request.token_count for request in backend.requests if request.source_index == source_index)
+        )
+    assert document["token_counts"] == expected_token_counts
+    assert document["total_tokens"] == sum(expected_token_counts)
+
+    records = coordinator.ledger.records()
+    assert len(records) == 2
+    assert all(record["request_channel"] == "batch" for record in records)
+    assert all(record["route_mode"] == "embedding" for record in records)
+
+
+def test_batch_embeddings_char_guard_splits_no_whitespace_input() -> None:
+    """The char budget catches inputs a heuristic token counter may undercount."""
+    agents = [
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning",),
+            priority=1,
+        )
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    config.set("routing", "embedding_max_tokens_per_request", 100)
+    config.set("routing", "embedding_max_chars_per_part", 5)
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        token_counter=_ExactTestCounter(tokens_per_word=1.0),
+        embedding_batch_backend=backend,
+    )
+
+    document = coordinator.complete_embeddings_batch(
+        ["abcdefghijkl"],
+        model="text-embedding-test",
+        attribution={"provider": "acme-provider"},
+    )
+
+    assert [request.input_text for request in backend.requests] == ["abcde", "fghij", "kl"]
+    assert document["part_count"] == 3
+    assert document["input_part_counts"] == [3]

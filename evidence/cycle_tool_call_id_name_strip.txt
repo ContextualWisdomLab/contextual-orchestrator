@@ -1,0 +1,10 @@
+cycle: tool_call id + function/schema name strip writeback HTTP honesty
+tip_base: #717 feat/tool-calls-arguments-object-json-http-honesty-20260817113502
+change:
+  - strip+writeback tool_calls[].id and tool-message tool_call_id (len after strip)
+  - strip+writeback tools/tool_calls/tool_choice function.name and message name
+  - strip+writeback response_format.json_schema.name and Responses text.format.name
+  - blank-after-strip still omit/reject; charset fail-closed after strip
+  - HTTP honesty tests cover chat tool history, tools+tool_choice, message name, json_schema
+local: 1201 passed
+product_gates: Full unit + Semgrep only (Strix ignored)

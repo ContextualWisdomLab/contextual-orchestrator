@@ -1,0 +1,12 @@
+cycle: metadata key no padding HTTP honesty (re-land #695 on tip ≥ #724)
+tip_base: #724 feat/developer-role-system-alias-http-honesty-20260817143355
+change:
+  - _validate_openai_metadata: reject keys with leading/trailing whitespace
+    (key != key.strip()) with named invalid_metadata
+  - Prevents padded labels from diverging identity vs strip() joins on cost/
+    attribution consumers; Completions/chat/Responses share the helper
+tests: tests/test_metadata_key_no_padding_http_honesty.py
+  - unit + chat + Completions + Responses reject pad; unpadded accept
+note: #695 shipped this on earlier tip substrate; later honesty tips lost the
+  guard while keeping empty/whitespace-key reject — re-land on tip ≥ #724.
+local: 1238 passed

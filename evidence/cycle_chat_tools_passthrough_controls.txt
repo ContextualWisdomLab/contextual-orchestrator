@@ -1,0 +1,11 @@
+cycle: chat tools/response_format passthrough sampling+controls HTTP honesty
+tip_base: #732 feat/embeddings-encoding-format-base64-http-honesty-20260817183757
+change:
+  - _validate_chat_sampling_and_control_fields: temperature/top_p/max_*/penalties,
+    seed/stop/n/store/logit_bias/modalities/prediction/reasoning_effort/service_tier,
+    user, stream_options — shared for route + tools/response_format passthrough
+  - chat path: coerce stream + run control gate before PASSTHROUGH_TRIGGER_KEYS proxy
+  - sampling validators write back coerced numbers (proxy egress honesty)
+tests: tests/test_chat_tools_passthrough_controls_http_honesty.py
+product_gates: Full unit + Semgrep only (Strix ignored)
+Local: 1278 passed.

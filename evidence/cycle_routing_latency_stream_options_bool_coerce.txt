@@ -1,0 +1,5 @@
+routing.latency_tolerant: _coerce_optional_bool (string true/false/0/1 → batch/sync).
+stream_options include_usage/include_obfuscation: same coerce; false forms omit without stream=true.
+response_format empty/null type alone → omit.
+Responses top_logprobs digit string coerce when logprobs=true.
+Local: 1143 passed.

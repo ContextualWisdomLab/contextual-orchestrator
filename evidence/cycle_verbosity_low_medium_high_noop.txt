@@ -1,0 +1,2 @@
+verbosity / text.verbosity: accept low/medium/high (casefold) as no-ops;
+unknown levels fail closed. Local: 1300 passed.

@@ -1,0 +1,3 @@
+embeddings input: accept token id arrays and batches of token arrays;
+re-encode as stable text surrogate for string embedding backends.
+Local: 1282 passed.

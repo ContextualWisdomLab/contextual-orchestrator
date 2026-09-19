@@ -1,0 +1,2 @@
+service_tier: accept auto/default/flex/priority (casefold/pad) as no-ops;
+unknown tiers still fail closed. Local: 1288 passed.

@@ -1,0 +1,2 @@
+cycle: whole-float string int coerce + top_logprobs/max_tool_calls zero omit
+tip: #711 substrate; _coerce_optional_int accepts "1.0"/"0.0"; digit coerce then nonzero reject

@@ -1,0 +1,499 @@
+"""Durable persistence: opt-in sqlite state store; in-memory default unchanged.
+
+Process-local-only state is a production blocker — a restart loses every run,
+audit trail, and analytics event. These assert state survives a restart when a
+--state-db is set, and that the default stays purely in-memory.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sqlite3
+import sys
+import tempfile
+from unittest.mock import patch
+import threading
+import time
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import _StateStore  # noqa: E402
+import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
+
+
+def _orch(state_db: str | None = None) -> TaskOrchestrator:
+    return TaskOrchestrator([ModelAgent("general_agent", "mock", tags=("reasoning", "writing"))], state_db=state_db)
+
+
+def test_runs_audit_analytics_survive_restart() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+
+        first = _orch(db)
+        record = first.run([{"role": "user", "content": "persist me"}])
+        run_id = record["workflow_run_id"]
+        evaluation = first.run_evaluation(["alpha", "beta"])
+        analytics_count = len(first._analytics_events)
+        audit_count = len(first._audit_events)
+        first.close()
+
+        # Simulate a restart: a brand-new orchestrator on the same db file.
+        second = _orch(db)
+        try:
+            assert run_id in second._workflow_runs
+            assert second.get_workflow_run(run_id)["answer"] == record["answer"]
+            assert second.get_workflow_run(run_id)["prompt_text"] == "persist me"
+            assert evaluation["evaluation_run_id"] in second._evaluation_runs
+            assert run_id in second._run_order  # run order rebuilt from persisted runs
+            assert len(second._analytics_events) == analytics_count
+            assert len(second._audit_events) == audit_count
+        finally:
+            second.close()
+
+
+def test_completed_run_with_empty_answer_survives_restart() -> None:
+    """A genuinely-judged run with an empty answer must not vanish on reload.
+
+    Devin review (PR #961): the recent-run reload gate must distinguish a
+    not-yet-judged batch_route row from every other persisted run using an
+    explicit "pending_verification" marker, not _is_trace_complete()'s
+    truthy-"answer" requirement -- a completed route/stream/conduct run can
+    legitimately report an empty answer and must stay visible in
+    list_recent_runs() after a restart the same as it was before one.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = _orch(db)
+        record = {
+            "workflow_run_id": "run_empty_answer",
+            "created_at": 0,
+            "mode": "route",
+            "policy_mode": "route",
+            "prompt_text": "prompt",
+            "answer": "",
+            "trace": [
+                {
+                    "id": 0, "role": "worker", "agent_id": "general_agent",
+                    "subtask": "Direct route", "access": [], "output": "",
+                }
+            ],
+            "policy_snapshot": first.policy.as_dict(),
+            "verification": {"accepted": True, "reason": "ok"},
+        }
+        first._replace_workflow_run(record)
+        first._run_order.appendleft(record["workflow_run_id"])
+        first._store.save("workflow_run", record["workflow_run_id"], record)
+        assert "run_empty_answer" in first._run_order  # visible before a restart
+        first.close()
+
+        second = _orch(db)
+        try:
+            assert "run_empty_answer" in second._run_order
+            assert any(
+                run["workflow_run_id"] == "run_empty_answer"
+                for run in second.list_recent_runs(page_size=10)
+            )
+        finally:
+            second.close()
+
+
+def test_default_is_purely_in_memory() -> None:
+    orchestrator = _orch()  # no state_db
+    assert orchestrator._store is None
+    orchestrator.run([{"role": "user", "content": "hi"}])
+    # No db file, nothing to reload — a fresh default orchestrator starts empty.
+    assert _orch()._workflow_runs == {}
+
+
+def test_store_upserts_keyed_records_and_appends_streams() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        store.save("workflow_run", "run_k1", {"workflow_run_id": "run_k1", "v": 1})
+        store.save("workflow_run", "run_k1", {"workflow_run_id": "run_k1", "v": 2})  # upsert, not duplicate
+        assert store.load("workflow_run") == [{"workflow_run_id": "run_k1", "v": 2}]
+
+        store.save("audit", None, {"a": 1})
+        store.save("audit", None, {"a": 2})
+        assert store.load("audit") == [{"a": 1}, {"a": 2}]  # streams append in order
+        assert store.load("audit", 1) == [{"a": 2}]  # limit keeps the newest
+        store.close()
+
+
+@pytest.mark.parametrize("failure_phase", ["insert", "commit"])
+def test_failed_keyed_save_preserves_previous_committed_record(failure_phase: str) -> None:
+    """A failed replacement must not leak its deletion into the next commit."""
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            store._conn.execute("PRAGMA foreign_keys = ON")
+            store.save("workflow_run", "run_existing", {"version": 1})
+            if failure_phase == "insert":
+                store._conn.execute(
+                    "CREATE TRIGGER reject_replacement BEFORE INSERT ON orchestration_records "
+                    "WHEN NEW.payload = '{\"version\": 2}' "
+                    "BEGIN SELECT RAISE(FAIL, 'injected write failure'); END"
+                )
+            else:
+                # Both writes succeed; the deferred constraint fails only at commit.
+                store._conn.execute(
+                    "CREATE TABLE linked_record (record_seq INTEGER REFERENCES "
+                    "orchestration_records(seq) DEFERRABLE INITIALLY DEFERRED)"
+                )
+                store._conn.execute(
+                    "INSERT INTO linked_record SELECT seq FROM orchestration_records"
+                )
+            store._conn.commit()
+            try:
+                store.save("workflow_run", "run_existing", {"version": 2})
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise AssertionError("the injected write failure did not occur")
+            assert not store._conn.in_transaction
+            store.save("workflow_run", "run_other", {"version": 3})
+            assert store.load("workflow_run") == [{"version": 1}, {"version": 3}]
+            assert not store._conn.in_transaction
+        finally:
+            store.close()
+        reopened = _StateStore(os.path.join(directory, "state.db"))
+        try:
+            assert reopened.load("workflow_run") == [{"version": 1}, {"version": 3}]
+        finally:
+            reopened.close()
+
+
+def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        malicious_kind = "audit'; DROP TABLE orchestration_records; --"
+        malicious_key = "run_k1'; DROP TABLE orchestration_records; --"
+        store.save(malicious_kind, malicious_key, {"payload": "kind is data"})
+        store.save("workflow_run", malicious_key, {"workflow_run_id": malicious_key, "v": 1})
+
+        assert store.load(malicious_kind) == [{"payload": "kind is data"}]
+        assert store.load("workflow_run", 1) == [{"workflow_run_id": malicious_key, "v": 1}]
+        assert store._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
+            ("table", "orchestration_records"),
+        ).fetchone() == ("orchestration_records",)
+
+        try:
+            store.load("workflow_run", "1; DROP TABLE orchestration_records; --")  # type: ignore[arg-type]
+        except sqlite3.IntegrityError:
+            pass
+        except sqlite3.OperationalError:
+            pass
+        assert store._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
+            ("table", "orchestration_records"),
+        ).fetchone() == ("orchestration_records",)
+        store.close()
+
+
+def test_store_migrates_legacy_table_and_preserves_rows() -> None:
+    """Upgrade a pre-policy state database before serving new writes."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "legacy.db")
+        connection = sqlite3.connect(db)
+        connection.execute(
+            "CREATE TABLE records (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)",
+            ("audit", None, '{"legacy": true}'),
+        )
+        connection.execute("CREATE INDEX records_kind_seq ON records(kind, seq)")
+        connection.commit()
+        connection.close()
+
+        store = _StateStore(db)
+        try:
+            assert store.load("audit") == [{"legacy": True}]
+            names = {
+                row[0]
+                for row in store._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = ?", ("table",)
+                ).fetchall()
+            }
+            assert "records" not in names
+            assert "orchestration_records" in names
+            assert store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
+                ("index", "orchestration_records_kind_seq"),
+            ).fetchone() == ("orchestration_records_kind_seq",)
+        finally:
+            store.close()
+
+
+def test_store_rejects_ambiguous_dual_persistence_tables() -> None:
+    """Fail closed instead of guessing when both schema generations exist."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "ambiguous.db")
+        connection = sqlite3.connect(db)
+        for table in ("records", "orchestration_records"):
+            connection.execute(
+                f"CREATE TABLE {table} (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+            )
+        connection.commit()
+        connection.close()
+
+        try:
+            _StateStore(db)
+        except RuntimeError as exc:
+            assert "both legacy and current" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("ambiguous persistence schema must fail closed")
+
+
+def test_store_closes_connection_when_rejecting_ambiguous_schema() -> None:
+    """A fail-closed dual-schema rejection must not leak its SQLite handle."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "ambiguous-closed.db")
+        connection = sqlite3.connect(db)
+        for table in ("records", "orchestration_records"):
+            connection.execute(
+                f"CREATE TABLE {table} (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+            )
+        connection.commit()
+        connection.close()
+
+        real_connect = sqlite3.connect
+        tracked: list[object] = []
+
+        class TrackingConnection:
+            """Track closure while forwarding SQLite operations to a real handle."""
+
+            def __init__(self, wrapped: sqlite3.Connection) -> None:
+                self.wrapped = wrapped
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+                self.wrapped.close()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self.wrapped, name)
+
+        def connect(*args: object, **kwargs: object) -> TrackingConnection:
+            wrapper = TrackingConnection(real_connect(*args, **kwargs))
+            tracked.append(wrapper)
+            return wrapper
+
+        with patch.object(orchestrator_module.sqlite3, "connect", side_effect=connect):
+            try:
+                _StateStore(db)
+            except RuntimeError as exc:
+                assert "both legacy and current" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("ambiguous persistence schema must fail closed")
+
+        assert len(tracked) == 1
+        assert tracked[0].closed  # type: ignore[union-attr]
+
+
+def test_store_rolls_back_partial_legacy_migration() -> None:
+    """A failed index creation must not leave a half-renamed state database."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "legacy-rollback.db")
+        connection = sqlite3.connect(db)
+        connection.execute(
+            "CREATE TABLE records (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+        )
+        connection.execute("CREATE INDEX records_kind_seq ON records(kind, seq)")
+        connection.commit()
+        connection.close()
+
+        with patch.object(
+            _StateStore,
+            "_CREATE_RECORDS_KIND_SEQ_INDEX_SQL",
+            "CREATE INDEX broken_index ON orchestration_records(missing_column)",
+        ):
+            try:
+                _StateStore(db)
+            except sqlite3.OperationalError as exc:
+                assert "no such column" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("broken migration must fail closed")
+
+        connection = sqlite3.connect(db)
+        try:
+            names = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')"
+                ).fetchall()
+            }
+            assert "records" in names
+            assert "orchestration_records" not in names
+            assert "records_kind_seq" in names
+        finally:
+            connection.close()
+
+
+def test_durable_audit_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        limit = store._STREAM_LIMITS["audit"]
+        for index in range(limit + 3):
+            store.save("audit", None, {"index": index}, durable=True)
+
+        assert len(store.load("audit")) == limit
+        assert store.load("audit", 1) == [{"index": limit + 2}]
+        store.close()
+
+
+def test_durable_authorization_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        limit = store._STREAM_LIMITS["authorization"]
+        for index in range(limit + 3):
+            store.save("authorization", None, {"index": index}, durable=True)
+
+        assert len(store.load("authorization")) == limit
+        assert store.load("authorization", 1) == [{"index": limit + 2}]
+        store.close()
+
+
+def test_durable_analytics_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        assert store._STREAM_LIMITS["analytics"] == 256
+        limit = 256
+        for index in range(limit + 3):
+            store.save("analytics", None, {"index": index}, durable=True)
+
+        assert len(store.load("analytics")) == limit
+        assert store.load("analytics", 1) == [{"index": limit + 2}]
+        store.close()
+
+
+def test_durable_stream_return_is_visible_to_an_independent_connection() -> None:
+    """A durable return must acknowledge commit, not enqueue or flush-on-read."""
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = os.path.join(directory, "s.db")
+        store = _StateStore(database_path)
+        try:
+            # Prevent the asynchronous worker from making a queued write look durable.
+            with store._stream_condition, sqlite3.connect(database_path) as reader:
+                for stream_kind in store._STREAM_LIMITS:
+                    store.save(stream_kind, None, {"committed": True}, durable=True)
+                    rows = reader.execute(
+                        "SELECT payload FROM orchestration_records WHERE kind = ?",
+                        (stream_kind,),
+                    ).fetchall()
+                    assert rows == [('{"committed": true}',)]
+        finally:
+            store.close()
+
+
+def test_authorization_stream_persists_separately_from_audit() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = _orch(db)
+        first._append_audit_event("substantive_event", {"value": "keep"})
+        first.record_authorization_decision(
+            scope="inference", purpose="message_delivery", allowed=False, reason="unauthorized"
+        )
+        first.close()
+
+        second = _orch(db)
+        try:
+            assert [event["event_type"] for event in second._audit_events] == ["substantive_event"]
+            assert [event["event_type"] for event in second._authorization_events] == ["authorization_decision"]
+        finally:
+            second.close()
+
+
+def test_stream_reload_respects_deque_maxlen() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = _orch(db)
+        assert first._analytics_events.maxlen == 256
+        maxlen = first._analytics_events.maxlen
+        # Drive more analytics events than the deque can hold.
+        for i in range(maxlen + 25):
+            first.record_analytics_event("load_probe", {"i": i})
+        assert len(first._analytics_events) == maxlen  # deque saturated
+        first.close()
+
+        second = _orch(db)
+        try:
+            assert len(second._analytics_events) == maxlen  # reload also capped
+            assert second._analytics_events[-1]["event_detail"]["i"] == maxlen + 24  # newest kept
+        finally:
+            second.close()
+
+
+def test_stream_save_does_not_block_on_a_held_lock() -> None:
+    """Unauthenticated denial recording must not force a synchronous, lock-serialized
+    disk commit on the request thread (the hot path any caller can trigger pre-auth)."""
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        with store._lock:  # simulate a keyed write already holding the store lock
+            started = time.monotonic()
+            store.save("authorization", None, {"denied": True})
+            elapsed = time.monotonic() - started
+        assert elapsed < 0.5  # queued without waiting for the held lock
+        assert store.load("authorization") == [{"denied": True}]
+        store.close()
+
+
+def test_saturated_authorization_stream_keeps_newest_audit_event() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        authorization_limit = store._STREAM_LIMITS["authorization"]
+        with store._lock:
+            for index in range(authorization_limit * 9):
+                store.save("authorization", None, {"index": index})
+            store.save("audit", None, {"event": "must-survive"})
+
+        assert store.load("authorization", 1) == [{"index": authorization_limit * 9 - 1}]
+        assert store.load("audit") == [{"event": "must-survive"}]
+        store.close()
+
+
+def test_stream_worker_survives_a_failed_best_effort_write() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        worker = store._stream_worker
+        original_save = store._save_sync
+        failed = threading.Event()
+
+        def fail_once(kind: str, key: str | None, payload: dict[str, object]) -> None:
+            failed.set()
+            raise TypeError("deliberate persistence failure")
+
+        store._save_sync = fail_once  # type: ignore[method-assign]
+        store.save("audit", None, {"discarded": True})
+        assert failed.wait(timeout=1)
+        assert worker.is_alive()
+
+        store._save_sync = original_save  # type: ignore[method-assign]
+        store.save("audit", None, {"saved": True})
+        assert store.load("audit") == [{"saved": True}]
+        store.close()
+        assert not worker.is_alive()
+
+
+def test_keyed_save_remains_synchronous() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        store.save("workflow_run", "run_1", {"workflow_run_id": "run_1"})
+        # No queue drain needed: readable through the raw connection immediately.
+        rows = store._conn.execute(
+            "SELECT kind FROM orchestration_records WHERE key = ?", ("run_1",)
+        ).fetchall()
+        assert rows == [("workflow_run",)]
+        store.close()
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            fn()
+            print(f"ok {name}")
+    print("ok")

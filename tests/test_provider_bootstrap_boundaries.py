@@ -1,0 +1,524 @@
+"""Boundary tests for provider bootstrap credential, selection, and pool paths."""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+import pytest
+
+import contextual_orchestrator.provider_bootstrap as pb
+from contextual_orchestrator.credentials import (
+    InMemoryCredentialBackend,
+    PostgresCredentialBackend,
+    get_credential,
+    set_backend,
+)
+from contextual_orchestrator.model_discovery import DiscoveredModel
+from contextual_orchestrator.provider_bootstrap import (
+    PROVIDER_CREDENTIAL_NAMES,
+    ProviderBootstrapError,
+    collect_provider_credentials,
+    register_provider_credentials_atomically,
+    select_model_group_diverse_models,
+)
+
+
+def _complete_environment() -> dict[str, str]:
+    return {
+        name: f"secret-for-{name.lower()}\n"
+        for name in PROVIDER_CREDENTIAL_NAMES
+    }
+
+
+def _model(
+    provider: str,
+    credential: str,
+    model_id: str,
+    prompt: float | None = 1.0,
+    currency: str = "USD",
+) -> DiscoveredModel:
+    return DiscoveredModel(
+        provider_name=provider,
+        model_id=model_id,
+        credential_name=credential,
+        chat_base_url=f"https://{provider}.example/v1",
+        auth_scheme="Bearer",
+        prompt_price_per_1k=prompt,
+        completion_price_per_1k=prompt,
+        currency_code=currency,
+    )
+
+
+# --- collect_provider_credentials --------------------------------------------------
+
+
+def test_collect_partial_mode_with_zero_values_fails_closed() -> None:
+    with pytest.raises(ProviderBootstrapError, match="received no credentials"):
+        collect_provider_credentials({}, require_all=False)
+
+
+# --- register_provider_credentials_atomically ---------------------------------------
+
+
+def test_register_rejects_empty_batch() -> None:
+    set_backend(InMemoryCredentialBackend())
+    try:
+        with pytest.raises(ProviderBootstrapError, match="empty credential batch"):
+            register_provider_credentials_atomically({})
+    finally:
+        set_backend(None)
+
+
+def test_register_rejects_unknown_credential_names() -> None:
+    set_backend(InMemoryCredentialBackend())
+    try:
+        with pytest.raises(ProviderBootstrapError, match="unknown credential names"):
+            register_provider_credentials_atomically({"MADE_UP_KEY": "value"})
+    finally:
+        set_backend(None)
+
+
+def test_register_rejects_non_string_value() -> None:
+    set_backend(InMemoryCredentialBackend())
+    try:
+        with pytest.raises(ProviderBootstrapError, match="rejected an empty value"):
+            register_provider_credentials_atomically({"OPENAI_API_KEY": 123})  # type: ignore[dict-item]
+    finally:
+        set_backend(None)
+
+
+class _FakeCursor:
+    def __init__(self, log: list[tuple[str, tuple[Any, ...]]]) -> None:
+        self._log = log
+
+    def execute(self, sql: str, params: tuple[Any, ...]) -> None:
+        self._log.append((sql.split()[0], params))
+
+    def __enter__(self) -> "_FakeCursor":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        return None
+
+
+class _FakeConnection:
+    def __init__(self) -> None:
+        self.log: list[tuple[str, tuple[Any, ...]]] = []
+        self.commits = 0
+
+    def cursor(self) -> _FakeCursor:
+        return _FakeCursor(self.log)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
+class _StubPostgresBackend(PostgresCredentialBackend):
+    """Offline pgcrypto backend recording registration statements."""
+
+    def __init__(self) -> None:
+        super().__init__("postgresql://registry_user@localhost/registry_db", "phrase")
+        self.connection = _FakeConnection()
+
+    def _connect(self) -> Any:
+        connection = self.connection
+
+        @contextmanager
+        def _cm() -> Iterator[_FakeConnection]:
+            yield connection
+
+        return _cm()
+
+    def _ensure_schema(self, connection: object) -> None:
+        return None
+
+
+def test_register_postgres_backend_upserts_every_credential_in_one_transaction() -> None:
+    backend = _StubPostgresBackend()
+    set_backend(backend)
+    try:
+        registered = register_provider_credentials_atomically({
+            "NVIDIA_NIM_API_KEY_SUB": "second\n",
+            "OPENAI_API_KEY": "first",
+        })
+        assert registered == ("NVIDIA_NIM_API_KEY_SUB", "OPENAI_API_KEY")
+        operations = [op for op, _params in backend.connection.log]
+        assert operations == ["INSERT", "INSERT"]
+        assert backend.connection.commits == 1
+        first_params = backend.connection.log[0][1]
+        # Values are line-ending-normalized before encryption transport.
+        assert first_params[:2] == ("NVIDIA_NIM_API_KEY_SUB", "second")
+        assert first_params[2] == "phrase"
+    finally:
+        set_backend(None)
+
+
+def test_register_requires_atomic_builtin_backend() -> None:
+    class AlienBackend:
+        pass
+
+    set_backend(AlienBackend())  # type: ignore[arg-type]
+    try:
+        with pytest.raises(ProviderBootstrapError, match="atomic built-in credential backend"):
+            register_provider_credentials_atomically({"OPENAI_API_KEY": "value"})
+    finally:
+        set_backend(None)
+
+
+# --- select_model_group_diverse_models ---------------------------------------------
+
+
+def test_select_rejects_non_positive_limit() -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        select_model_group_diverse_models([_model("openai", "OPENAI_API_KEY", "gpt-x")], limit=0)
+
+
+def test_select_unpriced_and_foreign_currency_models_sort_last_but_still_fill() -> None:
+    priced = _model("openai", "OPENAI_API_KEY", "gpt-cheap", prompt=0.5)
+    unpriced = _model("openrouter", "OPENROUTER_API_KEY", "qwen-free", prompt=None)
+    eur = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "nim-eur", prompt=0.01, currency="EUR")
+
+    selected = select_model_group_diverse_models(
+        [unpriced, eur, priced], limit=3
+    )
+    # Known USD pricing wins the diversity slot; unknown/incomparable fill after.
+    assert [m.model_id for m in selected][:1] == ["gpt-cheap"]
+    assert {m.model_id for m in selected} == {"gpt-cheap", "qwen-free", "nim-eur"}
+
+
+def test_select_keeps_independent_credential_accounts() -> None:
+    primary = _model(
+        "nvidia_nim", "NVIDIA_NIM_API_KEY", "nim-gamma", prompt=3.0
+    )
+    same_family_sub = _model(
+        "nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "nim-delta", prompt=4.0
+    )
+    selected = select_model_group_diverse_models([primary, same_family_sub], limit=2)
+    # A shared vendor endpoint does not collapse independent credential accounts.
+    assert [m.model_id for m in selected] == ["nim-gamma", "nim-delta"]
+
+
+def test_select_skips_non_chat_candidates_entirely() -> None:
+    guard = _model("openai", "OPENAI_API_KEY", "llama-guard-4b", prompt=0.1)
+    chat = _model("openrouter", "OPENROUTER_API_KEY", "qwen-chat", prompt=9.0)
+    selected = select_model_group_diverse_models([guard, chat], limit=5)
+    assert [m.model_id for m in selected] == ["qwen-chat"]
+
+
+# --- bootstrap_provider_runtime ------------------------------------------------------
+
+
+def test_runtime_fails_when_discovery_returns_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pb, "discover_all_models", lambda: ([], []))
+    set_backend(InMemoryCredentialBackend())
+    try:
+        with pytest.raises(ProviderBootstrapError, match="discovered no usable models"):
+            pb.bootstrap_provider_runtime(environ=_complete_environment(), model_limit=2)
+    finally:
+        set_backend(None)
+
+
+def test_runtime_reports_pricing_and_error_providers_without_agents_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextual_orchestrator.model_discovery import ProviderDiscoveryError
+
+    good = _model("openai", "OPENAI_API_KEY", "gpt-live", prompt=1.5)
+    failed = _model("bytez", "BYTEZ_API_KEY", "bytez-live", prompt=0.25)
+
+    def discovery() -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
+        return [good, failed], [ProviderDiscoveryError("together", "http_401")]
+
+    monkeypatch.setattr(pb, "discover_all_models", discovery)
+    set_backend(InMemoryCredentialBackend())
+    try:
+        report = pb.bootstrap_provider_runtime(
+            environ=_complete_environment(), model_limit=8
+        )
+        payload = report.as_dict()
+        assert payload["durable_agent_pool"] is False
+        assert payload["enabled_agent_ids"] == []
+        assert payload["providers_with_errors"] == ["together"]
+        assert payload["eligible_model_count"] == 2
+        assert payload["priced_model_count"] >= 1
+        serialized = str(payload)
+        assert "secret-for-" not in serialized
+        assert all(get_credential(name) for name in PROVIDER_CREDENTIAL_NAMES)
+    finally:
+        set_backend(None)
+
+
+def test_register_rejects_whitespace_only_value() -> None:
+    set_backend(InMemoryCredentialBackend())
+    try:
+        with pytest.raises(ProviderBootstrapError, match="rejected an empty value"):
+            register_provider_credentials_atomically({"OPENAI_API_KEY": "  \r\n "})
+    finally:
+        set_backend(None)
+
+
+def test_select_returns_partial_pool_when_family_exhausted_below_limit() -> None:
+    primary = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "nim-primary", prompt=1.0)
+    sibling = _model(
+        "nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "nim-sibling", prompt=2.0
+    )
+    # Only one outage family exists, so diversity yields one slot, the filler
+    # adds the second, and the pool legitimately ends below ``limit``.
+    selected = select_model_group_diverse_models([primary, sibling], limit=5)
+    assert [m.model_id for m in selected] == ["nim-primary", "nim-sibling"]
+
+
+def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
+    tmp_path: Any,
+) -> None:
+    """Non-discovered operators survive cleanup; disabled leftovers stay put."""
+    from contextual_orchestrator import ModelAgent, TaskOrchestrator
+    from dataclasses import replace as dc_replace
+    from contextual_orchestrator.provider_bootstrap import (
+        _synchronize_durable_agent_pool,
+    )
+
+    agents_db = str(tmp_path / "pool_boundary.db")
+    seed = TaskOrchestrator(
+        [ModelAgent("seed_placeholder_agent", "placeholder-model")],
+        agents_db=agents_db,
+    )
+    # Construction does not persist; sync_discovered_agents is the durable upsert.
+    seed.sync_discovered_agents([
+        ModelAgent("manual_operator_agent", "manual-model", tags=("manual",)),
+        dc_replace(
+            ModelAgent("openai_retired_model", "retired-model", tags=("discovered",)),
+            disabled=True,
+        ),
+    ])
+
+    selected_models = [
+        _model("openai", "OPENAI_API_KEY", "gpt-current"),
+        _model("openrouter", "OPENROUTER_API_KEY", "qwen-current"),
+    ]
+
+    enabled = _synchronize_durable_agent_pool(agents_db, selected_models)
+    expected_ids = tuple(sorted(pb.agent_id_for(model) for model in selected_models))
+
+    assert enabled == expected_ids
+    restarted = TaskOrchestrator([], agents_db=agents_db)
+    ids_by_state = {
+        agent.id: ("disabled" if agent.disabled else "enabled")
+        for agent in restarted.candidates
+    }
+    # The manual operator survives untouched; the disabled discovered leftover
+    # is neither activated nor deleted.
+    assert ids_by_state["manual_operator_agent"] == "enabled"
+    assert ids_by_state["openai_retired_model"] == "disabled"
+    assert all(ids_by_state[agent_id] == "enabled" for agent_id in expected_ids)
+
+
+def test_durable_pool_does_not_activate_manual_legacy_id_collision(tmp_path: Any) -> None:
+    """Discovery must not override an operator-disabled manual endpoint."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "manual_collision.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    manual = replace(
+        generated,
+        id="openrouter_vendor_model",
+        base_url="https://manual.example/v1",
+        disabled=True,
+        priority=77,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    stored = next(agent for agent in restarted.candidates if agent.id == manual.id)
+    assert stored.base_url == manual.base_url
+    assert stored.disabled is True
+    assert stored.priority == 77
+    assert stored.tags == ("manual",)
+    restarted.close()
+
+
+def test_durable_pool_does_not_replace_manual_exact_id_collision(tmp_path: Any) -> None:
+    """The generated discovery id cannot overwrite an operator-owned row."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "manual_exact_collision.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    manual = replace(
+        generated,
+        base_url="https://manual.example/v1",
+        disabled=True,
+        priority=77,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
+
+
+def test_durable_pool_collision_preflight_prevents_partial_activation(tmp_path: Any) -> None:
+    """A mixed valid/collision selection must write nothing before failing."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "mixed_collision.db")
+    collision = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    manual = replace(
+        pb._active_agent_from_discovered(collision),
+        id="openrouter_vendor_model",
+        base_url="https://manual.example/v1",
+        disabled=True,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    valid = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "valid-model")
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [valid, collision])
+
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
+
+
+@pytest.mark.parametrize(
+    ("model_id", "legacy_id", "capabilities"),
+    (
+        ("Straße/Model", "openrouter_stra_e_model", ()),
+        ("模型", "openrouter_model", ("image",)),
+    ),
+)
+def test_unicode_legacy_collision_preflight_leaves_pool_unchanged(
+    tmp_path: Any,
+    model_id: str,
+    legacy_id: str,
+    capabilities: tuple[str, ...],
+) -> None:
+    """Historical Unicode legacy IDs must collide before any selected row is saved."""
+    from dataclasses import replace
+
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "unicode_collision.db")
+    collision = replace(
+        _model("openrouter", "OPENROUTER_API_KEY", model_id),
+        capabilities=capabilities,
+    )
+    manual = replace(
+        pb._active_agent_from_discovered(collision),
+        id=legacy_id,
+        base_url="https://manual.example/v1",
+        disabled=True,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    valid = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "valid-model")
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [valid, collision])
+
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
+
+
+def test_durable_pool_sync_closes_temporary_orchestrator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    ) -> None:
+    """A refresh must stop telemetry owned by its temporary orchestrator."""
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.provider_bootstrap import (
+        _synchronize_durable_agent_pool,
+    )
+
+    closed: list[bool] = []
+
+    class TrackingOrchestrator(TaskOrchestrator):
+        def close(self) -> None:
+            closed.append(True)
+            super().close()
+
+    monkeypatch.setattr(pb, "TaskOrchestrator", TrackingOrchestrator)
+    enabled = _synchronize_durable_agent_pool(
+        str(tmp_path / "pool_close.db"),
+        [_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")],
+    )
+
+    assert enabled == (pb.agent_id_for(_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")),)
+    assert closed == [True]
+
+
+def test_durable_pool_migrates_legacy_selected_endpoint_without_duplicate(tmp_path: Any) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "legacy_selected.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    legacy = replace(generated, id="openrouter_vendor_model", disabled=False)
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    seeded.sync_discovered_agents([legacy])
+    seeded.close()
+
+    enabled = pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    matching = [
+        agent
+        for agent in restarted.candidates
+        if agent.provider_name == generated.provider_name
+        and agent.credential_name == generated.credential_name
+        and agent.model == generated.model
+    ]
+
+    assert enabled == (legacy.id,)
+    assert [agent.id for agent in matching] == [legacy.id]
+    assert matching[0].disabled is False
+    restarted.close()
+
+
+def test_durable_pool_activates_refreshed_duplicate_legacy_endpoint(tmp_path: Any) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "duplicate_legacy_selected.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(replace(generated, id="legacy_first", priority=1))
+    seeded._pool_store.save(replace(generated, id="legacy_refreshed", priority=2))
+    seeded.close()
+
+    enabled = pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+
+    assert enabled == ("legacy_refreshed",)
+    assert [agent.id for agent in restarted.agents] == ["legacy_refreshed"]
+    assert restarted.agents[0].priority == generated.priority
+    restarted.close()

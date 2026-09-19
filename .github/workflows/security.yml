@@ -1,0 +1,303 @@
+name: Security and Quality
+
+# One local workflow replaces the former Tests, Fuzz, and Security workflows.
+# Central required workflows still own dependency review, Trivy, OSV,
+# Scorecard, SAST, OpenCode, Strix, Noema, and merge scheduling.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
+  schedule:
+    - cron: "17 3 * * 1"
+    - cron: "41 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.event.schedule || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    name: Tests and package quality
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
+      - name: Build locked native decision measurement
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          uv sync --locked --extra api --extra db --extra queue --group dev --group native-build
+          uv run --no-sync maturin develop --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml
+          uv run --no-sync maturin build --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml --out "$RUNNER_TEMP/decision-wheels"
+
+      - name: Run full test suite
+        run: uv run --no-sync python -m pytest -q -ra
+
+      - name: Install hash-locked quality tools
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+
+      - name: Prove complete benchmark coverage and public docstrings
+        run: |
+          set -euo pipefail
+          python -m coverage erase
+          python -m coverage run --branch \
+            --source=contextual_orchestrator.nim_benchmark \
+            -m pytest \
+            tests/test_nim_benchmark.py \
+            tests/test_nim_benchmark_release_acceptance.py \
+            tests/test_nim_benchmark_workflow_contract.py \
+            -q
+          python -m coverage report \
+            --include=contextual_orchestrator/nim_benchmark.py \
+            --show-missing \
+            --fail-under=100
+          python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
+
+      - name: Build, install, and import the wheel
+        run: |
+          set -euo pipefail
+          rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
+          python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
+          python scripts/verify_decision_wheel_manifest.py dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
+          python -m pip install --no-deps \
+            --target "$RUNNER_TEMP/nim-wheel-site" \
+            dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
+          cd "$RUNNER_TEMP"
+          PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
+            python -c "import pathlib, contextual_orchestrator as core; import contextual_orchestrator.nim_benchmark; import contextual_orchestrator._decision_receipt as native; root = pathlib.Path('nim-wheel-site').resolve(); assert pathlib.Path(core.__file__).is_relative_to(root); assert pathlib.Path(native.__file__).is_relative_to(root)"
+          PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
+            python -m pytest --noconftest --import-mode=importlib "$GITHUB_WORKSPACE/tests/test_decision_receipts.py" -q
+
+  fuzz:
+    name: Property and coverage-guided fuzzing
+    if: >-
+      (github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2') &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install fuzz dependencies
+        run: python -m pip install --require-hashes -r requirements.lock -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt
+
+      - name: Run property-based fuzz tests
+        run: python -m pytest tests/fuzz -q
+
+      - name: Set per-target time budget
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "push" ]; then
+            echo "FUZZ_SECONDS=60" >>"$GITHUB_ENV"
+          else
+            echo "FUZZ_SECONDS=300" >>"$GITHUB_ENV"
+          fi
+
+      - name: Run coverage-guided fuzz targets
+        run: |
+          set -euo pipefail
+          python fuzz/fuzz_request_body.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/request_body
+          python fuzz/fuzz_agent_config.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/agent_config
+          python fuzz/fuzz_redaction.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/redaction
+          python fuzz/fuzz_orchestration.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/orchestration
+          python fuzz/fuzz_model_judge.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/judge
+          python fuzz/fuzz_pii_key.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/pii_key
+          python fuzz/fuzz_reasoning_effort_profile.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/reasoning_effort_profile
+          python fuzz/fuzz_nim_catalog.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/nim_catalog
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1
+        with:
+          name: fuzz-crashes
+          path: crash-*
+          if-no-files-found: ignore
+
+  rust:
+    name: Rust workspace gate
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --workspace --locked
+
+      - name: Install cargo-audit
+        run: |
+          set -euo pipefail
+          audit_version="0.22.2"
+          archive="cargo-audit-x86_64-unknown-linux-gnu-v${audit_version}.tgz"
+          curl -sSLf \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${audit_version}/${archive}" \
+            -o "${RUNNER_TEMP}/${archive}"
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          install -m 0755 \
+            "${RUNNER_TEMP}/cargo-audit-x86_64-unknown-linux-gnu-v${audit_version}/cargo-audit" \
+            /usr/local/bin/cargo-audit
+          cargo audit --version
+
+      - name: Audit Cargo.lock advisories
+        run: cargo audit --file Cargo.lock
+
+  security:
+    name: CodeQL, supply chain, and SBOM
+    if: >-
+      (github.event_name != 'schedule' || github.event.schedule == '17 3 * * 1') &&
+      (github.event_name != 'pull_request' ||
+        (github.event.action != 'closed' &&
+         github.event.pull_request.draft == false &&
+         github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # github/codeql-action/init@v4.38.0
+        with:
+          languages: python
+          build-mode: none
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install audit and project dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-security-ci.txt
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+
+      - name: Audit pinned dependencies and generate SBOM
+        run: |
+          set -euo pipefail
+          python -m pip_audit -r requirements.lock
+          cyclonedx-py environment --output-format json --output-file cyclonedx-sbom.json
+
+      - name: Upload CycloneDX SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1
+        with:
+          name: cyclonedx-sbom
+          path: cyclonedx-sbom.json
+
+      # Analyze without uploading, then upload with an explicit retry loop.
+      # Issue #1172: analysis completed and SARIF exported, then the code-scanning
+      # upload died silently (~17s, no step error line) during a GitHub API 5xx
+      # window; reruns passed. Keep the gate fail-closed (no continue-on-error).
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # github/codeql-action/analyze@v4.38.0
+        with:
+          category: "/language:python"
+          output: ${{ runner.temp }}/codeql-sarif
+          upload: never
+          wait-for-processing: false
+
+      - name: Upload CodeQL SARIF with transient retries
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          GITHUB_REF_NAME: ${{ github.ref }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+          GITHUB_REPOSITORY_VALUE: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sarif="$(find "$SARIF_DIR" -name '*.sarif' -type f | head -n 1)"
+          if [ -z "$sarif" ] || [ ! -f "$sarif" ]; then
+            echo "No SARIF produced under $SARIF_DIR" >&2
+            ls -la "$SARIF_DIR" >&2 || true
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            ref="refs/pull/${PR_NUMBER}/merge"
+            sha="$GITHUB_SHA_VALUE"
+          else
+            ref="$GITHUB_REF_NAME"
+            sha="$GITHUB_SHA_VALUE"
+          fi
+          echo "Uploading $sarif for $ref @ $sha"
+          attempt=1
+          max_attempts=5
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "SARIF upload attempt ${attempt}/${max_attempts}"
+            if printf '%s' "$GITHUB_TOKEN" | codeql github upload-results \
+              --repository="$GITHUB_REPOSITORY_VALUE" \
+              --ref="$ref" \
+              --commit="$sha" \
+              --sarif="$sarif" \
+              --github-auth-stdin
+            then
+              echo "SARIF upload succeeded on attempt ${attempt}"
+              exit 0
+            fi
+            status=$?
+            echo "Upload attempt ${attempt} failed with status ${status}"
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              exit "$status"
+            fi
+            sleep $((attempt * 20))
+            attempt=$((attempt + 1))
+          done

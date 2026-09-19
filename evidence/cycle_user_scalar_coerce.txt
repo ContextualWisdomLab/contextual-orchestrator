@@ -1,0 +1,11 @@
+cycle: user scalar bool/int/float coerce HTTP honesty
+tip_base: #726 feat/metadata-scalar-coerce-http-honesty-20260817154329
+change:
+  - _validate_completions_user: coerce bool/int/float to strings (metadata parity)
+  - write back body["user"] so proxy/egress sees honest string identity
+  - objects/arrays still fail-closed; null omit; empty/whitespace reject
+tests: tests/test_user_scalar_coerce_http_honesty.py
+  - unit writeback + object reject
+  - chat/completions/responses/embeddings accept scalars; chat rejects list
+product_gates: Full unit + Semgrep only (Strix ignored)
+local: 1251 passed

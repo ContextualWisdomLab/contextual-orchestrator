@@ -1,0 +1,1596 @@
+"""Sync-vs-batch routing and the batch-submission path to pg-llm-batch.
+
+The orchestrator — not the caller — decides whether a request runs
+**synchronously** (interactive, low-latency) or is dispatched to a **batch**
+backend (latency-tolerant, cost-optimised). This module owns:
+
+* :class:`RoutingPolicy` — the sync-vs-batch decision, driven by request hints
+  plus thresholds read from the KV config store.
+* :func:`cheapest_upstream` — cost-optimising upstream selection (the
+  "LiteLLM-plus" cost optimiser) using the configurable price table.
+* Batch backends behind one :class:`BatchBackend` surface:
+    * :class:`LocalBatchBackend` — runs requests in-process via an injected
+      runner (preserves the mock/local path; used by tests and standalone).
+    * :class:`PgLlmBatchBackend` — submits to **pg-llm-batch** through an
+      injected OpenAI-compatible ``BatchAPIClient`` and retrieves
+      results, so batch model routing is controlled by the orchestrator.
+
+Config/thresholds come from KV, never ``os.getenv``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import hashlib
+import json
+import logging
+import math
+import queue
+import threading
+import time
+import uuid
+from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Protocol
+
+from .batch_job_registry import (
+    ClaimNotAcquired,
+    JobRegistryFactory,
+    _claim_renewal_interval_seconds,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+_ROUTING_CATEGORY = "routing"
+_PROVIDER_CUSTOM_ID_MAX_LENGTH = 64
+
+
+# ---------------------------------------------------------------------------
+# Routing decision
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RoutingHints:
+    """Per-request routing hints supplied by the caller (never authoritative)."""
+
+    channel: Optional[str] = None  # explicit "sync" | "batch" request
+    latency_tolerant: bool = False
+    priority: str = "normal"  # "interactive" | "normal" | "bulk"
+
+    @classmethod
+    def from_mapping(cls, data: Optional[Dict[str, Any]]) -> "RoutingHints":
+        """Build hints from a loose mapping, tolerating missing keys."""
+        data = data or {}
+        channel = data.get("channel")
+        if channel is not None:
+            channel = str(channel).lower()
+        return cls(
+            channel=channel,
+            latency_tolerant=bool(data.get("latency_tolerant", False)),
+            priority=str(data.get("priority", "normal")).lower(),
+        )
+
+
+@dataclass
+class RoutingDecision:
+    """Outcome of the sync-vs-batch decision."""
+
+    channel: str  # "sync" | "batch"
+    reason: str
+
+
+class RoutingPolicy:
+    """Decides sync vs batch from hints + KV-configured thresholds.
+
+    Config (category ``routing``):
+
+    * ``batch_enabled`` (bool, default ``True``) — master switch. When off,
+      everything runs sync.
+    * ``batch_min_tokens`` (int, default ``0``) — prompts at/over this token
+      count are eligible for batch when nothing forces sync. ``0`` disables the
+      size trigger.
+    * ``interactive_forces_sync`` (bool, default ``True``) — an ``interactive``
+      priority hint always stays sync.
+    """
+
+    def __init__(self, config_store: Any) -> None:
+        self._config = config_store
+
+    def _batch_enabled(self) -> bool:
+        return bool(self._config.get(_ROUTING_CATEGORY, "batch_enabled", True))
+
+    def decide(self, hints: RoutingHints, prompt_tokens: int | None = None) -> RoutingDecision:
+        """Return the routing decision for one request."""
+        if not self._batch_enabled():
+            return RoutingDecision("sync", "batch routing disabled by config")
+
+        interactive_forces_sync = bool(
+            self._config.get(_ROUTING_CATEGORY, "interactive_forces_sync", True)
+        )
+        if hints.priority == "interactive" and interactive_forces_sync:
+            return RoutingDecision("sync", "interactive priority forces sync")
+
+        if hints.channel == "sync":
+            return RoutingDecision("sync", "caller requested sync channel")
+        if hints.channel == "batch":
+            return RoutingDecision("batch", "caller requested batch channel")
+
+        if hints.latency_tolerant or hints.priority == "bulk":
+            return RoutingDecision("batch", "latency-tolerant request routed to batch")
+
+        batch_min_tokens = int(self._config.get(_ROUTING_CATEGORY, "batch_min_tokens", 0))
+        if batch_min_tokens and prompt_tokens is None:
+            return RoutingDecision(
+                "sync", "prompt token count unavailable; conservative sync path"
+            )
+        if batch_min_tokens and prompt_tokens >= batch_min_tokens:
+            return RoutingDecision(
+                "batch", f"prompt tokens {prompt_tokens} >= batch_min_tokens {batch_min_tokens}"
+            )
+
+        return RoutingDecision("sync", "default interactive path")
+
+
+def cheapest_upstream(
+    candidates: List[Dict[str, str]],
+    price_book: Any,
+    *,
+    assumed_prompt_tokens: int = 1000,
+    assumed_completion_tokens: int = 1000,
+) -> Optional[Dict[str, str]]:
+    """Return the lowest-cost ``{provider, model}`` candidate by the price table.
+
+    Cost-optimising upstream selection for load balancing: given candidate
+    provider/model pairs, price each against the configurable price table for a
+    representative request shape and return the cheapest. Unpriced candidates
+    are excluded because an unknown price is not free. Ties keep input order;
+    ``None`` is returned when no candidate has a known price.
+
+    :class:`~contextual_orchestrator.cost_router.CostRoutingCoordinator`'s
+    ``_cheapest_capability_candidate`` helper plays a similar upstream
+    cost-based selection role — resolving one embedding member out of
+    several capability-matched candidates — looking up each candidate's
+    price directly via :meth:`~contextual_orchestrator.cost_ledger.PriceBook.get_price`
+    and comparing raw, unrounded prompt prices. This function remains a
+    standalone, table-driven upstream selector used elsewhere for load
+    balancing.
+    """
+    if not candidates:
+        return None
+    best: Optional[Dict[str, str]] = None
+    best_cost: Optional[float] = None
+    for candidate in candidates:
+        provider = candidate.get("provider", "")
+        model = candidate.get("model", "")
+        cost, _currency, price_known = price_book.compute_cost(
+            provider, model, assumed_prompt_tokens, assumed_completion_tokens
+        )
+        if not price_known:
+            continue
+        if best_cost is None or cost < best_cost:
+            best_cost = cost
+            best = candidate
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Batch requests / jobs / results
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BatchRequest:
+    """One request destined for a batch backend."""
+
+    messages: List[Dict[str, str]]
+    model: str = "contextual-orchestrator"
+    custom_id: str = field(default_factory=lambda: f"req_{uuid.uuid4().hex}")
+    attribution: Dict[str, Any] = field(default_factory=dict)
+    mode: str = "auto"
+    zdr_only: bool = False
+
+    def to_jsonl_line(self, endpoint: str = "/v1/chat/completions") -> Dict[str, Any]:
+        """Render this request as an OpenAI Batch API JSONL line."""
+        return {
+            "custom_id": self.custom_id,
+            "method": "POST",
+            "url": endpoint,
+            # ``zdr_only`` is a contextual-orchestrator selection policy, not
+            # an upstream provider request field.
+            "body": {"model": self.model, "messages": self.messages},
+        }
+
+
+@dataclass
+class BatchJob:
+    """Handle for a submitted batch job."""
+
+    job_id: str
+    backend: str
+    status: str = "submitted"
+    submitted_at: int = field(default_factory=lambda: int(time.time()))
+    request_count: int = 0
+    # HTTP callers bind this opaque digest to the authenticated principal;
+    # library-only jobs may remain unowned for standalone use.
+    owner_id: Optional[str] = None
+    # Prompt-token fallback estimates are safe metadata, stored atomically with
+    # the job handle rather than retaining submitted prompt text.
+    prompt_token_estimates: Dict[str, int] = field(default_factory=dict)
+    # Finalized before the registry snapshot is written; the append-only event
+    # supplies the durable request association independently of that registry.
+    request_link_status: str = "unavailable"
+    recovery_status: str = "unavailable"
+    # Deliberately not a dataclass field: HSET may succeed before expiry fails,
+    # so an operation result must never be serialized into its own snapshot.
+    registry_persistence_status = "unavailable"
+    backend_registry_persistence_status = "unavailable"
+    recovered_request_metadata = None
+
+
+@dataclass
+class BatchResultItem:
+    """A single completed request within a batch."""
+
+    custom_id: str
+    answer: str
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    attribution: Dict[str, Any] = field(default_factory=dict)
+    model: str = "contextual-orchestrator"
+    mode: str = "auto"
+    # The original request messages, carried through so a caller whose
+    # backend reports no usage (e.g. LocalBatchBackend against a mock/local
+    # runner) can estimate from the real prompt instead of a blank placeholder.
+    messages: List[Dict[str, str]] = field(default_factory=list)
+    # Local runs keep their per-call identities and usage intact so the cost
+    # router can meter heterogeneous conduct workflows one provider at a time.
+    trace: List[Dict[str, Any]] = field(default_factory=list)
+    cache_status: Optional[str] = None
+    race_usage: List[Dict[str, Any]] = field(default_factory=list)
+    usage_valid: Optional[bool] = None
+
+
+class BatchDownloadError(RuntimeError):
+    """A batch backend's result download explicitly failed.
+
+    Raised instead of silently returning an empty result list when the
+    injected client reports ``{"success": False, ...}`` — a transient
+    download error, or the batch having actually expired/errored upstream
+    after ``poll()`` already reported ``is_complete=True``. An empty list is
+    reserved for a batch that legitimately completed with zero items;
+    conflating the two hides real failures (and, for embeddings, can
+    permanently poison a cached "completed" document with fabricated
+    zero-vectors — see ``CostRoutingCoordinator.embeddings_batch_document``).
+    """
+
+    def __init__(self, job_id: str, reason: Optional[str] = None) -> None:
+        self.job_id = job_id
+        self.reason = reason
+        message = f"batch {job_id!r} result download failed"
+        if reason:
+            message = f"{message}: {reason}"
+        super().__init__(message)
+
+
+def _validated_download_responses(
+    payload: Dict[str, Any],
+    *,
+    expected_custom_ids: set[str],
+    request_count: int,
+    job_id: str,
+) -> List[Dict[str, Any]]:
+    """Return a complete one-to-one set of successful downloaded rows."""
+    responses = payload.get("responses")
+    if not isinstance(responses, list):
+        raise BatchDownloadError(job_id, "malformed response list")
+    if request_count and not expected_custom_ids:
+        raise BatchDownloadError(job_id, "submitted request metadata is unavailable")
+
+    seen: set[str] = set()
+    for entry in responses:
+        if not isinstance(entry, dict):
+            raise BatchDownloadError(job_id, "malformed response row")
+        custom_id = entry.get("custom_id")
+        if (
+            not isinstance(custom_id, str)
+            or custom_id not in expected_custom_ids
+            or custom_id in seen
+        ):
+            raise BatchDownloadError(job_id, "response identifiers do not match the submission")
+        seen.add(custom_id)
+        if entry.get("error") is not None:
+            raise BatchDownloadError(job_id, "one or more batch items failed")
+        response = entry.get("response")
+        if not isinstance(response, dict):
+            raise BatchDownloadError(job_id, "malformed response row")
+        status_code = response.get("status_code")
+        if status_code is not None and (
+            type(status_code) is not int or not 200 <= status_code < 300
+        ):
+            raise BatchDownloadError(job_id, "one or more batch items failed")
+
+    if seen != expected_custom_ids or len(responses) != request_count:
+        raise BatchDownloadError(job_id, "download returned an incomplete result set")
+    return responses
+
+
+class BatchBackend(Protocol):
+    """Submit/poll/retrieve contract shared by every batch backend."""
+
+    name: str
+
+    def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
+        """Submit a batch of requests and return a job handle."""
+        ...
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Return the current status of a batch job."""
+        ...
+
+    def retrieve(self, job: BatchJob) -> List[BatchResultItem]:
+        """Retrieve completed results for a batch job."""
+        ...
+
+
+class LocalBatchBackend:
+    """In-process batch backend that runs each request via an injected runner.
+
+    Preserves the mock/local path: no external service, no Postgres. The runner
+    is any callable ``(messages, mode, model) -> {"answer": str, "mode": str}`` — the
+    orchestrator's own ``complete`` fits directly. Results are computed eagerly
+    on submit and returned verbatim on retrieve, so the batch lifecycle is fully
+    observable in tests.
+    """
+
+    name = "local"
+
+    def __init__(
+        self,
+        runner: Callable[[List[Dict[str, str]], str, str], Dict[str, Any]],
+        *,
+        max_concurrency: int = 1,
+        job_registry: Any = None,
+        request_context: Optional[Callable[[BatchRequest], Any]] = None,
+    ) -> None:
+        if type(max_concurrency) is not int or max_concurrency < 1:
+            raise ValueError("max_concurrency must be a positive integer")
+        self._runner = runner
+        self.max_concurrency = max_concurrency
+        self._request_context = request_context
+        # Computed results survive a restart when a Valkey-backed registry
+        # is injected; a plain dict preserves the historical behavior.
+        self._results: Dict[str, List[BatchResultItem]] = (
+            job_registry.mapping("local_batch_results", decode=lambda raw: BatchResultItem(**raw))
+            if job_registry is not None
+            else {}
+        )
+
+    def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
+        """Run every request in-process and stash the results under a job id."""
+        job_id = f"localbatch_{uuid.uuid4().hex}"
+        def run(request: BatchRequest) -> BatchResultItem:
+            context = (
+                self._request_context(request)
+                if self._request_context is not None
+                else nullcontext()
+            )
+            with context:
+                result = self._runner(request.messages, request.mode, request.model)
+            answer = result.get("answer", "")
+            # The runner (typically orchestrator.complete()) has no top-level
+            # "usage" key -- real provider usage is nested per-step inside
+            # "trace"[i]["usage"] (one step for route, possibly several for
+            # conduct). Aggregate it so batch results carry real token counts
+            # instead of the dataclass's zero defaults.
+            trace = [
+                {
+                    key: step[key]
+                    for key in ("agent_id", "served_agent_id", "usage", "output")
+                    if key in step
+                }
+                for step in result.get("trace") or []
+                if isinstance(step, dict)
+            ]
+
+            def reported(step: Dict[str, Any], key: str) -> int:
+                usage = step.get("usage")
+                value = usage.get(key) if isinstance(usage, dict) else None
+                return value if type(value) is int and value >= 0 else 0
+
+            prompt_tokens = sum(
+                reported(step, "prompt_tokens") for step in trace
+            )
+            completion_tokens = sum(
+                reported(step, "completion_tokens") for step in trace
+            )
+            return BatchResultItem(
+                custom_id=request.custom_id,
+                answer=answer,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                attribution=dict(request.attribution),
+                model=request.model,
+                mode=result.get("mode", request.mode),
+                messages=list(request.messages),
+                trace=trace,
+                cache_status=result.get("cache_status"),
+                race_usage=list(result.get("_batch_race_usage") or []),
+            )
+        if self.max_concurrency == 1 or len(requests) <= 1:
+            items = [run(request) for request in requests]
+        else:
+            def run_with_context(item: tuple[Any, BatchRequest]) -> BatchResultItem:
+                context, request = item
+                return context.run(run, request)
+
+            contexts_and_requests = [(copy_context(), request) for request in requests]
+            with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(requests))) as pool:
+                items = list(pool.map(run_with_context, contexts_and_requests))
+        self._results[job_id] = items
+        return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Local batches complete synchronously, so always report completed."""
+        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+
+    def retrieve(self, job: BatchJob) -> List[BatchResultItem]:
+        """Return the results computed at submit time."""
+        return self._results.get(job.job_id, [])
+
+
+class PgLlmBatchBackend:
+    """Batch backend that submits to **pg-llm-batch** and retrieves results.
+
+    Drives the pg-llm-batch OpenAI-compatible ``BatchAPIClient`` async flow
+    (upload JSONL -> create batch job -> poll -> download results). The client
+    is injected so it can be the real ``pg_llm_batch.BatchAPIClient`` in
+    production or a fake in tests. An optional
+    ``payload_assembler`` persists the JSONL into Postgres and returns a
+    ``memory://`` reference; without one, an in-memory reference is used (the
+    injected client is responsible for loading it).
+    """
+
+    name = "pg-llm-batch"
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        endpoint_alias: str = "default",
+        endpoint: str = "/v1/chat/completions",
+        payload_assembler: Any = None,
+        job_registry: Any = None,
+        recovery_identity: str | None = None,
+    ) -> None:
+        self._client = client
+        self._endpoint_alias = endpoint_alias
+        self._endpoint = endpoint
+        self._assembler = payload_assembler
+        if recovery_identity is not None and (not isinstance(recovery_identity, str) or not recovery_identity.strip()):
+            raise ValueError("recovery identity must be a nonempty operator-controlled identifier")
+        self._recovery_identity = recovery_identity
+        # Tracked requests survive a restart when a Valkey-backed registry
+        # is injected; a plain dict preserves the historical behavior.
+        self._jobs: Dict[str, Dict[str, Any]] = (
+            job_registry.mapping("pg_llm_batch_jobs") if job_registry is not None else {}
+        )
+
+    @property
+    def recovery_enabled(self) -> bool:
+        """Whether the operator supplied a stable deployment/account binding."""
+        return self._recovery_identity is not None
+
+    def has_job_metadata(self, job: BatchJob) -> bool:
+        """Check whether active registry metadata supports the existing job."""
+        try:
+            document = self._jobs.get(job.job_id)
+        except Exception:
+            return False
+        return (isinstance(document, dict)
+                and document.get("endpoint_alias") == self._endpoint_alias
+                and document.get("recovery_identity") == self._recovery_identity
+                and (document.get("endpoint") == self._endpoint
+                     or ("endpoint" not in document and self._recovery_identity is None))
+                and isinstance(document.get("requests"), dict)
+                and len(document["requests"]) == job.request_count)
+
+    def recovery_descriptor(self, requests: List[BatchRequest]) -> Dict[str, Any]:
+        """Describe exact target and item metadata without submitted prompt text."""
+        from .cost_ledger import AttributionDimensions
+        return {
+            "recovery_identity": self._recovery_identity,
+            "backend_name": self.name,
+            "endpoint_alias": self._endpoint_alias,
+            "endpoint": self._endpoint,
+            "items": [{"custom_id": item.custom_id, "model": item.model,
+                       "mode": item.mode, "attribution": AttributionDimensions.from_mapping(item.attribution).as_dict()}
+                      for item in requests],
+        }
+
+    def restore_descriptor(self, job: BatchJob, descriptor: Dict[str, Any]) -> None:
+        """Restore prompt-free item identity only for this exact configured target."""
+        if (not isinstance(descriptor, dict) or descriptor.get("backend_name") != self.name
+                or self._recovery_identity is None
+                or descriptor.get("recovery_identity") != self._recovery_identity
+                or descriptor.get("endpoint_alias") != self._endpoint_alias
+                or descriptor.get("endpoint") != self._endpoint):
+            raise ValueError("batch target mismatch")
+        items = descriptor.get("items")
+        if not isinstance(items, list) or len(items) != job.request_count:
+            raise ValueError("batch item count mismatch")
+        restored = {}
+        for item in items:
+            if not isinstance(item, dict) or set(item) != {"custom_id", "model", "mode", "attribution"}:
+                raise ValueError("invalid batch item descriptor")
+            if any(not isinstance(item[field], str) or not item[field] for field in ("custom_id", "model", "mode")):
+                raise ValueError("invalid batch item identity")
+            if item["custom_id"] in restored or not isinstance(item["attribution"], dict):
+                raise ValueError("invalid batch item metadata")
+            restored[item["custom_id"]] = {**item, "messages": []}
+        job.recovered_request_metadata = restored
+
+    def _assemble_payload(self, requests: List[BatchRequest]) -> str:
+        if self._assembler is not None:
+            return self._assembler.assemble(
+                [request.to_jsonl_line(self._endpoint) for request in requests]
+            )
+        # No Postgres assembler: hand the client a memory:// reference. The JSONL
+        # body itself is built here so a real assembler or client can load it.
+        return f"memory://{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _run(coro: Any) -> Any:
+        return asyncio.run(coro)
+
+    def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
+        """Upload JSONL + create a batch job via the pg-llm-batch client."""
+        file_path = self._assemble_payload(requests)
+
+        async def _submit() -> Dict[str, Any]:
+            uploaded = await self._client.upload_jsonl(file_path, self._endpoint_alias)
+            input_file_id = uploaded["id"]
+            return await self._client.create_batch_job(
+                input_file_id,
+                self._endpoint_alias,
+                endpoint=self._endpoint,
+                metadata=metadata,
+            )
+
+        job_payload = self._run(_submit())
+        batch_id = job_payload["id"]
+        # Tracked requests are stored as JSON primitives (not dataclass
+        # instances) so the registry can be a JSON-backed Valkey mapping;
+        # retrieve() rebuilds the dataclass view it needs.
+        registry_status = "stored"
+        try:
+            self._jobs[batch_id] = {
+                "endpoint_alias": self._endpoint_alias,
+                "recovery_identity": self._recovery_identity,
+                "endpoint": self._endpoint,
+                "requests": {
+                    request.custom_id: dataclasses.asdict(request) for request in requests
+                },
+            }
+        except Exception:
+            registry_status = "write_failed"
+        job = BatchJob(
+            job_id=batch_id,
+            backend=self.name,
+            status=job_payload.get("status", "validating"),
+            request_count=len(requests),
+        )
+        job.backend_registry_persistence_status = registry_status
+        return job
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Poll batch status via the pg-llm-batch client."""
+        async def _poll() -> Dict[str, Any]:
+            return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
+
+        status = self._run(_poll())
+        return {
+            "job_id": job.job_id,
+            "status": status.get("status"),
+            "is_complete": status.get("is_complete", False),
+            "progress_percentage": status.get("progress_percentage", 0),
+        }
+
+    def retrieve(self, job: BatchJob) -> List[BatchResultItem]:
+        """Download + parse batch results, mapping them back to submitted requests.
+
+        Raises :class:`BatchDownloadError` when the client reports an explicit
+        download failure, instead of returning an empty list indistinguishable
+        from a batch that legitimately completed with zero items.
+        """
+        async def _download() -> Dict[str, Any]:
+            return await self._client.download_results(job.job_id, self._endpoint_alias)
+
+        payload = self._run(_download())
+        if not payload.get("success"):
+            reason = payload.get("reason") or payload.get("error")
+            _LOGGER.warning(
+                "batch download failed job_id=%s backend=%s reason=%s",
+                job.job_id,
+                self.name,
+                reason,
+            )
+            raise BatchDownloadError(job.job_id, reason)
+        tracked = (job.recovered_request_metadata if job.recovered_request_metadata is not None
+                   else self._jobs.get(job.job_id, {}).get("requests", {}))
+        responses = _validated_download_responses(
+            payload,
+            expected_custom_ids=set(tracked),
+            request_count=job.request_count,
+            job_id=job.job_id,
+        )
+        items: List[BatchResultItem] = []
+        for entry in responses:
+            custom_id = entry.get("custom_id", "")
+            response = entry.get("response", {}) or {}
+            body = response.get("body", {}) or {}
+            answer = _extract_answer(body)
+            usage = body.get("usage", {}) or {}
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            usage_valid = (
+                type(prompt_tokens) is int
+                and prompt_tokens >= 0
+                and type(completion_tokens) is int
+                and completion_tokens >= 0
+            )
+            raw_request = tracked.get(custom_id)
+            request = BatchRequest(**raw_request) if raw_request else None
+            items.append(
+                BatchResultItem(
+                    custom_id=custom_id,
+                    answer=answer,
+                    prompt_tokens=prompt_tokens if usage_valid else 0,
+                    completion_tokens=completion_tokens if usage_valid else 0,
+                    attribution=dict(request.attribution) if request else {},
+                    model=request.model if request else "contextual-orchestrator",
+                    mode=request.mode if request else "auto",
+                    messages=list(request.messages) if request else [],
+                    usage_valid=usage_valid,
+                )
+            )
+        return items
+
+
+def _extract_answer(body: Dict[str, Any]) -> str:
+    choices = body.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    return str(message.get("content", ""))
+
+
+# ---------------------------------------------------------------------------
+# Embeddings batch requests / results / backends
+# ---------------------------------------------------------------------------
+#
+# The embeddings batch path mirrors the chat path above but carries a single
+# ``input`` string per request and returns a vector per input. It is the surface
+# naruon's ``batch_embedding_service`` submits to: bulk, latency-tolerant
+# embedding work is dispatched here, routed through the same cost ledger, and
+# forwarded to pg-llm-batch in production (embeddings JSONL) or run in-process by
+# :class:`LocalEmbeddingBatchBackend` for the mock/standalone path.
+
+_DEFAULT_EMBEDDING_DIMENSION = 8
+
+
+@dataclass
+class EmbeddingBatchRequest:
+    """One text destined for the embeddings batch backend."""
+
+    input_text: str
+    model: str = "contextual-orchestrator"
+    custom_id: str = field(default_factory=lambda: f"emb_{uuid.uuid4().hex}")
+    attribution: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    source_index: int = 0
+    part_index: int = 0
+    part_count: int = 1
+    token_count: int = 0
+    token_start: int = 0
+    token_end: int = 0
+    shard_index: int = 0
+    routing_agent_id: str | None = None
+    zdr_only: bool = False
+    agent_id: Optional[str] = None
+    provider_routing: Optional[Dict[str, Any]] = None
+
+    def wire_custom_id(self) -> str:
+        """Return a provider-safe id while retaining the internal request mapping.
+
+        The provider only needs a unique wire id; ``PgLlmBatchEmbeddingBackend``
+        maps it back to the persisted request, which already carries ``agent_id``.
+        Hashing avoids exposing or lengthening that internal identifier and keeps
+        the OpenAI-compatible 64-character custom-id limit intact.
+        """
+        if self.agent_id is None and len(self.custom_id) <= _PROVIDER_CUSTOM_ID_MAX_LENGTH:
+            return self.custom_id
+        identity = self.custom_id if self.agent_id is None else f"{self.agent_id}\x00{self.custom_id}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
+        """Render this request as an OpenAI Batch API embeddings JSONL line."""
+        body: Dict[str, Any] = {"model": self.model, "input": self.input_text}
+        if self.provider_routing is not None:
+            body["provider"] = dict(self.provider_routing)
+        return {
+            # The provider body stays OpenAI-compatible; the backend's tracked
+            # request map carries the immutable route identity separately.
+            "custom_id": self.wire_custom_id(),
+            "method": "POST",
+            "url": endpoint,
+            "body": body,
+        }
+
+
+@dataclass
+class EmbeddingBatchResultItem:
+    """A single completed embedding within a batch."""
+
+    custom_id: str
+    index: int
+    embedding: List[float]
+    prompt_tokens: int = 0
+    model: str = "contextual-orchestrator"
+    agent_id: Optional[str] = None
+
+
+class EmbeddingBatchBackend(Protocol):
+    """Submit/poll/retrieve contract shared by every embeddings batch backend."""
+
+    name: str
+    poll_after_ms: int
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Submit a batch of embedding requests and return a job handle."""
+        ...
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Return the current status of an embeddings batch job."""
+        ...
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Retrieve completed embeddings for a batch job."""
+        ...
+
+
+def heuristic_embedding(text: str, dimension: int = _DEFAULT_EMBEDDING_DIMENSION) -> List[float]:
+    """Deterministic, dependency-free embedding for the local/standalone path.
+
+    Derives a stable unit-range vector from a SHA-256 digest of ``text`` so the
+    mock/standalone batch path returns real, reproducible vectors without any
+    external provider call. Not semantically meaningful — it exists so the batch
+    lifecycle (and the naruon contract) is fully exercisable offline.
+    """
+    if dimension <= 0:
+        raise ValueError("dimension must be positive")
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    vector: List[float] = []
+    for index in range(dimension):
+        byte_value = digest[index % len(digest)]
+        vector.append(round((byte_value / 255.0) * 2.0 - 1.0, 6))
+    return vector
+
+
+class LocalEmbeddingBatchBackend:
+    """In-process embeddings batch backend (preserves the mock/local path).
+
+    Runs every input through an injected ``embedder`` callable
+    (``input_text -> vector``) and, when given a ``token_counter``, records a
+    real per-input prompt-token count so cost attribution is exact. No external
+    service and no Postgres, so the batch lifecycle is fully observable in tests
+    and usable standalone.
+    """
+
+    name = "local"
+
+    def __init__(
+        self,
+        embedder: Optional[Callable[[str], List[float]]] = None,
+        *,
+        token_counter: Any = None,
+        dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
+        job_registry: Any = None,
+    ) -> None:
+        self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
+        self._token_counter = token_counter
+        # Computed results survive a restart when a Valkey-backed registry
+        # is injected; a plain dict preserves the historical behavior.
+        self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
+            job_registry.mapping(
+                "local_embedding_results", decode=lambda raw: EmbeddingBatchResultItem(**raw)
+            )
+            if job_registry is not None
+            else {}
+        )
+
+    def _count_tokens(self, text: str, model: str) -> int:
+        if self._token_counter is None:
+            raise RuntimeError("an authoritative embedding tokenizer is required")
+        return int(self._token_counter.count_text(text, model))
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Embed every input in-process and stash the results under a job id."""
+        job_id = f"localembed_{uuid.uuid4().hex}"
+        items: List[EmbeddingBatchResultItem] = []
+        for index, request in enumerate(requests):
+            items.append(
+                EmbeddingBatchResultItem(
+                    custom_id=request.custom_id,
+                    index=index,
+                    embedding=list(self._embedder(request.input_text)),
+                    prompt_tokens=self._count_tokens(request.input_text, request.model),
+                    model=request.model,
+                    agent_id=request.agent_id,
+                )
+            )
+        self._results[job_id] = items
+        return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Local batches complete synchronously, so always report completed."""
+        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Return the embeddings computed at submit time."""
+        return self._results.get(job.job_id, [])
+
+
+class _DaemonWorkerPool:
+    """A fixed-size daemon worker pool with a `ThreadPoolExecutor`-shaped surface.
+
+    ``ProviderEmbeddingBatchBackend`` used to hand its long-lived, durable
+    job queue to a real :class:`concurrent.futures.ThreadPoolExecutor`. That
+    executor registers every worker thread it starts with
+    ``concurrent.futures.thread``'s own interpreter-exit ``atexit`` hook,
+    which unconditionally *joins* each still-running worker at shutdown
+    regardless of that worker's own daemon flag (the same verified failure
+    mode as ``endpoint_race.race_first_valid`` and
+    ``model_discovery._openrouter_free_model_endpoints`` elsewhere in this
+    PR). Combined with this org's default no-deadline
+    ``ModelClient.timeout=None`` policy -- and the fact that
+    ``execution_timeout_seconds`` here is only a *cooperative* deadline
+    checked after ``runner()`` returns, never a preemptive cancellation of
+    the in-flight call -- a provider embedding runner that never returns
+    would make that join, and therefore process shutdown, hang forever even
+    though ``close()`` had already been called.
+
+    This pool keeps the concurrency bound (a *fixed* number of persistent
+    daemon workers, not one raw thread per queued job -- durable recovery
+    can replay many pending jobs at once, and one native thread per job
+    would reintroduce the unbounded-thread-count problem the fixed-pool
+    fetch in ``model_discovery`` was written to avoid) while carrying no
+    exit-hook registration at all: an abandoned worker is silently dropped
+    at interpreter exit, exactly like every other raw ``daemon=True``
+    thread in this codebase's timeout-safe call sites.
+
+    ``submit()``/``shutdown()`` intentionally mirror
+    :class:`concurrent.futures.ThreadPoolExecutor`'s method names and
+    ``shutdown(wait=, cancel_futures=)`` signature so every existing
+    ``ProviderEmbeddingBatchBackend`` call site -- and the ``_executor``
+    attribute callers substitute test doubles into -- keeps working
+    unchanged. Workers are also spawned lazily, one per ``submit()`` up to
+    ``max_workers``, exactly like ``ThreadPoolExecutor._adjust_thread_count``:
+    each new worker's first ``queue.get()`` finds its triggering item
+    already queued rather than racing a ``Condition`` wakeup against an
+    already-idle worker, so callers that (like several existing tests)
+    observe a durable job's state immediately after ``submit()`` returns
+    keep the same effectively-synchronous-for-fast-runners timing the
+    ``ThreadPoolExecutor``-backed implementation had.
+
+    ``submit()`` also mirrors ``ThreadPoolExecutor``'s closed-pool contract:
+    once ``shutdown()`` has run, a later ``submit()`` raises ``RuntimeError``
+    instead of silently queuing work behind the shutdown sentinels, where it
+    would never be picked up by any worker (every worker already exits on
+    its own sentinel and none are spawned after shutdown, since
+    ``submit()`` is the only place that spawns them). ``ProviderEmbeddingBatchBackend``
+    itself never races ``submit()`` against ``shutdown()`` this way --
+    ``start()`` and ``close()`` both serialize through the backend's
+    ``_executor_lock`` and ``start()`` checks ``self._closed`` first -- but
+    this pool is a standalone primitive and must not depend on every caller
+    reproducing that locking to avoid stranding a job.
+    """
+
+    def __init__(self, max_workers: int, *, thread_name_prefix: str = "provider_embedding_worker") -> None:
+        self._max_workers = max_workers
+        self._thread_name_prefix = thread_name_prefix
+        self._queue: queue.Queue[tuple[Callable[..., Any], tuple[Any, ...]] | None] = queue.Queue()
+        self._workers: list[threading.Thread] = []
+        self._workers_lock = threading.Lock()
+        self._shutdown = False
+
+    def _drain(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:  # shutdown sentinel
+                return
+            fn, args = item
+            try:
+                fn(*args)
+            except BaseException:  # noqa: BLE001 - a worker task must never kill its worker
+                _LOGGER.exception("provider embedding worker task raised")
+
+    def submit(self, fn: Callable[..., Any], *args: Any) -> None:
+        """Queue ``fn(*args)`` for a pool worker. Fire-and-forget: no Future.
+
+        Raises ``RuntimeError`` if ``shutdown()`` has already run, matching
+        ``ThreadPoolExecutor.submit``'s closed-pool contract, instead of
+        enqueuing work behind the shutdown sentinels where no worker would
+        ever pick it up.
+        """
+        with self._workers_lock:
+            if self._shutdown:
+                raise RuntimeError("cannot schedule new work after shutdown")
+            self._queue.put((fn, args))
+            if len(self._workers) < self._max_workers:
+                worker = threading.Thread(
+                    target=self._drain,
+                    name=f"{self._thread_name_prefix}_{len(self._workers)}",
+                    daemon=True,
+                )
+                self._workers.append(worker)
+                worker.start()
+
+    def shutdown(self, *, wait: bool = True, cancel_futures: bool = False) -> None:
+        """Stop accepting new work; mirrors ``ThreadPoolExecutor.shutdown``.
+
+        ``cancel_futures=True`` drops anything still sitting in the queue
+        that no worker has picked up yet -- it never runs, exactly like
+        ``ThreadPoolExecutor``'s own ``cancel_futures``. It cannot, and does
+        not need to, interrupt a worker already inside ``fn(*args)``: that
+        worker is a daemon thread and is simply abandoned, not joined, when
+        ``wait=False``.
+
+        Admission is closed *first*, atomically, under ``_workers_lock`` --
+        before anything else (draining the queue or queuing stop sentinels)
+        happens. ``submit()`` checks the same flag under the same lock, so
+        the two methods can never interleave: a ``submit()`` that acquires
+        the lock after this closes admission observes the closed pool and
+        raises immediately (see ``submit``'s docstring) instead of racing
+        the cancellation drain below, and a ``submit()`` already holding the
+        lock is guaranteed to finish enqueuing before this method can
+        proceed -- so its item is still present in the queue when the drain
+        below runs and is correctly cancelled. Either way no submission can
+        land *between* the drain and admission closing, which is what let a
+        racing ``submit()`` slip past ``cancel_futures=True`` before this
+        fix (ContextualWisdomLab/contextual-orchestrator#971).
+
+        Idempotent: a repeated call observes ``self._shutdown`` already set
+        and skips re-draining the queue and re-queuing sentinels (both of
+        which are only correct to do once), while still joining the
+        already-captured worker list when ``wait=True``.
+        """
+        with self._workers_lock:
+            first_shutdown = not self._shutdown
+            self._shutdown = True
+            workers = list(self._workers)
+        if first_shutdown:
+            if cancel_futures:
+                while True:
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+            for _ in workers:
+                self._queue.put(None)
+        if wait:
+            for worker in workers:
+                worker.join()
+
+
+class ProviderEmbeddingBatchBackend:
+    """Queue provider embedding work and expose a durable polling lifecycle."""
+
+    name = "provider"
+
+    def __init__(
+        self,
+        runner: Callable[[List[EmbeddingBatchRequest]], tuple[List[List[float]], int]],
+        *,
+        job_registry: Any = None,
+        max_concurrency: int = 1,
+        claim_lease_seconds: float | None = None,
+        execution_timeout_seconds: float | None = None,
+    ) -> None:
+        if type(max_concurrency) is not int or max_concurrency < 1:
+            raise ValueError("max_concurrency must be a positive integer")
+        self._runner = runner
+        self._max_concurrency = max_concurrency
+        self._executor: _DaemonWorkerPool | None = None
+        self._executor_lock = threading.Lock()
+        self._closed = threading.Event()
+        self._registry = job_registry or JobRegistryFactory()
+        if self._registry.durable and (
+            claim_lease_seconds is None or claim_lease_seconds <= 0
+        ):
+            raise ValueError("durable provider backend claim lease must be positive")
+        self._claim_lease_seconds = claim_lease_seconds
+        # This is the backend's actual durable-claim observation cadence (the
+        # same formula used by ``JobRegistryFactory.lock``), not an HTTP-layer
+        # polling guess.  Admission responses expose it so callers do not have
+        # to invent their own retry interval.
+        self.poll_after_ms = int(
+            1000
+            * _claim_renewal_interval_seconds(claim_lease_seconds or 0)
+        )
+        if execution_timeout_seconds is not None and execution_timeout_seconds <= 0:
+            raise ValueError("provider embedding execution timeout must be positive")
+        # ``None`` is a genuine "no execution deadline" state (the caller's
+        # ``ModelClient`` has no configured wall-clock timeout) and must stay
+        # that way -- it previously fell back to the registry's storage
+        # retention window, silently expiring an intentionally unbounded
+        # embedding job once that window elapsed. ``_execution_deadline``
+        # below treats ``None`` as an unbounded (``+inf``) deadline instead.
+        self._execution_timeout_seconds = execution_timeout_seconds
+        self._terminal_events: Dict[str, threading.Event] = {}
+        self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
+            job_registry.mapping(
+                "provider_embedding_results", decode=lambda raw: EmbeddingBatchResultItem(**raw)
+            )
+            if job_registry is not None
+            else {}
+        )
+        self._requests = (
+            job_registry.mapping(
+                "provider_embedding_requests",
+                decode=lambda raw: EmbeddingBatchRequest(**raw),
+            )
+            if job_registry is not None
+            else {}
+        )
+        self._states = (
+            job_registry.mapping("provider_embedding_states")
+            if job_registry is not None
+            else {}
+        )
+        self._usage = (
+            job_registry.mapping("provider_embedding_usage")
+            if job_registry is not None
+            else {}
+        )
+        self._errors = (
+            job_registry.mapping("provider_embedding_errors")
+            if job_registry is not None
+            else {}
+        )
+        self._deadlines = (
+            job_registry.mapping("provider_embedding_deadlines")
+            if job_registry is not None
+            else {}
+        )
+        self._cancellations = (
+            job_registry.mapping("provider_embedding_cancellations")
+            if job_registry is not None
+            else {}
+        )
+        pending_job_ids = [
+            job_id
+            for job_id in list(self._states)
+            if self._states.get(job_id) in {"queued", "running"}
+        ]
+        if pending_job_ids:
+            self._executor = _DaemonWorkerPool(self._max_concurrency)
+            for job_id in pending_job_ids:
+                self._terminal_events[job_id] = threading.Event()
+                self._executor.submit(copy_context().run, self._run_job, job_id)
+
+    def close(self) -> None:
+        """Release the bounded worker pool owned by this backend."""
+        self._closed.set()
+        with self._executor_lock:
+            executor, self._executor = self._executor, None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def __enter__(self) -> "ProviderEmbeddingBatchBackend":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:  # pragma: no cover - interpreter timing varies
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001, S110 - interpreter teardown must not raise
+            pass
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Persist a queued job and return immediately with a pollable handle."""
+        job = self.reserve(requests, metadata=metadata)
+        self.start(job)
+        return job
+
+    def reserve(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Persist provider work without making it executable yet."""
+        if self._closed.is_set():
+            raise RuntimeError("provider embedding backend is closed")
+        job_id = f"providerembed_{uuid.uuid4().hex}"
+        self._requests[job_id] = list(requests)
+        self._states[job_id] = "reserved"
+        return BatchJob(
+            job_id=job_id,
+            backend=self.name,
+            status="reserved",
+            request_count=len(requests),
+        )
+
+    def start(self, job: BatchJob) -> None:
+        """Make a fully registered reservation executable."""
+        with self._executor_lock:
+            if self._closed.is_set():
+                raise RuntimeError("provider embedding backend is closed")
+            if self._states.get(job.job_id) != "reserved":
+                return
+            self._states[job.job_id] = "queued"
+            self._terminal_events[job.job_id] = threading.Event()
+            if self._executor is None:
+                self._executor = _DaemonWorkerPool(self._max_concurrency)
+            self._executor.submit(copy_context().run, self._run_job, job.job_id)
+
+    def _run_job(self, job_id: str) -> None:
+        """Execute or reclaim one persisted job until it becomes terminal."""
+        while not self._closed.is_set() and self._states.get(job_id) in {"queued", "running"}:
+            try:
+                deadline_epoch = self._execution_deadline(job_id)
+                break
+            except ClaimNotAcquired:
+                threading.Event().wait(min(0.05, self._claim_lease_seconds))
+        else:
+            return
+        while (
+            not self._closed.is_set()
+            and self._states.get(job_id) in {"queued", "running"}
+            and time.time() < deadline_epoch
+        ):
+            try:
+                with self._registry.lock(
+                    "provider_embedding_job_execution",
+                    job_id,
+                    lease_seconds=self._claim_lease_seconds,
+                    renew_until_epoch=deadline_epoch,
+                ) as execution_claim:
+                    self._run_claimed_job(job_id, execution_claim)
+            except ClaimNotAcquired:
+                remaining = max(0.0, deadline_epoch - time.time())
+                threading.Event().wait(min(0.05, remaining))
+        if (
+            not self._closed.is_set()
+            and time.time() >= deadline_epoch
+            and self._states.get(job_id) in {"queued", "running"}
+        ):
+            self._fail_expired_job(job_id)
+        if self._states.get(job_id) in {"completed", "failed", "cancelled"}:
+            event = self._terminal_events.pop(job_id, None)
+            if event is not None:
+                event.set()
+
+    def _execution_deadline(self, job_id: str) -> float:
+        """Persist this job's lifetime beginning with the first execution claim.
+
+        ``+inf`` when the backend was built with no execution timeout (a
+        genuinely unbounded job) -- every deadline comparison below already
+        treats an infinite epoch as "never expires" without further changes.
+        """
+        existing = self._deadlines.get(job_id)
+        if existing is not None:
+            return float(existing)
+        with self._registry.lock(
+            "provider_embedding_job_execution",
+            job_id,
+            lease_seconds=self._claim_lease_seconds,
+        ):
+            existing = self._deadlines.get(job_id)
+            if existing is None:
+                if self._execution_timeout_seconds is None:
+                    deadline = float("inf")
+                else:
+                    request_count = len(self._requests[job_id])
+                    deadline = (
+                        time.time()
+                        + self._execution_timeout_seconds * max(1, request_count)
+                    )
+                set_if_absent = getattr(self._deadlines, "set_if_absent", None)
+                if callable(set_if_absent):
+                    set_if_absent(job_id, deadline)
+                else:
+                    self._deadlines[job_id] = deadline
+                existing = self._deadlines[job_id]
+        return float(existing)
+
+    def _fail_expired_job(self, job_id: str) -> None:
+        """Claim and atomically terminate provider work past its deadline."""
+        while not self._closed.is_set() and self._states.get(job_id) in {"queued", "running"}:
+            try:
+                with self._registry.lock(
+                    "provider_embedding_job_execution",
+                    job_id,
+                    lease_seconds=self._claim_lease_seconds,
+                ) as execution_claim:
+                    self._publish_terminal(
+                        job_id,
+                        execution_claim,
+                        status="failed",
+                        error={
+                            "error_type": "TimeoutError",
+                            "http_status": None,
+                            "provider_code": "provider_embedding_deadline_exceeded",
+                            "retryable": True,
+                            "failed_shard_index": None,
+                        },
+                    )
+                    return
+            except ClaimNotAcquired:
+                threading.Event().wait(0.05)
+
+    def _run_claimed_job(self, job_id: str, execution_claim: Any) -> None:
+        """Run one claim attempt and atomically publish its terminal outcome."""
+        execution_claim.ensure_owned()
+        if self._registry.durable:
+            self._registry.mark_provider_embedding_running(execution_claim, job_id)
+        else:
+            with self._registry.lock(
+                "provider_embedding_job_states",
+                job_id,
+                lease_seconds=self._claim_lease_seconds,
+            ):
+                if self._states.get(job_id) not in {"queued", "running"}:
+                    return
+                self._states[job_id] = "running"
+        requests = list(self._requests[job_id])
+        try:
+            vectors, prompt_tokens = self._runner(requests)
+            execution_claim.ensure_owned()
+            if time.time() >= self._execution_deadline(job_id):
+                self._publish_terminal(
+                    job_id,
+                    execution_claim,
+                    status="failed",
+                    error={
+                        "error_type": "TimeoutError",
+                        "http_status": None,
+                        "provider_code": "provider_embedding_deadline_exceeded",
+                        "retryable": True,
+                        "failed_shard_index": None,
+                    },
+                )
+                return
+            if len(vectors) != len(requests):
+                raise ValueError("provider embedding batch result count did not match inputs")
+            dimensions = {len(vector) for vector in vectors}
+            if vectors and (dimensions == {0} or len(dimensions) != 1):
+                raise ValueError("provider embedding batch dimensions were inconsistent")
+            items = [
+                EmbeddingBatchResultItem(
+                    custom_id=request.custom_id,
+                    index=index,
+                    embedding=vector,
+                    prompt_tokens=0,
+                    model=request.model,
+                )
+                for index, (request, vector) in enumerate(zip(requests, vectors, strict=True))
+            ]
+            self._publish_terminal(
+                job_id,
+                execution_claim,
+                status="completed",
+                results=items,
+                usage={"prompt_tokens": int(prompt_tokens)},
+            )
+        except ClaimNotAcquired:
+            raise
+        except Exception as exc:  # noqa: BLE001 - polling exposes bounded failure metadata
+            error = {
+                "error_type": type(exc).__name__,
+                "http_status": getattr(
+                    exc, "client_status", getattr(exc, "status_code", None)
+                ),
+                "provider_code": getattr(
+                    exc, "error_code", getattr(exc, "provider_code", None)
+                ),
+                "retryable": bool(getattr(exc, "retryable", False)),
+                "failed_shard_index": getattr(exc, "failed_shard_index", None),
+            }
+            self._publish_terminal(
+                job_id, execution_claim, status="failed", error=error
+            )
+
+    def _publish_terminal(
+        self,
+        job_id: str,
+        execution_claim: Any,
+        *,
+        status: str,
+        results: Any = None,
+        usage: Any = None,
+        error: Any = None,
+    ) -> None:
+        """Publish terminal state atomically for durable registries."""
+        if self._registry.durable:
+            self._registry.publish_provider_embedding_terminal(
+                execution_claim,
+                job_id,
+                status=status,
+                results=results,
+                usage=usage,
+                error=error,
+            )
+            return
+        with self._registry.lock(
+            "provider_embedding_job_states",
+            job_id,
+            lease_seconds=self._claim_lease_seconds,
+        ):
+            execution_claim.ensure_owned()
+            if self._states.get(job_id) not in {"queued", "running"}:
+                raise ClaimNotAcquired("provider embedding job is already terminal")
+            if results is not None:
+                self._results[job_id] = results
+            if usage is not None:
+                self._usage[job_id] = usage
+            if error is not None:
+                self._errors[job_id] = error
+            self._states[job_id] = status
+
+    def wait(self, job: BatchJob, *, timeout: float | None) -> Dict[str, Any]:
+        """Wait within the caller's explicit deadline for a terminal state.
+
+        ``timeout`` may be ``None`` or ``float("inf")`` when the caller has no
+        wall-clock deadline (contextual-orchestrator's no-implicit-deadline
+        default). ``threading.Event.wait`` raises ``OverflowError`` for a
+        non-finite timeout on CPython, so both forms are translated to ``None``
+        (block indefinitely) rather than passed through.
+        """
+        event = self._terminal_events.get(job.job_id)
+        if event is not None:
+            event.wait(
+                timeout=(
+                    timeout
+                    if timeout is not None and math.isfinite(timeout)
+                    else None
+                )
+            )
+        return self.poll(job)
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Return queued, running, completed, or failed without blocking."""
+        status = str(self._states.get(job.job_id, "failed"))
+        document = {
+            "job_id": job.job_id,
+            "status": status,
+            "is_complete": status in {"completed", "failed", "cancelled"},
+        }
+        if status == "failed":
+            document["failure"] = dict(self._errors.get(job.job_id, {}))
+        elif status == "cancelled":
+            document["cancellation"] = dict(self._cancellations.get(job.job_id, {}))
+        elif status == "completed":
+            document["usage"] = dict(self._usage.get(job.job_id, {}))
+        return document
+
+    def cancel(self, job: BatchJob, *, reason: str) -> Dict[str, Any]:
+        """Mark queued/running work cancelled and discard any late provider result."""
+        if self._registry.durable:
+            cancelled = self._registry.cancel_provider_embedding(job.job_id, reason=reason)
+            status = "cancelled" if cancelled else str(self._states.get(job.job_id, "failed"))
+        else:
+            with self._registry.lock(
+                "provider_embedding_job_states", job.job_id,
+                lease_seconds=self._claim_lease_seconds,
+            ):
+                status = str(self._states.get(job.job_id, "failed"))
+                if status not in {"completed", "failed", "cancelled"}:
+                    self._cancellations[job.job_id] = {"reason": reason}
+                    self._states[job.job_id] = "cancelled"
+                    status = "cancelled"
+        if status == "cancelled":
+            event = self._terminal_events.pop(job.job_id, None)
+            if event is not None:
+                event.set()
+        return {
+            "job_id": job.job_id,
+            "status": status,
+            "is_complete": status in {"completed", "failed", "cancelled"},
+            **(
+                {"cancellation": dict(self._cancellations.get(job.job_id, {}))}
+                if status == "cancelled"
+                else {}
+            ),
+        }
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Return provider embeddings computed during submission."""
+        return self._results.get(job.job_id, [])
+
+    def usage(self, job: BatchJob) -> Dict[str, int]:
+        """Return provider-reported batch usage without per-input allocation."""
+        return dict(self._usage.get(job.job_id, {}))
+
+class PgLlmBatchEmbeddingBackend:
+    """Embeddings batch backend that submits to **pg-llm-batch** and retrieves.
+
+    Mirrors :class:`PgLlmBatchBackend` but targets the OpenAI-compatible
+    ``/v1/embeddings`` endpoint: it uploads an embeddings JSONL, creates a batch
+    job, polls, and downloads the vectors. The client is injected so it can be
+    the real ``pg_llm_batch.BatchAPIClient`` in production or a fake in tests.
+    """
+
+    name = "pg-llm-batch"
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        endpoint_alias: str = "default",
+        endpoint: str = "/v1/embeddings",
+        payload_assembler: Any = None,
+        job_registry: Any = None,
+    ) -> None:
+        self._client = client
+        poll_interval = getattr(client, "poll_interval_seconds", None)
+        self.poll_after_ms = (
+            int(poll_interval * 1000)
+            if isinstance(poll_interval, (int, float))
+            and not isinstance(poll_interval, bool)
+            and poll_interval > 0
+            else 0
+        )
+        self._endpoint_alias = endpoint_alias
+        self._endpoint = endpoint
+        self._assembler = payload_assembler
+        # Tracked requests survive a restart when a Valkey-backed registry
+        # is injected; a plain dict preserves the historical behavior.
+        self._jobs: Dict[str, Dict[str, Any]] = (
+            job_registry.mapping("pg_llm_embedding_jobs") if job_registry is not None else {}
+        )
+
+    def _assemble_payload(self, requests: List[EmbeddingBatchRequest]) -> str:
+        if self._assembler is not None:
+            return self._assembler.assemble(
+                [request.to_jsonl_line(self._endpoint) for request in requests]
+            )
+        return f"memory://{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _run(coro: Any) -> Any:
+        return asyncio.run(coro)
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Upload embeddings JSONL + create a batch job via the pg-llm-batch client."""
+        file_path = self._assemble_payload(requests)
+        wire_custom_ids = [
+            request.to_jsonl_line(self._endpoint)["custom_id"] for request in requests
+        ]
+        job_metadata = dict(metadata) if metadata is not None else None
+        agent_ids = sorted({request.agent_id for request in requests if request.agent_id})
+        if agent_ids:
+            job_metadata = job_metadata or {}
+            if len(agent_ids) == 1:
+                job_metadata["agent_id"] = agent_ids[0]
+            else:
+                job_metadata["agent_ids"] = agent_ids
+
+        async def _submit() -> Dict[str, Any]:
+            uploaded = await self._client.upload_jsonl(file_path, self._endpoint_alias)
+            input_file_id = uploaded["id"]
+            return await self._client.create_batch_job(
+                input_file_id,
+                self._endpoint_alias,
+                endpoint=self._endpoint,
+                metadata=job_metadata,
+            )
+
+        job_payload = self._run(_submit())
+        batch_id = job_payload["id"]
+        self._jobs[batch_id] = {
+            "endpoint_alias": self._endpoint_alias,
+            # JSON primitives, not dataclass instances, so a Valkey-backed
+            # registry can serialize the tracked state (see PgLlmBatchBackend).
+            "requests": {
+                wire_id: dataclasses.asdict(request)
+                for wire_id, request in zip(wire_custom_ids, requests)
+            },
+            "order": wire_custom_ids,
+        }
+        return BatchJob(
+            job_id=batch_id,
+            backend=self.name,
+            status=job_payload.get("status", "validating"),
+            request_count=len(requests),
+        )
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Poll embeddings batch status via the pg-llm-batch client."""
+        async def _poll() -> Dict[str, Any]:
+            return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
+
+        status = self._run(_poll())
+        return {
+            "job_id": job.job_id,
+            "status": status.get("status"),
+            "is_complete": status.get("is_complete", False),
+            "progress_percentage": status.get("progress_percentage", 0),
+        }
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Download + parse embedding results, mapping them back to input order.
+
+        Raises :class:`BatchDownloadError` when the client reports an explicit
+        download failure, instead of returning an empty list indistinguishable
+        from a batch that legitimately completed with zero items.
+        """
+        async def _download() -> Dict[str, Any]:
+            return await self._client.download_results(job.job_id, self._endpoint_alias)
+
+        payload = self._run(_download())
+        if not payload.get("success"):
+            reason = payload.get("reason") or payload.get("error")
+            _LOGGER.warning(
+                "embeddings batch download failed job_id=%s backend=%s reason=%s",
+                job.job_id,
+                self.name,
+                reason,
+            )
+            raise BatchDownloadError(job.job_id, reason)
+        tracked = self._jobs.get(job.job_id, {})
+        tracked_requests = tracked.get("requests", {})
+        order = tracked.get("order", [])
+        responses = _validated_download_responses(
+            payload,
+            expected_custom_ids=set(tracked_requests),
+            request_count=job.request_count,
+            job_id=job.job_id,
+        )
+        position_by_custom_id = {custom_id: pos for pos, custom_id in enumerate(order)}
+        items: List[EmbeddingBatchResultItem] = []
+        for entry in responses:
+            custom_id = entry.get("custom_id", "")
+            body = (entry.get("response") or {}).get("body", {})
+            embedding = _extract_embedding(body)
+            usage = body.get("usage", {}) or {}
+            raw_request = tracked_requests.get(custom_id)
+            tracked_request = EmbeddingBatchRequest(**raw_request) if raw_request else None
+            items.append(
+                EmbeddingBatchResultItem(
+                    custom_id=tracked_request.custom_id if tracked_request else custom_id,
+                    index=position_by_custom_id.get(custom_id, len(items)),
+                    embedding=embedding,
+                    prompt_tokens=int(usage.get("prompt_tokens", 0)),
+                    model=tracked_request.model if tracked_request else "contextual-orchestrator",
+                    agent_id=tracked_request.agent_id if tracked_request else None,
+                )
+            )
+        items.sort(key=lambda item: item.index)
+        return items
+
+
+def _extract_embedding(body: Dict[str, Any]) -> List[float]:
+    data = body.get("data") or []
+    if not data:
+        return []
+    vector = data[0].get("embedding") or []
+    return [float(value) for value in vector]
+
+
+def build_embeddings_jsonl_body(
+    requests: List[EmbeddingBatchRequest], endpoint: str = "/v1/embeddings"
+) -> str:
+    """Serialize embedding batch requests into an OpenAI Batch API JSONL body."""
+    return "\n".join(json.dumps(request.to_jsonl_line(endpoint)) for request in requests)

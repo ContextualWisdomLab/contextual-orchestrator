@@ -1,0 +1,3 @@
+Accept Responses flat tool_choice {type,name} alongside chat nested
+{type,function:{name}}; reject mixed; name must match tools; strip/casefold type.
+Local: 1212 passed.

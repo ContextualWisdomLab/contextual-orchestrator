@@ -1,0 +1,3 @@
+include_orchestration_trace: coerce via _coerce_optional_bool (string true/false/0/1, int 0/1; null/empty omit; "yes" still fail-closed).
+attribution: null/empty/whitespace dimension values omit (not str(None)/"").
+Local: 1136 passed.

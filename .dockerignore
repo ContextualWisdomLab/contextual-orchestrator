@@ -1,0 +1,10 @@
+.git
+.codegraph
+.venv
+.hypothesis
+.secrets
+__pycache__
+*.pyc
+*.db
+build
+dist

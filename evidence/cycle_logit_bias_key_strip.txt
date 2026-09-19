@@ -1,0 +1,4 @@
+logit_bias keys: strip incidental whitespace before digit-token-id check
+(_coerce_logit_bias_token_key). Responses write-back cleaned keys; Completions/
+chat type-check then reject non-empty maps. Follow-on to #730 value coerce.
+Local: 1270 passed.

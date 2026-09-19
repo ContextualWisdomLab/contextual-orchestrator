@@ -1,0 +1,1 @@
+authorization: Bearer sk-abcdef1234567890TOKEN

@@ -1,0 +1,112 @@
+# REST API Design
+
+## Rules
+
+- API version prefix: `/api/v1`.
+- Resource names: plural lower snake_case, at least two words.
+- Operation IDs: verb plus resource, lower snake_case.
+- Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
+- Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
+- OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- Slow provider I/O is isolated per request; `/healthz` remains independently
+  serviceable, and saturated inference returns `503 concurrency_limit_exceeded`
+  instead of waiting for a run slot. HTTP/1.1 fixed-length responses are
+  persistent; incremental SSE explicitly closes after `[DONE]`.
+
+## Current Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/openapi.json` | API contract |
+| `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
+| `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
+| `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
+| `GET` | `/v1/readiness` | Inference-scoped, per-candidate provider readiness (issue #926); a redacted subset of `/api/v1/provider_readiness/latest` for a minimal-privilege caller such as a CI review sidecar |
+| `GET` | `/api/v1/agent_pools` | List model agents |
+| `GET` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Read a worker only when it belongs to the addressed pool |
+| `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
+| `GET` | `/api/v1/provider_readiness/latest` | Read or explicitly refresh bounded provider chat readiness |
+| `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |
+| `GET` | `/api/v1/sales_readiness/latest` | Read local enterprise-pilot readiness criteria and evidence |
+| `GET` | `/api/v1/commercial_readiness/latest` | Read KRW 2,000,000,000 commercial due-diligence readiness criteria and evidence |
+| `GET` | `/api/v1/commercial_evidence_manifests/latest` | Review evidence gaps before commercial diligence |
+| `GET` | `/api/v1/commercial_handoff_bundles/latest` | Review handoff evidence and resolve remaining commercial gaps |
+| `GET` | `/api/v1/buyer_evidence_manifests/latest` | Deprecated compatibility alias for the commercial evidence manifest |
+| `GET` | `/api/v1/buyer_handoff_bundles/latest` | Deprecated compatibility alias for the commercial handoff bundle |
+| `GET` | `/api/v1/saleability_decisions/latest` | Read KRW 2,000,000,000 saleability decision for commercial diligence review |
+| `GET` | `/api/v1/commercial_evidence_exports/latest` | Read portable commercial evidence export for buyer due diligence |
+| `GET` | `/api/v1/commercial_acceptance_checks/latest` | Read commercial acceptance check for buyer due diligence |
+| `GET` | `/api/v1/commercial_buyer_acceptance_workflows/latest` | Read buyer acceptance workflow for commercial diligence review |
+| `GET` | `/api/v1/commercial_release_candidates/latest` | Read commercial release-candidate package for buyer due diligence |
+| `GET` | `/api/v1/commercial_gap_registers/latest` | Read commercial gap register for buyer due diligence |
+| `GET` | `/api/v1/commercial_procurement_readiness/latest` | Read commercial procurement readiness for buyer due diligence |
+| `GET` | `/api/v1/commercial_contract_readiness/latest` | Read commercial contract readiness for buyer due diligence |
+| `GET` | `/api/v1/commercial_onboarding_readiness/latest` | Read commercial onboarding readiness for buyer close |
+| `GET` | `/api/v1/commercial_operations_readiness/latest` | Read commercial operations readiness for buyer handoff |
+| `GET` | `/api/v1/commercial_security_attestations/latest` | Read commercial security attestation for buyer security review |
+| `GET` | `/api/v1/commercial_value_readiness/latest` | Read commercial value readiness for buyer economic review |
+| `GET` | `/api/v1/commercial_close_readiness/latest` | Read commercial close readiness for buyer signature and go-live review |
+| `GET` | `/api/v1/commercial_go_to_market_readiness/latest` | Read commercial go-to-market readiness for buyer and stakeholder review |
+| `GET` | `/api/v1/commercial_launch_readiness/latest` | Read commercial launch readiness for buyer trial and go-live execution |
+| `GET` | `/api/v1/commercial_completion_scorecards/latest` | Read KRW 2,000,000,000 commercial completion scorecard |
+| `GET` | `/api/v1/commercial_demo_scenarios/latest` | Read KRW 2,000,000,000 commercial demo scenarios |
+| `GET` | `/api/v1/commercial_proposal_packets/latest` | Read KRW 2,000,000,000 commercial proposal packet |
+| `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Read KRW 2,000,000,000 commercial purchase approval packet |
+| `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Read KRW 2,000,000,000 commercial due diligence room |
+| `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Read KRW 2,000,000,000 commercial investment committee memo |
+| `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
+| `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
+| `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
+| `GET` | `/api/v1/workflow_runs/{workflow_run_id}` | Inspect one run and trace |
+| `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list and accessed-output evidence; requires both admin and trace-purpose authorization before resource lookup. |
+| `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status/priority/tags/provider exclusions or streamed-usage capability |
+| `DELETE` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Remove a worker only when it belongs to the addressed pool |
+| `POST` | `/api/v1/evaluation_runs` | Replay prompts and return a reproducible evaluation run |
+| `GET` | `/api/v1/evaluation_runs/{evaluation_run_id}` | Review replay output |
+| `GET` | `/api/v1/locale_bundles/{locale_code}` | Read i18n bundle |
+| `GET` | `/admin` | Management console |
+
+## Product Planning Additions (Implemented)
+
+These product surfaces are now implemented in this prototype:
+
+| Method | Path | Purpose | Paper Basis |
+|---|---|---|---|
+| `GET` | `/api/v1/workflow_runs/{workflow_run_id}` | Inspect one run with role, worker, subtask, access list, verifier result, and synthesis evidence. | TRINITY roles; Conductor workflow steps and access lists. |
+| `POST` | `/api/v1/evaluation_runs` | Replay a prompt or dataset against policy variants before changing production routing. | Fugu and TRINITY optimize coordination against measured outcomes. |
+| `GET` | `/api/v1/access_reports/{workflow_run_id}` | Produce compliance evidence for which worker saw which prior outputs. | Conductor access-list visibility control. |
+| `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status, priority, capability tags, or provider exclusion. | Fugu configurable worker pool and provider/compliance constraints. |
+| `GET` | `/api/v1/analytics_snapshots/latest` | Produce source-backed local KPI and guardrail evidence without claiming production telemetry. | Fugu evaluation discipline; TRINITY verification evidence; Conductor access-list guardrails. |
+| `GET` | `/api/v1/sales_readiness/latest` | Produce a sellable-pilot readiness gate from current runtime, admin, security, analytics, locale, and provider evidence. | Fugu API adoption; TRINITY verification; Conductor trace and access-list evidence. |
+| `GET` | `/api/v1/commercial_readiness/latest` | Produce a high-value buyer due-diligence readiness gate for the KRW 2,000,000,000 target without presenting it as a valuation guarantee. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; enterprise procurement review. |
+| `GET` | `/api/v1/commercial_evidence_manifests/latest` | Show evidence gaps and the next diligence action without exposing implementation boundaries. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement evidence review. |
+| `GET` | `/api/v1/commercial_handoff_bundles/latest` | Show packaged handoff evidence and the remaining commercial follow-ups. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement handoff review. |
+| `GET` | `/api/v1/saleability_decisions/latest` | Produce the final saleability decision gate that separates concrete blockers from warning follow-ups and review-process non-blockers. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence decision. |
+| `GET` | `/api/v1/commercial_evidence_exports/latest` | Produce the portable commercial evidence export that packages the saleability decision, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and required external evidence gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence export. |
+| `GET` | `/api/v1/commercial_acceptance_checks/latest` | Produce the buyer acceptance check that turns the commercial evidence export into ready, warning, or blocked acceptance status. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer acceptance review. |
+| `GET` | `/api/v1/commercial_buyer_acceptance_workflows/latest` | Produce the owner-scoped buyer acceptance workflow that turns the runbook into Go, Warning, and No-Go runtime evidence. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer acceptance workflow review. |
+| `GET` | `/api/v1/commercial_release_candidates/latest` | Produce the commercial release-candidate manifest that packages acceptance status, runtime endpoints, repository distribution packet, security metadata, admin visibility, verification, Figma artifacts, review-process policy, packaging decision, and external release gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer release-candidate review. |
+| `GET` | `/api/v1/commercial_gap_registers/latest` | Produce the commercial gap register that converts release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer gap closure review. |
+| `GET` | `/api/v1/commercial_procurement_readiness/latest` | Produce the procurement readiness gate that packages license, rights, security metadata, distribution docs, admin evidence, support/SLO input, buyer legal/ROI/procurement input, review-process policy, and packaging decision. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement and legal review. |
+| `GET` | `/api/v1/commercial_contract_readiness/latest` | Produce the contract readiness gate that packages support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, buyer order-form input, review-process policy, and packaging decision. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; legal and procurement contract review. |
+| `GET` | `/api/v1/commercial_onboarding_readiness/latest` | Produce the onboarding readiness gate that converts production support/SLO and buyer-specific input warnings into paid-onboarding owners, actions, and exit criteria. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer close and onboarding review. |
+| `GET` | `/api/v1/commercial_operations_readiness/latest` | Produce the operations readiness gate that converts production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into operations handoff owners, actions, and exit criteria. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer operations handoff review. |
+| `GET` | `/api/v1/commercial_security_attestations/latest` | Produce the security attestation gate that separates repo-local security evidence from external attestation, hosted scan, and buyer privacy/DPA gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer security review. |
+| `GET` | `/api/v1/commercial_value_readiness/latest` | Produce the value readiness gate that separates repo-local measured value evidence from buyer-specific ROI, reference proof, budget-owner, and payback-input gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer economic review. |
+| `GET` | `/api/v1/commercial_close_readiness/latest` | Produce the close readiness gate that separates repo-local sellable product evidence from buyer signatures, DPA/security acceptance, budget/PO, and go-live authorization gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer close and signature review. |
+| `GET` | `/api/v1/commercial_go_to_market_readiness/latest` | Produce the go-to-market readiness index that ties close, value, security, evidence export, buyer handoff, saleability, admin evidence, analytics truthfulness, Figma artifacts, review-process policy, and packaging decision into one buyer/stakeholder packet. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer and stakeholder GTM review. |
+| `GET` | `/api/v1/commercial_launch_readiness/latest` | Produce the launch readiness gate that ties GTM, runtime, acceptance, operator, admin, analytics, Figma, review-process, and packaging evidence into one trial/go-live packet while separating buyer environment, production telemetry, and signature inputs. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer trial and launch review. |
+| `GET` | `/api/v1/commercial_completion_scorecards/latest` | Produce the runtime completion scorecard for the KRW 2,000,000,000 program-completion standard across plugin artifacts, runtime readiness, verification, review policy, packaging, and external follow-ups. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; final buyer completion review. |
+| `GET` | `/api/v1/commercial_demo_scenarios/latest` | Produce the buyer demo packet that ties compatible API smoke, workflow trace, access-list evidence, evaluation replay, admin readiness, metric truthfulness, Figma review, buyer acceptance, review-process policy, and packaging decision into one runtime scenario list. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer demo and stakeholder review. |
+| `GET` | `/api/v1/commercial_proposal_packets/latest` | Produce the buyer proposal packet that ties completion, demo, acceptance, value, security, contract, onboarding, operations, analytics, Figma, review-process policy, packaging decision, and buyer-specific follow-ups into one runtime proposal review artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer proposal and commercial negotiation review. |
+| `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Produce the buyer purchase approval packet that ties proposal, close, procurement, contract, value, security, onboarding, operations, analytics, Figma, review-process policy, packaging decision, and buyer authority follow-ups into one runtime approval artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer finance, procurement, legal, security, and implementation approval. |
+| `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
+| `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
+
+## Production Library Target
+
+The current stdlib adapter is measured for 64 simultaneous delayed-provider
+requests in the [k6 baseline](benchmarks/2026-08-25-web-concurrency-k6.md).
+Adopt the already-declared FastAPI/Uvicorn extra only when typed dependency
+injection or multi-process ASGI measurements justify a migration; do not run a
+second, divergent API contract in parallel.

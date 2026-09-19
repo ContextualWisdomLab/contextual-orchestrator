@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def test_explicit_arxiv_references_have_inventory_entries() -> None:
+    """Keep tracked-text paper discovery complete without claiming paper review."""
+    reference_pattern = re.compile(
+        r"(?:arxiv\.org/(?:abs|pdf|html)/|arxiv[:.])(\d{4}\.\d{4,5})(?:v\d+)?\b",
+        re.IGNORECASE,
+    )
+    for citation_text in (
+        "https://arxiv.org/abs/2601.17814",
+        "https://arxiv.org/pdf/2601.17814v1.pdf",
+        "https://arxiv.org/html/2601.17814v1",
+        "arXiv:2601.17814v2",
+    ):
+        assert reference_pattern.findall(citation_text) == ["2601.17814"]
+    tracked_paths = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT_DIR, text=True
+    ).split("\0")
+    inventory = (ROOT_DIR / "docs/papers/README.md").read_text(encoding="utf-8")
+    inventoried_ids = set(re.findall(r"\b(\d{4}\.\d{4,5})(?:v\d+)?\b", inventory, re.I))
+    missing_references = {}
+    for relative_path in tracked_paths:
+        source_path = ROOT_DIR / relative_path
+        if source_path.suffix not in {".py", ".rs", ".md", ".toml"}:
+            continue
+        references = set(reference_pattern.findall(source_path.read_text(encoding="utf-8")))
+        if missing_ids := references - inventoried_ids:
+            missing_references[relative_path] = sorted(missing_ids)
+    assert not missing_references, missing_references
+
+
+def test_explicit_doi_links_have_inventory_entries() -> None:
+    """Index DOI-only citations too; discovery does not establish source review."""
+    reference_pattern = re.compile(r"https?://(?:dx\.)?doi\.org/([^\s<>\"`)]+)", re.I)
+    inventory = (ROOT_DIR / "docs/papers/README.md").read_text(encoding="utf-8")
+    inventoried_ids = {value.rstrip(".,;").lower() for value in reference_pattern.findall(inventory)}
+    tracked_paths = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT_DIR, text=True
+    ).split("\0")
+    missing_references = {}
+    for relative_path in tracked_paths:
+        source_path = ROOT_DIR / relative_path
+        if source_path.suffix not in {".py", ".rs", ".md", ".toml"}:
+            continue
+        references = {
+            value.rstrip(".,;").lower()
+            for value in reference_pattern.findall(source_path.read_text(encoding="utf-8"))
+        }
+        if missing_ids := references - inventoried_ids:
+            missing_references[relative_path] = sorted(missing_ids)
+    assert not missing_references, missing_references
+
+
+class RecordingClient:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def chat(self, agent: ModelAgent, messages, temperature: float = 0.2) -> str:
+        self.calls.append((agent.id, messages))
+        return f"{agent.id}:{len(self.calls)}"
+
+
+def build(client: RecordingClient | None = None) -> TaskOrchestrator:
+    return TaskOrchestrator(
+        [
+            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation"), priority=1),
+            ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "security", "review"), priority=2),
+        ],
+        client=client,
+    )
+
+
+def test_fugu_contract_fuses_fast_route_and_deep_workflow() -> None:
+    """Auto mode fuses a fast direct route with deep orchestrated workflows.
+
+    The split decision is the structured triage verdict (one exact-schema
+    model call), not keyword matching; mock transports cannot emit that JSON,
+    so the verdicts are pinned here to exercise both arms of the fusion.
+    """
+    orchestrator = build()
+    orchestrator._triage_fn = lambda text: "architecture" in text
+
+    fast = orchestrator.complete([{"role": "user", "content": "Write one sentence."}], mode="auto")
+    deep = orchestrator.complete(
+        [{"role": "user", "content": "Analyze the architecture, implement the code, and verify risks."}],
+        mode="auto",
+    )
+
+    assert fast["mode"] == "route"
+    assert deep["mode"] == "conduct"
+
+
+def test_trinity_contract_has_explicit_thinker_worker_verifier_roles() -> None:
+    result = build().conduct([{"role": "user", "content": "Analyze and implement a safe parser."}])
+
+    assert ["thinker", "worker", "verifier"] == [step["role"] for step in result["trace"][:3]]
+
+
+def test_conductor_contract_uses_access_lists_to_control_context() -> None:
+    client = RecordingClient()
+    build(client).conduct([{"role": "user", "content": "Analyze, implement, verify, and synthesize."}])
+
+    worker_prompt = client.calls[1][1][-1]["content"]
+    verifier_prompt = client.calls[2][1][-1]["content"]
+
+    assert "Step 0: planner_agent:1" in worker_prompt
+    assert "Step 1: builder_agent:2" not in worker_prompt
+    assert "Step 0: planner_agent:1" in verifier_prompt
+    assert "Step 1: builder_agent:2" in verifier_prompt
+
+
+def _adr_text(relative_path: str) -> str:
+    raw = (ROOT_DIR / relative_path).read_text(encoding="utf-8")
+    return " ".join(raw.split())
+
+
+def test_adr_records_include_verified_paper_and_standard_references() -> None:
+    """docs/adr is the citation-backed architecture series, not planning/adrs."""
+    index = _adr_text("docs/adr/README.md")
+    fallback = _adr_text("docs/adr/0001-tool-execution-fallback-policy.md")
+    control_plane = _adr_text("docs/adr/0002-control-plane-orchestrator.md")
+    cost_routing = _adr_text("docs/adr/0003-cost-aware-sync-batch-routing.md")
+    msa_leaf = _adr_text("docs/adr/0004-msa-leaf-composition.md")
+
+    assert "docs/planning/adrs/" in index
+    assert "not a second source of truth for the same number" in index
+    assert "0001-tool-execution-fallback-policy.md" in index
+    assert "0002-control-plane-orchestrator.md" in index
+    assert "0003-cost-aware-sync-batch-routing.md" in index
+    assert "0004-msa-leaf-composition.md" in index
+
+    assert "## References" in fallback
+    assert "https://doi.org/10.17487/RFC9110" in fallback
+    assert "https://doi.org/10.6028/NIST.SP.800-53r5" in fallback
+    assert "https://doi.org/10.6028/NIST.SP.800-204" in fallback
+    assert "section 9.2.2" in fallback
+    assert "SI-11" in fallback
+    assert "SC-24" in fallback
+
+    assert "https://doi.org/10.48550/arXiv.2512.04695" in control_plane
+    assert "https://doi.org/10.48550/arXiv.2512.04388" in control_plane
+    assert "https://sakana.ai/fugu-release/" in control_plane
+    assert "[Preprint]" in control_plane
+    assert "deterministic capability-hint heuristic" in control_plane
+    assert "not a trained Fugu, TRINITY, or Conductor clone" in control_plane
+
+    assert "https://doi.org/10.48550/arXiv.2305.05176" in cost_routing
+    assert "https://doi.org/10.48550/arXiv.2406.18665" in cost_routing
+    assert "https://doi.org/10.48550/arXiv.2404.14618" in cost_routing
+    assert "Learned routers are future work" in cost_routing
+    assert "deterministic and config-driven" in cost_routing
+
+    assert "injected client" in msa_leaf
+    assert "same interpreter" in msa_leaf
+    assert "planning ADR 0001" in msa_leaf
+    assert "naruon and gyeot are permitted callers" in msa_leaf
+    assert "https://doi.org/10.6028/NIST.SP.800-204" in msa_leaf
+
+
+def test_generated_plan_bound_comes_from_policy() -> None:
+    """The generated-plan step bound is one policy value, not a paper constant.
+
+    ``OrchestrationPolicy.max_workflow_steps`` (default 6, a product decision
+    recorded next to the field) must drive both the planner prompt and the
+    plan parser, and must not be the Fugu-Ultra report's training-time
+    "up to 5 steps" (arXiv:2606.21228 S3.2.3) copied into this layer.
+    """
+    import json
+    from dataclasses import replace
+
+    from contextual_orchestrator.orchestrator import OrchestrationPolicy
+
+    assert OrchestrationPolicy().max_workflow_steps == 6
+
+    steps = [
+        {"id": index, "role": role, "agent_id": agent_id, "subtask": f"step {index}", "access": []}
+        for index, (role, agent_id) in enumerate(
+            [
+                ("thinker", "planner_agent"),
+                ("worker", "builder_agent"),
+                ("verifier", "reviewer_agent"),
+                ("synthesizer", "planner_agent"),
+            ]
+        )
+    ]
+
+    class PlanRecordingClient(RecordingClient):
+        def chat(self, agent: ModelAgent, messages, temperature: float = 0.2) -> str:
+            self.calls.append((agent.id, messages))
+            return json.dumps({"steps": steps})
+
+    client = PlanRecordingClient()
+    orchestrator = build(client)
+    orchestrator.policy = replace(orchestrator.policy, max_workflow_steps=3)
+
+    try:
+        orchestrator._parse_workflow_plan(json.dumps({"steps": steps}))
+    except ValueError as exc:
+        assert "2..3 steps" in str(exc)
+    else:
+        raise AssertionError("a four-step plan must be rejected under a three-step policy")
+
+    try:
+        orchestrator._plan_generated("summarize the release notes")
+    except ValueError as exc:
+        assert "2..3 steps" in str(exc)
+    else:
+        raise AssertionError("the generated-plan path must reject four steps under a three-step policy")
+
+    planner_messages = client.calls[0][1]
+    system_prompt = next(message["content"] for message in planner_messages if message["role"] == "system")
+    assert "2 to 3 steps" in system_prompt
+
+
+if __name__ == "__main__":  # pragma: no cover
+    test_fugu_contract_fuses_fast_route_and_deep_workflow()
+    test_trinity_contract_has_explicit_thinker_worker_verifier_roles()
+    test_conductor_contract_uses_access_lists_to_control_context()
+    test_adr_records_include_verified_paper_and_standard_references()
+    test_generated_plan_bound_comes_from_policy()
+    print("ok")

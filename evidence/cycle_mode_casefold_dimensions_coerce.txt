@@ -1,0 +1,3 @@
+mode/orchestration_mode: strip+casefold auto|route|conduct.
+embeddings dimensions: digit/float coerce then named reject (unsupported).
+Local: 1146 passed.

@@ -1,0 +1,63 @@
+# ADR 0011: Keep raw provider failures inside the gateway
+
+- Status: Accepted
+- Date: 2026-08-21
+
+## Context
+
+Provider HTTP bodies and exception messages can contain credentials, prompt
+content, personal data, internal URLs, or vendor diagnostics. Retrying and
+cross-provider failover must therefore not make a provider's raw exception
+available through a public gateway error or an exception cause.
+
+## Decision
+
+1. Retry and passthrough transport failures expose only a package-owned message
+   containing the affected agent and operation.
+2. Model discovery reports a stable diagnostic code (`transport_error`,
+   `timeout`, `http_status_<code>`, or `invalid_response`) without copying the
+   provider response or exception text.
+3. Exhausted failover raises the stable failover message without chaining the
+   last provider exception.
+4. Package-owned reasoning-only response guidance remains visible because it is
+   deterministic local remediation, not provider output.
+5. Provider diagnostics may be counted by allowlisted type/code in internal
+   telemetry, but raw bodies, exception text, credentials, and prompts are not
+   persisted or returned.
+6. Streaming and Batch API paths follow the same boundary: a mid-stream or
+   batch failure surfaces one package-owned error (`provider <id> streaming
+   request failed` / `provider <id> batch request failed`) because a stream may
+   already have emitted bytes (no retry, no failover), and raw connection
+   resets outside ``URLError`` map to the same stable ``transport_error`` code.
+7. A virtual structured request keeps one request-scoped set of models proven
+   missing. Evidence roles and final synthesis share it, so each missing model
+   is attempted at most once and complete exhaustion terminates with the typed
+   `model_not_found` surface rather than restarting the same catalog sequence.
+8. Configured-gateway readiness probes use a distinct capability-probe
+   telemetry operation. They are not caller attempts. Conversely, an explicit
+   structured model pin constrains evidence, model judgment, and synthesis to
+   that same agent; only virtual selectors may replace a missing model.
+
+## Consequences
+
+Operators receive an actionable stable code and can use the agent/provider
+identity to select the next diagnostic step. Exact vendor text is unavailable
+at the public boundary; it must be inspected only in the provider's own
+authorized observability system. This is intentional because gateway logs and
+responses have a wider audience than provider credentials and request data.
+
+## Verification
+
+`tests/test_model_discovery.py`, `tests/test_provider_reliability.py`,
+`tests/test_auto_discovery_server.py`, `tests/test_chat_response_format_http_honesty.py`,
+`tests/test_true_streaming.py`, and `tests/test_model_judge.py` assert that
+provider response text is absent from public messages and causes, while the
+full suite must remain green before merge.
+
+## References
+
+MITRE. (n.d.). *CWE-209: Generation of error message containing sensitive
+information*. https://cwe.mitre.org/data/definitions/209.html
+
+OWASP Foundation. (2023). *Application Security Verification Standard 4.0.3*.
+https://owasp.org/www-project-application-security-verification-standard/

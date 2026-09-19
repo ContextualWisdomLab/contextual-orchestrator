@@ -1,0 +1,393 @@
+# KV credential resolution
+
+Runtime provider secrets (model provider API keys) are resolved from a
+**pluggable key/value credential registry**, never from `os.getenv` at request
+time. This document describes the `get_credential` seam, the KV backends, the
+bootstrap flow, and why the previous `api_key_env` environment pattern is
+superseded.
+
+## The `get_credential` seam
+
+`contextual_orchestrator/credentials.py` exposes two functions plus a small
+pluggable backend interface:
+
+```python
+from contextual_orchestrator import get_credential, register_credential
+
+get_credential("OPENAI_API_KEY")        # -> "sk-..." | None (from the KV)
+register_credential("OPENAI_API_KEY", value)   # writes into the KV
+```
+
+The orchestrator resolves an agent's provider key through this seam only:
+
+- Remote `ModelAgent` records use `get_credential(agent.credential_name)`.
+- Direct `mlx://` workers are intentionally keyless and never receive a
+  provider credential.
+- Authenticated loopback `local://` gateways may use the separate,
+  explicitly named `ModelAgent.local_credential_key`.
+- `ModelClient._send()` resolves the transport-specific key before building
+  the outgoing request.
+- `ModelClient._validate_provider()` requires the credential to be **resolvable**
+  before any egress when that transport names a key. A non-mock agent whose
+  credential is missing raises `NotConfigured` — it never silently falls back
+  to `os.getenv`.
+
+Mock agents (`base_url` starting with `mock://`) early-return before any
+credential logic and stay keyless.
+
+### Wardnet policy-document boundary
+
+Privacy-policy analysis never resolves or connects to an arbitrary policy host
+inside contextual-orchestrator. Register `WARDNET_API_URL` and
+`WARDNET_ADMIN_TOKEN` in the same KV registry. The discovery command sends each
+bounded policy URL to Wardnet's authenticated `/api/outbound/fetch` endpoint;
+Wardnet owns public-destination policy, DNS pinning, redirects, and response
+limits. Contextual-orchestrator accepts only the returned bounded textual body,
+then asks an already-discovered ZDR-capable model for strict structured analysis.
+If either Wardnet credential, a grounded quote, or a ZDR analysis route is
+missing, policy-derived fields remain unknown.
+
+For JavaScript-rendered policies, provide a pinned MCP Python SDK in the
+deployment image (this repository intentionally does not declare a
+`policy-browser` extra), then register an authenticated Camoufox MCP Streamable HTTP endpoint and
+`WARDNET_EGRESS_PROXY_URL`. Wardnet must approve the URL first, and every
+Camoufox tab receives the authenticated Wardnet proxy using its dedicated token
+from KV. Deploy Camoufox with Wardnet as its UDP/TCP container DNS resolver,
+and block direct web or external-DNS egress; the proxy and resolver are
+complementary controls. Camofox browser 2.4.7 does not expose a checked-in
+Firefox `network.trr.mode=5` setting, so do not claim that encrypted DNS itself
+is disabled. The sealed network still prevents it from becoming a direct
+bypass: any HTTPS request, including one to a DoH service, must use Wardnet's
+authenticated, destination-checked CONNECT path. Discovery falls back to
+Wardnet's static response if MCP or the proxy is unavailable.
+
+The optional `compose.camoufox-wardnet.yaml` overlay makes this boundary
+deployable with `compose.yaml`. It pins Camofox MCP 1.15.0 (including the 1.13.2
+inbound-authentication fix), Camofox browser 2.4.7, and an immutable Wardnet
+revision. The browser joins only Docker `internal` networks, has no published
+port, and uses Wardnet's fixed address as its port-53 resolver. Wardnet alone is
+dual-homed for upstream DNS and HTTPS, so browser subprocesses cannot reach
+external DNS or TCP 80/443 without Wardnet.
+
+Start the overlay after registering matching KV values and supplying its
+dedicated deployment secrets plus Wardnet's PostgreSQL URL. Because Wardnet
+binds non-loopback interfaces in this profile, the URL must use `postgres://`
+or `postgresql://` and explicitly select `sslmode=require`, `verify-ca`, or
+`verify-full`; an omitted mode or `sslmode=disable` fails startup. This must be
+an external PostgreSQL endpoint whose certificate validates against Wardnet's
+built-in Mozilla roots. The plaintext development PostgreSQL service in
+`compose.yaml` is not Wardnet's production control plane and cannot satisfy
+this prerequisite:
+
+```bash
+docker compose -f compose.yaml -f compose.camoufox-wardnet.yaml up -d
+```
+
+Register `WARDNET_EGRESS_PROXY_URL` as `http://172.30.0.2:8080` and
+`CAMOUFOX_MCP_URL` as `http://camofox-mcp:8080/mcp`. Use the same dedicated
+token values exposed to the corresponding containers. The browser has no
+general egress route, so encrypted DNS cannot bypass Wardnet's CONNECT policy;
+this does not assert that the browser refuses all DoH requests.
+The browser release currently publishes a Linux AMD64 manifest, so the overlay
+declares that platform explicitly; ARM hosts require Docker's AMD64 emulation.
+
+```bash
+printf '%s' 'http://127.0.0.1:8080' | python -m contextual_orchestrator \
+  register-credential --name WARDNET_API_URL --value-stdin
+printf '%s' "$WARDNET_ADMIN_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name WARDNET_ADMIN_TOKEN --value-stdin
+printf '%s' 'http://wardnet:8080' | python -m contextual_orchestrator \
+  register-credential --name WARDNET_EGRESS_PROXY_URL --value-stdin
+printf '%s' "$WARDNET_EGRESS_PROXY_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name WARDNET_EGRESS_PROXY_TOKEN --value-stdin
+printf '%s' 'http://127.0.0.1:9377/mcp' | python -m contextual_orchestrator \
+  register-credential --name CAMOUFOX_MCP_URL --value-stdin
+printf '%s' "$CAMOUFOX_MCP_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name CAMOUFOX_MCP_TOKEN --value-stdin
+```
+
+### Web-search boundary
+
+`contextual_orchestrator.web_search.web_search()` (see `docs/adr/0123-web-search-mcp-a2a-gateway-foundation.md`
+for the full design; this is slice 1) queries a SearXNG-compatible metasearch
+instance for grounded results. Register `SEARXNG_URL` with the instance's base
+URL; an `https://` URL is validated with the same SSRF-safe boundary as every
+other remote provider (public, non-private/loopback/link-local/reserved
+destination IP), and an explicit loopback `http://127.0.0.1`-style URL is
+accepted for local development only, exactly like the Wardnet API URL above.
+SearXNG has no native API key, so `SEARXNG_TOKEN` is optional — register it
+only when the instance sits behind a reverse proxy that requires a bearer
+token; when present it is sent as `Authorization: Bearer <token>`.
+
+```bash
+printf '%s' 'https://searxng.internal.example' | python -m contextual_orchestrator \
+  register-credential --name SEARXNG_URL --value-stdin
+printf '%s' "$SEARXNG_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name SEARXNG_TOKEN --value-stdin
+```
+
+This module does not deploy SearXNG itself — point it at any SearXNG instance
+you already run (the project's own Docker Compose deployment is documented at
+[docs.searxng.org](https://docs.searxng.org/admin/installation-docker.html)).
+Camoufox-rendered browsing (for JS-heavy fact-check targets, not search) and
+its `quarantine-sandbox-runtime` session isolation remain a documented
+follow-up; see the ADR.
+
+### Agent credential naming
+
+`ModelAgent` gained a `credential_key` field (default `"OPENAI_API_KEY"`) that
+names the credential to resolve from the KV:
+
+```json
+{ "id": "coding_agent", "model": "gpt-5.5",
+  "base_url": "https://api.openai.com/v1", "credential_key": "OPENAI_API_KEY" }
+```
+
+**Back-compat:** the legacy `api_key_env` field is still accepted. When set, its
+string is treated as the **credential name** in the KV — it is *not* read as an
+environment variable. `ModelAgent.credential_name` returns `api_key_env` when
+present, otherwise `credential_key`.
+
+### Direct MLX versus an authenticated local gateway
+
+These schemes have different credential contracts:
+
+```json
+{ "id": "mlx_worker", "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "base_url": "mlx://127.0.0.1:18083/v1" }
+```
+
+The direct `mlx://` transport is a loopback-only, keyless mlx-lm server. A
+`credential_key` or remote `OPENAI_API_KEY` is never forwarded to it. A
+`local://` URL instead denotes the contextual-orchestrator loopback gateway;
+when that gateway requires bearer authentication, configure only its explicit
+local token name:
+
+```json
+{ "id": "mlx_gateway", "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "base_url": "local://127.0.0.1:18084/v1",
+  "local_credential_key": "LOCAL_GATEWAY_TOKEN" }
+```
+
+The gateway owns worker template settings, so `chat_template_kwargs` is sent
+only to direct `mlx://` workers. Missing local gateway credentials fail closed;
+they do not fall back to an OpenAI credential or an unauthenticated request.
+
+## Backends
+
+Backends implement a tiny interface (`get(name)` / `set(name, value)`), selected
+at bootstrap by `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`:
+
+| Selector   | Backend                        | Use                                   |
+| ---------- | ------------------------------ | ------------------------------------- |
+| `memory`   | `InMemoryCredentialBackend`    | dev/tests — **default**, no Postgres  |
+| `postgres` | `PostgresCredentialBackend`    | production — pgcrypto-encrypted registry |
+
+Tests and the app suite run on the in-memory backend, so **no KV or Postgres is
+required to run `pytest`**.
+
+### Postgres pgcrypto registry (org reference pattern)
+
+The default production backend mirrors xtrmLLMBatchPython's pgcrypto-encrypted
+Postgres credential registry. New DB objects use 2+ word snake_case names:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS provider_credentials (
+    credential_name text PRIMARY KEY,
+    encrypted_value bytea NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Secrets are encrypted at rest with `pgp_sym_encrypt(value, passphrase)` and read
+back with `pgp_sym_decrypt(encrypted_value, passphrase)`.
+
+## The single allowed env use: bootstrap transport
+
+Environment variables are permitted in **exactly one place** — as bootstrap
+transport to *connect to and unlock the KV itself*, never as the runtime source
+of a provider key:
+
+| Variable                                   | Role                                   |
+| ------------------------------------------ | -------------------------------------- |
+| `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`       | backend selector (`memory`/`postgres`) |
+| `CONTEXTUAL_ORCHESTRATOR_KV_DSN`           | Postgres DSN to reach the registry     |
+| `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE`    | pgcrypto passphrase to unlock secrets  |
+
+These open the KV. They are not provider API keys.
+
+## Bootstrapping a credential
+
+The root `compose.yaml` uses the same stdin-only pattern for separate admin and
+inference bearer tokens through a one-shot `credential_bootstrap` service and
+Compose secrets. Its `--production` command refuses the legacy single-token
+mode; the single-token CLI remains an explicit local-development escape hatch.
+Only KV connection/unlock values use environment bootstrap transport.
+
+A one-shot CLI subcommand writes a deploy-time secret into the KV:
+
+```bash
+# Preferred: pipe the secret over stdin (keeps it out of argv and the app env)
+echo "$OPENAI_API_KEY" | python -m contextual_orchestrator \
+    register-credential --name OPENAI_API_KEY --value-stdin
+
+# Or use bootstrap transport: read the value from a named env var at bootstrap
+python -m contextual_orchestrator \
+    register-credential --name OPENAI_API_KEY --from-env OPENAI_API_KEY
+```
+
+Run this against the `postgres` backend so the value persists:
+
+```bash
+export CONTEXTUAL_ORCHESTRATOR_KV_BACKEND=postgres
+export CONTEXTUAL_ORCHESTRATOR_KV_DSN="postgresql://user@host/db"
+export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE="…"
+echo "$OPENAI_API_KEY" | python -m contextual_orchestrator \
+    register-credential --name OPENAI_API_KEY --value-stdin
+```
+
+### CI/deploy injection without runtime `os.getenv`
+
+Inject `secrets.OPENAI_API_KEY` into the **bootstrap job only**, and pipe it to
+`register-credential`. The running orchestrator never sees the secret in its
+environment:
+
+```yaml
+# deploy job (NOT the app test job)
+- name: Seed provider credential into the KV
+  env:
+    CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
+    CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.KV_DSN }}
+    CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.KV_PASSPHRASE }}
+  run: |
+    printf '%s' "${{ secrets.OPENAI_API_KEY }}" \
+      | python -m contextual_orchestrator register-credential \
+          --name OPENAI_API_KEY --value-stdin
+```
+
+The application test workflow must **not** receive `OPENAI_API_KEY`: tests run on
+the mock pool and the in-memory backend and stay green without any secret.
+
+## Why this supersedes `api_key_env`
+
+The previous pattern read `os.environ.get(agent.api_key_env)` at request time —
+the environment *was* the runtime source of the provider key. Per the org
+principle **"No os.getenv, values from KV"**, that source moves to the KV:
+
+- Secrets live encrypted in the registry, resolved via `get_credential`.
+- Missing credentials fail loudly (`NotConfigured`) instead of silently using an
+  ambient env var.
+- Env is demoted to bootstrap transport for connecting to the KV.
+
+`api_key_env` is retained only as a back-compat *credential name* alias.
+
+## Server authentication and Keyverse
+
+Provider credentials and gateway bearer authentication are separate concerns.
+The CLI resolves named server tokens from this KV when `--auth-token-key`,
+`--admin-token-key`, `--inference-token-key`, or `--trace-token-key` is used;
+it does not read the legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment
+variables at request time. Explicit token flags remain local-development
+escape hatches. Add `--production` to require split admin/inference
+credentials and reject the insecure admin session cookie option;
+`--allow-public-bind` requires split credentials and also rejects the
+insecure cookie option.
+Both gates fail before resolving any credential when a single token is selected.
+
+The `trace` purpose (ADR 0026) has its own optional credential,
+`--trace-token`/`--trace-token-key` (KV name `CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN`
+by default). In single-token mode (only `--auth-token`/`--auth-token-key`
+configured, with no admin/inference/trace token), `auth_token` still
+authorizes `trace` as the documented local escape hatch. In split
+admin/inference mode, admin and inference tokens never authorize `trace`:
+without a distinct `trace_token`, trace-bearing responses fail closed
+(`401`); with one configured, only that token authorizes the `trace` scope.
+
+For production ecosystem access, construct `SecurityConfig` with a reviewed
+`bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must
+own issuer/audience/signature/expiry/scope validation and key rotation; do not
+decode JWTs with a string split or place Keycloak admin credentials in this
+repository. Keyverse RP registration, desired-state reconciliation, and
+confidential-client secret placement remain deployment-controller operations.
+
+## Multi-provider auto-discovery
+
+Once a provider's credential is registered in the KV, `contextual_orchestrator`
+can discover that provider's available models and turn them into agent-pool
+candidates automatically — no hand-written `agents.json` entry required.
+`contextual_orchestrator/model_discovery.py` covers the providers below out of
+the box, all resolved through `get_credential` (never fabricated, never read
+from `os.getenv`):
+
+| Provider          | KV credential name       | Auth header       |
+| ------------------ | ------------------------ | ------------------ |
+| OpenAI              | `OPENAI_API_KEY`         | `Bearer <token>`   |
+| OpenRouter          | `OPENROUTER_API_KEY`     | `Bearer <token>`   |
+| OpenCode Zen        | `OPENCODE_ZEN_API_KEY`   | `Bearer <token>`   |
+| OpenCode Go         | `OPENCODE_ZEN_API_KEY`   | `Bearer <token>`   |
+| NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
+| NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
+| Bytez               | `BYTEZ_API_KEY`          | raw token          |
+| Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
+
+OpenCode Go reuses `OPENCODE_ZEN_API_KEY`. Registering that one credential
+discovers both `https://opencode.ai/zen/v1` and `https://opencode.ai/zen/go/v1`;
+the two catalogs stay separate provider accounts. The trusted review sidecar
+admits honest-free rows from those catalogs into `orchestrator/free` when that
+credential is present; `OPENAI_API_KEY` stays out of that pool.
+
+For a configured gateway, the one-shot discovery/bootstrap boundary accepts
+`LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
+host is listed in `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`. It promotes
+`LLM_GATEWAY_API_KEY` into the KV before discovery; provider requests and normal
+runtime routing then read the key only from KV. The full capability catalog and
+model-info pricing remain visible, while `--free-only` selects only structured
+zero-price evidence.
+When serving the persisted agents, pass the same host with
+`--allowed-provider-host`; startup discovery reads this injected runtime policy
+and never re-reads or promotes gateway environment values.
+
+Bytez discovery sends the provider token without the OpenAI-compatible
+`Bearer` prefix. That provider-specific behavior is why `ModelAgent` has an
+`auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
+doesn't use the default. Discovery checks `task=chat` first and then the
+documented chat-completion-compatible `task=text-generation` catalog. It does
+not issue an unfiltered request. If both catalogs are empty or fail, refresh
+fails closed with a bounded error code; a persisted last-known-good catalog is
+kept unchanged.
+
+Register any subset of the provider keys, then discover:
+
+```bash
+echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator \
+    register-credential --name OPENROUTER_API_KEY --value-stdin
+
+python -m contextual_orchestrator discover-models --agents-db state/pool.db
+```
+
+A provider with nothing registered is silently skipped — registering one key
+or all six both work. `discover-models` prints a JSON report
+(`discovered_count`, `priced_count`, `providers_with_errors`, and each
+`{provider, model, agent_id}` found) and, with `--agents-db`, persists the
+discovered agents into the same sqlite agent-pool file `--serve --agents-db`
+reads — the same durable-overlay mechanism the admin console's "add agent"
+uses (`TaskOrchestrator.sync_discovered_agents`, an idempotent upsert of
+`add_agent`/`patch_agent`'s existing persistence path). Discovered agents are
+added **disabled**, so a newly found model never starts serving traffic
+before an operator opts it in.
+
+Cost-based auto-optimization uses `model_discovery.refresh_price_book` to write
+provider-reported per-token pricing into `PriceBook`. Discovery selectors rank
+complete, valid price evidence first and keep unknown-priced candidates as a
+deterministic fallback.
+
+## Gateway direction
+
+This credential seam is the durable first step of growing
+`contextual-orchestrator` into a LiteLLM-class model gateway: one stable
+`get_credential` boundary that a multi-provider key store, rotation, and
+per-tenant scoping can grow behind without touching the routing engine. The
+Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
+started here.
+

@@ -1,0 +1,12 @@
+{
+  "agents": [
+    {
+      "id": "local_fast_agent",
+      "model": "mlx-community/llama-3.2-3b-instruct-4bit",
+      "base_url": "mlx://127.0.0.1:8080/v1",
+      "provider_name": "mlx-lm",
+      "tags": ["reasoning", "writing", "coding", "verification"],
+      "priority": 1
+    }
+  ]
+}
