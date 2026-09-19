@@ -9251,7 +9251,7 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
-            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = (
+            attempt_answer, attempt_served_id, attempt_served_model, attempt_usage = (
                 self._invoke_with_rate_limit_recovery(
                     candidate,
                     messages,
@@ -9262,8 +9262,49 @@ class TaskOrchestrator:
                     prompt_token_lower_bound=prompt_bound,
                 )
             )
-            route_evidence = self._last_route_evidence
+            current_route_evidence = self._last_route_evidence
             self._last_route_evidence = None
+            if isinstance(current_route_evidence, dict):
+                if isinstance(route_evidence, dict):
+                    route_evidence = _route_evidence_payload(
+                        eligible_agent_ids=list(
+                            dict.fromkeys(
+                                [
+                                    *route_evidence.get("eligible_agent_ids", ()),
+                                    *current_route_evidence.get("eligible_agent_ids", ()),
+                                ]
+                            )
+                        ),
+                        attempted=[
+                            *route_evidence.get("attempted", ()),
+                            *current_route_evidence.get("attempted", ()),
+                        ],
+                        terminal_reason=str(
+                            current_route_evidence.get("terminal_reason", "served")
+                        ),
+                    )
+                else:
+                    route_evidence = current_route_evidence
+            elif isinstance(route_evidence, dict):
+                route_evidence = _route_evidence_payload(
+                    eligible_agent_ids=list(
+                        dict.fromkeys(
+                            [
+                                *route_evidence.get("eligible_agent_ids", ()),
+                                attempt_served_id,
+                            ]
+                        )
+                    ),
+                    attempted=[
+                        *route_evidence.get("attempted", ()),
+                        {
+                            "agent_id": attempt_served_id,
+                            "model": attempt_served_model,
+                            "outcome": "served",
+                        },
+                    ],
+                    terminal_reason="served",
+                )
             extras = getattr(self, "_last_assistant_message", None)
             self._last_assistant_message = None
             output_budget = getattr(self, "_last_output_budget", None)
@@ -11983,12 +12024,23 @@ class TaskOrchestrator:
                     raise_with_recovered_route()
                 if wait_deadline is None:
                     wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
-                if not self._await_rate_limit_recovery(
-                    candidates,
-                    deadline=wait_deadline,
-                    transport="chat",
-                    virtual_selector=virtual_selector,
-                ):
+                try:
+                    waited = self._await_rate_limit_recovery(
+                        candidates,
+                        deadline=wait_deadline,
+                        transport="chat",
+                        virtual_selector=virtual_selector,
+                    )
+                except ProviderUpstreamError as wait_error:
+                    raise _attach_route_evidence_to_upstream_error(
+                        wait_error,
+                        _route_evidence_payload(
+                            eligible_agent_ids=merged_eligible,
+                            attempted=merged_attempts,
+                            terminal_reason="rate_limit_wait_budget_exhausted",
+                        ),
+                    ) from None
+                if not waited:
                     # Defensive: _await_rate_limit_recovery agreed there was
                     # nothing to wait for after all. Never loop without
                     # having actually waited -- re-raise the real failure.
