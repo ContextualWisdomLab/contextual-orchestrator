@@ -75,7 +75,7 @@ def test_saleability_decision_report_classifies_warnings_and_non_blockers() -> N
         },
     )
 
-    assert report["saleability_status"] == "saleability_ready_with_warnings"
+    assert report["saleability_status"] == "saleability_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_saleability_decision"
     assert "not a valuation guarantee" in report["source_note"]
@@ -85,7 +85,7 @@ def test_saleability_decision_report_classifies_warnings_and_non_blockers() -> N
     assert report["concrete_blockers"] == []
     assert report["warning_conditions"][0]["evidence_type"] == "proposed_until_production"
     assert report["warning_conditions"][1]["evidence_type"] == "proposed_until_buyer_specific"
-    assert report["decision_summary"]["blocked_count"] == 0
+    assert report["decision_summary"]["blocked_count"] == 1
     assert report["decision_summary"]["warning_count"] == 2
     assert report["related_runtime_reports"]["buyer_handoff_status"] == "buyer_handoff_ready_with_warnings"
     assert report["library_split_decision"]["decision"] == "keep_single_product"

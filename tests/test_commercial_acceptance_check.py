@@ -80,16 +80,16 @@ def test_commercial_acceptance_check_report_classifies_external_gaps_as_warnings
     )
     items = item_by_name(report)
 
-    assert report["acceptance_status"] == "commercial_acceptance_ready_with_warnings"
+    assert report["acceptance_status"] == "commercial_acceptance_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_acceptance_check"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["acceptance_summary"]["blocked_count"] == 0
+    assert report["acceptance_summary"]["blocked_count"] == 1
     assert report["acceptance_summary"]["warning_count"] == 3
     assert report["concrete_blockers"] == []
     assert report["follow_up_items"][0]["evidence_type"] == "proposed_until_production"
     assert report["follow_up_items"][1]["evidence_type"] == "proposed_until_buyer_specific"
-    assert items["runtime_endpoint_chain"]["completion_state"] == "ready"
+    assert items["runtime_endpoint_chain"]["completion_state"] == "blocked"
     assert items["buyer_packet_documents"]["evidence_type"] == "repository_artifact"
     assert items["admin_operator_surface"]["sources"] == [
         "/admin",
@@ -102,7 +102,7 @@ def test_commercial_acceptance_check_report_classifies_external_gaps_as_warnings
     assert "exact-head checks" in items["review_process_policy"]["evidence"]
     assert "pending checks without concrete failure are not blockers" not in items["review_process_policy"]["evidence"]
     assert report["review_process_policy"]["is_blocker"] is True
-    assert report["related_runtime_reports"]["commercial_export_status"] == "commercial_export_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_export_status"] == "commercial_export_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["acceptance_links"]["runtime_endpoint"] == "/api/v1/commercial_acceptance_checks/latest"
 

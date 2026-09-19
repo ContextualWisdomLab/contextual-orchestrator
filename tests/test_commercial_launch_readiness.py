@@ -80,12 +80,12 @@ def test_commercial_launch_readiness_report_tracks_launch_inputs() -> None:
     )
     items = item_by_name(report)
 
-    assert report["launch_status"] == "commercial_launch_ready_with_warnings"
+    assert report["launch_status"] == "commercial_launch_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_launch_readiness"
     assert "not a valuation guarantee" in report["source_note"]
     assert "production compliance certificate" in report["source_note"]
-    assert report["launch_summary"]["blocked_count"] == 0
+    assert report["launch_summary"]["blocked_count"] == 2
     assert report["launch_summary"]["warning_count"] == 3
     assert report["launch_summary"]["external_input_group_count"] == 3
     assert report["launch_summary"]["buyer_environment_gap_count"] == 1
@@ -94,13 +94,13 @@ def test_commercial_launch_readiness_report_tracks_launch_inputs() -> None:
     assert report["launch_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     for item_name in [
-        "go_to_market_packet",
         "runtime_launch_path",
-        "acceptance_test_packet",
         "operator_runbook_packet",
         "admin_observability_packet",
     ]:
         assert items[item_name]["completion_state"] == "ready"
+    assert items["go_to_market_packet"]["completion_state"] == "blocked"
+    assert items["acceptance_test_packet"]["completion_state"] == "blocked"
     assert items["buyer_environment_inputs"]["completion_state"] == "warning"
     assert items["buyer_environment_inputs"]["source_gap_status"] == "buyer_environment_required"
     assert items["production_telemetry_inputs"]["completion_state"] == "warning"
@@ -110,7 +110,7 @@ def test_commercial_launch_readiness_report_tracks_launch_inputs() -> None:
     assert items["review_process_policy"]["completion_state"] == "ready"
     assert items["packaging_decision"]["completion_state"] == "ready"
     assert report["related_runtime_reports"]["commercial_go_to_market_status"] == (
-        "commercial_go_to_market_ready_with_warnings"
+        "commercial_go_to_market_blocked"
     )
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["launch_links"]["runtime_endpoint"] == "/api/v1/commercial_launch_readiness/latest"

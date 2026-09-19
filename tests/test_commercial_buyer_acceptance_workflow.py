@@ -80,31 +80,31 @@ def test_commercial_buyer_acceptance_workflow_report_maps_runbook_steps() -> Non
     )
     steps = step_by_name(report)
 
-    assert report["workflow_status"] == "buyer_acceptance_workflow_ready_with_warnings"
+    assert report["workflow_status"] == "buyer_acceptance_workflow_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_buyer_acceptance_workflow"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["workflow_summary"]["blocked_count"] == 0
+    assert report["workflow_summary"]["blocked_count"] == 2
     assert report["workflow_summary"]["warning_count"] == 2
     assert report["workflow_summary"]["review_process_is_blocker"] is True
     assert report["workflow_summary"]["code_connect_used"] is False
-    assert report["concrete_blockers"] == []
+    assert report["concrete_blockers"] == ["commercial_launch_blocked"]
     for step_name in [
         "confirm_product_scope",
         "confirm_integration_surface",
         "confirm_operator_evidence",
-        "confirm_readiness_endpoints",
         "confirm_security_posture",
         "confirm_metric_honesty",
         "confirm_visual_review_path",
         "confirm_packaging_decision",
     ]:
         assert steps[step_name]["completion_state"] == "ready"
+    assert steps["confirm_readiness_endpoints"]["completion_state"] == "blocked"
     assert steps["confirm_production_inputs"]["completion_state"] == "warning"
     assert steps["confirm_buyer_specific_inputs"]["completion_state"] == "warning"
     assert steps["confirm_buyer_specific_inputs"]["evidence_type"] == "proposed_until_buyer_specific"
-    assert report["related_runtime_reports"]["commercial_acceptance_status"] == "commercial_acceptance_ready_with_warnings"
-    assert report["related_runtime_reports"]["commercial_completion_status"] == "commercial_completion_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_acceptance_status"] == "commercial_acceptance_blocked"
+    assert report["related_runtime_reports"]["commercial_completion_status"] == "commercial_completion_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["workflow_links"]["runtime_endpoint"] == "/api/v1/commercial_buyer_acceptance_workflows/latest"
 

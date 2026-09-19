@@ -13611,17 +13611,20 @@ class TaskOrchestrator:
             for item in handoff["follow_up_items"]
             if item["completion_state"] == "warning"
         ]
-        if concrete_blockers:
+        review_policy = review_process_policy(release_authority)
+        if concrete_blockers or review_policy["is_blocker"]:
             saleability_status = "saleability_blocked"
-            decision_label = "Blocked by concrete defect"
+            decision_label = (
+                "Blocked by concrete defect"
+                if concrete_blockers
+                else "Blocked until release authorization passes"
+            )
         elif warning_conditions:
             saleability_status = "saleability_ready_with_warnings"
             decision_label = "Ready for buyer diligence with explicit warnings"
         else:  # pragma: no cover - unreachable while handoff follow-up warnings are literal report sections
             saleability_status = "saleability_ready"  # pragma: no cover
             decision_label = "Ready for buyer diligence"  # pragma: no cover
-
-        review_policy = review_process_policy(release_authority)
         return {
             "saleability_status": saleability_status,
             "decision_label": decision_label,
@@ -13636,7 +13639,7 @@ class TaskOrchestrator:
             ),
             "decision_summary": {
                 "included_artifact_count": len(handoff["included_artifacts"]),
-                "blocked_count": len(concrete_blockers),
+                "blocked_count": len(concrete_blockers) + (1 if review_policy["is_blocker"] else 0),
                 "warning_count": len(warning_conditions),
                 "review_process_is_blocker": review_policy["is_blocker"],
             },
@@ -13826,7 +13829,7 @@ class TaskOrchestrator:
         export_section_summary = self._buyer_manifest_summary(export_sections)
         blocked_count = export_section_summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = len(required_external_evidence)
-        if blocked_count:
+        if blocked_count or saleability["review_process_policy"]["is_blocker"]:
             export_status = "commercial_export_blocked"
         elif warning_count:
             export_status = "commercial_export_ready_with_warnings"
@@ -14034,7 +14037,7 @@ class TaskOrchestrator:
         summary = self._buyer_manifest_summary(all_items)
         blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
+        if blocked_count or evidence_export["review_process_policy"]["is_blocker"]:
             acceptance_status = "commercial_acceptance_blocked"
         elif warning_count:
             acceptance_status = "commercial_acceptance_ready_with_warnings"

@@ -80,34 +80,34 @@ def test_commercial_proposal_packet_report_packages_buyer_proposal() -> None:
     )
     sections = section_by_name(report)
 
-    assert report["proposal_status"] == "commercial_proposal_ready_with_warnings"
+    assert report["proposal_status"] == "commercial_proposal_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_proposal_packet"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["proposal_summary"]["blocked_count"] == 0
+    assert report["proposal_summary"]["blocked_count"] == 3
     assert report["proposal_summary"]["warning_count"] == 2
     assert report["proposal_summary"]["section_count"] == 10
     assert report["proposal_summary"]["review_process_is_blocker"] is True
     assert report["proposal_summary"]["code_connect_used"] is False
-    assert report["concrete_blockers"] == []
+    assert report["concrete_blockers"] == ["commercial_launch_blocked"]
     for section_name in [
-        "executive_summary",
         "product_scope",
         "buyer_value_case",
-        "demo_and_acceptance_path",
         "technical_evidence",
         "security_and_compliance",
         "implementation_and_operations",
         "proposal_review_packet",
     ]:
         assert sections[section_name]["completion_state"] == "ready"
+    assert sections["executive_summary"]["completion_state"] == "blocked"
+    assert sections["demo_and_acceptance_path"]["completion_state"] == "blocked"
     assert sections["commercial_terms_followups"]["completion_state"] == "warning"
     assert sections["production_buyer_inputs"]["completion_state"] == "warning"
     assert "/api/v1/commercial_proposal_packets/latest" in report["required_runtime_endpoints"]
     assert "/api/v1/commercial_demo_scenarios/latest" in report["required_runtime_endpoints"]
-    assert report["related_runtime_reports"]["commercial_demo_status"] == "commercial_demo_ready_with_warnings"
-    assert report["related_runtime_reports"]["commercial_completion_status"] == "commercial_completion_ready_with_warnings"
-    assert report["related_runtime_reports"]["buyer_acceptance_workflow_status"] == "buyer_acceptance_workflow_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_demo_status"] == "commercial_demo_blocked"
+    assert report["related_runtime_reports"]["commercial_completion_status"] == "commercial_completion_blocked"
+    assert report["related_runtime_reports"]["buyer_acceptance_workflow_status"] == "buyer_acceptance_workflow_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["proposal_links"]["runtime_endpoint"] == "/api/v1/commercial_proposal_packets/latest"
 
@@ -132,7 +132,7 @@ def test_commercial_proposal_packet_endpoint_openapi_admin_and_docs_contract() -
         "KRW 2B Commercial Proposal Packet",
         "local_commercial_proposal_packet",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
     ]:
         assert expected_text in proposal_doc

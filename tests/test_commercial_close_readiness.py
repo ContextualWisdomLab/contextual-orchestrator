@@ -80,20 +80,20 @@ def test_commercial_close_readiness_report_separates_local_packet_from_buyer_sig
     )
     items = item_by_name(report)
 
-    assert report["close_status"] == "commercial_close_ready_with_warnings"
+    assert report["close_status"] == "commercial_close_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_close_readiness"
     assert "not a valuation guarantee" in report["source_note"]
     assert "purchase commitment" in report["source_note"]
-    assert report["close_summary"]["blocked_count"] == 0
+    assert report["close_summary"]["blocked_count"] == 2
     assert report["close_summary"]["warning_count"] == 4
     assert report["close_summary"]["buyer_signature_gap_count"] == 4
     assert report["close_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
-    assert items["sellable_product_packet"]["completion_state"] == "ready"
+    assert items["sellable_product_packet"]["completion_state"] == "blocked"
     assert items["contract_close_packet"]["completion_state"] == "ready"
     assert items["onboarding_operations_packet"]["completion_state"] == "ready"
-    assert items["buyer_evidence_export_packet"]["completion_state"] == "ready"
+    assert items["buyer_evidence_export_packet"]["completion_state"] == "blocked"
     for item_name in [
         "signed_order_form_msa",
         "dpa_security_acceptance",

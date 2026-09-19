@@ -80,34 +80,34 @@ def test_commercial_purchase_approval_packet_report_packages_buyer_approval() ->
     )
     gates = gate_by_name(report)
 
-    assert report["purchase_approval_status"] == "commercial_purchase_approval_ready_with_warnings"
+    assert report["purchase_approval_status"] == "commercial_purchase_approval_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_purchase_approval_packet"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["approval_summary"]["blocked_count"] == 0
+    assert report["approval_summary"]["blocked_count"] == 3
     assert report["approval_summary"]["warning_count"] == 2
     assert report["approval_summary"]["gate_count"] == 10
     assert report["approval_summary"]["review_process_is_blocker"] is True
     assert report["approval_summary"]["code_connect_used"] is False
-    assert report["concrete_blockers"] == []
+    assert report["concrete_blockers"] == ["commercial_launch_blocked"]
     for gate_name in [
-        "proposal_packet_ready",
         "procurement_path_ready",
         "contract_legal_packet_ready",
         "financial_value_case_ready",
         "security_acceptance_ready",
         "implementation_readiness_ready",
-        "close_readiness_ready",
         "approval_runtime_packet_ready",
     ]:
         assert gates[gate_name]["completion_state"] == "ready"
+    assert gates["proposal_packet_ready"]["completion_state"] == "blocked"
+    assert gates["close_readiness_ready"]["completion_state"] == "blocked"
     assert gates["buyer_signature_authority"]["completion_state"] == "warning"
     assert gates["buyer_budget_po_authority"]["completion_state"] == "warning"
     assert "/api/v1/commercial_purchase_approval_packets/latest" in report["required_runtime_endpoints"]
     assert "/api/v1/commercial_proposal_packets/latest" in report["required_runtime_endpoints"]
     assert "/api/v1/commercial_close_readiness/latest" in report["required_runtime_endpoints"]
-    assert report["related_runtime_reports"]["commercial_proposal_status"] == "commercial_proposal_ready_with_warnings"
-    assert report["related_runtime_reports"]["commercial_close_status"] == "commercial_close_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_proposal_status"] == "commercial_proposal_blocked"
+    assert report["related_runtime_reports"]["commercial_close_status"] == "commercial_close_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["approval_links"]["runtime_endpoint"] == "/api/v1/commercial_purchase_approval_packets/latest"
 

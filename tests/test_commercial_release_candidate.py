@@ -135,12 +135,12 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
     artifacts = artifact_by_name(report)
 
     assert report["release_status"] == "commercial_release_blocked"
-    assert report["product_evidence_status"] == "commercial_release_ready_with_warnings"
+    assert report["product_evidence_status"] == "commercial_release_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_release_candidate"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["release_summary"]["blocked_count"] == 1
-    assert report["release_summary"]["product_blocked_count"] == 0
+    assert report["release_summary"]["blocked_count"] == 3
+    assert report["release_summary"]["product_blocked_count"] == 2
     assert report["release_summary"]["warning_count"] == 2
     assert report["release_summary"]["release_authority_blocker_count"] == 1
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
@@ -160,7 +160,7 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
         "/api/v1/commercial_release_candidates/latest",
     ]
     assert artifacts["figma_stakeholder_artifacts"]["evidence_type"] == "figma_artifact"
-    assert report["related_runtime_reports"]["commercial_acceptance_status"] == "commercial_acceptance_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_acceptance_status"] == "commercial_acceptance_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["release_links"]["runtime_endpoint"] == "/api/v1/commercial_release_candidates/latest"
 
@@ -205,7 +205,7 @@ def test_product_evidence_status_blocks_when_release_artifact_is_missing(monkeyp
     )
 
     assert report["product_evidence_status"] == "commercial_release_blocked"
-    assert report["release_summary"]["product_blocked_count"] == 1
+    assert report["release_summary"]["product_blocked_count"] == 3
     assert report["release_status"] == "commercial_release_blocked"
 
 
