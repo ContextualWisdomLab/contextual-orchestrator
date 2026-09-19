@@ -7159,3 +7159,33 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+
+
+## 2026-09-20 Protected-main CI regression RCA
+
+PR #995 exact head `d4f7e135719b16a0f0d72377d1bbe9b3614a8600`
+reproduced three independent protected-main defects in Security and Quality run
+`35447727309`. Rust job `105909460320` installed components for mutable
+`stable`, but repository `rust-toolchain.toml` selected pinned Rust 1.97.1
+with the minimal profile; `cargo fmt` therefore failed before source
+validation because that active toolchain lacked `rustfmt`. The owner repair
+declares `rustfmt` and `clippy` beside the pinned toolchain.
+
+Security job `105909460342` failed closed because `requirements.lock`
+retained anyio 4.14.1, affected by CVE-2026-63374, CVE-2026-64847, and
+CVE-2026-63349, while `uv.lock` already selected 4.14.2. The owner repair
+aligns the hash-locked pip surface to anyio 4.14.2; the audit remains the gate
+and no advisory is ignored.
+
+Test job `105909460394` stopped during collection because
+`tests/test_provider_embedding_batch_backend.py` imported the removed
+`_DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS` name even though production and the
+test's intended assertion use the semantic
+`_DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS` owner. The repair updates
+the stale test contract without adding a compatibility alias to production.
+
+The repair is isolated on `fix/protected-main-ci-regressions-20260920`.
+PRs #995, #1203, and #1205 remain open and preserve their product deltas.
+Queued, skipped, cancelled, or predecessor Checks are not acceptance evidence;
+each dependent exact head must be ordinarily restacked on the protected repair
+after it merges, then reacquire terminal Checks and independent review.
