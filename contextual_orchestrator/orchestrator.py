@@ -11992,6 +11992,36 @@ class TaskOrchestrator:
                 recovered_attempts = merged_attempts
                 recovered_eligible_agent_ids = merged_eligible
                 continue
+            except ProviderResponseError as exc:
+                if not recovered_attempts:
+                    raise
+                current_route = exc.detail.get("route")
+                current_attempts = (
+                    list(current_route.get("attempted", ()))
+                    if isinstance(current_route, dict)
+                    else []
+                )
+                current_eligible = (
+                    list(current_route.get("eligible_agent_ids", ()))
+                    if isinstance(current_route, dict)
+                    else []
+                )
+                raise _attach_route_evidence_to_response_error(
+                    exc,
+                    _route_evidence_payload(
+                        eligible_agent_ids=list(
+                            dict.fromkeys(
+                                [*recovered_eligible_agent_ids, *current_eligible]
+                            )
+                        ),
+                        attempted=[*recovered_attempts, *current_attempts],
+                        terminal_reason=(
+                            str(current_route.get("terminal_reason"))
+                            if isinstance(current_route, dict)
+                            else "eligible_set_exhausted"
+                        ),
+                    ),
+                ) from None
             if recovered_attempts:
                 current_route = self._last_route_evidence
                 if isinstance(current_route, dict):
