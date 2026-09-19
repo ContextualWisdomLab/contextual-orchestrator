@@ -387,6 +387,80 @@ def test_free_image_stream_rejects_before_sse_without_image_pool(
         server.server_close()
 
 
+
+@pytest.mark.parametrize("false_form", ["false", 0])
+def test_http_endpoint_scope_normalizes_parallel_tool_false_before_image_admission(
+    false_form: object,
+) -> None:
+    """Endpoint preflight must use the same normalized tool shape as serving."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "vision_single_tool_free",
+                "vision-single-tool-free-model",
+                base_url="https://vision.example/v1",
+                tags=(
+                    "cost:free",
+                    "reasoning",
+                    "writing",
+                    "input:text",
+                    "input:image",
+                    "output:text",
+                    "tool_call:single",
+                ),
+            )
+        ],
+        client=_RecordingClient(),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": "Synthetic test tool",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for tool_name in ("inspect_one", "inspect_two")
+    ]
+    try:
+        status, document = _post_json(
+            server,
+            "/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Review this figure."},
+                            {
+                                "type": "image_url",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ],
+                "tools": tools,
+                "parallel_tool_calls": false_form,
+                "routing": {"endpoint": "https://vision.example"},
+            },
+        )
+        assert status == 200, document
+        assert set(orchestrator.client.agent_ids) == {"vision_single_tool_free"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_endpoint_is_limited_to_supported_surfaces_and_forces_sync() -> None:
     with pytest.raises(RequestError) as exc_info:
         _validate_routing({"endpoint": "https://a.example"})
