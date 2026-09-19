@@ -676,3 +676,90 @@ if __name__ == "__main__":
     test_free_image_pool_fails_closed_when_only_single_tool_image_agent_exists()
     test_free_image_pool_ids_compose_tool_call_exclusion()
     print("ok")
+
+
+class _StreamingJudgeProbeClient:
+    """Record one streamed worker without provider network I/O."""
+
+    def __init__(self) -> None:
+        self.agent_ids: list[str] = []
+
+    def stream_chat(
+        self, agent: ModelAgent, messages: list[dict[str, Any]], **kwargs: Any
+    ):
+        """Yield one deterministic delta from the selected worker."""
+        del messages, kwargs
+        self.agent_ids.append(agent.id)
+        yield "vision answer"
+
+    @staticmethod
+    def take_usage() -> None:
+        """Return no provider usage for the routing-only fixture."""
+        return None
+
+
+def test_free_image_stream_passes_entitlement_to_realtime_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streamed route judging must keep the image entitlement."""
+    client = _StreamingJudgeProbeClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "vision_free",
+                "vision-free-model",
+                tags=_IMAGE_FREE_TAGS,
+                base_url="mock://vision",
+            )
+        ],
+        client=client,
+    )
+    observed_judge: dict[str, Any] = {}
+
+    def capture_judge(**kwargs: Any) -> dict[str, Any]:
+        observed_judge.update(kwargs)
+        return {
+            "accepted": True,
+            "reason": "test fixture",
+            "verifier_output": kwargs["answer"],
+            "judge": "model",
+        }
+
+    monkeypatch.setattr(orchestrator, "_realtime_route_judge", capture_judge)
+
+    assert "".join(
+        orchestrator.stream_route(
+            _figure_messages(),
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+    ) == "vision answer"
+    assert observed_judge["required_tags"] == ("input:image",)
+    assert client.agent_ids == ["vision_free"]
+
+
+@pytest.mark.parametrize(
+    "media_tags",
+    [
+        ("capability:image", "output:image"),
+        ("capability:video", "output:video"),
+    ],
+)
+def test_free_image_pool_excludes_non_chat_media_agents(
+    media_tags: tuple[str, ...],
+) -> None:
+    """Image editing and video deployments cannot prove chat capacity."""
+    media_agent = ModelAgent(
+        "media_free",
+        "media-free-model",
+        tags=(
+            "cost:free",
+            "input:text",
+            "input:image",
+            *media_tags,
+        ),
+        base_url="mock://media",
+    )
+
+    assert TaskOrchestrator([media_agent])._free_pool_agent_ids(
+        messages=_figure_messages()
+    ) == set()
