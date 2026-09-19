@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 247770)
-Total output lines: 20126
-
 """Runtime orchestration, workflow trace, governance, and audit primitives."""
 
 from __future__ import annotations
@@ -8505,7 +8502,4051 @@ class TaskOrchestrator:
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-       …47770 tokens truncated…  self,
+        )
+        return record
+
+    def run_evaluation(
+        self, prompts: list[str], mode: str = "auto", owner_id: str | None = None
+    ) -> dict[str, Any]:
+        """Replay prompts through the runtime and persist an evaluation record."""
+        if not prompts:  # pragma: no cover
+            raise ValueError("evaluation requires at least one prompt")
+        workflow_run_ids: list[str] = []
+        results: list[dict[str, Any]] = []
+        for prompt in prompts:
+            record = self.run(
+                [{"role": "user", "content": prompt}], mode=mode, owner_id=owner_id
+            )
+            workflow_run_ids.append(record["workflow_run_id"])
+            results.append({
+                "workflow_run_id": record["workflow_run_id"],
+                "answer": record["answer"],
+            })
+
+        evaluation_run_id = f"eval_{uuid.uuid4().hex}"
+        evaluation = {
+            "evaluation_run_id": evaluation_run_id,
+            "created_at": int(time.time()),
+            "mode": mode,
+            "prompt_count": len(prompts),
+            "workflow_run_ids": workflow_run_ids,
+            "results": results,
+            "success_count": len([r for r in results if r["answer"]]),
+        }
+        if owner_id is not None:
+            evaluation["owner_id"] = owner_id
+        stored_evaluation = (
+            {
+                **evaluation,
+                "results": [
+                    {**result, "answer": _zdr_content_placeholder(result["answer"])}
+                    for result in results
+                ],
+            }
+            if _REQUEST_ZDR_ONLY.get()
+            else evaluation
+        )
+        self._evaluation_runs[evaluation_run_id] = stored_evaluation
+        if self._store is not None:
+            self._store.save("evaluation_run", evaluation_run_id, stored_evaluation)
+        self._append_audit_event(
+            "evaluation_run_created",
+            {
+                "evaluation_run_id": evaluation_run_id,
+                "workflow_run_count": len(workflow_run_ids),
+                "success_count": evaluation["success_count"],
+            },
+        )
+        self.record_analytics_event(
+            "evaluation_run_created",
+            {
+                "evaluation_run_id": evaluation_run_id,
+                "run_mode": mode,
+                "workflow_run_count": len(workflow_run_ids),
+                "success_count": evaluation["success_count"],
+            },
+        )
+        return evaluation
+
+    def compare_to_baseline(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
+        """Measure the orchestration engine against a single-worker baseline.
+
+        For each prompt: run the full orchestration (route/conduct per mode) and a
+        single-agent baseline (one worker call, no verifier/synthesizer), then report
+        latency and a structural coverage proxy plus the delta.
+
+        This is a MEASURED report, not a quality claim: the proxy is structural
+        (contributing steps + verifier-pass presence, computable from mock/runtime
+        outputs), NOT human-judged answer quality. Read-only — it does not persist runs.
+        """
+        results: list[dict[str, Any]] = []
+        for prompt in prompts:
+            messages = [{"role": "user", "content": prompt}]
+
+            start = time.perf_counter()
+            # Evaluation must measure provider work, not a cache hit from a prior request.
+            # The normal completion path still honors the configured response cache.
+            orchestrated = self._dispatch(messages, mode)
+            orchestrated_latency = round((time.perf_counter() - start) * 1000, 2)
+
+            start = time.perf_counter()
+            baseline = self.route_once(messages)
+            baseline_latency = round((time.perf_counter() - start) * 1000, 2)
+
+            orchestrated_steps = len(orchestrated["trace"])
+            baseline_steps = len(baseline["trace"])
+            results.append({
+                "prompt": prompt[:120],
+                "orchestrated": {
+                    "mode": orchestrated["mode"],
+                    "latency_ms": orchestrated_latency,
+                    "steps": orchestrated_steps,
+                    "verified": bool(orchestrated.get("verification", {}).get("accepted")),
+                    "answer_length": len(orchestrated["answer"]),
+                },
+                "baseline": {
+                    "mode": baseline["mode"],
+                    "latency_ms": baseline_latency,
+                    "steps": baseline_steps,
+                    "answer_length": len(baseline["answer"]),
+                },
+                "latency_overhead_ms": round(orchestrated_latency - baseline_latency, 2),
+                "structural_coverage_delta": orchestrated_steps - baseline_steps,
+            })
+
+        count = len(results)
+
+        def avg(select: Any) -> float:
+            return round(sum(select(row) for row in results) / count, 2) if count else 0.0
+
+        aggregate = {
+            "orchestrated_avg_latency_ms": avg(lambda row: row["orchestrated"]["latency_ms"]),
+            "baseline_avg_latency_ms": avg(lambda row: row["baseline"]["latency_ms"]),
+            "avg_latency_overhead_ms": avg(lambda row: row["latency_overhead_ms"]),
+            "orchestrated_avg_steps": avg(lambda row: row["orchestrated"]["steps"]),
+            "baseline_avg_steps": avg(lambda row: row["baseline"]["steps"]),
+            "avg_structural_coverage_delta": avg(lambda row: row["structural_coverage_delta"]),
+            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / count, 2) if count else 0.0,
+        }
+        return {
+            "mode": mode,
+            "prompt_count": count,
+            "results": results,
+            "aggregate": aggregate,
+            "quality_proxy": (
+                "structural proxy from mock/runtime outputs (contributing steps + verifier-pass presence); "
+                "measures the latency-for-verification tradeoff, NOT human-judged quality"
+            ),
+        }
+
+    def get_workflow_run(
+        self, workflow_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return a persisted workflow run by identifier."""
+        if workflow_run_id not in self._workflow_runs:  # pragma: no cover
+            raise KeyError(workflow_run_id)
+        record = self._workflow_runs[workflow_run_id]
+        if owner_id is not None and record.get("owner_id") != owner_id:
+            raise KeyError(workflow_run_id)
+        return record
+
+    def get_evaluation_run(
+        self, evaluation_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return an evaluation only when it belongs to the requested owner."""
+        record = self._evaluation_runs[evaluation_run_id]
+        if owner_id is not None and record.get("owner_id") != owner_id:
+            raise KeyError(evaluation_run_id)
+        return record
+
+    def get_access_report(
+        self, workflow_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return per-step visibility and accessed output evidence for a run."""
+        run = self.get_workflow_run(workflow_run_id, owner_id=owner_id)
+        access_report = []
+        for step in run["trace"]:
+            access_report.append({
+                "step_id": step["id"],
+                "role": step["role"],
+                "agent_id": step["agent_id"],
+                "access": step["access"],
+                "accessed_outputs": [
+                    run["trace"][index]["output"] for index in step["access"] if index < len(run["trace"])
+                ],
+            })
+        return {
+            "workflow_run_id": workflow_run_id,
+            "policy_snapshot": run["policy_snapshot"],
+            "steps": access_report,
+            "verifier": run.get("verification"),
+        }
+
+    def patch_agent(
+        self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any], *,
+        actor_id: str | None = None,
+        expected_timeout_revision: int | None = None,
+        restored_from_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Apply governance updates without invalidating the active effort catalog."""
+        if not patch:  # pragma: no cover
+            raise ValueError("patch request body must contain updates")
+        current = self._agent_in_pool(agent_pool_id, worker_agent_id)
+        patched = current
+        if "status" in patch:
+            status = str(patch["status"]).lower()
+            if status in {"active", "enabled"}:
+                patched = replace(patched, disabled=False)
+            elif status in {"disabled", "excluded", "inactive", "quarantine"}:
+                patched = replace(patched, disabled=True)
+            else:  # pragma: no cover
+                raise ValueError("status must be active, enabled, disabled, excluded, inactive, or quarantine")
+        if "priority" in patch:
+            patched = replace(patched, priority=int(patch["priority"]))
+        if "tags" in patch:
+            patched = replace(patched, tags=tuple(patch["tags"]))
+        if "provider_exclusions" in patch:
+            patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
+        if "group_name" in patch:
+            group_name = str(patch["group_name"])
+            patched = replace(patched, group_name=canonical_group_name(group_name) if group_name else "")
+        if "max_output_tokens" in patch:
+            patched = replace(patched, max_output_tokens=patch["max_output_tokens"])
+        if "context_window" in patch:
+            patched = replace(patched, context_window=patch["context_window"])
+        if "model_timeout_seconds" in patch:
+            patched = replace(patched, model_timeout_seconds=patch["model_timeout_seconds"])
+        if "endpoint_equivalence" in patch:
+            value = patch["endpoint_equivalence"]
+            if value is not None and not isinstance(value, dict):
+                raise ValueError("endpoint_equivalence must be an object or null")
+            patched = replace(patched, endpoint_equivalence=value)
+        if "stream_usage_supported" in patch:
+            patched = replace(
+                patched, stream_usage_supported=patch["stream_usage_supported"]
+            )
+
+        updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
+        updated_agents = [agent for agent in updated_candidates if not agent.disabled]
+        if not updated_agents:
+            raise ValueError("cannot disable the last enabled agent")
+        self._require_role_effort_pool(updated_candidates)
+        if "model_timeout_seconds" in patch:
+            if set(patch) != {"model_timeout_seconds"}:
+                raise ValueError("model timeout policy must be updated separately")
+            if expected_timeout_revision is not None and (
+                type(expected_timeout_revision) is not int
+                or expected_timeout_revision != current.model_timeout_revision
+            ):
+                raise ValueError("model timeout policy changed; reload before updating")
+            if actor_id is not None and (
+                type(actor_id) is not str or len(actor_id) != 64
+                or any(character not in "0123456789abcdef" for character in actor_id)
+            ):
+                raise ValueError("timeout actor must be an opaque principal digest")
+            if self._pool_store is None:
+                raise ValueError("model timeout policy requires a durable agent store")
+            revision = self._pool_store.save(
+                patched, timeout_previous=current, actor_id=actor_id,
+                restored_from_revision=restored_from_revision,
+            )
+            patched = replace(patched, model_timeout_revision=revision)
+            updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
+            updated_agents = [agent for agent in updated_candidates if not agent.disabled]
+            self.candidates = updated_candidates
+            self.agents = updated_agents
+            self._append_audit_event(
+                "model_timeout_policy_changed",
+                {
+                    "agent_pool_id": agent_pool_id,
+                    "worker_agent_id": worker_agent_id,
+                    "revision": revision,
+                    "restored_from_revision": restored_from_revision,
+                },
+            )
+            return self._agent_to_admin_payload(patched)
+        if self._pool_store is not None:
+            self._pool_store.save(patched)
+        self.candidates = updated_candidates
+        self.agents = updated_agents
+        self._rebuild_budget_meter()
+        if patched.group_name != current.group_name:
+            self._routers_reset_members({worker_agent_id})
+        candidate_ids = {agent.id for agent in updated_candidates}
+        for agent_id in candidate_ids:
+            self._routers_register_member(agent_id)
+        self._routers_forget_members(candidate_ids)
+        self._append_audit_event(
+            "agent_patched",
+            {
+                "agent_pool_id": agent_pool_id,
+                "worker_agent_id": worker_agent_id,
+                "updated_fields": sorted(patch.keys()),
+            },
+        )
+        if "status" in patch:
+            self.record_analytics_event(
+                "agent_status_changed",
+                {
+                    "agent_pool_id": agent_pool_id,
+                    "agent_id": worker_agent_id,
+                    "status": self._agent_to_admin_payload(patched)["status"],
+                },
+            )
+        if "provider_exclusions" in patch:
+            self.record_analytics_event(
+                "provider_exclusion_changed",
+                {
+                    "agent_pool_id": agent_pool_id,
+                    "agent_id": worker_agent_id,
+                    "provider_exclusions": list(patched.provider_exclusions),
+                },
+            )
+        return self._agent_to_admin_payload(patched)
+
+    def get_model_timeout_policy(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
+        """Read configured policy and whether serving applies the selected model wait."""
+        serving = self._agent_in_pool(agent_pool_id, worker_agent_id)
+        configured = serving
+        if self._pool_store is not None:
+            # ponytail: one full snapshot per admin read; indexed lookup if pool size warrants it.
+            configured = next(
+                (agent for agent in self._pool_store.load_all() if agent.id == worker_agent_id),
+                serving,
+            )
+        return {
+            "configured_seconds": configured.model_timeout_seconds,
+            "revision": configured.model_timeout_revision,
+            "unit": "seconds",
+            "serving_snapshot_seconds": serving.model_timeout_seconds,
+            "serving_snapshot_revision": serving.model_timeout_revision,
+            "enforcement_available": True,
+        }
+
+    def list_model_timeout_history(
+        self, agent_pool_id: str, worker_agent_id: str, *, page_size: int = 20,
+        before_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Page older model policy changes without offset drift during new writes."""
+        self._agent_in_pool(agent_pool_id, worker_agent_id)
+        if type(page_size) is not int or not 1 <= page_size <= 100:
+            raise ValueError("page_size must be an integer between 1 and 100")
+        if before_revision is not None and (
+            type(before_revision) is not int or not 1 <= before_revision <= _AGENT_POOL_INTEGER_MAX
+        ):
+            raise ValueError("before_revision must be a positive stored revision")
+        rows = self._pool_store.timeout_history(worker_agent_id, page_size, before_revision) if self._pool_store else []
+        items = rows[:page_size]
+        return {
+            "items": items,
+            "next_before_revision": items[-1]["revision"] if len(rows) > page_size else None,
+            "history_available": self._pool_store is not None,
+        }
+
+    def restore_model_timeout(
+        self, agent_pool_id: str, worker_agent_id: str, source_revision: int, *,
+        expected_revision: int, actor_id: str,
+    ) -> dict[str, Any]:
+        """Restore a model-owned historical value as a new revision, never rewrite history."""
+        self._agent_in_pool(agent_pool_id, worker_agent_id)
+        if type(source_revision) is not int or not 0 < source_revision <= _AGENT_POOL_INTEGER_MAX:
+            raise ValueError("source_revision must be a positive integer")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("expected_revision must be a non-negative integer")
+        if actor_id is None:
+            raise ValueError("restore requires an opaque principal digest")
+        if self._pool_store is None:
+            raise ValueError("model timeout policy requires a durable agent store")
+        value = self._pool_store.timeout_at_revision(worker_agent_id, source_revision)
+        return self.patch_agent(
+            agent_pool_id, worker_agent_id, {"model_timeout_seconds": value}, actor_id=actor_id,
+            expected_timeout_revision=expected_revision, restored_from_revision=source_revision,
+        )
+
+    def list_model_groups(self) -> list[dict[str, Any]]:
+        """Return operator-defined logical models and measured member evidence."""
+        names = sorted({canonical_group_name(agent.group_name) for agent in self.candidates if agent.group_name})
+        return [self.get_model_group(name) for name in names]
+
+    def get_model_group(self, group_name: str) -> dict[str, Any]:
+        """Return one logical model group or raise ``KeyError`` when absent."""
+        name = canonical_group_name(group_name)
+        members = [agent for agent in self.candidates if agent.group_name and canonical_group_name(agent.group_name) == name]
+        if not members:
+            raise KeyError(name)
+        ranked_ids = self._measured_member_order([agent.id for agent in members])
+        return {
+            "group_name": name,
+            "member_agent_ids": ranked_ids,
+            "enabled_member_count": sum(1 for agent in members if not agent.disabled),
+            "capability_coverage": {
+                capability: sum(capability in agent.tags for agent in members)
+                for capability in sorted(MODEL_CAPABILITIES)
+                if any(capability in agent.tags for agent in members)
+            },
+            "members": [self._agent_to_admin_payload(self._agent(agent_id)) for agent_id in ranked_ids],
+        }
+
+    def set_model_group(self, group_name: str, member_agent_ids: list[str]) -> dict[str, Any]:
+        """Create or replace a group membership using configured agent identifiers."""
+        name = canonical_group_name(group_name)
+        if not member_agent_ids or any(type(agent_id) is not str for agent_id in member_agent_ids):
+            raise ValueError("member_agent_ids must be a non-empty list of strings")
+        if len(member_agent_ids) != len(set(member_agent_ids)):
+            raise ValueError("member_agent_ids must not contain duplicates")
+        requested = set(member_agent_ids)
+        known = {agent.id for agent in self.candidates}
+        previous = {
+            agent.id
+            for agent in self.candidates
+            if agent.group_name and canonical_group_name(agent.group_name) == name
+        }
+        missing = sorted(requested - known)
+        if missing:
+            raise KeyError(",".join(missing))
+        previous_candidates = self.candidates
+        updated = [
+            replace(agent, group_name=name)
+            if agent.id in requested
+            else replace(agent, group_name="")
+            if agent.group_name and canonical_group_name(agent.group_name) == name
+            else agent
+            for agent in self.candidates
+        ]
+        changed = {
+            before.id
+            for before, after in zip(previous_candidates, updated)
+            if before.group_name != after.group_name
+        }
+        if self._pool_store is not None:
+            self._pool_store.save_many(agent for agent in updated if agent.id in requested | previous)
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
+        self._routers_reset_members(changed)
+        for agent_id in changed:
+            self._routers_register_member(agent_id)
+        self._routers_forget_members({agent.id for agent in updated})
+        self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
+        return self.get_model_group(name)
+
+    def delete_model_group(self, group_name: str) -> dict[str, Any]:
+        """Delete a logical group while retaining its provider agents."""
+        current = self.get_model_group(group_name)
+        name = current["group_name"]
+        member_ids = set(current["member_agent_ids"])
+        updated = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
+        if self._pool_store is not None:
+            self._pool_store.save_many(agent for agent in updated if agent.id in member_ids)
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
+        self._routers_reset_members(member_ids)
+        for agent_id in member_ids:
+            self._routers_register_member(agent_id)
+        self._routers_forget_members({agent.id for agent in self.candidates})
+        self._append_audit_event("model_group_deleted", {"group_name": name})
+        return {"group_name": name, "deleted": True}
+
+    def add_agent(self, agent_pool_id: str, value: dict[str, Any]) -> dict[str, Any]:
+        """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""
+        if agent_pool_id != "default":  # pragma: no cover
+            raise KeyError(agent_pool_id)
+        if "id" not in value or "model" not in value:
+            raise ValueError("agent requires id and model")
+        agent = ModelAgent.from_dict(value)
+        if any(existing.id == agent.id for existing in self.candidates):
+            raise ValueError(f"agent {agent.id} already exists")
+        if not agent.base_url.startswith("mock://"):
+            parsed = urlparse(agent.base_url)
+            if not _is_local_provider_url(agent.base_url) and (parsed.scheme != "https" or not parsed.hostname):
+                raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
+            if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
+                raise ValueError("non-mock agents require credential_key or legacy api_key_env")
+        if self._pool_store is not None:
+            self._pool_store.save(agent)
+        self.candidates = [*self.candidates, agent]
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        self._rebuild_budget_meter()
+        self._routers_register_member(agent.id)
+        self._append_audit_event(
+            "agent_added",
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": agent.id, "model": agent.model},
+        )
+        self.record_analytics_event(
+            "agent_added",
+            {"agent_pool_id": agent_pool_id, "agent_id": agent.id, "model": agent.model},
+        )
+        return self._agent_to_admin_payload(agent)
+
+    def sync_discovered_agents(self, discovered_agents: list[ModelAgent]) -> dict[str, list[str]]:
+        """Upsert auto-discovered agents into the pool; persists when agents_db is set.
+
+        Unlike :meth:`add_agent`, an id that already exists is replaced in place
+        (re-running discovery is idempotent) instead of raising. New agents are
+        appended disabled (see ``model_discovery.agent_from_discovered``) so a
+        freshly discovered model never starts serving traffic before an operator
+        (or the cost router) opts it in via ``patch_agent``.
+        """
+        existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
+        legacy_discovered = {
+            (agent.provider_name, agent.model, agent.id): index
+            for index, agent in enumerate(self.candidates)
+        }
+        discovered_by_identity = {
+            (agent.provider_name, agent.credential_name, agent.model): index
+            for index, agent in enumerate(self.candidates)
+            if "discovered" in agent.tags
+        }
+        updated_candidates = list(self.candidates)
+        effective_discovered_agents: list[ModelAgent] = []
+        added: list[str] = []
+        updated: list[str] = []
+        for agent in discovered_agents:
+            index = existing_by_id.get(agent.id)
+            if index is None:
+                index = legacy_discovered.get(
+                    (
+                        agent.provider_name,
+                        agent.model,
+                        legacy_discovered_agent_id(agent.provider_name, agent.model),
+                    )
+                )
+                if index is None:
+                    index = discovered_by_identity.get(
+                        (agent.provider_name, agent.credential_name, agent.model)
+                    )
+                if index is not None:
+                    # Identity remapping is only for discovery-owned rows; never
+                    # overwrite an operator-managed agent that shares legacy id shape.
+                    if "discovered" not in updated_candidates[index].tags:
+                        continue
+                    agent = replace(agent, id=updated_candidates[index].id)
+            if index is None:
+                existing_by_id[agent.id] = len(updated_candidates)
+                updated_candidates.append(agent)
+                added.append(agent.id)
+            else:
+                agent = replace(
+                    agent,
+                    group_name=updated_candidates[index].group_name or agent.group_name,
+                    model_timeout_seconds=updated_candidates[index].model_timeout_seconds,
+                    model_timeout_revision=updated_candidates[index].model_timeout_revision,
+                )
+                updated_candidates[index] = agent
+                updated.append(agent.id)
+            effective_discovered_agents.append(agent)
+        self._require_role_effort_pool(updated_candidates)
+        if self._pool_store is not None:
+            self._pool_store.save_many(effective_discovered_agents)
+        self.candidates = updated_candidates
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        self._rebuild_budget_meter()
+        for agent in effective_discovered_agents:
+            self._routers_register_member(agent.id)
+        if added or updated:
+            self._append_audit_event(
+                "agents_discovered",
+                {"added": added, "updated": updated},
+            )
+            self.record_analytics_event(
+                "agents_discovered",
+                {"added_count": len(added), "updated_count": len(updated)},
+            )
+        return {"added": added, "updated": updated}
+
+    def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
+        """Remove an agent while preserving enabled and role-effort invariants."""
+        target = self._agent_in_pool(agent_pool_id, worker_agent_id)
+        remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
+        if not remaining_enabled:
+            raise ValueError("cannot remove the last enabled agent")
+        remaining_candidates = [
+            agent for agent in self.candidates if agent.id != worker_agent_id
+        ]
+        self._require_role_effort_pool(remaining_candidates)
+        if self._pool_store is not None:
+            # Persist the tombstone before removing the serving candidate.
+            self._pool_store.save(replace(target, disabled=True, group_name=""))
+        self.candidates = remaining_candidates
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
+        self._rebuild_budget_meter()
+        self._routers_forget_members({agent.id for agent in self.candidates})
+        self._append_audit_event(
+            "agent_removed",
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": worker_agent_id, "model": target.model},
+        )
+        self.record_analytics_event(
+            "agent_removed",
+            {"agent_pool_id": agent_pool_id, "agent_id": worker_agent_id},
+        )
+        return {"removed": worker_agent_id}
+
+    def _retire_runtime_agent(self, worker_agent_id: str) -> None:
+        """Remove a bootstrap row for this process without persisting a tombstone."""
+        self._agent_in_pool("default", worker_agent_id)
+        self.candidates = [
+            agent for agent in self.candidates if agent.id != worker_agent_id
+        ]
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
+        self._rebuild_budget_meter()
+        self._routers_forget_members({agent.id for agent in self.candidates})
+        self._append_audit_event(
+            "runtime_agent_retired",
+            {"agent_pool_id": "default", "worker_agent_id": worker_agent_id},
+        )
+
+    @property
+    def _last_assistant_message(self) -> dict[str, Any] | None:
+        """Tool_calls/finish_reason from THIS thread's most recent worker call.
+
+        ``ThreadingHTTPServer`` serves every request on its own thread and one
+        ``TaskOrchestrator`` is shared across all of them, so this must not be
+        plain instance state: a sibling request's ``_invoke`` would otherwise
+        reset it between this thread's write and its read, silently dropping
+        the tool call from the response.
+        """
+        return getattr(self._assistant_message_local, "value", None)
+
+    @_last_assistant_message.setter
+    def _last_assistant_message(self, value: dict[str, Any] | None) -> None:
+        """Store this thread's pending assistant extras."""
+        self._assistant_message_local.value = value
+
+    @property
+    def _last_output_budget(self) -> dict[str, Any] | None:
+        """Output-budget clamp evidence from THIS thread's most recent ``_invoke`` call.
+
+        Mirrors ``_last_assistant_message``'s per-thread storage for the same
+        ``ThreadingHTTPServer`` reason: one shared ``TaskOrchestrator`` serves
+        every request on its own thread, so this cannot be plain instance state.
+        """
+        return getattr(self._output_budget_local, "value", None)
+
+    @_last_output_budget.setter
+    def _last_output_budget(self, value: dict[str, Any] | None) -> None:
+        """Store this thread's pending output-budget clamp evidence."""
+        self._output_budget_local.value = value
+
+    @property
+    def _last_context_window_excluded(self) -> list[str]:
+        """Agent ids the context-window candidate filter skipped for THIS thread.
+
+        Mirrors :attr:`_last_assistant_message`'s thread-local side channel: one
+        ``TaskOrchestrator`` is shared across every request thread, so this
+        cannot be plain instance state without one thread's evidence leaking
+        into a sibling request's response.
+        """
+        return getattr(self._context_window_local, "value", [])
+
+    @_last_context_window_excluded.setter
+    def _last_context_window_excluded(self, value: list[str]) -> None:
+        """Store this thread's most recent context-window exclusion evidence."""
+        self._context_window_local.value = value
+
+    def route_once(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = GATEWAY_DEFAULT_MODEL,
+    ) -> dict[str, Any]:
+        """Route a prompt to one selected worker agent and return a single-step trace.
+
+        When ``policy.realtime_judge`` is on, every candidate answer is judged
+        in real time by the fast-mlsirm judge before it is returned; rejected
+        answers fail over to the next measured candidate within the configured
+        tool-retry budget, and every verdict updates the quality ledger so
+        measured accuracy steers future routing. Speed is explicitly not a
+        design constraint at this layer -- correctness is.
+        """
+        text = self._latest_user_text(messages)
+        prompt_context = self._prompt_interaction(messages)
+        free_only = model_name == self.FREE_MODEL
+        # Selector nature threaded to _invoke_with_rate_limit_recovery: a
+        # virtual/gateway-selected model name may wait out a rate-limit
+        # storm even with a single eligible candidate; an explicit concrete
+        # model id must keep failing fast (see _await_rate_limit_recovery).
+        virtual_selector = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
+        requested = self._requested_agent(model_name)
+        required_tags = self._image_input_required_tags(messages)
+        try:
+            ranked_pool: list[ModelAgent] = (
+                [requested] if requested is not None else []
+            ) or self._ranked_agents(
+                text,
+                "worker",
+                free_only=free_only,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+            )
+        except RuntimeError as exc:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                ) from exc
+            raise
+        # Context-window candidate filtering only applies to virtual/role-based
+        # selection: an explicitly requested concrete model (``requested`` is
+        # not None) is the caller's own choice, and the provider's own error
+        # is the honest answer for it -- never pre-filtered.
+        prompt_bound: int | None = None
+        prompt_bound_source: str | None = None
+        if requested is None and ranked_pool:
+            prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(
+                text, ranked_pool[0].model
+            )
+        context_window_excluded: list[str] = []
+        free_ids = self._free_pool_agent_ids(messages=messages)
+        allowed_agent_ids = free_ids if free_only else None
+        # A tool-result follow-up returns to its emitting agent when that
+        # agent is still one of the already role/free/ZDR-filtered
+        # ``ranked_pool`` candidates above (Fugu report arXiv:2606.21228 S3 /
+        # Fugu-Ultra Conductor). An explicit concrete model (``requested``)
+        # is never re-ranked and must not carry tool-loop evidence either:
+        # the caller pinned the agent, so neither ``emitting_agent`` nor
+        # ``fallback`` describes a gateway decision there.
+        tool_loop_evidence: dict[str, str] | None = None
+        if requested is None:
+            ranked_pool, tool_loop_evidence = self._apply_tool_loop_route(ranked_pool, messages)
+
+        max_attempts = 1 + min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        trace_rows: list[dict[str, Any]] = []
+        answer = ""
+        served_id = ""
+        verification: dict[str, Any] = {
+            "accepted": False,
+            "reason": "no candidate attempted",
+            "verifier_output": "",
+            "judge": "model",
+        }
+        tried_ids: set[str] = set()
+        extras: dict[str, Any] | None = None
+        for attempt_index, candidate in enumerate(ranked_pool):
+            if len(tried_ids) >= max_attempts:
+                break
+            tried_ids.add(candidate.id)
+            start = time.perf_counter()
+            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = (
+                self._invoke_with_rate_limit_recovery(
+                    candidate,
+                    messages,
+                    text=text,
+                    role="worker",
+                    allowed_agent_ids=allowed_agent_ids,
+                    virtual_selector=virtual_selector,
+                    prompt_token_lower_bound=prompt_bound,
+                )
+            )
+            extras = getattr(self, "_last_assistant_message", None)
+            self._last_assistant_message = None
+            output_budget = getattr(self, "_last_output_budget", None)
+            self._last_output_budget = None
+            for excluded_id in self._last_context_window_excluded:
+                if excluded_id not in context_window_excluded:
+                    context_window_excluded.append(excluded_id)
+            self._last_context_window_excluded = []
+            latency_seconds = time.perf_counter() - start
+            row = {
+                "id": attempt_index,
+                "role": "worker",
+                "agent_id": candidate.id,
+                "model": candidate.model,
+                "provider": candidate.provider_name or self._infer_provider_name(candidate.base_url),
+                "subtask": "Direct route",
+                "access": [],
+                "latency_ms": round(latency_seconds * 1000, 2),
+                "output": attempt_answer,
+            }
+            if attempt_usage is not None:
+                row["usage"] = attempt_usage
+            if isinstance(output_budget, dict):
+                row.update(output_budget)
+            if attempt_served_id != candidate.id:
+                row["served_agent_id"] = attempt_served_id
+                row["failover_from"] = candidate.id
+            answer, served_id = attempt_answer, attempt_served_id
+            if isinstance(extras, dict) and extras.get("tool_calls"):
+                verification = {
+                    "accepted": True,
+                    "reason": "tool call requires caller execution",
+                    "verifier_output": answer,
+                    "judge": "tool_call",
+                }
+            else:
+                verification = self._realtime_route_judge(
+                    text=text,
+                    answer=answer,
+                    served_id=served_id,
+                    latency_seconds=latency_seconds,
+                    usage=attempt_usage,
+                    free_only=free_only,
+                    required_tags=required_tags,
+                    prompt_context=prompt_context,
+                )
+            row["realtime_judge"] = {
+                "accepted": verification["accepted"],
+                "reason": verification["reason"],
+            }
+            trace_rows.append(row)
+            if verification["accepted"]:
+                break
+            # Rejected answers already recorded a quality-ledger failure in
+            # _realtime_route_judge; keep the last (best-available) answer but
+            # fail over to the next measured candidate while budget remains.
+
+        final_row = trace_rows[-1] if trace_rows else {
+            "id": 0,
+            "role": "worker",
+            "agent_id": "",
+            "subtask": "Direct route",
+            "access": [],
+            "latency_ms": None,
+            "output": "",
+        }
+        result = {
+            "mode": "route",
+            "answer": answer,
+            "verification": {**verification, "verifier_output": answer},
+            "trace": [final_row],
+        }
+        if "output_budget_clamped" in final_row:
+            result["requested_output_tokens"] = final_row["requested_output_tokens"]
+            result["effective_output_tokens"] = final_row["effective_output_tokens"]
+            result["output_budget_clamped"] = final_row["output_budget_clamped"]
+        if isinstance(extras, dict):
+            if extras.get("tool_calls"):
+                result["tool_calls"] = extras["tool_calls"]
+                self._record_tool_loop_agents(extras["tool_calls"], served_id or None)
+            if extras.get("finish_reason"):
+                result["finish_reason"] = extras["finish_reason"]
+        if tool_loop_evidence is not None:
+            result.update(tool_loop_evidence)
+        if prompt_bound is not None and prompt_bound_source is not None:
+            result = self._with_context_window_evidence(
+                result, prompt_bound, prompt_bound_source, context_window_excluded
+            )
+        return self._with_effort_snapshot(result)
+
+    def _realtime_route_judge(
+        self,
+        *,
+        text: str,
+        answer: str,
+        served_id: str,
+        latency_seconds: float | None,
+        usage: dict[str, Any] | None,
+        free_only: bool,
+        required_tags: tuple[str, ...] = (),
+        prompt_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Judge one direct-route answer now and feed the quality ledger.
+
+        Accepted answers record one success observation (with provider token
+        counts when reported); rejected or unjudgeable answers record one
+        failure, so measured accuracy -- not just transport success -- steers
+        subsequent member ordering inside model groups. ``latency_seconds`` is
+        ``None`` when the caller has no single-attempt wall-clock timing to
+        honestly attribute to this one answer (see
+        ``ModelGroupRouter.observe_success``); the success/failure signal is
+        still recorded, just not a misleading latency sample.
+        """
+        output_tokens = self._usage_completion_tokens(usage)
+
+        def _record(accepted: bool, irt_row: tuple[int, ...] = ()) -> None:
+            if accepted:
+                self._quality_router.observe_success(
+                    served_id, latency_seconds, output_tokens=output_tokens
+                )
+            else:
+                self._quality_router.observe_failure(served_id)
+            if prompt_context is not None:
+                self._observe_contextual_quality(
+                    prompt_context,
+                    served_id,
+                    accepted=accepted,
+                    latency_seconds=latency_seconds,
+                    output_tokens=output_tokens,
+                    irt_row=irt_row,
+                )
+
+        if not self.policy.realtime_judge:
+            return {
+                "accepted": True,
+                "reason": "single route path",
+                "verifier_output": answer,
+                "judge": "model",
+            }
+        fallback_report = {"verifier_output": answer}
+        base = self._model_judge_verification(
+            text,
+            fallback_report,
+            free_only=free_only,
+            required_tags=required_tags,
+        )
+        accepted = bool(base.get("accepted"))
+        raw_irt_row = base.get("judge_irt_row")
+        irt_row = (
+            tuple(raw_irt_row)
+            if isinstance(raw_irt_row, list)
+            and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
+            else ()
+        )
+        _record(accepted, irt_row)
+        return base
+
+    @staticmethod
+    def _usage_completion_tokens(usage: dict[str, Any] | None) -> int | None:
+        """Provider-reported completion token count, or None when absent/invalid."""
+        if not isinstance(usage, dict):
+            return None
+        tokens = usage.get("completion_tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            return None
+        return tokens
+
+    @staticmethod
+    def _usage_total_tokens(usage: dict[str, Any] | None) -> int | None:
+        """Provider-reported total token count, or None when absent/invalid."""
+        if not isinstance(usage, dict):
+            return None
+        tokens = usage.get("total_tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            return None
+        return tokens
+
+    def conduct(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = GATEWAY_DEFAULT_MODEL,
+        progress: Any = None,
+        workflow_run_id: str | None = None,
+        _excluded_agent_ids: set[str] | None = None,
+        _allowed_agent_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        """Run a workflow, optionally persisting it under a supplied run id."""
+        self._raise_if_spend_budget_exceeded()
+        # Selector nature threaded to _invoke_with_rate_limit_recovery for
+        # every step: a virtual/gateway-selected model name may wait out a
+        # rate-limit storm even with a single eligible candidate; an
+        # explicit concrete model id must keep failing fast (see
+        # _await_rate_limit_recovery). Mirrors route_once's identical set.
+        virtual_selector = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
+        task = self._latest_user_text(messages)
+        required_tags = self._image_input_required_tags(messages)
+        caller_instructions = "\n\n".join(
+            instruction
+            for message in messages
+            if message.get("role") == "system"
+            if (instruction := _coerce_message_content_text(message.get("content")))
+        )
+        plan_source = "template"
+        if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
+            steps = self._plan(
+                task, model_name=model_name, required_tags=required_tags
+            )
+        elif self.policy.workflow_planning == "generated":
+            try:
+                tool_scope = (
+                    self.client.suppress_request_tools()
+                    if hasattr(self.client, "suppress_request_tools")
+                    else nullcontext()
+                )
+                with tool_scope:
+                    steps = self._plan_generated(task)
+                plan_source = "generated"
+            except BudgetExceededError:
+                raise
+            except Exception:  # noqa: BLE001 - invalid plans must not break the request
+                steps = self._plan(task, required_tags=required_tags)
+                plan_source = "template_fallback"
+        else:
+            steps = self._plan(task, required_tags=required_tags)
+        outputs: dict[int, str] = {}
+        trace: list[dict[str, Any]] = []
+        tool_result: dict[str, Any] | None = None
+        tool_loop_evidence: dict[str, str] | None = None
+        free_ids = self._free_pool_agent_ids(messages=messages)
+        requested_agent = self._requested_agent(model_name)
+        judge_agent_ids = (
+            _allowed_agent_ids
+            if _allowed_agent_ids is not None
+            else {
+                candidate.id
+                for candidate in self.agents
+                if candidate.group_name == requested_agent.group_name
+                and self._zdr_agent_allowed(candidate)
+            }
+            if requested_agent is not None and requested_agent.group_name
+            else {requested_agent.id}
+            if requested_agent is not None
+            else free_ids
+            if model_name == self.FREE_MODEL
+            else None
+        )
+        # Context-window candidate filtering only applies to the worker step's
+        # virtual/role-based selection, and only when the caller did not pin a
+        # concrete model: ``requested_agent`` not None means the caller's own
+        # choice, and the provider's own error is the honest answer for it.
+        context_window_excluded: list[str] = []
+        prompt_bound: int | None = None
+        prompt_bound_source: str | None = None
+
+        for step in steps:
+            if plan_source == "generated":
+                in_flight_tokens, in_flight_cost = self._trace_budget_spend(trace)
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
+            agent = self._agent(step.agent_id)
+            if not self._agent_matches_required_tags(agent, required_tags):
+                try:
+                    capable = self._ranked_agents(
+                        step.subtask,
+                        step.role,
+                        required_tags=required_tags,
+                        free_only=model_name == self.FREE_MODEL,
+                    )
+                except RuntimeError:
+                    capable = []
+                if capable:
+                    agent = capable[0]
+            if step.role == "worker" and requested_agent is None:
+                # A tool-result follow-up returns to the agent that emitted
+                # the call it is answering, when that agent is still eligible
+                # under this step's own constraints (Fugu report
+                # arXiv:2606.21228 S3 / Fugu-Ultra Conductor). requested_agent
+                # is None only for a virtual selector -- an explicit concrete
+                # model pins ``agent`` above and is never re-ranked here.
+                worker_candidates, step_tool_loop_evidence = self._apply_tool_loop_route(
+                    self._failover_candidates(
+                        agent,
+                        step.subtask,
+                        "worker",
+                        allowed_agent_ids=(
+                            free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
+                        ),
+                    ),
+                    messages,
+                )
+                if worker_candidates:
+                    agent = worker_candidates[0]
+                if step_tool_loop_evidence is not None:
+                    tool_loop_evidence = step_tool_loop_evidence
+            if progress is not None:
+                _notify_progress(progress, step.role, "started")
+            prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
+            instruction = f"Accessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
+            step_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        f"Role: {step.role}\n"
+                        "Use only the original task and the accessed prior steps. "
+                        "Return concise, directly useful work."
+                        + (f"\n\nCaller instructions:\n{caller_instructions}" if caller_instructions else "")
+                    ),
+                },
+                *copy.deepcopy(messages),
+                {
+                    "role": "user",
+                    "content": instruction,
+                },
+            ]
+            step_prompt_bound: int | None = None
+            if step.role == "worker" and requested_agent is None:
+                prompt_bound, prompt_bound_source = self._prompt_token_lower_bound(
+                    task, agent.model
+                )
+                step_prompt_bound = prompt_bound
+            start = time.perf_counter()
+            output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
+                agent,
+                step_messages,
+                text=task,
+                role=step.role,
+                allowed_agent_ids=(
+                    free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
+                ),
+                excluded_agent_ids=_excluded_agent_ids,
+                virtual_selector=virtual_selector,
+                prompt_token_lower_bound=step_prompt_bound,
+            )
+            extras = self._last_assistant_message
+            self._last_assistant_message = None
+            output_budget = self._last_output_budget
+            self._last_output_budget = None
+            if step_prompt_bound is not None:
+                for excluded_id in self._last_context_window_excluded:
+                    if excluded_id not in context_window_excluded:
+                        context_window_excluded.append(excluded_id)
+            self._last_context_window_excluded = []
+            elapsed = (time.perf_counter() - start) * 1000
+            outputs[step.id] = output
+            row = step.as_dict()
+            row["agent_id"] = agent.id
+            row["latency_ms"] = round(elapsed, 2)
+            row["model"] = agent.model
+            row["provider"] = agent.provider_name or self._infer_provider_name(agent.base_url)
+            row["output"] = output
+            if usage is not None:
+                row["usage"] = usage
+            if isinstance(output_budget, dict):
+                row.update(output_budget)
+            if served_id != agent.id:  # pragma: no cover
+                row["served_agent_id"] = served_id
+                row["failover_from"] = agent.id
+            trace.append(row)
+            if progress is not None:
+                _notify_progress(progress, step.role, "completed", redact_value(output))
+            if step.role == "worker" and isinstance(extras, dict) and extras.get("tool_calls"):
+                tool_result = extras
+                self._record_tool_loop_agents(extras["tool_calls"], served_id or agent.id)
+                break
+            tool_loop_evidence = None
+
+        if tool_result is not None:
+            answer = output
+            verification = {
+                "accepted": True,
+                "reason": "tool call requires caller execution",
+                "verifier_output": answer,
+                "judge": "tool_call",
+            }
+        elif plan_source == "generated":
+            # Generated plans have variable shape: locate roles instead of fixed indices.
+            def last_output(role: str) -> str:
+                ids = [step.id for step in steps if step.role == role]
+                return outputs.get(ids[-1], "") if ids else ""
+
+            # Generated plans may omit a thinker; the first step's output is the upstream evidence.
+            upstream = last_output("thinker") or outputs.get(steps[0].id, "")
+            verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
+            if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
+                verification = self._model_judge_verification(
+                    task,
+                    verification,
+                    free_only=model_name == self.FREE_MODEL,
+                    allowed_agent_ids=judge_agent_ids,
+                    excluded_agent_ids=_excluded_agent_ids,
+                    required_tags=required_tags,
+                )
+            answer = outputs[steps[-1].id]
+            if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
+                answer = last_output("worker")
+        else:
+            verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
+            if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
+                verification = self._model_judge_verification(
+                    task,
+                    verification,
+                    free_only=model_name == self.FREE_MODEL,
+                    allowed_agent_ids=judge_agent_ids,
+                    excluded_agent_ids=_excluded_agent_ids,
+                    required_tags=required_tags,
+                )
+            answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            if not verification["accepted"] and self.policy.verifier_required:
+                answer = outputs[steps[1].id]
+
+        result = {
+            "mode": "conduct",
+            "answer": answer,
+            "trace": trace,
+            "verification": verification,
+            "plan_source": plan_source,
+        }
+        if trace and "output_budget_clamped" in trace[-1]:
+            result["requested_output_tokens"] = trace[-1]["requested_output_tokens"]
+            result["effective_output_tokens"] = trace[-1]["effective_output_tokens"]
+            result["output_budget_clamped"] = trace[-1]["output_budget_clamped"]
+        if tool_result is not None:
+            result["tool_calls"] = tool_result["tool_calls"]
+            result["finish_reason"] = tool_result.get("finish_reason") or "tool_calls"
+            if tool_loop_evidence is not None:
+                result.update(tool_loop_evidence)
+        if prompt_bound is not None and prompt_bound_source is not None:
+            result = self._with_context_window_evidence(
+                result, prompt_bound, prompt_bound_source, context_window_excluded
+            )
+        if workflow_run_id is None:
+            return self._with_effort_snapshot(result)
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id,
+                "created_at": int(time.time()),
+                "policy_mode": "conduct",
+                "prompt_text": task,
+                "policy_snapshot": self.policy.as_dict(),
+                **result,
+            }
+        )
+        self._replace_workflow_run(record)
+        self._run_order.appendleft(workflow_run_id)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "run_mode": "conduct",
+                "policy_mode": "conduct",
+                "trace_step_count": len(trace),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        return record
+
+    def _unsupported_role_effort_roles(
+        self, candidates: list[ModelAgent] | None = None
+    ) -> list[str]:
+        """Return fail-closed catalog roles lacking an eligible proving agent."""
+        if self.role_effort_catalog is None:
+            return []
+        pool = self.candidates if candidates is None else candidates
+        chat_agents = [
+            agent
+            for agent in pool
+            if not agent.disabled and _is_general_chat_agent(agent)
+        ]
+        return sorted(
+            role
+            for role, profile in self.role_effort_catalog.items()
+            if profile.unsupported_provider_fallback != "omit"
+            and not any(
+                agent_proves_reasoning_effort_support(agent)
+                for agent in chat_agents
+                if role not in agent.provider_exclusions
+            )
+        )
+
+    def _require_role_effort_pool(
+        self, candidates: list[ModelAgent] | None = None
+    ) -> None:
+        """Reject a pool mutation that would strand a fail-closed catalog role."""
+        unsupported_roles = self._unsupported_role_effort_roles(candidates)
+        if unsupported_roles:
+            raise ValueError(
+                "agent pool mutation would leave fail-closed role-effort roles "
+                "without an enabled eligible agent that proves native support: "
+                + ", ".join(unsupported_roles)
+            )
+
+    def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
+        """Return the opt-in profile bound to one workflow role."""
+        if self.role_effort_catalog is None:
+            return None
+        return self.role_effort_catalog.get(role)
+
+    def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Attach a replayable role-effort snapshot when the operator opted in.
+
+        Buyer next action: compare ``reasoning_effort_snapshot.snapshot_hash``
+        on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
+        the constructor catalog to keep today's payload.
+        """
+        if self.role_effort_catalog is None:
+            return result
+        snapshot = snapshot_role_effort_catalog(self.role_effort_catalog)
+        result["reasoning_effort_snapshot"] = {
+            "profile_version": snapshot.profile_version,
+            "snapshot_hash": snapshot.snapshot_hash,
+            "role_profiles": snapshot.role_profiles,
+        }
+        return result
+
+    def _plan_generated(self, task: str) -> list[WorkflowStep]:
+        """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
+
+        The plan is JSON: natural-language subtasks, a worker assignment, and an access
+        list of prior step outputs per step. Anything invalid raises so conduct() falls
+        back to the fixed template — a bad plan must never break the request.
+        """
+        planner = self._select_agent(task, "thinker")
+        roles = ("thinker", "worker", "verifier", "synthesizer")
+        eligible_by_role = {
+            role: {
+                agent.id
+                for agent in self._ranked_agents(task, role)
+                if role not in agent.provider_exclusions
+            }
+            for role in roles
+        }
+        pool = "\n".join(
+            f"- {agent.id}: model={agent.model}, "
+            f"roles={','.join(role for role in roles if agent.id in eligible_by_role[role])}, "
+            f"tags={', '.join(agent.tags) or 'none'}"
+            for agent in self.agents
+            if _is_general_chat_agent(agent)
+            and self._zdr_agent_allowed(agent)
+            and _agent_matches_request_endpoint(agent)
+            and any(agent.id in eligible_by_role[role] for role in roles)
+        )
+        system = (
+            "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
+            'Return ONLY a JSON object, no prose: {"steps": [{"id": 0, "role": "thinker|worker|verifier|synthesizer", '
+            '"agent_id": "<agent id>", "subtask": "natural-language instruction", "access": [prior step ids]}]}\n'
+            f"Rules: 2 to {self.policy.max_workflow_steps} steps; ids sequential from 0; access may list only earlier "
+            "step ids (each step sees ONLY the outputs it lists); assign each step only to an agent listing that role; "
+            "the final step must produce the answer; include a "
+            "verifier step when correctness matters.\n"
+            f"Available agents:\n{pool}"
+        )
+        planner_messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": task},
+        ]
+        effort_profile = self._role_effort_profile("planner")
+        with observe_auxiliary_dispatch([planner.id], "generated_planner"):
+            raw = (
+                self.client.chat(planner, planner_messages, effort_profile=effort_profile)
+                if effort_profile is not None
+                else self.client.chat(planner, planner_messages)
+            )
+        return self._parse_workflow_plan(raw)
+
+    def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
+        """Validate a generated plan strictly; raise ValueError on any structural problem."""
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("plan contains no JSON object")
+        data = json.loads(raw[start : end + 1])
+        raw_steps = data.get("steps")
+        if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
+            raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
+        known_agents = {
+            agent.id: agent
+            for agent in self.agents
+            if _agent_matches_request_endpoint(agent)
+        }
+        steps: list[WorkflowStep] = []
+        for index, item in enumerate(raw_steps):
+            if int(item.get("id", -1)) != index:
+                raise ValueError("step ids must be sequential from 0")
+            role = str(item.get("role", ""))
+            if role not in {"thinker", "worker", "verifier", "synthesizer"}:
+                raise ValueError(f"unknown role {role!r}")
+            subtask = str(item.get("subtask", "")).strip()
+            if not subtask:
+                raise ValueError("step subtask must be non-empty")
+            access = tuple(sorted({int(value) for value in item.get("access", [])}))
+            if any(value < 0 or value >= index for value in access):
+                raise ValueError("access may reference only earlier steps")
+            agent_id = item.get("agent_id")
+            assigned = known_agents.get(agent_id)
+            eligible_ids = {
+                agent.id
+                for agent in self._ranked_agents(subtask, role)
+                if role not in agent.provider_exclusions
+            }
+            if (
+                assigned is None
+                or not _is_general_chat_agent(assigned)
+                or not self._zdr_agent_allowed(assigned)
+                or assigned.id not in eligible_ids
+            ):
+                # Unknown or stale ineligible assignments are reselected honestly.
+                agent_id = self._select_agent(subtask, role).id
+            steps.append(WorkflowStep(index, role, agent_id, subtask, access))
+        if steps[-1].role not in {"synthesizer", "worker"}:
+            raise ValueError("final step must produce the answer")
+        return steps
+
+    def _plan(
+        self,
+        task: str,
+        *,
+        model_name: str = GATEWAY_DEFAULT_MODEL,
+        required_tags: tuple[str, ...] = (),
+    ) -> list[WorkflowStep]:
+        requested = self._requested_agent(model_name)
+        free_only = model_name == self.FREE_MODEL
+        thinker = (
+            requested
+            or self._select_agent(
+                task, "thinker", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        worker = (
+            requested
+            or self._select_agent(
+                task, "worker", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        verifier = (
+            requested
+            or self._select_agent(
+                task, "verifier", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        synthesizer = (
+            requested
+            or self._select_agent(
+                task, "synthesizer", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        return [
+            WorkflowStep(0, "thinker", thinker, "Decompose the task and identify the best execution strategy."),
+            WorkflowStep(1, "worker", worker, "Execute the core task using the plan.", (0,)),
+            WorkflowStep(2, "verifier", verifier, "Find concrete errors, gaps, and unsupported claims.", (0, 1)),
+            WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
+        ]
+
+    def _static_rank_key(
+        self,
+        agent: ModelAgent,
+        role: str,
+        affinity: float | None,
+    ) -> tuple[int, int, int, float, str]:
+        """Operator-declared static ordering key (ascending sort = best first).
+
+        Inputs are exclusively operator configuration and literature-standard
+        semantic similarity -- no invented weights:
+
+        1. ``-role_fit``: agents whose operator-maintained capability tags
+           include a tag declared for the role lead their tier; a high
+           ``priority`` never promotes a capability-mismatched agent over a
+           matching one.
+        2. ``-priority``: the operator's explicit per-agent ranking.
+        3. Semantic bucket + ``-cosine``: cosine similarity between task and
+           agent-metadata embeddings (Karpukhin et al., 2020; Ong et al.,
+           2024). Agents without an affinity vector sort after all measured
+           ones within the same declaration tier.
+        4. ``agent.id``: deterministic final tiebreak.
+        """
+        role_fit = 1 if set(agent.tags) & set(self.ROLE_TAGS.get(role, ())) else 0
+        priority = agent.priority
+        if isinstance(priority, bool) or not isinstance(priority, (int, float)):
+            priority = 0
+        has_affinity = 1 if affinity is None else 0
+        negated_affinity = 0.0 if affinity is None else -float(affinity)
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "rank_candidate agent_id=%s model=%s priority=%s capability_fit=%s affinity=%s",
+                agent.id,
+                agent.model,
+                priority,
+                bool(role_fit),
+                "unmeasured" if affinity is None else f"{affinity:.3f}",
+            )
+        return (-role_fit, -int(priority), has_affinity, negated_affinity, agent.id)
+
+    def _ranked_agents(
+        self,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+        free_only: bool = False,
+        chat_only: bool = True,
+        candidate_pool: Iterable[ModelAgent] | None = None,
+        prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ) -> list[ModelAgent]:
+        """Rank logical model groups, then measured provider members within each group.
+
+        Ordering ladder, all evidence-based:
+        1. Role-ineligible members (operator ``provider_exclusions``) always
+           follow every eligible one.
+        2. Within a partition, operator declarations order statically via
+           :meth:`_static_rank_key` (priority -> capability fit -> cosine).
+        3. Inside one logical model group, measured ledgers refine member
+           order (:meth:`_measured_member_order`: judged quality first, then
+           successful responses per second).
+
+        ``free_only`` selects between the two ``FREE_MODEL`` eligibility
+        predicates using ``chat_only`` as the scope signal: ``chat_only=True``
+        (every caller except ``_capability_agents``) means the request shape
+        is not yet known, so :meth:`_is_general_free_agent` applies the
+        blind-serving modality exclusion; ``chat_only=False`` means a
+        specific, already-known capability was requested (only
+        ``_capability_agents`` passes this), so the plain price-only
+        :meth:`_is_free_agent` applies instead -- a non-text ``input:``
+        modality there is the capability's own expected shape, not a
+        surprise. This is a deliberate reuse of an existing, audited signal
+        (``chat_only`` already means "the caller does not know which
+        capability will be needed"), not a new implicit distinction.
+
+        When ``chat_only`` and an opt-in ``role_effort_catalog`` entry for
+        ``role`` fails closed (``unsupported_provider_fallback`` other than
+        ``"omit"``), the result is further narrowed to agents that prove
+        ``reasoning_effort`` support via :func:`_eligible_role_effort_candidates`
+        -- with automatic fallback to the unfiltered set when none prove it.
+        This keeps every role-based selection and failover path (route,
+        conduct, stream, batch, structured synthesis) consistent with the
+        startup guard's own intent: a role the guard let through must never
+        still hand an unsupported agent to ``apply_effort_profile``, which
+        would raise ``EffortProfileError``. ``chat_only=False`` (only
+        ``_capability_agents``) is a distinct, non-role capability lookup and
+        is deliberately left out of this filter.
+        """
+        source = self.agents if candidate_pool is None else list(candidate_pool)
+        shaped_body = self._request_shaped_chat_body(None)
+        candidates = [
+            agent
+            for agent in source
+            if not agent.disabled
+            and _agent_matches_request_endpoint(agent)
+            and self._zdr_agent_allowed(agent)
+            if (
+                not free_only
+                or (
+                    self._is_image_capable_free_agent(agent, chat_body=shaped_body)
+                    if (
+                        IMAGE_INPUT_EVIDENCE_TAG in required_tags
+                        or LEGACY_VISION_CAPABILITY_TAG in required_tags
+                    )
+                    else (
+                        self._is_general_free_agent(agent, chat_body=shaped_body)
+                        if chat_only
+                        else self._is_free_agent(agent)
+                    )
+                )
+            )
+            and (not chat_only or _is_general_chat_agent(agent))
+            and self._agent_matches_required_tags(agent, required_tags)
+        ]
+        if chat_only:
+            candidates = _eligible_role_effort_candidates(
+                candidates, effort_profile or self._role_effort_profile(role)
+            )
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "rank_partition role=%s candidates=%d free_only=%s chat_only=%s",
+                role,
+                len(candidates),
+                free_only,
+                chat_only,
+            )
+        if not candidates:
+            if _REQUEST_ZDR_ONLY.get():
+                raise RuntimeError("no ZDR-eligible agent is available for the active privacy policy")
+            if free_only:
+                raise RuntimeError("no enabled zero-cost model is available")
+            if chat_only:
+                raise RuntimeError("no chat-compatible agent available")
+            raise RuntimeError("no enabled zero-cost model is available")
+        affinities = self._semantic_affinities(text, candidates)
+        static = sorted(
+            candidates,
+            key=lambda agent: self._static_rank_key(agent, role, affinities.get(agent.id)),
+        )
+        eligible = [agent for agent in static if role not in agent.provider_exclusions]
+        excluded = [agent for agent in static if role in agent.provider_exclusions]
+        return self._psychometric_order(
+            self._refine_partition(eligible, role), prompt_context
+        ) + self._psychometric_order(
+            self._refine_partition(excluded, role), prompt_context
+        )
+
+    def _refine_partition(self, partition: list[ModelAgent], role: str) -> list[ModelAgent]:
+        """Group-refine one role-partition with measured intra-group ordering."""
+        groups: dict[str, list[ModelAgent]] = {}
+        for agent in partition:
+            key = canonical_group_name(agent.group_name) if agent.group_name else f"agent:{agent.id}"
+            groups.setdefault(key, []).append(agent)
+        ordered: list[ModelAgent] = []
+        for members in groups.values():
+            if not members[0].group_name:
+                ordered.extend(members)
+                continue
+            eligible = [member for member in members if role not in member.provider_exclusions]
+            excluded = [member for member in members if role in member.provider_exclusions]
+            for sub_partition in (eligible, excluded):
+                by_id = {member.id: member for member in sub_partition}
+                ordered.extend(
+                    by_id[member_id] for member_id in self._measured_member_order(list(by_id))
+                )
+        return ordered
+
+    def _measured_member_order(self, member_ids: list[str]) -> list[str]:
+        """Order same-declaration members by measured evidence, quality first.
+
+        Evidence ladder: judged-answer observations (real-time fast-mlsirm
+        verdicts) govern when any member has them; otherwise the transport
+        throughput/stability ledger decides; with no evidence at all the
+        caller's input order survives untouched. No synthetic scores.
+        """
+        judged_quality = any(
+            self._quality_router.member_observation_count(member_id) > 0
+            for member_id in member_ids
+        )
+        router = self._quality_router if judged_quality else self._group_router
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            for member_id in member_ids:
+                _LOGGER.debug(
+                    "rank_candidate agent_id=%s judged_quality=%s evidence_score=%.3f",
+                    member_id,
+                    judged_quality,
+                    router.member_score(member_id),
+                )
+        return router.ranked_member_ids(member_ids)
+
+    def _psychometric_order(
+        self, candidates: list[ModelAgent], prompt_context: str | None
+    ) -> list[ModelAgent]:
+        """Put fast-MLSIRM-evidenced candidates before ordinary measured order."""
+        if (
+            not prompt_context
+            or len(candidates) < 2
+            or not self._psychometric_router.has_observations()
+        ):
+            return candidates
+        evidence = self._psychometric_router.ranked_evidence(
+            [candidate.id for candidate in candidates],
+            prompt_context,
+            self._embed_cached(prompt_context),
+        )
+        if not evidence:
+            return candidates
+        by_id = {candidate.id: candidate for candidate in candidates}
+        evidenced_ids = [agent_id for agent_id, _score in evidence]
+        return [by_id[agent_id] for agent_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        ]
+
+    def _observe_contextual_quality(
+        self,
+        prompt_context: str,
+        served_id: str,
+        *,
+        accepted: bool,
+        latency_seconds: float | None,
+        output_tokens: int | None,
+        irt_row: tuple[int, ...] = (),
+    ) -> None:
+        """Record a fast-mlsirm judge outcome for contextual ability fitting."""
+        del latency_seconds, output_tokens
+        self._psychometric_router.observe(
+            prompt_context,
+            served_id,
+            accepted,
+            self._embed_cached(prompt_context),
+            irt_row,
+        )
+        if self._store is not None:
+            context_id = self._psychometric_router.context_id(prompt_context)
+            record = next(
+                item
+                for item in self._psychometric_router.records()
+                if item["context_id"] == context_id and item["agent_id"] == served_id
+            )
+            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
+            self._store.save("psychometric_observation", key, record)
+            retained = {
+                hashlib.sha256(
+                    f"{item['context_id']}\0{item['agent_id']}".encode()
+                ).hexdigest()
+                for item in self._psychometric_router.records()
+            }
+            self._store.prune_keyed("psychometric_observation", retained)
+
+    # --- dual-ledger membership maintenance ---------------------------------
+
+    def _routing_ledgers(self) -> tuple[ModelGroupRouter, ModelGroupRouter]:
+        """Both measured ledgers (transport throughput and judged quality)."""
+        return self._group_router, self._quality_router
+
+    def _routers_register_member(self, member_id: str) -> None:
+        """Register one member in every routing ledger (idempotent)."""
+        for router in self._routing_ledgers():
+            router.register_member(member_id)
+
+    def _routers_reset_members(self, member_ids: set[str]) -> None:
+        """Drop ledger rows whose group context changed in every ledger."""
+        for router in self._routing_ledgers():
+            router.reset_members(member_ids)
+
+    def _routers_forget_members(self, member_ids: set[str]) -> None:
+        """Forget members that left the pool in every ledger."""
+        for router in self._routing_ledgers():
+            router.forget_members(member_ids)
+
+    @staticmethod
+    def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
+        """Return whether an agent's discovery-derived tags declare non-text input.
+
+        ``ModelAgent`` carries no dedicated modality field; every discovery
+        pathway (``model_discovery.agent_from_discovered``,
+        ``provider_bootstrap.serving_tags_for_discovered``) instead records
+        each declared input modality as an ``input:<modality>`` tag. Delegates
+        the actual "what counts as non-text" classification to
+        ``chat_capability.requires_non_text_input``, the single evidence-based
+        rule shared with ``model_discovery._requires_non_text_input`` (which
+        reads ``DiscoveredModel.input_modalities`` directly) so the two
+        representations of the same catalog evidence cannot drift on this
+        question independently of each other.
+        """
+        return requires_non_text_input(
+            tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
+        )
+
+    def _is_free_agent(self, agent: ModelAgent) -> bool:
+        """Return true only for explicitly zero-priced configured models.
+
+        Price-only, deliberately blind to modality: this predicate backs
+        every ``FREE_MODEL`` selection path, including capability-scoped
+        media routes (``_capability_agents`` -> ``/v1/audio/transcriptions``,
+        ``/v1/videos``, image, speech, rerank) where an agent's non-text
+        ``input:<modality>`` tag is exactly the modality the request is
+        already asking for, not a surprise -- excluding it there would make a
+        genuinely free transcription/video/image agent unreachable through
+        its own capability's free route. See :meth:`_is_general_free_agent`
+        for the stricter, blind-general-chat variant.
+
+        Experiential promotional/free metadata is deliberately excluded here
+        as well as in discovery-time selection. Its waterfall can spend
+        credits after a free limit, and the public contract exposes no
+        request-level free-only enforcement evidence. This protects durable
+        agents and capability-scoped routes that predate the discovery guard.
+        """
+        if agent.provider_name == "experiential_labs":
+            return False
+        if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
+            return True
+        return self.price_per_million.get(agent.model) == 0 and sum(
+            candidate.model == agent.model for candidate in self.candidates
+        ) == 1
+
+    @staticmethod
+    def _agent_rejected_by_single_tool_call_evidence(
+        agent: ModelAgent, chat_body: Mapping[str, Any] | None
+    ) -> bool:
+        """True when discovery proved this agent cannot serve the request's tool shape.
+
+        Issue #940: ``tool_call:single`` is positive evidence that a multi-call
+        / ``parallel_tool_calls: true`` request will 400. Shared by blind
+        general-free and image-capable free admission so multimodal selection
+        cannot reopen the doomed round-trip.
+        """
+        return (
+            chat_body is not None
+            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
+            and _request_requires_parallel_tool_calls(chat_body)
+        )
+
+    def _request_shaped_chat_body(
+        self, chat_body: Mapping[str, Any] | None
+    ) -> Mapping[str, Any] | None:
+        """Prefer an explicit chat body; else tools from request-scoped client settings.
+
+        Route/conduct paths carry tools on ``ModelClient.request_settings`` rather
+        than a passthrough body. Rebuilding the tool-shape fields here keeps
+        :meth:`_free_pool_agent_ids` and :meth:`_ranked_agents` on the same
+        #940 exclusion as ``proxy_completion``.
+        """
+        if isinstance(chat_body, Mapping):
+            return chat_body
+        snapshot = getattr(self.client, "request_settings_snapshot", None)
+        if not callable(snapshot):
+            return None
+        settings = snapshot()
+        if not isinstance(settings, Mapping):
+            return None
+        tools = settings.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return None
+        shaped: dict[str, Any] = {"tools": tools}
+        if "parallel_tool_calls" in settings:
+            shaped["parallel_tool_calls"] = settings["parallel_tool_calls"]
+        return shaped
+
+    def _is_general_free_agent(
+        self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None
+    ) -> bool:
+        """Return true only for zero-priced models fit for *blind* free serving.
+
+        When the caller passes the inbound ``chat_body``, an agent carrying the
+        positive ``tool_call:single`` discovery evidence is also withheld from
+        a request whose shape that evidence proved rejected (see
+        :func:`_request_requires_parallel_tool_calls`, issue #940). The
+        passthrough 400 failover in :func:`_is_single_tool_call_limit_error`
+        stays as the safety net for shapes no evidence covers; this check only
+        avoids a provider round-trip the catalog already knows will fail.
+
+        Zero price alone does not certify fitness for the general-purpose
+        ``orchestrator/free`` chat pool: that pool serves every role and
+        request shape -- including tool-calling requests -- without knowing
+        in advance which capability a request will need. An agent whose tags
+        declare a non-text input modality (e.g. a vision-input deployment) is
+        therefore never treated as free *here*, even when it is honestly
+        tagged ``cost:free`` for price inventory purposes and for its own
+        capability-scoped free route (see :meth:`_is_free_agent`, and
+        ``contextual_orchestrator.model_discovery.general_free_serving_candidates``
+        for the equivalent discovery-time selector and its incident writeup).
+        This is the single choke point every *general chat* ``FREE_MODEL``
+        selection path shares -- including an agent row loaded from a durable
+        pool store that was written before this exclusion existed, or one
+        activated by a pool-construction path this repository adds later.
+        """
+        if not (self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)):
+            return False
+        if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
+            return False
+        return True
+
+    def _is_image_capable_free_agent(
+        self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None
+    ) -> bool:
+        """Return true for zero-cost agents with image-input evidence for known image traffic.
+
+        Image entitlement is an *additional* predicate on top of
+        :meth:`_is_free_agent`, not a replacement for request-shaped tool-call
+        admission (#940). When ``chat_body`` (or reconstructed request settings)
+        requires parallel/multi tool calls, a ``tool_call:single`` image-capable
+        free agent is excluded before provider I/O — the same composition
+        :meth:`_is_general_free_agent` applies for blind text free traffic.
+        A legacy ``vision`` tag without ``input:*`` evidence remains eligible;
+        explicit ``input:image`` without ``input:text`` is image-only and is
+        rejected for the mixed text/image review envelope.
+        """
+        input_tags = {tag for tag in agent.tags if tag.startswith("input:")}
+        if not (
+            self._is_free_agent(agent)
+            and _is_general_chat_agent(agent)
+            and self._agent_supports_image_input(agent)
+            and (not input_tags or "input:text" in input_tags)
+        ):
+            return False
+        if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
+            return False
+        return True
+
+    # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
+
+    @staticmethod
+    def _agent_descriptor_text(agent: ModelAgent) -> str:
+        """Operator-declared metadata joined as the agent's embedding document."""
+        return " ".join([agent.model, *sorted(agent.tags)])
+
+    @staticmethod
+    def _cosine_similarity(
+        vector_a: list[float], vector_b: list[float]
+    ) -> float | None:
+        """Cosine of two equal-length vectors; None when either norm is zero."""
+        if len(vector_a) != len(vector_b) or not vector_a:
+            return None
+        dot = sum(a * b for a, b in zip(vector_a, vector_b))
+        norm_a = math.sqrt(sum(a * a for a in vector_a))
+        norm_b = math.sqrt(sum(b * b for b in vector_b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return None
+        return dot / (norm_a * norm_b)
+
+    def _cache_put(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
+        """Insert into one bounded LRU evidence cache under the evidence lock."""
+        with self._evidence_lock:
+            cache[key] = value
+            cache.move_to_end(key)
+            while len(cache) > self.EVIDENCE_CACHE_MAX_ENTRIES:
+                cache.popitem(last=False)
+
+    def _embedding_agent_id(self) -> str | None:
+        """First measured embedding-capable member id, or None when unconfigured."""
+        try:
+            return self.select_capability_agent("embedding").id
+        except (RuntimeError, ValueError):
+            return None
+
+    def _embed_cached(self, text: str) -> list[float] | None:
+        """Embedding vector for text via the configured embedding member; None on failure."""
+        digest = hashlib.sha256(
+            f"{_request_endpoint_partition()}\x1f{text}".encode("utf-8")
+        ).hexdigest()
+        with self._evidence_lock:
+            cached = self._task_vector_cache.get(digest)
+        if cached is not None:
+            return cached
+        embedding_member = self._embedding_agent_id()
+        if embedding_member is None:
+            return None
+        try:
+            with observe_auxiliary_dispatch([embedding_member], "routing_evidence_embedding"):
+                vectors = self.client.embed(self._agent(embedding_member), [text])
+        except Exception:  # noqa: BLE001 - similarity is best-effort evidence
+            return None
+        vector = vectors[0] if vectors else None
+        if vector is not None:
+            self._cache_put(self._task_vector_cache, digest, vector)
+        return vector
+
+    def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
+        """Cached embedding of one agent's operator-declared metadata document."""
+        fingerprint = hashlib.sha256(
+            "\x1f".join(
+                [
+                    _request_endpoint_partition(),
+                    agent.id,
+                    self._agent_descriptor_text(agent),
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+        with self._evidence_lock:
+            cached = self._descriptor_vector_cache.get(fingerprint)
+        if cached is not None:
+            return cached
+        embedding_member = self._embedding_agent_id()
+        if embedding_member is None:
+            return None
+        try:
+            with observe_auxiliary_dispatch([embedding_member], "routing_evidence_embedding"):
+                vectors = self.client.embed(
+                    self._agent(embedding_member), [self._agent_descriptor_text(agent)]
+                )
+        except Exception:  # noqa: BLE001 - similarity is best-effort evidence
+            return None
+        vector = vectors[0] if vectors else None
+        if vector is not None:
+            self._cache_put(self._descriptor_vector_cache, fingerprint, vector)
+        return vector
+
+    def _semantic_affinities(
+        self, text: str, agents: list[ModelAgent]
+    ) -> dict[str, float | None]:
+        """Cosine similarity between task text and every agent's metadata document.
+
+        Returns ``{agent_id: float|None}``; all values are None whenever there
+        is no task text, no embedding-capable member, or embedding transport
+        fails -- callers then fall back to declaration-only ordering.
+        """
+        stripped = text.strip() if isinstance(text, str) else ""
+        if not stripped or not agents:
+            return {agent.id: None for agent in agents}
+        task_vector = self._embed_cached(stripped)
+        if task_vector is None:
+            return {agent.id: None for agent in agents}
+        affinities: dict[str, float | None] = {}
+        for agent in agents:
+            descriptor_vector = self._descriptor_vector_cached(agent)
+            affinities[agent.id] = (
+                None
+                if descriptor_vector is None
+                else self._cosine_similarity(task_vector, descriptor_vector)
+            )
+        return affinities
+
+    # --- structured complexity triage (replaces keyword hint tables) -------
+
+    #: Exact-schema instruction for the single structured triage call.
+    TRIAGE_SYSTEM_PROMPT = (
+        "You classify whether a user task requires an orchestrated multi-step "
+        "workflow (planning plus verification across steps) or one direct answer. "
+        'Reply with exactly one JSON object {"workflow_required": true} or '
+        '{"workflow_required": false} and nothing else.'
+    )
+
+    def _triage_workflow_required(self, text: str) -> bool:
+        """Decide route-vs-conduct with one strict JSON verdict; fail to conduct.
+
+        Evidence policy: the decision is made by a model under an exact output
+        schema, never by keyword matching. Any failure of the triage call or
+        parse fails closed toward the orchestrated path, which carries verifier
+        assurance; an absent triage agent degrades to the direct path because
+        no evidence source exists at all. Verdicts are cached by content hash.
+        """
+        digest = hashlib.sha256(
+            (
+                _request_endpoint_partition()
+                + "\x1f"
+                + text
+                + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")
+            ).encode("utf-8")
+        ).hexdigest()
+        with self._evidence_lock:
+            cached = self._triage_cache.get(digest)
+        if cached is not None:
+            return cached
+        verdict = self._compute_triage_verdict(text)
+        self._cache_put(self._triage_cache, digest, verdict)
+        return verdict
+
+    def _compute_triage_verdict(self, text: str) -> bool:
+        """One uncached triage decision for :meth:`_triage_workflow_required`."""
+        try:
+            candidates = self._ranked_agents(text, "worker", free_only=True)
+        except RuntimeError:
+            candidates = []
+        if not candidates and not _REQUEST_ZDR_ONLY.get():
+            candidates = [
+                agent for agent in self.agents if _agent_matches_request_endpoint(agent)
+            ]
+        if not candidates:
+            return False
+        triage_agent = candidates[0]
+        messages: list[ChatMessage] = [
+            {"role": "system", "content": self.TRIAGE_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ]
+        try:
+            with observe_auxiliary_dispatch([triage_agent.id], "structured_triage"):
+                reply = self.client.chat(triage_agent, messages, temperature=0.0)
+            return _parse_triage_reply(reply)
+        except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
+            return True
+
+    def _select_agent(
+        self,
+        text: str,
+        role: str,
+        *,
+        free_only: bool = False,
+        required_tags: tuple[str, ...] = (),
+        prefer_tags: tuple[str, ...] = (),
+        prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ) -> ModelAgent:
+        """Select one general-chat agent for a conversational role.
+
+        Non-chat discovery rows (embeddings, rerank, transcription, ...) are
+        excluded by the capability contract enforced by
+        :func:`is_general_chat_candidate`; this is an endpoint-compatibility
+        gate, not a task-keyword heuristic. ``required_tags`` must all be
+        present (hard entitlements); ``prefer_tags`` only influence
+        tie-breaking when a candidate already carries them, so a pool that
+        does not advertise an optional gateway capability still resolves.
+        """
+        ranked = [
+            agent
+            for agent in self._ranked_agents(
+                text,
+                role,
+                free_only=free_only,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+                effort_profile=effort_profile,
+            )
+            if _is_general_chat_agent(agent)
+            and self._agent_matches_required_tags(agent, required_tags)
+        ]
+        if prefer_tags and ranked:
+            preferred = [
+                agent
+                for agent in ranked
+                if all(tag in agent.tags for tag in prefer_tags)
+            ]
+            if preferred:
+                ranked = preferred
+        if not ranked:
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        selected = ranked[0]
+        if selected.disabled:  # pragma: no cover
+            raise RuntimeError(f"no enabled agent available for role={role}")
+        if role in selected.provider_exclusions:  # pragma: no cover
+            raise RuntimeError(f"no eligible agent available for role={role}")
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "select_agent role=%s free_only=%s zdr_only=%s chosen_agent_id=%s chosen_model=%s",
+                role,
+                free_only,
+                bool(_REQUEST_ZDR_ONLY.get()),
+                selected.id,
+                selected.model,
+            )
+        return selected
+
+    def _capability_agents(self, capability: str, model_name: str | None = None) -> list[ModelAgent]:
+        """Return measured candidates supporting a capability, optionally within one group."""
+        capability = capability.strip().lower()
+        capability = {"embeddings": "embedding"}.get(capability, capability)
+        if not capability:
+            raise ValueError("capability must be a non-empty string")
+        virtual_model = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
+        free_only = model_name == self.FREE_MODEL
+        exact_models = {agent.model for agent in self.candidates}
+        requested_group = (
+            canonical_group_name(model_name)
+            if model_name is not None and model_name not in exact_models and not virtual_model
+            else None
+        )
+        if model_name is not None and not virtual_model and not any(
+            agent.model == model_name
+            or (
+                agent.group_name
+                and requested_group is not None
+                and canonical_group_name(agent.group_name) == requested_group
+            )
+            for agent in self.candidates
+        ):
+            raise ValueError(f"requested model {model_name!r} is not configured")
+        ranked = [
+            agent
+            for agent in self._ranked_agents(
+                # chat_only=False signals a known, explicit capability request
+                # (not a blind general-chat one), so free_only here uses
+                # _ranked_agents' price-only _is_free_agent branch: a capable
+                # agent's own non-text input tag is expected, not disqualifying.
+                "", capability, free_only=free_only, chat_only=False
+            )
+            if not agent.disabled
+            and capability in agent.tags
+            and capability not in agent.provider_exclusions
+            and (
+                model_name is None or virtual_model or agent.model == model_name
+                or (
+                    agent.group_name
+                    and requested_group is not None
+                    and canonical_group_name(agent.group_name) == requested_group
+                )
+            )
+        ]
+        if not ranked:
+            raise RuntimeError(f"no enabled agent available for capability={capability}")
+        healthy = [agent for agent in ranked if not self._circuit_open(agent.id)]
+        if not healthy:
+            raise RuntimeError(
+                f"all enabled agents temporarily unavailable for capability={capability}"
+            )
+        return healthy
+
+    def select_capability_agent(self, capability: str, model_name: str | None = None) -> ModelAgent:
+        """Select a measured member supporting a capability, optionally within one group."""
+        return self._capability_agents(capability, model_name)[0]
+
+    @staticmethod
+    def _equivalent_race_members(
+        candidates: list[ModelAgent], *, capability: str
+    ) -> list[ModelAgent]:
+        """Return replicas proven equivalent for the requested capability."""
+        if len(candidates) < 2 or not candidates[0].group_name:
+            return []
+        declared = [agent for agent in candidates if agent.endpoint_equivalence is not None]
+        if len(declared) < 2:
+            return []
+        first = declared[0]
+        contract = EndpointEquivalenceContract(**first.endpoint_equivalence)  # type: ignore[arg-type]
+        if (
+            capability not in contract.capability_set
+            or not contract.hedge_eligible
+            or contract.execution_policy != "immediate_race"
+        ):
+            return []
+        peers = [
+            agent
+            for agent in declared
+            if agent.group_name == first.group_name
+            and EndpointEquivalenceContract(**agent.endpoint_equivalence) == contract  # type: ignore[arg-type]
+        ]
+        return peers if len(peers) >= 2 else []
+
+    def _record_endpoint_race(self, outcome: Any, *, capability: str) -> None:
+        """Persist secret-free winner and cancellation provenance."""
+        self._append_audit_event(
+            "equivalent_endpoint_race_completed",
+            {
+                "capability": capability,
+                "winner_endpoint_id": outcome.winner_endpoint_id,
+                "attempted_endpoint_ids": list(outcome.attempted_endpoint_ids),
+                "cancellation_outcomes": dict(outcome.cancellation_outcomes),
+                "completion_ms": outcome.completion_ms,
+            },
+        )
+
+    def _record_endpoint_attempt(
+        self,
+        endpoint_id: str,
+        value: Any | None,
+        error: BaseException | None,
+        *,
+        capability: str,
+    ) -> None:
+        """Record reported duplicate usage without treating missing usage as free."""
+        usage = None
+        if isinstance(value, tuple):
+            if len(value) == 3 and isinstance(value[2], dict):
+                usage = value[2]
+            elif len(value) == 5 and isinstance(value[3], dict):
+                usage = value[3]
+        elif isinstance(value, dict) and isinstance(value.get("usage"), dict):
+            usage = value["usage"]
+        self._append_audit_event(
+            "equivalent_endpoint_attempt_completed",
+            {
+                "capability": capability,
+                "endpoint_id": endpoint_id,
+                "validation_outcome": (
+                    "cancelled"
+                    if isinstance(error, _ProviderRequestCancelled)
+                    else "provider_error" if error is not None else "completed"
+                ),
+                "usage": usage,
+                "duplicate_cost_evidence": (
+                    "provider_reported_usage" if usage is not None
+                    else "unavailable_requires_provider_invoice"
+                ),
+            },
+        )
+
+    def _record_race_attempt(
+        self,
+        endpoint_id: str,
+        value: Any | None,
+        error: BaseException | None,
+        *,
+        capability: str,
+    ) -> None:
+        """Share race completion evidence with normal stability/circuit ledgers."""
+        self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
+        if (
+            error is not None
+            and not isinstance(error, _ProviderRequestCancelled)
+            and not _is_request_too_large_error(error)
+        ):
+            self._group_router.observe_failure(endpoint_id)
+            self._record_failure(endpoint_id)
+
+    def _race_attempt_collector(
+        self, capability: str
+    ) -> tuple[
+        Callable[[str, Any | None, BaseException | None], None],
+        Callable[[str | None, tuple[tuple[str, str], ...]], None],
+    ]:
+        """Return callbacks that ledger completed loser usage after winner selection."""
+        state_lock = threading.Lock()
+        pending: list[tuple[str, Any]] = []
+        state: dict[str, Any] = {
+            "finalized": False,
+            "winner": None,
+            "completed_ids": set(),
+        }
+
+        def emit(endpoint_id: str, value: Any) -> None:
+            sink = self._race_usage_sink
+            if sink is not None:
+                sink(endpoint_id, value)
+
+        def completed(
+            endpoint_id: str,
+            value: Any | None,
+            error: BaseException | None,
+        ) -> None:
+            self._record_race_attempt(
+                endpoint_id, value, error, capability=capability
+            )
+            if error is not None or value is None:
+                emit("__race_incomplete__", None)
+                with state_lock:
+                    state["completed_ids"].add(endpoint_id)
+                return
+            with state_lock:
+                if not state["finalized"]:
+                    pending.append((endpoint_id, value))
+                    state["completed_ids"].add(endpoint_id)
+                    return
+                winner = state["winner"]
+            if winner is None or endpoint_id != winner:
+                emit(endpoint_id, value)
+            with state_lock:
+                state["completed_ids"].add(endpoint_id)
+
+        def finalize(
+            winner_endpoint_id: str | None,
+            cancellation_outcomes: tuple[tuple[str, str], ...],
+        ) -> None:
+            with state_lock:
+                state["finalized"] = True
+                state["winner"] = winner_endpoint_id
+                completed_ids = set(state["completed_ids"])
+                ready = list(pending)
+                pending.clear()
+            for endpoint_id, value in ready:
+                if winner_endpoint_id is None or endpoint_id != winner_endpoint_id:
+                    emit(endpoint_id, value)
+            if any(
+                outcome == "safe_drain" and endpoint_id not in completed_ids
+                for endpoint_id, outcome in cancellation_outcomes
+            ):
+                emit("__race_incomplete__", None)
+
+        return completed, finalize
+
+    def proxy_capability(
+        self,
+        body: dict[str, Any],
+        *,
+        capability: str,
+        endpoint: str,
+        binary: bool = False,
+        selection_sink: Callable[[ModelAgent, Any], Any] | None = None,
+    ) -> dict[str, Any] | tuple[bytes, str]:
+        """Route one capability request with measured group-member failover."""
+        requested_model = body.get("model")
+        candidates = self._capability_agents(capability, requested_model)
+        every_failure_was_request_too_large = True
+        saw_failure = False
+        race_members = self._equivalent_race_members(candidates, capability=capability)
+        # Async video submission creates provider-side work that cannot be
+        # raced safely without loser cancellation: every accepted loser would
+        # become an unowned, billable job.  A selection sink marks this
+        # ownership-producing path, so use measured sequential failover below.
+        if race_members and selection_sink is None:
+            if len(race_members) > MAX_LOCAL_CONCURRENCY:
+                raise ValueError(
+                    "immediate_race endpoint count exceeds the supported concurrency capacity"
+                )
+            def call(agent: ModelAgent) -> dict[str, Any] | tuple[bytes, str]:
+                payload = {
+                    key: value for key, value in body.items()
+                    if key not in self._ORCHESTRATION_ONLY_KEYS
+                }
+                payload["model"] = agent.model
+                provider_endpoint = (
+                    "images"
+                    if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                    else endpoint
+                )
+                record_initial_selection([member.id for member in race_members], "capability_race",
+                                         attempt_id=decision_attempt_id)
+                return (
+                    self.client.proxy_send_bytes(agent, provider_endpoint, payload)
+                    if binary else self.client.proxy_send(agent, provider_endpoint, payload)
+                )
+
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
+            attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
+            decision_attempt_id = uuid.uuid4().hex
+            def attempt(agent: ModelAgent) -> EndpointAttempt[Any]:
+                provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
+                return EndpointAttempt(
+                    agent.id, contract, provider_call,
+                    cancellation_supported=contract.cancellation_supported,
+                    cancel=cancel if contract.cancellation_supported else None,
+                )
+            try:
+                outcome = race_first_valid(
+                    [attempt(agent) for agent in race_members],
+                    validate=(
+                        (
+                            lambda value: isinstance(value, tuple)
+                            and len(value) == 2
+                            and isinstance(value[0], bytes)
+                            and bool(value[0])
+                        )
+                        if binary
+                        else (lambda value: isinstance(value, dict) and bool(value))
+                    ),
+                    deadline_seconds=self.client.timeout,
+                    max_concurrency=len(race_members),
+                    on_attempt_complete=attempt_completed,
+                )
+            except RuntimeError:
+                outcome = None
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id,
+                () if outcome is None else outcome.cancellation_outcomes,
+            )
+            if outcome is not None:
+                self._record_endpoint_race(outcome, capability=capability)
+                self._group_router.observe_success(
+                    outcome.winner_endpoint_id, outcome.completion_ms / 1000
+                )
+                return outcome.value
+        last_error: Exception | None = None
+        for agent in candidates:
+            payload = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS
+            }
+            payload["model"] = agent.model
+            provider_endpoint = (
+                "images"
+                if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                else endpoint
+            )
+            started_at = time.perf_counter()
+            try:
+                record_initial_selection([agent.id], "capability_proxy")
+                result = (
+                    self.client.proxy_send_bytes(agent, provider_endpoint, payload)
+                    if binary
+                    else self.client.proxy_send(agent, provider_endpoint, payload)
+                )
+            except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
+                classified = (
+                    exc
+                    if isinstance(exc, ProviderUpstreamError)
+                    else classify_provider_failure(
+                        exc,
+                        agent_id=agent.id,
+                        model=agent.model,
+                        transport=capability,
+                    )
+                )
+                last_error = classified
+                saw_failure = True
+                request_too_large = _is_request_too_large_error(exc)
+                every_failure_was_request_too_large = (
+                    every_failure_was_request_too_large and request_too_large
+                )
+                if not request_too_large:
+                    self._group_router.observe_failure(agent.id)
+                if isinstance(classified, ProviderUpstreamError):
+                    decision = classify_provider_transport_failure(classified.retryable)
+                    if decision.circuit_failure and not request_too_large:
+                        self._record_failure(agent.id)
+                continue
+            if selection_sink is not None:
+                selected_result = selection_sink(agent, result)
+                self._group_router.observe_success(
+                    agent.id, time.perf_counter() - started_at
+                )
+                self._record_success(agent.id)
+                return selected_result
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            self._record_success(agent.id)
+            return result
+        if saw_failure and every_failure_was_request_too_large:
+            raise ProviderRequestTooLargeError(
+                "request body exceeds every eligible provider limit"
+            ) from last_error
+        if isinstance(last_error, ProviderUpstreamError):
+            raise last_error
+        if last_error is not None:
+            failed = candidates[-1] if candidates else None
+            raise classify_provider_failure(
+                last_error,
+                agent_id=failed.id if failed is not None else "",
+                model=failed.model if failed is not None else "",
+                transport=capability,
+            ) from None
+        raise RuntimeError(f"all {capability} providers failed") from last_error
+
+    def _invoke(
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        allowed_agent_ids: set[str] | None = None,
+        eligibility_role: str | None = None,
+        excluded_agent_ids: set[str] | None = None,
+        prompt_token_lower_bound: int | None = None,
+    ) -> tuple[str, str, str, dict[str, Any] | None]:
+        """Call an agent with bounded, safety-aware tool retry and failover.
+
+        ``ModelClient`` handles provider transport retries. This layer classifies
+        agent/tool-runtime failures: missing tools move to a compatible agent,
+        explicitly idempotent transient calls retry the same agent, and ambiguous
+        side effects or policy/permission/argument errors fail closed.
+
+        ``eligibility_role`` keeps operator exclusions tied to the role used to
+        select the primary when the call's effort profile has a distinct name.
+
+        ``prompt_token_lower_bound``, when given, is forwarded to
+        :meth:`_failover_candidates` so it skips a candidate whose known
+        context window provably cannot hold the prompt. Callers pass it only
+        for virtual/role-based selection -- never for an explicitly requested
+        concrete model, where the provider's own error is the honest answer.
+        The candidate ids it excludes are recorded on this thread's
+        :attr:`_last_context_window_excluded` for the caller to read back.
+        """
+        self._last_assistant_message = None
+        self._last_output_budget = None
+        self._last_context_window_excluded = []
+        required_tags = self._image_input_required_tags(messages)
+        prompt_context = self._prompt_interaction(messages)
+        candidates = self._failover_candidates(
+            primary,
+            text,
+            eligibility_role or role,
+            required_tags=required_tags,
+            allowed_agent_ids=allowed_agent_ids,
+            prompt_context=prompt_context,
+            prompt_token_lower_bound=prompt_token_lower_bound,
+        )
+        if excluded_agent_ids:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.id not in excluded_agent_ids
+            ]
+        if not candidates:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                )
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        race_members = self._equivalent_race_members(candidates, capability="text")
+        if race_members:
+            if len(race_members) > MAX_LOCAL_CONCURRENCY:
+                raise ValueError(
+                    "immediate_race endpoint count exceeds the supported concurrency capacity"
+                )
+            effort_profile = self._role_effort_profile(role)
+            request_settings = self.client.request_settings_snapshot()
+
+            def call(
+                agent: ModelAgent,
+            ) -> tuple[
+                str,
+                str,
+                str,
+                dict[str, Any] | None,
+                dict[str, Any] | None,
+                dict[str, Any] | None,
+            ]:
+                tool_scope = (
+                    self.client.suppress_request_tools()
+                    if role != "worker"
+                    and hasattr(self.client, "suppress_request_tools")
+                    else nullcontext()
+                )
+                with self.client.request_settings(**request_settings), tool_scope:
+                    record_initial_selection([member.id for member in race_members], "text_race",
+                                             attempt_id=decision_attempt_id)
+                    output = (
+                        self.client.chat(agent, messages, effort_profile=effort_profile)
+                        if effort_profile is not None
+                        else self.client.chat(agent, messages)
+                    )
+                    usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                    extras = (
+                        self.client.take_assistant_message()
+                        if hasattr(self.client, "take_assistant_message")
+                        else None
+                    )
+                    output_budget = (
+                        self.client.take_output_budget()
+                        if hasattr(self.client, "take_output_budget")
+                        else None
+                    )
+                return output, agent.id, agent.model, usage, extras, output_budget
+
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
+            attempt_completed, finalize_attempts = self._race_attempt_collector("text")
+            decision_attempt_id = uuid.uuid4().hex
+            def attempt(agent: ModelAgent) -> EndpointAttempt[Any]:
+                provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
+                return EndpointAttempt(
+                    agent.id, contract, provider_call,
+                    cancellation_supported=contract.cancellation_supported,
+                    cancel=cancel if contract.cancellation_supported else None,
+                )
+            try:
+                outcome = race_first_valid(
+                    [attempt(agent) for agent in race_members],
+                    validate=lambda value: isinstance(value[0], str)
+                    and (
+                        bool(value[0])
+                        or (
+                            isinstance(value[4], dict)
+                            and bool(value[4].get("tool_calls"))
+                        )
+                    ),
+                    deadline_seconds=self.client.timeout,
+                    max_concurrency=len(race_members),
+                    on_attempt_complete=attempt_completed,
+                )
+            except RuntimeError:
+                outcome = None
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id,
+                () if outcome is None else outcome.cancellation_outcomes,
+            )
+            if outcome is not None:
+                self._record_endpoint_race(outcome, capability="text")
+                self._record_success(outcome.winner_endpoint_id)
+                output, served_id, served_model, usage, extras, output_budget = outcome.value
+                self._last_assistant_message = extras
+                # ADR 0130: only the winning endpoint's clamp evidence is
+                # recorded here. Losing attempts race the same messages
+                # against equivalent endpoints and are otherwise discarded
+                # (see ``_race_attempt_collector``), so their clamp decisions
+                # never reach a caller and are not worth threading through.
+                self._last_output_budget = output_budget
+                output_tokens = None
+                if isinstance(usage, dict):
+                    reported = usage.get("completion_tokens", usage.get("output_tokens"))
+                    if type(reported) is int and reported > 0:
+                        output_tokens = reported
+                self._group_router.observe_success(
+                    outcome.winner_endpoint_id,
+                    outcome.completion_ms / 1000,
+                    output_tokens=output_tokens,
+                )
+                return output, served_id, served_model, usage
+        retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        bounded_provider_response_failures = 0
+        last_provider_response_error: ProviderResponseError | None = None
+        every_failure_was_request_too_large = True
+        # The final classified upstream failure survives the candidate loop so a
+        # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
+        # one opaque collapse message.
+        last_upstream_error: ProviderUpstreamError | None = None
+        for agent in candidates:
+            retry_attempt = 0
+            while True:
+                try:
+                    attempt_start = time.perf_counter()
+                    effort_profile = self._role_effort_profile(role)
+                    # This loop already decides retry-same-agent vs. failover
+                    # per attempt below; single_attempt_transport() keeps
+                    # ModelClient's own transient-retry-with-backoff from
+                    # stacking underneath that decision and multiplying how
+                    # many real attempts one already-failing agent consumes
+                    # before failover ever runs (see its docstring). A plain
+                    # duck-typed ``client`` (any object exposing just
+                    # ``chat()``, e.g. test doubles) has no such method, so
+                    # this degrades to a no-op scope exactly like the
+                    # existing ``take_usage`` duck-typing below.
+                    single_attempt = getattr(self.client, "single_attempt_transport", None)
+                    transport_scope = single_attempt() if callable(single_attempt) else nullcontext()
+                    tool_scope = (
+                        self.client.suppress_request_tools()
+                        if role != "worker"
+                        and hasattr(self.client, "suppress_request_tools")
+                        else nullcontext()
+                    )
+                    with transport_scope, tool_scope:
+                        record_initial_selection([agent.id], "invocation_" + role)
+                        output = (
+                            self.client.chat(agent, messages, effort_profile=effort_profile)
+                            if effort_profile is not None
+                            else self.client.chat(agent, messages)
+                        )
+                except Exception as exc:
+                    if _is_request_too_large_error(exc):
+                        break
+                    every_failure_was_request_too_large = False
+                    if agent.group_name or allowed_agent_ids is not None:
+                        self._group_router.observe_failure(agent.id)
+                    if isinstance(exc, ToolFallbackStoppedError):
+                        # Deliberately terminal, even inside a free/auto virtual
+                        # pool with untried candidates remaining: every path that
+                        # raises this (the provider's own explicit terminal
+                        # tool-execution-state signal via
+                        # _provider_tool_execution_stopped, or a FAIL_CLOSED
+                        # verdict from classify_tool_failure below) resolves to
+                        # ambiguous_outcome, permission_denied, policy_blocked, or
+                        # invalid_arguments -- the exact ADR 0001 safety invariants
+                        # ("permission and policy failures never fall through to
+                        # another agent"; "non-idempotent timeout or transport
+                        # uncertainty never replays automatically") that a
+                        # different candidate cannot make safer: an ambiguous
+                        # server-side outcome is ambiguous regardless of which
+                        # agent asks next, and authorization/policy denial must
+                        # not be worked around by trying a different one. Do not
+                        # convert this to failover without an explicit product
+                        # decision distinguishing which failure kinds that would
+                        # actually be safe for.
+                        raise
+                    if isinstance(exc, ProviderUpstreamError):
+                        last_upstream_error = exc
+                        if exc.provider_status in (429, 503):
+                            # Quota cooldown, tracked separately from the
+                            # circuit breaker below (a 429 is not a model
+                            # health failure) so a caller-level storm-wait
+                            # (_invoke_with_rate_limit_recovery) can see it.
+                            self._record_rate_limit(
+                                agent.id,
+                                exc.extra_detail.get("retry_after_seconds"),
+                                status=exc.provider_status,
+                            )
+                        if (
+                            excluded_agent_ids is not None
+                            and exc.error_code == "model_not_found"
+                        ):
+                            excluded_agent_ids.add(agent.id)
+                            self._record_failure(agent.id)
+                            break
+                        # The primary chat call is a bounded, side-effect-free
+                        # model request, not a tool invocation: classify from
+                        # the provider's own already-computed retryability
+                        # instead of classify_tool_failure's message-text
+                        # heuristics, so free/auto virtual-model failover can
+                        # never be accidentally downgraded to fail-closed by
+                        # incidental wording in an upstream error body (e.g. a
+                        # 400 that happens to mention "invalid arguments").
+                        decision = classify_provider_transport_failure(exc.retryable)
+                    elif isinstance(exc, ProviderResponseError):
+                        if allowed_agent_ids is None:
+                            raise
+                        bounded_provider_response_failures += 1
+                        last_provider_response_error = exc
+                        decision = classify_tool_failure(exc)
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        self._record_failure(agent.id)
+                        break
+                    elif isinstance(exc, _LocalProviderAdmissionTimeout):
+                        decision = downgrade_to_failover(
+                            classify_tool_failure(exc, idempotent=True)
+                        )
+                    else:
+                        decision = classify_tool_failure(exc)
+                    action = decision.action
+                    # A failed attempt is one Bernoulli stability observation
+                    # for measured group routing regardless of what happens next.
+                    if (
+                        action is ToolFallbackAction.RETRY_SAME_AGENT
+                        and retry_attempt < retry_limit
+                    ):
+                        retry_attempt += 1
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        if decision.circuit_failure:  # pragma: no branch - retry-classified failures always trip the circuit
+                            self._record_failure(agent.id)
+                        if self.tool_retry_backoff_seconds:
+                            retry_ceiling = min(
+                                self.tool_retry_backoff_seconds
+                                * (2.0 ** min(retry_attempt - 1, 16)),
+                                30.0,
+                            )
+                            retry_delay = self._tool_retry_jitter(0.0, retry_ceiling)
+                            self._tool_retry_sleep(retry_delay)
+                        continue
+                    if action is ToolFallbackAction.RETRY_SAME_AGENT:
+                        decision = downgrade_to_failover(decision)
+                        action = decision.action
+                    self._record_tool_fallback(agent.id, decision, retry_attempt)
+                    if decision.circuit_failure:
+                        self._record_failure(agent.id)
+                    if action is ToolFallbackAction.FAIL_CLOSED:
+                        raise ToolFallbackStoppedError(agent.id, decision) from None
+                    break
+                # Success: one Bernoulli observation plus measured latency, and
+                # provider-reported completion tokens when available feeding the
+                # tokens-per-second EWMA (Jacobson 1988 estimator). Token counts
+                # are never inferred from text length or chunk counts.
+                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                extras = (
+                    self.client.take_assistant_message()
+                    if hasattr(self.client, "take_assistant_message")
+                    else None
+                )
+                self._last_assistant_message = extras
+                self._last_output_budget = (
+                    self.client.take_output_budget()
+                    if hasattr(self.client, "take_output_budget")
+                    else None
+                )
+                output_tokens = self._usage_completion_tokens(usage)
+                total_tokens = self._usage_total_tokens(usage)
+                if agent.group_name or allowed_agent_ids is not None:
+                    self._group_router.observe_success(
+                        agent.id,
+                        time.perf_counter() - attempt_start,
+                        output_tokens=output_tokens,
+                        total_tokens=total_tokens,
+                    )
+                self._record_success(agent.id)
+                return output, agent.id, agent.model, usage
+        if (
+            last_provider_response_error is not None
+            and bounded_provider_response_failures == len(candidates)
+        ):
+            raise last_provider_response_error
+        if candidates and every_failure_was_request_too_large:
+            raise ProviderRequestTooLargeError(
+                "request body exceeds every eligible provider limit"
+            )
+        if last_upstream_error is not None:
+            raise last_upstream_error
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
+
+    def _record_tool_fallback(
+        self,
+        agent_id: str,
+        decision: ToolFailureDecision,
+        retry_attempt: int,
+    ) -> None:
+        """Record a secret-free audit event for one tool fallback decision."""
+        event_detail = {
+            "agent_id": agent_id,
+            "action": decision.action.value,
+            "failure_kind": decision.kind.value,
+            "reason_code": decision.reason_code,
+            "retry_attempt": retry_attempt,
+        }
+        observed_kind = (
+            decision.kind
+            if decision.observed_kind is None
+            else decision.observed_kind
+        )
+        if observed_kind is not decision.kind:
+            event_detail["observed_failure_kind"] = observed_kind.value
+        self._append_audit_event("tool_fallback_decision", event_detail)
+
+    def _prompt_token_lower_bound(self, text: str, model: str) -> tuple[int, str]:
+        """Conservative prompt-token lower bound for context-window filtering.
+
+        Thin wrapper over :func:`contextual_orchestrator.token_counting.prompt_token_lower_bound`
+        bound to this instance's configured ``token_counter`` (Ong et al., 2024;
+        ADR 0133).
+        """
+        return _prompt_token_lower_bound_evidence(text, model, self.token_counter)
+
+    def _apply_context_window_filter(
+        self,
+        candidates: list[ModelAgent],
+        lower_bound_tokens: int,
+    ) -> tuple[list[ModelAgent], list[str]]:
+        """Skip candidates whose KNOWN context window cannot hold the prompt.
+
+        Raises :class:`ProviderRequestTooLargeError` naming the smallest known
+        window and the lower-bound count when filtering would remove every
+        candidate, so the caller gets the same honest request-too-large
+        contract as the all-providers-413 case instead of an empty pool or a
+        500.
+        """
+        kept, excluded = _context_window_exclusions(candidates, lower_bound_tokens)
+        if kept or not excluded:
+            return kept, excluded
+        smallest_window = min(
+            candidate.context_window
+            for candidate in candidates
+            if isinstance(candidate.context_window, int)
+            and not isinstance(candidate.context_window, bool)
+            and candidate.context_window > 0
+        )
+        raise ProviderRequestTooLargeError(
+            "every eligible candidate's known context window "
+            f"({smallest_window} tokens, smallest known) is smaller than the "
+            f"prompt's lower-bound token count ({lower_bound_tokens})"
+        )
+
+    @staticmethod
+    def _with_context_window_evidence(
+        result: dict[str, Any],
+        lower_bound_tokens: int,
+        bound_source: str,
+        excluded_agent_ids: list[str],
+    ) -> dict[str, Any]:
+        """Attach context-window candidate-filter evidence to a ``route``/``conduct`` result.
+
+        Only attached when the filter actually excluded a candidate --
+        otherwise the response shape is unchanged, matching every other
+        evidence field in this dict (e.g. ``served_agent_id``/``failover_from``)
+        that is only present when something notable happened. Sets flat
+        top-level keys, mirroring this dict's other orchestration fields
+        (``mode``, ``verification``, ...) -- :func:`chat_completion_response`
+        reads them the same way to populate its ``orchestration`` extension.
+        """
+        if not isinstance(result, dict) or not excluded_agent_ids:
+            return result
+        annotated = dict(result)
+        annotated["prompt_token_lower_bound"] = lower_bound_tokens
+        annotated["prompt_token_bound_source"] = bound_source
+        annotated["context_window_excluded"] = excluded_agent_ids
+        return annotated
+
+    @staticmethod
+    def _with_context_window_orchestration_extension(
+        result: dict[str, Any],
+        lower_bound_tokens: int,
+        bound_source: str,
+        excluded_agent_ids: list[str],
+    ) -> dict[str, Any]:
+        """Attach context-window candidate-filter evidence to a raw passthrough body.
+
+        Only attached when the filter actually excluded a candidate, so a
+        request nothing was skipped for keeps its plain passthrough shape
+        (some callers assert the absence of an ``orchestration`` key for
+        exactly that reason). Unlike :meth:`_with_context_window_evidence`,
+        this nests the fields under the wire-level ``orchestration`` extension
+        key directly, since a ``proxy_completion`` result IS the final
+        OpenAI-shaped response body (no later ``chat_completion_response``
+        wrapping step re-derives one).
+        """
+        if not isinstance(result, dict) or not excluded_agent_ids:
+            return result
+        annotated = dict(result)
+        orchestration = dict(annotated.get("orchestration") or {})
+        orchestration["prompt_token_lower_bound"] = lower_bound_tokens
+        orchestration["prompt_token_bound_source"] = bound_source
+        orchestration["context_window_excluded"] = excluded_agent_ids
+        annotated["orchestration"] = orchestration
+        return annotated
+
+    def _failover_candidates(
+        self,
+        primary: ModelAgent,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+        allowed_agent_ids: set[str] | None = None,
+        prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+        skip_rate_limited: bool = True,
+        prompt_token_lower_bound: int | None = None,
+    ) -> list[ModelAgent]:
+        """Rank and filter failover candidates for one role.
+
+        ``skip_rate_limited`` (default ``True``) drops a candidate with a
+        currently active provider-declared quota cooldown
+        (:meth:`_record_rate_limit`), the same way circuit-open candidates
+        are dropped below -- callers get this for free. A caller that needs
+        the FULL ranked list to run its own storm-wait/earliest-ready
+        decision (``proxy_completion``'s passthrough loop) passes
+        ``skip_rate_limited=False`` and does its own filtering.
+        """
+        try:
+            ranked = self._ranked_agents(
+                text,
+                role,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+                effort_profile=effort_profile,
+            )
+        except RuntimeError:
+            if required_tags:
+                return []
+            raise
+        if allowed_agent_ids is not None:
+            ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
+        if allowed_agent_ids is None:
+            ranked = [
+                agent
+                for agent in ranked
+                if (
+                    canonical_group_name(agent.group_name)
+                    == canonical_group_name(primary.group_name)
+                    if primary.group_name and agent.group_name
+                    else not primary.group_name and not agent.group_name
+                )
+            ]
+        ordered = (
+            [primary]
+            if allowed_agent_ids is None or primary.id in allowed_agent_ids
+            else []
+        ) + [agent for agent in ranked if agent.id != primary.id]
+        ordered = [
+            agent
+            for agent in ordered
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            and _is_general_chat_agent(agent)
+            and self._agent_matches_required_tags(agent, required_tags)
+        ]
+        eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
+        healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
+        # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
+        healthy = healthy or eligible
+        if skip_rate_limited:
+            not_rate_limited = [
+                agent for agent in healthy if self._rate_limit_remaining(agent.id) is None
+            ]
+            # If every healthy candidate is currently quota-limited, still
+            # return them rather than an empty list -- a caller with no
+            # storm-wait logic of its own should still get one honest
+            # attempt/failure instead of "no eligible provider candidate".
+            healthy = not_rate_limited or healthy
+        if prompt_token_lower_bound is not None:
+            healthy, excluded = self._apply_context_window_filter(
+                healthy, prompt_token_lower_bound
+            )
+            self._last_context_window_excluded = excluded
+        return healthy
+
+    def _record_tool_loop_agents(self, tool_calls: Any, agent_id: str | None) -> None:
+        """Remember which agent emitted each tool call, keyed by ``tool_call_id``.
+
+        Feeds :meth:`_apply_tool_loop_route`, which routes a follow-up request
+        carrying that call's ``role: tool`` result back to the same agent
+        (Fugu report arXiv:2606.21228 S3 / Fugu-Ultra Conductor's
+        tool-loop-return contract) instead of a freshly ranked one. The map is
+        bounded LRU (:data:`TOOL_LOOP_MEMORY_MAX_ENTRIES` /
+        ``tool_loop_memory_max_entries``); a call id that is never followed up
+        simply ages out.
+        """
+        if not agent_id or not isinstance(tool_calls, list):
+            return
+        call_ids = [
+            call["id"]
+            for call in tool_calls
+            if isinstance(call, dict) and isinstance(call.get("id"), str) and call["id"]
+        ]
+        if not call_ids:
+            return
+        with self._evidence_lock:
+            for call_id in call_ids:
+                self._tool_loop_memory[call_id] = agent_id
+                self._tool_loop_memory.move_to_end(call_id)
+            while len(self._tool_loop_memory) > self.tool_loop_memory_max_entries:
+                self._tool_loop_memory.popitem(last=False)
+
+    @staticmethod
+    def _tool_loop_call_ids(messages: Any) -> list[str]:
+        """Return every ``tool_call_id`` a request's ``role: tool`` messages carry."""
+        if not isinstance(messages, list):
+            return []
+        return [
+            message["tool_call_id"]
+            for message in messages
+            if isinstance(message, dict)
+            and message.get("role") == "tool"
+            and isinstance(message.get("tool_call_id"), str)
+            and message["tool_call_id"]
+        ]
+
+    def _remembered_tool_loop_agent(self, messages: Any) -> str | None:
+        """Return the remembered emitting-agent id for a tool-result follow-up, if any."""
+        call_ids = self._tool_loop_call_ids(messages)
+        if not call_ids:
+            return None
+        with self._evidence_lock:
+            for call_id in call_ids:
+                agent_id = self._tool_loop_memory.get(call_id)
+                if agent_id is not None:
+                    return agent_id
+        return None
+
+    def _apply_tool_loop_route(
+        self,
+        candidates: list[ModelAgent],
+        messages: Any,
+    ) -> tuple[list[ModelAgent], dict[str, str] | None]:
+        """Move a tool-result follow-up's emitting agent to the front, when eligible.
+
+        ``candidates`` must already be fully filtered/ordered by every request
+        constraint that applies (virtual selector, free/ZDR eligibility,
+        circuit state, provider exclusions) -- this only reorders within that
+        eligible set, so an explicit concrete model (whose call sites never
+        reach this helper) and every other precedence rule are preserved
+        unconditionally: the remembered agent is used only when it is already
+        one of ``candidates``.
+
+        Returns ``(candidates, None)`` when the request carries no tool-loop
+        follow-up evidence (no remembered ``tool_call_id``); otherwise the
+        (possibly reordered) candidates plus a routing-evidence mapping with
+        ``tool_loop_route`` (``"emitting_agent"`` when the remembered agent is
+        still eligible and was moved to the front, ``"fallback"`` when it is
+        no longer eligible and the original order is kept) and
+        ``tool_loop_agent_id`` (the remembered agent id either way).
+        """
+        remembered_agent_id = self._remembered_tool_loop_agent(messages)
+        if remembered_agent_id is None:
+            return candidates, None
+        for index, candidate in enumerate(candidates):
+            if candidate.id != remembered_agent_id:
+                continue
+            reordered = (
+                candidates
+                if index == 0
+                else [candidate, *candidates[:index], *candidates[index + 1 :]]
+            )
+            return reordered, {
+                "tool_loop_route": "emitting_agent",
+                "tool_loop_agent_id": remembered_agent_id,
+            }
+        return candidates, {
+            "tool_loop_route": "fallback",
+            "tool_loop_agent_id": remembered_agent_id,
+        }
+
+    @staticmethod
+    def _chat_response_tool_calls(response: Any) -> list[Any] | None:
+        """Return a chat-completions-shaped provider response's ``tool_calls``, if any."""
+        if not isinstance(response, Mapping):
+            return None
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        first = choices[0]
+        message = first.get("message") if isinstance(first, Mapping) else None
+        tool_calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+        return tool_calls if isinstance(tool_calls, list) and tool_calls else None
+
+    @staticmethod
+    def _responses_output_tool_calls(response: Any) -> list[dict[str, Any]] | None:
+        """Return a Responses-shaped provider response's ``function_call`` items.
+
+        Adapts each item's ``call_id`` into the ``{"id": ...}`` shape
+        :meth:`_record_tool_loop_agents` already expects from chat's
+        ``tool_calls``, so a Responses-surface tool call feeds the same
+        ``tool_loop_memory`` map as a chat one.
+        """
+        if not isinstance(response, Mapping):
+            return None
+        output = response.get("output")
+        if not isinstance(output, list):
+            return None
+        call_ids = [
+            item["call_id"]
+            for item in output
+            if isinstance(item, Mapping)
+            and item.get("type") == "function_call"
+            and isinstance(item.get("call_id"), str)
+            and item["call_id"]
+        ]
+        return [{"id": call_id} for call_id in call_ids] if call_ids else None
+
+    @staticmethod
+    def _served_tool_calls(response: Any, api_surface: str) -> list[Any] | None:
+        """Extract a served response's tool calls for whichever wire surface served it.
+
+        A single dispatch point for :meth:`_record_tool_loop_agents` callers
+        that can serve either surface (``proxy_completion``'s explicit-model
+        and virtual passthrough branches, and
+        ``_orchestrated_provider_completion``'s structured synthesis), so the
+        Responses-vs-chat extractor choice is made once instead of repeating
+        the same ``api_surface == "responses"`` branch at each call site.
+        """
+        return (
+            TaskOrchestrator._responses_output_tool_calls(response)
+            if api_surface == "responses"
+            else TaskOrchestrator._chat_response_tool_calls(response)
+        )
+
+    def _circuit_open(self, agent_id: str) -> bool:
+        with self._circuit_lock:
+            state = self._circuit.get(agent_id)
+            if not state or state["failures"] < self.circuit_failure_threshold:
+                return False
+            if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
+                state["failures"] = 0.0
+                state["opened_at"] = 0.0
+                reset_occurred = True
+            else:
+                reset_occurred = False
+        if reset_occurred:
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug("circuit_reset agent_id=%s", agent_id)
+            return False
+        return True
+
+    def _record_failure(self, agent_id: str) -> None:
+        opened = False
+        with self._circuit_lock:
+            state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
+            state["failures"] += 1.0
+            failures = state["failures"]
+            if failures >= self.circuit_failure_threshold and not state["opened_at"]:
+                state["opened_at"] = time.monotonic()
+                opened = True
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "circuit_failure agent_id=%s failures=%s threshold=%s",
+                agent_id,
+                failures,
+                self.circuit_failure_threshold,
+            )
+        if opened:
+            _LOGGER.warning(
+                "circuit_opened agent_id=%s failures=%s threshold=%s reset_seconds=%s",
+                agent_id,
+                failures,
+                self.circuit_failure_threshold,
+                self.circuit_reset_seconds,
+            )
+
+    def _record_embedding_failure(
+        self, agent: ModelAgent, endpoint_path: str, exc: BaseException
+    ) -> None:
+        """Quarantine one failing embedding endpoint and retain secret-free evidence."""
+        provider_status = getattr(exc, "provider_status", None)
+        if provider_status is None and isinstance(exc, urllib.error.HTTPError):
+            provider_status = exc.code
+        if isinstance(provider_status, bool) or not isinstance(provider_status, int):
+            provider_status = None
+        if provider_status != 413:
+            self._group_router.observe_failure(agent.id)
+            self._record_failure(agent.id)
+        self.record_analytics_event(
+            "embedding_endpoint_failed",
+            {
+                "endpoint_path": endpoint_path,
+                "agent_id": agent.id,
+                "model": agent.model,
+                "error_type": type(exc).__name__,
+                "provider_status": provider_status,
+            },
+        )
+
+    def _record_success(self, agent_id: str) -> None:
+        with self._circuit_lock:
+            cleared = self._circuit.pop(agent_id, None)
+        if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
+
+    #: Statuses for which an absent Retry-After/x-ratelimit-reset* still
+    #: records an assumed cooldown. Deliberately 429 only: 503 ("service
+    #: unavailable") is a genuine, possibly permanent availability signal
+    #: with no inherent quota-recovery semantics, so an unheadered 503
+    #: keeps requiring an explicit provider-stated duration to be treated as
+    #: cooling at all -- unlike 429, which is unambiguously quota exhaustion
+    #: even when the provider forgot to say for how long.
+    _ASSUMABLE_RATE_LIMIT_STATUSES = frozenset({429})
+
+    def _record_rate_limit(
+        self, agent_id: str, retry_after_seconds: float | None, *, status: int = 429
+    ) -> None:
+        """Record one 429/503 quota cooldown, provider-stated or assumed.
+
+        ``retry_after_seconds is None`` means the provider's response carried
+        no ``Retry-After``/``x-ratelimit-reset*`` at all (RFC 9110 10.2.3
+        permits this, and real providers -- NIM and OpenRouter among them --
+        routinely do it) -- NOT "no cooldown". Recording nothing in that case
+        was the original defect: a candidate whose 429 omitted the header was
+        never marked cooling, so an all-omitted-header storm looked identical
+        to "nothing is rate-limited" and failed exactly as if this whole
+        feature were absent. An unknown duration on a 429 (``status``'s
+        default) therefore records ``self.rate_limit_unknown_cooldown_seconds``
+        (an assumed cooldown, tracked in ``_rate_limit_assumed``) instead of
+        skipping the record. An unknown duration on any other status (pass
+        the real one explicitly) records nothing, preserving that status's
+        existing exhaustion behavior -- see
+        :data:`_ASSUMABLE_RATE_LIMIT_STATUSES`.
+
+        Cooldowns only ever extend forward: a second, larger cooldown for the
+        same agent before the first expires replaces it (and its source
+        label with it), but a smaller/stale one -- provider-stated or
+        assumed -- never shortens an in-flight cooldown or overwrites its
+        source label.
+        """
+        assumed = retry_after_seconds is None
+        if assumed and status not in self._ASSUMABLE_RATE_LIMIT_STATUSES:
+            return
+        resolved_seconds = (
+            self.rate_limit_unknown_cooldown_seconds
+            if assumed
+            else max(float(retry_after_seconds), 0.0)
+        )
+        until = time.monotonic() + resolved_seconds
+        with self._rate_limit_lock:
+            current = self._rate_limit_until.get(agent_id)
+            if current is None or until > current:
+                self._rate_limit_until[agent_id] = until
+                if assumed:
+                    self._rate_limit_assumed.add(agent_id)
+                else:
+                    self._rate_limit_assumed.discard(agent_id)
+
+    def _rate_limit_remaining(self, agent_id: str, *, now: float | None = None) -> float | None:
+        """Return remaining cooldown seconds for ``agent_id``, or ``None`` when clear."""
+        moment = now if now is not None else time.monotonic()
+        with self._rate_limit_lock:
+            until = self._rate_limit_until.get(agent_id)
+            if until is None:
+                return None
+            remaining = until - moment
+            if remaining <= 0:
+                self._rate_limit_until.pop(agent_id, None)
+                self._rate_limit_assumed.discard(agent_id)
+                return None
+            return remaining
+
+    def _rate_limit_cooldown_source(self, agent_id: str) -> str:
+        """Return ``"assumed"`` when ``agent_id``'s active cooldown has no provider-stated duration, else ``"provider"``.
+
+        Meaningful only when the caller already knows ``agent_id`` is
+        currently rate-limited (a non-``None`` :meth:`_rate_limit_remaining`);
+        an agent with no active cooldown is reported ``"provider"`` here by
+        harmless default.
+        """
+        with self._rate_limit_lock:
+            return "assumed" if agent_id in self._rate_limit_assumed else "provider"
+
+    def _rate_limited_snapshot(self) -> dict[str, float]:
+        """Return ``{agent_id: remaining_seconds}`` for every currently cooling-down agent."""
+        now = time.monotonic()
+        with self._rate_limit_lock:
+            items = list(self._rate_limit_until.items())
+        snapshot: dict[str, float] = {}
+        expired: list[str] = []
+        for agent_id, until in items:
+            remaining = until - now
+            if remaining > 0:
+                snapshot[agent_id] = remaining
+            else:
+                expired.append(agent_id)
+        if expired:
+            with self._rate_limit_lock:
+                for agent_id in expired:
+                    stale = self._rate_limit_until.get(agent_id)
+                    if stale is not None and stale - time.monotonic() <= 0:
+                        self._rate_limit_until.pop(agent_id, None)
+        return snapshot
+
+    def _rate_limit_wait_budget(self, agent: ModelAgent) -> float:
+        """Resolve how long a rate-limit-storm wait may block for this request.
+
+        Prefers the administrator-owned ``model_timeout_seconds`` deadline
+        (issue #1053) on the primary candidate when one is set -- waiting for
+        a quota cooldown must never exceed a deadline the administrator
+        already promised bounds the request. Falls back to
+        ``self.rate_limit_wait_seconds`` (a caller-contract bound, documented
+        on the constructor, not a hidden product limit) only when no such
+        deadline is configured. A test double standing in for ``self.client``
+        need not implement the resolver at all.
+        """
+        resolver = getattr(self.client, "_resolved_model_timeout", None)
+        resolved = resolver(agent) if callable(resolver) else None
+        return resolved if resolved is not None else self.rate_limit_wait_seconds
+
+    def _await_rate_limit_recovery(
+        self,
+        candidates: list[ModelAgent],
+        *,
+        deadline: float,
+        transport: str = "passthrough",
+        virtual_selector: bool,
+    ) -> bool:
+        """Wait out a rate-limit storm across ``candidates``, or fail honestly.
+
+        The single shared implementation of the wait-then-retry admission
+        contract: every caller with a genuine storm (``proxy_completion``'s
+        passthrough loop, and ``_invoke_with_rate_limit_recovery`` for
+        route_once/conduct) funnels through this one method instead of each
+        re-deriving the earliest-ready/budget decision.
+
+        The discriminator for whether there is anything to wait out is
+        **not** the candidate count -- it is whether the caller delegated
+        model selection to the gateway at all. ``virtual_selector`` carries
+        that: ``True`` when the request named a virtual/gateway-selected
+        model (``GATEWAY_DEFAULT_MODEL``/``AUTO_MODEL``/``FREE_MODEL``, or no
+        model at all), ``False`` when the caller pinned one concrete model
+        id. An explicit concrete model (``virtual_selector=False``) returns
+        ``False`` immediately regardless of candidate count -- a single
+        pinned/named candidate keeps its pre-existing immediate
+        classified-error contract exactly as before this feature existed;
+        the client already sees ``retryable=true`` and can retry on its own
+        with no server-side latency added.
+        :func:`~contextual_orchestrator.provider_errors` /
+        ``tests/test_provider_error_taxonomy.py::test_chat_completions_returns_openai_compatible_rate_limit_error``
+        pins exactly this shape (one named concrete model, always 429, no
+        headers) and hangs past its client-side read timeout if this path
+        waits, so it must stay fast.
+
+        A virtual selector (``virtual_selector=True``) waits even when only
+        ONE candidate is currently eligible: production evidence
+        (noema-review run 34772771262 on contextual-orchestrator#1177,
+        preflight ``ready_count: 1``, failing after 562s with a 429 from
+        ``google/gemma-4-31b-it:free``; ``ContextualWisdomLab/.github#2148``,
+        which documents the private-target ZDR pool as three OpenRouter
+        ``:free`` routes on one account, so a single 429 can wipe the pool
+        down to one or zero eligible routes) shows a single-eligible-
+        candidate virtual pool is a real, common shape in production, not a
+        hypothetical -- the previous ``len(candidates) < 2`` guard treated
+        that shape identically to "nothing to wait for" and failed the
+        request immediately, which is the exact failure this feature exists
+        to remove.
+
+        Also returns ``False`` when none of ``candidates`` is currently
+        rate-limited -- there is no cooldown to wait out regardless of
+        selector kind, so the caller's own (unrelated) failure handling
+        applies. Otherwise, computes the earliest known cooldown among the
+        currently rate-limited members and:
+
+        * waits for it (one bounded, non-busy ``time.sleep``-backed call)
+          and returns ``True`` -- the caller should re-run candidate
+          selection -- when it fits inside the remaining budget against
+          ``deadline`` (an absolute ``time.monotonic()`` instant the caller
+          already resolved via :meth:`_rate_limit_wait_budget`);
+        * otherwise raises the honest
+          :func:`contextual_orchestrator.provider_errors.rate_limited_storm_error`
+          (429, ``Retry-After``) instead of letting the caller fail as a
+          generic connection error or opaque exhaustion.
+        """
+        if not virtual_selector:
+            return False
+        now = time.monotonic()
+        cooling = [
+            candidate
+            for candidate in candidates
+            if self._rate_limit_remaining(candidate.id, now=now) is not None
+        ]
+        if not cooling:
+            return False
+        earliest_agent = min(
+            cooling, key=lambda candidate: self._rate_limit_remaining(candidate.id, now=now)
+        )
+        earliest_ready = self._rate_limit_remaining(earliest_agent.id, now=now)
+        remaining_budget = deadline - now
+        if earliest_ready is None or remaining_budget <= 0 or earliest_ready > remaining_budget:
+            raise rate_limited_storm_error(
+                agent_id=earliest_agent.id,
+                model=earliest_agent.model,
+                retry_after_seconds=earliest_ready if earliest_ready is not None else 0.0,
+                transport=transport,
+                cooldown_source=self._rate_limit_cooldown_source(earliest_agent.id),
+            ) from None
+        # Single bounded wait, never a busy-loop; caller re-runs selection
+        # once the earliest candidate's cooldown has elapsed.
+        self._rate_limit_sleep(earliest_ready)
+        return True
+
+    def _invoke_with_rate_limit_recovery(
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        allowed_agent_ids: set[str] | None = None,
+        eligibility_role: str | None = None,
+        excluded_agent_ids: set[str] | None = None,
+        virtual_selector: bool,
+        prompt_token_lower_bound: int | None = None,
+    ) -> tuple[str, str, str, dict[str, Any] | None]:
+        """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
+
+        route_once and conduct's per-step call both reach candidate
+        exhaustion through :meth:`_invoke`. When that exhaustion's last
+        failure is a 429/503 AND every candidate currently eligible for this
+        call is rate-limited (a genuine storm, not a mixed failure set),
+        waits out the earliest cooldown via :meth:`_await_rate_limit_recovery`
+        and retries the whole call instead of propagating the exhaustion --
+        the same admission contract ``proxy_completion`` applies to its own
+        passthrough failover loop. A mixed failure set (some candidate is not
+        rate-limited) re-raises exactly as :meth:`_invoke` would have,
+        unchanged.
+
+        ``virtual_selector`` is the caller's own already-computed selector
+        nature (route_once/conduct: ``model_name in {GATEWAY_DEFAULT_MODEL,
+        AUTO_MODEL, FREE_MODEL}``), threaded straight through to
+        :meth:`_await_rate_limit_recovery` -- see its docstring for why the
+        wait admission decision turns on selector kind, not candidate count.
+        An explicit concrete model always re-raises immediately below,
+        regardless of how many failover candidates exist, preserving
+        ``_invoke``'s pre-existing exhaustion contract for a pinned model.
+        """
+        wait_deadline: float | None = None
+        while True:
+            try:
+                return self._invoke(
+                    primary,
+                    messages,
+                    text=text,
+                    role=role,
+                    allowed_agent_ids=allowed_agent_ids,
+                    eligibility_role=eligibility_role,
+                    excluded_agent_ids=excluded_agent_ids,
+                    prompt_token_lower_bound=prompt_token_lower_bound,
+                )
+            except ProviderUpstreamError as exc:
+                if exc.provider_status not in (429, 503):
+                    raise
+                required_tags = self._image_input_required_tags(messages)
+                prompt_context = self._prompt_interaction(messages)
+                candidates = self._failover_candidates(
+                    primary,
+                    text,
+                    eligibility_role or role,
+                    required_tags=required_tags,
+                    allowed_agent_ids=allowed_agent_ids,
+                    prompt_context=prompt_context,
+                    skip_rate_limited=False,
+                    prompt_token_lower_bound=prompt_token_lower_bound,
+                )
+                if excluded_agent_ids:
+                    candidates = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.id not in excluded_agent_ids
+                    ]
+                if not virtual_selector or any(
+                    self._rate_limit_remaining(candidate.id) is None
+                    for candidate in candidates
+                ):
+                    # Not a genuine storm to wait out: either the caller
+                    # pinned one explicit concrete model (fail fast,
+                    # unchanged pre-existing contract -- see
+                    # _await_rate_limit_recovery's docstring), or some
+                    # eligible candidate is not rate-limited -- a genuine,
+                    # unrelated exhaustion/failure. Preserve _invoke's own
+                    # exhaustion contract exactly.
+                    raise
+                if wait_deadline is None:
+                    wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
+                if not self._await_rate_limit_recovery(
+                    candidates,
+                    deadline=wait_deadline,
+                    transport="chat",
+                    virtual_selector=virtual_selector,
+                ):
+                    # Defensive: _await_rate_limit_recovery agreed there was
+                    # nothing to wait for after all. Never loop without
+                    # having actually waited -- re-raise the real failure.
+                    raise
+                continue
+
+    @staticmethod
+    def _rate_limited_provider_signal(
+        exc: BaseException,
+    ) -> tuple[int, urllib.error.HTTPError | None] | None:
+        """Find a 429/503 status (and its HTTPError, for header access) in ``exc``'s chain."""
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+            if current is None or id(current) in seen:
+                return None
+            seen.add(id(current))
+            if isinstance(current, urllib.error.HTTPError) and current.code in (429, 503):
+                return current.code, current
+            if isinstance(current, ProviderUpstreamError) and current.provider_status in (429, 503):
+                return current.provider_status, None
+            if current.__cause__ is not None:
+                current = current.__cause__
+            elif current.__suppress_context__:
+                return None
+            else:
+                current = current.__context__
+        return None
+
+    def _agent(self, agent_id: str) -> ModelAgent:
+        for agent in self.candidates:
+            if agent.id == agent_id and _agent_matches_request_endpoint(agent):
+                return agent
+        raise KeyError(agent_id)  # pragma: no cover
+
+    def _agent_in_pool(self, agent_pool_id: str, worker_agent_id: str) -> ModelAgent:
+        """Resolve an agent only through the pool boundary it can belong to.
+
+        The current persistence model has one ``default`` pool and stores
+        agents by ID. Keeping the pool check beside the lookup prevents a
+        future multi-pool change from turning separately validated path
+        parameters into an object-authorization bypass.
+        """
+        if agent_pool_id != "default":
+            raise KeyError(agent_pool_id)
+        return self._agent(worker_agent_id)
+
+    def _needs_workflow(self, text: str) -> bool:
+        """Route-vs-conduct decision from a strict structured triage verdict.
+
+        Keyword hint tables are intentionally absent: keyword matching cannot
+        handle negation, mixed language, or tasks that quote trigger words, and
+        hand-tuned thresholds are not evidence. The verdict comes from one
+        exact-schema model call (cached by content hash) and fails closed to
+        the orchestrated path on any uncertainty.
+        """
+        return bool(self._triage_fn(text))
+
+    def _latest_user_text(self, messages: list[ChatMessage]) -> str:
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            text = _coerce_message_content_text(message.get("content", ""))
+            if text:
+                return text
+        return ""  # pragma: no cover
+
+    @staticmethod
+    def _prompt_interaction(messages: list[ChatMessage]) -> str:
+        """Canonical system/developer/user interaction used as an IRT item."""
+        interaction = [
+            {"role": message.get("role"), "content": message.get("content")}
+            for message in messages
+            if message.get("role") in {"system", "developer", "user"}
+        ]
+        try:
+            return json.dumps(
+                interaction,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        except (TypeError, ValueError):
+            return ""
+
+    @staticmethod
+    def _source_image_parts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        """Copy validated image parts so evidence steps receive source pixels."""
+        return [
+            copy.deepcopy(part)
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+            if isinstance(part, dict) and part.get("type") == "image_url"
+        ]
+
+    @staticmethod
+    def _image_input_required_tags(messages: list[ChatMessage]) -> tuple[str, ...]:
+        """Return the hard image entitlement before content normalization.
+
+        Chat validation accepts stripped, case-insensitive ``image_url`` and
+        the Responses-style ``input_image`` alias. Admission must recognize
+        that same surface before any streaming response is committed.
+        """
+        for message in messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if isinstance(part_type, str) and part_type.strip().casefold() in {
+                    "image_url",
+                    "input_image",
+                }:
+                    return (IMAGE_INPUT_EVIDENCE_TAG,)
+        return ()
+
+    @staticmethod
+    def _agent_supports_image_input(agent: ModelAgent) -> bool:
+        """True when an agent carries discovery or legacy image-input evidence."""
+        return (
+            IMAGE_INPUT_EVIDENCE_TAG in agent.tags
+            or LEGACY_VISION_CAPABILITY_TAG in agent.tags
+        )
+
+    @staticmethod
+    def _agent_matches_required_tags(
+        agent: ModelAgent, required_tags: tuple[str, ...]
+    ) -> bool:
+        """Hard entitlement check; image tags accept discovery or legacy forms."""
+        if not required_tags:
+            return True
+        if required_tags in {
+            (IMAGE_INPUT_EVIDENCE_TAG,),
+            (LEGACY_VISION_CAPABILITY_TAG,),
+        }:
+            return TaskOrchestrator._agent_supports_image_input(agent)
+        return all(tag in agent.tags for tag in required_tags)
+
+    def _free_pool_agent_ids(
+        self,
+        *,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
+        role: str | None = None,
+    ) -> set[str]:
+        """Ids eligible for ``orchestrator/free`` given the known request shape.
+
+        Blind text requests keep :meth:`_is_general_free_agent` (excludes
+        non-text-input deployments). When the request already carries
+        ``image_url`` parts, the modality is no longer unknown: admit
+        zero-cost agents with explicit image-input evidence via
+        :meth:`_is_image_capable_free_agent` so figure-bearing review traffic
+        can reach a vision-capable free model instead of a text-only one that
+        would silently ignore pixels. Image entitlement is composed with the
+        same #940 tool-call exclusion — never a replacement for it.
+        """
+        require_image = False
+        if messages is not None:
+            require_image = bool(self._image_input_required_tags(messages))
+        elif isinstance(chat_body, Mapping):
+            body_messages = chat_body.get("messages")
+            if isinstance(body_messages, list):
+                require_image = bool(self._image_input_required_tags(body_messages))
+        shaped_body = self._request_shaped_chat_body(chat_body)
+        ids: set[str] = set()
+        for candidate in self.agents:
+            if candidate.disabled:
+                continue
+            if role is not None and role in candidate.provider_exclusions:
+                continue
+            if not (
+                _agent_matches_request_endpoint(candidate)
+                and self._zdr_agent_allowed(candidate)
+            ):
+                continue
+            if require_image:
+                if self._is_image_capable_free_agent(
+                    candidate, chat_body=shaped_body
+                ):
+                    ids.add(candidate.id)
+            elif self._is_general_free_agent(candidate, chat_body=shaped_body):
+                ids.add(candidate.id)
+        return ids
+
+    def _model_judge_verification(
+        self,
+        task: str,
+        fallback: dict[str, Any],
+        *,
+        free_only: bool = False,
+        allowed_agent_ids: set[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
+        required_tags: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Ask a model for a strict structured verdict and fail closed on uncertainty."""
+        verifier_output = fallback.get("verifier_output", "")
+        if not verifier_output:
+            return {
+                "accepted": False,
+                "reason": "model judge requires a non-empty verifier report",
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+        try:
+            components = _resolve_fast_mlsirm_components()
+        except Exception:  # noqa: BLE001 - a broken installed judge must not bypass the required path
+            return {
+                "accepted": False,
+                "reason": "fast-mlsirm judge could not be loaded; verification failed closed",
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+        if components is None:
+            return {
+                "accepted": False,
+                "reason": "fast-mlsirm judge is unavailable; verification failed closed",
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+        judge_adapter: _FastMLSIJudgeAdapter | None = None
+        try:
+            eligible_judges = [
+                agent
+                for agent in self._ranked_agents(
+                    task,
+                    "verifier",
+                    free_only=free_only,
+                    required_tags=required_tags,
+                )
+                if allowed_agent_ids is None or agent.id in allowed_agent_ids
+                if excluded_agent_ids is None or agent.id not in excluded_agent_ids
+            ]
+            judge = eligible_judges[0]
+            judge_allowed_agent_ids = {agent.id for agent in eligible_judges}
+            # The judge is one bounded provider call.  Do not pass the
+            # planning strategy ("template"/"generated") as an
+            # orchestration mode or recursively conduct another workflow.
+            judge_adapter = _FastMLSIJudgeAdapter(
+                self,
+                task,
+                judge.id,
+                mode="route",
+                allowed_agent_ids=judge_allowed_agent_ids,
+                excluded_agent_ids=excluded_agent_ids,
+            )
+            fast_judge = components.judge_cls(
+                judge_adapter,
+                mode="route",
+                accept_threshold=0.7,
+            )
+            result = fast_judge.judge(
+                task=task,
+                answer=verifier_output,
+                criteria=(
+                    components.criterion_cls(
+                        criterion_id="evidence_quality",
+                        description="Does the verifier output identify concrete evidence and caveats with actionable impact?",
+                        weight=1.0,
+                    ),
+                    components.criterion_cls(
+                        criterion_id="risk_signal",
+                        description="Does the verifier output mention substantive risks and constraints with support?",
+                        weight=1.0,
+                    ),
+                ),
+            )
+            verification = {
+                "accepted": result.accepted,
+                "reason": result.rationale,
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+            verification.update(self._judge_adapter_accounting_fields(judge_adapter))
+            # The adapter's provider-boundary capture is authoritative for
+            # usage. fast-mlsirm aggregates a missing trace usage into a
+            # non-empty zero-token mapping, which must not turn an unmeasured
+            # call into provider-reported zero spend here.
+            result_usage_has_positive_evidence = isinstance(result.usage, Mapping) and any(
+                type(result.usage.get(key)) is int and result.usage[key] > 0
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+            if result.usage and (
+                judge_adapter.served_usage is not None or result_usage_has_positive_evidence
+            ):
+                verification["judge_usage"] = result.usage
+            verification["judge_orchestration_mode"] = result.orchestration_mode
+            # The provider call has already completed by this point (result
+            # is a real response, with judge_agent_id/judge_model/judge_usage
+            # already captured above) -- an invalid IRT projection is a
+            # publication-safety failure, not evidence the call never
+            # happened. Every fail-closed verdict from here on must still
+            # carry this accounting subset, or _run_budget_output_by_model/
+            # spend_analytics (which key off exactly these fields) silently
+            # lose an already-incurred, real judge spend the moment
+            # publication is rejected (Devin review on #961).
+            accounting_fields = {
+                key: verification[key]
+                for key in (
+                    "judge_agent_id",
+                    "judge_model",
+                    "judge_usage",
+                    "judge_output_text",
+                )
+                if key in verification
+            }
+            criterion_scores = getattr(result, "criterion_scores", None)
+            to_irt_row = getattr(result, "to_irt_row", None)
+            if isinstance(criterion_scores, Mapping) and callable(to_irt_row):
+                try:
+                    irt_row = to_irt_row(item_type="dichotomous")
+                except Exception:  # noqa: BLE001 - invalid IRT projection must not be published
+                    return {
+                        "accepted": False,
+                        "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
+                        "verifier_output": verifier_output,
+                        "judge": "model",
+                        **accounting_fields,
+                    }
+                if (
+                    len(criterion_scores) < 2
+                    or type(irt_row) not in (tuple, list)
+                    or len(irt_row) != len(criterion_scores)
+                ):
+                    return {
+                        "accepted": False,
+                        "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
+                        "verifier_output": verifier_output,
+                        "judge": "model",
+                        **accounting_fields,
+                    }
+                verification["judge_criterion_scores"] = dict(criterion_scores)
+                verification["judge_irt_item_type"] = "dichotomous"
+                verification["judge_irt_row"] = list(irt_row)
+            return verification
+        except components.format_error:
+            return {
+                "accepted": False,
+                "reason": "model judge returned an invalid structured verdict; verification failed closed",
+                "verifier_output": verifier_output,
+                "judge": "model",
+                **self._judge_adapter_accounting_fields(judge_adapter),
+            }
+        except Exception:  # noqa: BLE001 - judge failure must not break the request
+            return {
+                "accepted": False,
+                "reason": "model judge unavailable; verification failed closed",
+                "verifier_output": verifier_output,
+                "judge": "model",
+                **self._judge_adapter_accounting_fields(judge_adapter),
+            }
+
+    @staticmethod
+    def _judge_adapter_accounting_fields(
+        judge_adapter: "_FastMLSIJudgeAdapter | None",
+    ) -> dict[str, Any]:
+        """Return whatever judge spend evidence a (possibly failed) call captured.
+
+        A malformed structured verdict, or any other failure after the
+        provider call itself completed, must not erase that call's real
+        spend from budget/spend accounting (Devin review on #961):
+        ``_FastMLSIJudgeAdapter`` records ``served_agent_id``/``served_model``/
+        ``served_usage`` as soon as its own ``complete()``/``complete_structured()``
+        returns, independently of whether the caller (fast-mlsirm) later
+        raises while turning that response into a verdict. ``judge_adapter``
+        itself can be ``None`` when the failure happened before one was even
+        constructed (e.g. no eligible judge agent), in which case there is
+        genuinely no call to account for.
+        """
+        if judge_adapter is None:
+            return {}
+        fields: dict[str, Any] = {}
+        if judge_adapter.served_agent_id is not None:
+            fields["judge_agent_id"] = judge_adapter.served_agent_id
+        if judge_adapter.served_model is not None:
+            fields["judge_model"] = judge_adapter.served_model
+        if judge_adapter.served_usage:
+            # A falsy served_usage (missing/invalid response usage) is left
+            # genuinely absent rather than fabricated as reported-zero
+            # (Devin review on #961, on this same fix): judge_agent_id/
+            # judge_model above already keep a completed-but-unmeasured call
+            # attributable, and downstream budget/spend consumers derive an
+            # honest estimated fallback from the judge's own served_output
+            # text instead of trusting a fabricated "reported" usage dict.
+            fields["judge_usage"] = judge_adapter.served_usage
+        if judge_adapter.served_output is not None:
+            # The judge's own generated text, not the verifier_output text
+            # it was judging (Devin review on #961, on this same fallback
+            # fix): estimating "judge output tokens" from the worker
+            # answer it evaluated -- rather than what the judge itself
+            # generated -- systematically mis-sizes the estimate whenever
+            # the two lengths differ.
+            fields["judge_output_text"] = judge_adapter.served_output
+        return fields
+
+    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
+        """Prepare evidence for the model judge without making a heuristic decision."""
+        del thinker_output, worker_output
+        return {
+            "accepted": False,
+            "reason": "model judgment required; keyword matching is disabled",
+            "verifier_output": verifier_output,
+        }
+
+    def _protected_event_detail(self, detail: dict[str, Any], pii_fields: Iterable[str]) -> dict[str, Any]:
+        """Encrypt explicitly declared PII fields before an event enters memory or storage."""
+        fields = tuple(pii_fields)
+        if not fields:
+            return detail
+        encryptor = self._pii_encryptors.get(self._pii_key_name)
+        if encryptor is None:
+            encryptor = load_pii_encryptor(self._pii_key_name)
+            self._pii_encryptors[self._pii_key_name] = encryptor
+        return encryptor.encrypt_fields(detail, fields)
+
+    def _append_audit_event(
+        self,
+        event_type: str,
+        detail: dict[str, Any],
+        *,
+        pii_fields: Iterable[str] = (),
+        stream: str = "audit",
+        durable: bool = True,
+    ) -> None:
+        """Append a durable event to a bounded audit stream by default."""
+        event = {
+            "created_at": int(time.time()),
+            "event_type": event_type,
+            "event_detail": self._protected_event_detail(detail, pii_fields),
+        }
+        events = self._authorization_events if stream == "authorization" else self._audit_events
+        events.append(event)
+        if self._store is not None:
+            self._store.save(stream, None, event, durable=durable)
+
+    def record_authorization_decision(
+        self,
+        *,
+        scope: str,
+        purpose: str,
+        allowed: bool,
+        reason: str,
+        durable: bool = False,
+    ) -> None:
+        """Record a secret-free role/purpose authorization decision."""
+        self._append_audit_event(
+            "authorization_decision",
+            {
+                "scope": scope,
+                "purpose": purpose,
+                "allowed": bool(allowed),
+                "reason": reason,
+            },
+            stream="authorization",
+            durable=durable,
+        )
+
+    def _infer_provider_name(self, base_url: str) -> str:
+        if base_url.startswith("mock://"):
+            return f"mock-{base_url.removeprefix('mock://')}"
+        if "://" in base_url:
+            return base_url.split("//", 1)[-1].split("/", 1)[0]
+        return base_url  # pragma: no cover
+
+    def _agent_to_admin_payload(self, agent: ModelAgent) -> dict[str, Any]:
+        return {
+            "id": agent.id,
+            "model": agent.model,
+            "base_url": agent.base_url,
+            "provider_name": agent.provider_name or self._infer_provider_name(agent.base_url),
+            "priority": agent.priority,
+            "tags": list(agent.tags),
+            "status": "disabled" if agent.disabled else "active",
+            "provider_exclusions": list(agent.provider_exclusions),
+            "max_output_tokens": agent.max_output_tokens,
+            "context_window": agent.context_window,
+            "stream_usage_supported": agent.stream_usage_supported,
+            "model_timeout_seconds": agent.model_timeout_seconds,
+            "model_timeout_revision": agent.model_timeout_revision,
+            "group_name": agent.group_name,
+            "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
+        }
+
+    def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
+        """Return a paginated admin-safe view of configured agents."""
+        if page_number < 1 or page_size < 1:  # pragma: no cover
+            raise ValueError("page_number/page_size must be >= 1")
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        return [self._agent_to_admin_payload(agent) for agent in self.candidates[start:end]]
+
+    def list_openai_models(self) -> dict[str, Any]:
+        """Return an OpenAI-compatible ``/v1/models`` list from the agent pool.
+
+        Buyers discover selectable model ids without admin-scope agent pool access.
+        Each enabled agent model appears once; gateway default
+        ``contextual-orchestrator`` is always first. Disabled models are omitted
+        deliberately (matching real OpenAI API behavior: you only see models you
+        can actually call) rather than listed with a "disabled" status -- showing
+        an inference-scope caller a model it cannot use is its own kind of
+        dishonesty. Operators get disabled-agent visibility through the
+        admin-scope ``list_agents``/``/admin`` surface instead.
+        """
+        created = 1_700_000_000  # stable epoch so list responses are deterministic
+        data: list[dict[str, Any]] = [
+            {
+                "id": self.GATEWAY_DEFAULT_MODEL,
+                "object": "model",
+                "created": created,
+                "owned_by": "contextual-orchestrator",
+            }
+        ]
+        data.append({
+            "id": self.AUTO_MODEL,
+            "object": "model",
+            "created": created,
+            "owned_by": "contextual-orchestrator",
+        })
+        if any(self._is_general_free_agent(agent) for agent in self.agents):
+            data.append({
+                "id": self.FREE_MODEL,
+                "object": "model",
+                "created": created,
+                "owned_by": "contextual-orchestrator",
+            })
+        seen: set[str] = {item["id"] for item in data}
+        # Model-group aliases are addressable model ids (a logical name routes
+        # to the best measured member), so advertise them like real models.
+        for group in self.list_model_groups():
+            if not group.get("enabled_member_count"):
+                continue
+            group_alias = str(group["group_name"])
+            if group_alias in seen:
+                continue
+            seen.add(group_alias)
+            data.append(
+                {
+                    "id": group_alias,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": "model_group",
+                }
+            )
+        # ``self.agents`` is the enabled-only projection of ``self.candidates``
+        # (maintained at every pool mutation), so no disabled agent can appear
+        # in this loop.
+        for agent in self.agents:
+            model_id = str(agent.model).strip()
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            data.append(
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": agent.provider_name
+                    or self._infer_provider_name(agent.base_url)
+                    or "agent_pool",
+                }
+            )
+        return {"object": "list", "data": data}
+
+    def get_openai_model(self, model_id: str) -> dict[str, Any]:
+        """Return one OpenAI model object or raise ``KeyError`` when unknown."""
+        wanted = (model_id or "").strip()
+        if not wanted:
+            raise KeyError(model_id)
+        for item in self.list_openai_models()["data"]:
+            if item["id"] == wanted:
+                return item
+        raise KeyError(model_id)
+
+    def list_recent_runs(
+        self,
         page_number: int = 1,
         page_size: int = 10,
         owner_id: str | None = None,
