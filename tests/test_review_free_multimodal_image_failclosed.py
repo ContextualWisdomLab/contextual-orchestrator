@@ -12,6 +12,7 @@ predicate, never a replacement for ``tool_call:single`` exclusion on multi-tool
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 import urllib.error
@@ -429,6 +430,127 @@ def test_free_image_template_plan_selects_image_agents() -> None:
     )
 
     assert {step.agent_id for step in steps} == {"vision_free"}
+
+
+def test_realtime_route_judge_preserves_image_requirement() -> None:
+    """Direct-route verification must judge an image answer with an image-capable model."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "vision_free",
+                "vision-model",
+                tags=(*_IMAGE_FREE_TAGS, "verification"),
+            )
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    def judge(
+        text: str,
+        report: dict[str, Any],
+        *,
+        free_only: bool = False,
+        allowed_agent_ids: set[str] | None = None,
+        required_tags: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        del text, report, free_only, allowed_agent_ids
+        captured["required_tags"] = required_tags
+        return {
+            "accepted": True,
+            "reason": "image-capable judge",
+            "verifier_output": "accepted",
+            "judge": "model",
+        }
+
+    orchestrator._model_judge_verification = judge  # type: ignore[method-assign]
+
+    verdict = orchestrator._realtime_route_judge(
+        text="Review this figure.",
+        answer="The figure contains one point.",
+        served_id="vision_free",
+        latency_seconds=0.01,
+        usage=None,
+        free_only=True,
+        required_tags=("input:image",),
+    )
+
+    assert verdict["accepted"] is True
+    assert captured["required_tags"] == ("input:image",)
+
+
+def test_proxy_image_failover_excludes_text_only_agent() -> None:
+    """A failed image primary must fail over only within the image-capable pool."""
+    request_too_large = urllib.error.HTTPError(
+        "https://provider.invalid/v1/chat/completions",
+        413,
+        "request too large",
+        {},
+        io.BytesIO(b'{"error":{"message":"request too large"}}'),
+    )
+    client = _SequencedProxyClient(
+        {
+            "primary_vision": request_too_large,
+            "text_free": {"model": "text-only-model"},
+            "fallback_vision": {"model": "fallback-vision-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_vision",
+                "primary-vision-model",
+                priority=20,
+                tags=_IMAGE_FREE_TAGS,
+                provider_name="primary",
+            ),
+            ModelAgent(
+                "text_free",
+                "text-only-model",
+                priority=10,
+                tags=("cost:free", "input:text", "output:text"),
+                provider_name="text",
+            ),
+            ModelAgent(
+                "fallback_vision",
+                "fallback-vision-model",
+                priority=1,
+                tags=_IMAGE_FREE_TAGS,
+                provider_name="fallback",
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        _figure_payload(model=TaskOrchestrator.AUTO_MODEL)
+    )
+
+    assert result["model"] == "fallback-vision-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_vision",
+        "fallback_vision",
+    ]
+
+
+def test_runtime_image_pool_requires_text_and_image_input() -> None:
+    """Mixed figure review must reject durable agents that declare image-only input."""
+    image_only = ModelAgent(
+        "image_only",
+        "image-only-model",
+        priority=10,
+        tags=("cost:free", "input:image", "output:text"),
+    )
+    text_and_image = ModelAgent(
+        "text_and_image",
+        "text-and-image-model",
+        tags=_IMAGE_FREE_TAGS,
+    )
+    orchestrator = TaskOrchestrator([image_only, text_and_image])
+
+    assert not orchestrator._is_image_capable_free_agent(image_only)
+    assert orchestrator._free_pool_agent_ids(messages=_figure_messages()) == {
+        "text_and_image"
+    }
 
 
 if __name__ == "__main__":
