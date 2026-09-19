@@ -81,6 +81,9 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
+          # --no-build-isolation requires the PEP 517 backend already present;
+          # setup-python 3.12+ no longer ships setuptools in the base env.
+          python -m pip install --upgrade setuptools wheel
           python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
           python scripts/verify_decision_wheel_manifest.py dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
           python -m pip install --no-deps \
