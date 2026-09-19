@@ -1459,6 +1459,29 @@ def _typed_attempt_entry(
     }
 
 
+def _append_tool_stop_route_attempt(
+    attempts: list[dict[str, Any]],
+    agent: ModelAgent,
+    *,
+    transport: str,
+) -> None:
+    """Record a terminal tool stop without borrowing a provider error code.
+
+    ``_append_typed_route_failure`` classifies through the provider taxonomy
+    and would label this attempt ``api_error``. The tool decision already
+    rides on the enclosing ``ToolFallbackStoppedError``.
+    """
+    attempts.append(
+        {
+            "agent_id": agent.id,
+            "model": agent.model,
+            "outcome": "fail_closed",
+            "retryable": False,
+            "transport": transport,
+        }
+    )
+
+
 def _append_typed_route_failure(
     attempts: list[dict[str, Any]],
     agent: ModelAgent,
@@ -11131,8 +11154,8 @@ class TaskOrchestrator:
                         # convert this to failover without an explicit product
                         # decision distinguishing which failure kinds that would
                         # actually be safe for.
-                        _append_typed_route_failure(
-                            route_attempts, agent, exc, transport="chat"
+                        _append_tool_stop_route_attempt(
+                            route_attempts, agent, transport="chat"
                         )
                         if route_attempts:
                             _attach_route_evidence_to_tool_stop(
@@ -11220,8 +11243,8 @@ class TaskOrchestrator:
                     if decision.circuit_failure:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
-                        _append_typed_route_failure(
-                            route_attempts, agent, exc, transport="chat"
+                        _append_tool_stop_route_attempt(
+                            route_attempts, agent, transport="chat"
                         )
                         raise ToolFallbackStoppedError(
                             agent.id,

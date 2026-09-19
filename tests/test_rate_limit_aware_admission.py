@@ -679,6 +679,9 @@ def test_http_fail_closed_after_503_keeps_route_and_stops() -> None:
         "retryable_transport",
         "fail_closed",
     ]
+    terminal = route["attempted"][-1]
+    assert "error_code" not in terminal
+    assert "provider_status" not in terminal
     assert [attempt["agent_id"] for attempt in route["attempted"]] == [
         "primary_free_agent",
         "fallback_free_agent",
