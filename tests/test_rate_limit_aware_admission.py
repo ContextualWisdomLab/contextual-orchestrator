@@ -651,8 +651,9 @@ def test_http_fail_closed_after_503_keeps_route_and_stops() -> None:
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
+    response = None
     try:
-        status, body, _response = _post_chat_completion(
+        status, body, response = _post_chat_completion(
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
@@ -661,11 +662,14 @@ def test_http_fail_closed_after_503_keeps_route_and_stops() -> None:
             token,
         )
     finally:
+        if response is not None:
+            response.close()
         server.shutdown()
         worker.join(timeout=5)
         server.server_close()
         orchestrator.close()
 
+    assert response is not None and response.closed
     assert status == 409, body
     assert body["error"]["code"] == "tool_execution_stopped"
     assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
