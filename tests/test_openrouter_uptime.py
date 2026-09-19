@@ -231,6 +231,31 @@ def test_fractional_prior_refresh_preserves_single_observation_exactly() -> None
     assert router.member_observation_count("member_c") == 1
 
 
+def test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior() -> None:
+    """Large prior mass must not erase completed Bernoulli outcomes."""
+
+    calls: list[tuple[float, float]] = []
+
+    class RecordingRng:
+        def betavariate(self, alpha: float, beta: float) -> float:
+            calls.append((alpha, beta))
+            return 0.5
+
+    router = ModelGroupRouter(rng=RecordingRng())
+    router.observe_success("member_d", 0.2)
+    router.observe_failure("member_d")
+
+    router.update_prior("member_d", 1e20, 1e20)
+    report = router.member_report("member_d")
+    assert report["success_count"] == 1
+    assert report["failure_count"] == 1
+    assert router.member_observation_count("member_d") == 2
+
+    router.update_prior("member_d", 1.0, 1.0)
+    assert router.sampled_ranked_member_ids(["member_d"]) == ["member_d"]
+    assert calls == [(2.0, 2.0)]
+
+
 def test_update_prior_rejects_invalid_components() -> None:
     """Negative or non-finite prior components are rejected outright."""
     import pytest
@@ -418,5 +443,6 @@ if __name__ == "__main__":
     test_background_loop_accumulates_and_stop_joins()
     test_update_prior_contract_preserves_observation_counts()
     test_fractional_prior_refresh_preserves_single_observation_exactly()
+    test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior()
     test_update_prior_rejects_invalid_components()
     print("ok")
