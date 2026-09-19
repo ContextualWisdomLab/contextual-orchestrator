@@ -12064,15 +12064,25 @@ class TaskOrchestrator:
 
     @staticmethod
     def _image_input_required_tags(messages: list[ChatMessage]) -> tuple[str, ...]:
-        """Return the hard image-input entitlement when the request carries pixels.
+        """Return the hard image entitlement before content normalization.
 
-        Uses the discovery evidence tag ``input:image`` (not the legacy
-        ``vision`` capability name) so selection matches what
-        ``agent_from_discovered`` actually stamps. Empty when no image parts
-        are present — text-only free serving stays modality-blind.
+        Chat validation accepts stripped, case-insensitive ``image_url`` and
+        the Responses-style ``input_image`` alias. Admission must recognize
+        that same surface before any streaming response is committed.
         """
-        if TaskOrchestrator._source_image_parts(messages):
-            return (IMAGE_INPUT_EVIDENCE_TAG,)
+        for message in messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if isinstance(part_type, str) and part_type.strip().casefold() in {
+                    "image_url",
+                    "input_image",
+                }:
+                    return (IMAGE_INPUT_EVIDENCE_TAG,)
         return ()
 
     @staticmethod
@@ -12116,14 +12126,16 @@ class TaskOrchestrator:
         """
         require_image = False
         if messages is not None:
-            require_image = bool(self._source_image_parts(messages))
+            require_image = bool(self._image_input_required_tags(messages))
         elif isinstance(chat_body, Mapping):
             body_messages = chat_body.get("messages")
             if isinstance(body_messages, list):
-                require_image = bool(self._source_image_parts(body_messages))
+                require_image = bool(self._image_input_required_tags(body_messages))
         shaped_body = self._request_shaped_chat_body(chat_body)
         ids: set[str] = set()
         for candidate in self.agents:
+            if candidate.disabled:
+                continue
             if not (
                 _agent_matches_request_endpoint(candidate)
                 and self._zdr_agent_allowed(candidate)

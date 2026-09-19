@@ -2460,11 +2460,20 @@ def _require_pool_model(
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
-            if messages is not None and orchestrator._free_pool_agent_ids(
-                messages=messages,
-                chat_body=chat_body,
-            ):
-                return model_name
+            if messages is not None:
+                required_tags = orchestrator._image_input_required_tags(messages)
+                if orchestrator._free_pool_agent_ids(
+                    messages=messages,
+                    chat_body=chat_body,
+                ):
+                    return model_name
+                if required_tags:
+                    raise RequestError(
+                        400,
+                        "invalid_model",
+                        "no enabled zero-cost model satisfies required tags: "
+                        + ", ".join(required_tags),
+                    )
             if any(zdr_allowed(agent) and orchestrator._is_general_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
