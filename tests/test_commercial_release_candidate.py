@@ -332,6 +332,34 @@ def test_server_accepts_only_a_kv_signed_release_authority_snapshot() -> None:
         set_backend(None)
 
 
+def test_nested_commercial_reports_forward_release_authority() -> None:
+    """Intermediate buyer reports must not drop a snapshot the caller supplied."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"))]
+    )
+    authority = valid_release_authority()
+    seen: list[tuple[str, object]] = []
+    export = orchestrator.commercial_evidence_export_report
+    saleability = orchestrator.saleability_decision_report
+
+    def wrapped_export(*args: object, **kwargs: object) -> dict:
+        seen.append(("export", kwargs.get("release_authority")))
+        return export(*args, **kwargs)
+
+    def wrapped_saleability(*args: object, **kwargs: object) -> dict:
+        seen.append(("saleability", kwargs.get("release_authority")))
+        return saleability(*args, **kwargs)
+
+    orchestrator.commercial_evidence_export_report = wrapped_export  # type: ignore[method-assign]
+    orchestrator.saleability_decision_report = wrapped_saleability  # type: ignore[method-assign]
+    orchestrator.commercial_go_to_market_readiness_report(
+        release_authority=authority
+    )
+    forwarded = [item for item in seen if item[0] in {"export", "saleability"}]
+    assert forwarded
+    assert all(item[1] is authority for item in forwarded)
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_commercial_release_candidate_report_packages_ship_candidate()
     test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()

@@ -15562,6 +15562,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -15835,6 +15836,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -16112,6 +16114,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -16122,6 +16125,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         root = Path(__file__).resolve().parents[1]
