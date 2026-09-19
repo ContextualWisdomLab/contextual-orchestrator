@@ -7506,8 +7506,10 @@ class TaskOrchestrator:
         requested_model: Any,
         *,
         model_was_provided: bool = True,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
     ):
-        """Constrain this request to agents whose configured endpoint matches exactly."""
+        """Constrain this request to endpoint-local, request-capable agents."""
         if endpoint is None:
             yield
             return
@@ -7527,7 +7529,9 @@ class TaskOrchestrator:
             if not self._request_endpoint_supports_model(
                 self._normalize_endpoint_requested_model(
                     requested_model, model_was_provided=model_was_provided
-                )
+                ),
+                messages=messages,
+                chat_body=chat_body,
             ):
                 raise EndpointUnavailableError("endpoint_unavailable")
             yield
@@ -7548,7 +7552,13 @@ class TaskOrchestrator:
             return _INVALID_REQUESTED_MODEL
         return normalized
 
-    def _request_endpoint_supports_model(self, requested_model: Any) -> bool:
+    def _request_endpoint_supports_model(
+        self,
+        requested_model: Any,
+        *,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
+    ) -> bool:
         """Check endpoint-local eligibility without ranking or provider I/O."""
         if requested_model is _INVALID_REQUESTED_MODEL:
             return True
@@ -7559,6 +7569,16 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }:
             free_only = requested_model == self.FREE_MODEL
+            if free_only and messages is not None:
+                request_ids = self._free_pool_agent_ids(
+                    messages=messages,
+                    chat_body=chat_body,
+                )
+                return any(
+                    agent.id in request_ids
+                    and _agent_matches_request_endpoint(agent)
+                    for agent in self.agents
+                )
             return any(
                 not agent.disabled
                 and _agent_matches_request_endpoint(agent)
@@ -12104,7 +12124,10 @@ class TaskOrchestrator:
         shaped_body = self._request_shaped_chat_body(chat_body)
         ids: set[str] = set()
         for candidate in self.agents:
-            if not self._zdr_agent_allowed(candidate):
+            if not (
+                _agent_matches_request_endpoint(candidate)
+                and self._zdr_agent_allowed(candidate)
+            ):
                 continue
             if require_image:
                 if self._is_image_capable_free_agent(

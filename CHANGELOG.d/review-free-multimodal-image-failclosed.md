@@ -19,3 +19,9 @@ evidence, require `input:text` when any `input:*` evidence is present, and
 retain the documented legacy `vision` admission when no `input:*` tags exist;
 a mixed figure review therefore cannot fall through to a text-only or
 explicitly image-only model after initial selection.
+
+Endpoint-constrained free requests now apply the same request-aware image
+predicate during endpoint preflight and pool admission. Chat Completions and
+Responses therefore admit an endpoint-local free text+image agent, while a
+text-only request still cannot treat that vision deployment as the blind free
+pool and an endpoint without eligible local capacity still fails closed.
