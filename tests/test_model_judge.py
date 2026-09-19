@@ -1402,9 +1402,12 @@ def test_model_judge_adapter_preserves_image_free_failover_pool() -> None:
         def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
             del task, answer, criteria
             return SimpleNamespace(
-                accepted=True,
-                rationale="synthetic",
-                criterion_scores={},
+                    accepted=True,
+                    rationale="synthetic",
+                    criterion_scores={
+                        "evidence_quality": 1.0,
+                        "risk_signal": 1.0,
+                    },
                 usage=None,
                 orchestration_mode="route",
                 to_irt_row=lambda *, item_type: (1, 1),
@@ -1414,8 +1417,15 @@ def test_model_judge_adapter_preserves_image_free_failover_pool() -> None:
         [
             ModelAgent(
                 "image_free",
-                "image-free",
-                tags=("cost:free", "reasoning", "writing", "input:image"),
+                "mixed-chat-model",
+                tags=(
+                    "cost:free",
+                    "reasoning",
+                    "writing",
+                    "input:text",
+                    "input:image",
+                    "output:text",
+                ),
             ),
             ModelAgent(
                 "text_free",
