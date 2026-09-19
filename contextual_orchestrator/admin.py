@@ -960,7 +960,7 @@ ADMIN_HTML = r"""<!doctype html>
           <form id="modelGroupForm" class="policy-list" aria-labelledby="modelGroupsTitle">
             <h2 id="modelGroupsTitle" data-i18n="model_groups_title">Model groups</h2>
             <label><span data-i18n="group_name_label">Group name</span>
-              <input id="modelGroupName" required pattern="[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+" autocomplete="off">
+              <input id="modelGroupName" required pattern="[A-Za-z0-9]+(?:[\-_][A-Za-z0-9]+)+" autocomplete="off">
             </label>
             <label><span data-i18n="group_members_label">Provider model members</span>
               <select id="modelGroupMembers" multiple required size="5"></select>
@@ -1164,6 +1164,16 @@ Summarize this research thread and verify claims.</textarea>
 
     function apiFetch(url, options = {}) {
       return fetch(url, {credentials: "same-origin", ...options});
+    }
+
+    async function refreshAdminState() {
+      const response = await apiFetch("/admin/state");
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error?.message || "Could not load admin state");
+      }
+      state = payload;
+      return state;
     }
 
     function tags(tags) {
@@ -1701,14 +1711,14 @@ Summarize this research thread and verify claims.</textarea>
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
-      const res = await apiFetch("/admin/state");
-      if (!res.ok) {
+      try {
+        await refreshAdminState();
+      } catch (error) {
         if (els.sessionStatus) els.sessionStatus.textContent = t("session_status_missing");
         if (els.sessionAction) els.sessionAction.hidden = false;
         return;
       }
       if (els.sessionAction) els.sessionAction.hidden = true;
-      state = await res.json();
       await refreshModelGroups();
       await refreshAnalytics();
       await refreshReadiness();
