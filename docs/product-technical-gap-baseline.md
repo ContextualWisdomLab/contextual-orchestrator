@@ -68,6 +68,8 @@ selection. The three affected suites complete **91 tests** with warnings as
 errors; compileall and diff checks pass. Hosted exact-head protection remains
 required.
 
+A subsequent P0 review found that intermediate source commit `7ad13041c30d18e35694c2c071a577ae774d986a` embedded a tool-output truncation marker, deleted 4,042 lines from `orchestrator.py`, and failed `py_compile` before import. Ordinary-forward GREEN `b7440092d1cda47008271ed658fe372f536dd58f` (tree `e8dc294a853a54df6db794a42edb509b6b8b0e74`) restores canonical complete source blob `1dd97e36fe1579c434413317a5366f9f27d6e766`, reapplies only the verified role-aware preflight delta, and contains no truncation marker. Exact-tree `py_compile` passes and the same three affected suites complete **91 tests** with warnings as errors. This repair does not convert queued hosted checks or review transport into approval.
+
 A preservation regression at ordinary-forward RED `33e3998ac9f6b1373cdfda83a760f19214f2237c`
 proved that the branch snapshot had dropped 87 of 148 protected level-two
 sections, including PRD, TRD, Context Map, roadmap, delivery-gate, and incident
