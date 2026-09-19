@@ -4,6 +4,10 @@ Synthetic DOCX/HWPX figure review sends text + image_url parts on
 ``orchestrator/free``. A text-only free agent must not absorb that traffic and
 return a 200 that silently ignores figures. Coverage is local/mock only — no
 research document upload.
+
+Also composes issue #940 tool-call admission: image entitlement is an additional
+predicate, never a replacement for ``tool_call:single`` exclusion on multi-tool
+/ ``parallel_tool_calls: true`` requests.
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -24,6 +30,15 @@ _TEST_AUTH_TOKEN = "review_free_multimodal_image_failclosed_token"  # noqa: S105
 _TINY_PNG_DATA_URI = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+_IMAGE_FREE_TAGS = (
+    "cost:free",
+    "reasoning",
+    "writing",
+    "input:text",
+    "input:image",
+    "output:text",
 )
 
 
@@ -78,6 +93,79 @@ def _figure_payload(*, model: str = TaskOrchestrator.FREE_MODEL) -> dict:
     }
 
 
+def _figure_messages() -> list[dict[str, Any]]:
+    return _figure_payload()["messages"]
+
+
+class _SequencedProxyClient:
+    """Record proxy attempts without network I/O."""
+
+    def __init__(self, outcomes: dict[str, dict[str, Any] | BaseException]) -> None:
+        self.outcomes = outcomes
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        del endpoint
+        self.calls.append((agent.id, deepcopy(payload)))
+        outcome = self.outcomes[agent.id]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return deepcopy(outcome)
+
+    proxy_send = proxy_send_once
+
+
+def _image_free_pool_with_tool_evidence(
+    client: _SequencedProxyClient,
+    *,
+    primary_tool_tags: tuple[str, ...],
+    fallback_tool_tags: tuple[str, ...] = ("tool_call:multi",),
+) -> TaskOrchestrator:
+    """Two free image-capable agents; primary carries the given tool-call evidence."""
+    primary = ModelAgent(
+        "primary_vision",
+        "primary-vision-model",
+        priority=10,
+        provider_name="primary",
+        tags=(*_IMAGE_FREE_TAGS, *primary_tool_tags),
+        base_url="mock://primary",
+    )
+    fallback = ModelAgent(
+        "fallback_vision",
+        "fallback-vision-model",
+        priority=1,
+        provider_name="fallback",
+        tags=(*_IMAGE_FREE_TAGS, *fallback_tool_tags),
+        base_url="mock://fallback",
+    )
+    return TaskOrchestrator([primary, fallback], client=client)
+
+
+def _two_tool_figure_request(**extra: Any) -> dict[str, Any]:
+    return {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": _figure_messages(),
+        "tools": [
+            {"type": "function", "function": {"name": "inspect", "description": "x"}},
+            {"type": "function", "function": {"name": "scan", "description": "y"}},
+        ],
+        **extra,
+    }
+
+
+def _one_tool_figure_request(**extra: Any) -> dict[str, Any]:
+    return {
+        "model": TaskOrchestrator.FREE_MODEL,
+        "messages": _figure_messages(),
+        "tools": [
+            {"type": "function", "function": {"name": "inspect", "description": "x"}},
+        ],
+        **extra,
+    }
+
+
 def test_free_image_request_fails_closed_when_only_text_free_agents_exist() -> None:
     """Text-only free pool must not succeed on figure-bearing free traffic."""
     orchestrator = TaskOrchestrator(
@@ -115,14 +203,7 @@ def test_free_image_request_serves_image_capable_free_agent() -> None:
             ModelAgent(
                 "vision_free",
                 "mock-vision-free",
-                tags=(
-                    "cost:free",
-                    "reasoning",
-                    "writing",
-                    "input:text",
-                    "input:image",
-                    "output:text",
-                ),
+                tags=_IMAGE_FREE_TAGS,
                 base_url="mock://vision",
             ),
         ]
@@ -144,14 +225,7 @@ def test_text_only_free_request_still_excludes_vision_free_agent() -> None:
     vision = ModelAgent(
         "vision_free",
         "mock-vision-free",
-        tags=(
-            "cost:free",
-            "reasoning",
-            "writing",
-            "input:text",
-            "input:image",
-            "output:text",
-        ),
+        tags=_IMAGE_FREE_TAGS,
         base_url="mock://vision",
     )
     text = ModelAgent(
@@ -168,21 +242,139 @@ def test_text_only_free_request_still_excludes_vision_free_agent() -> None:
     )
     assert free_text_ids == {"text_free"}
     free_image_ids = orchestrator._free_pool_agent_ids(
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "figure"},
-                    {"type": "image_url", "image_url": {"url": _TINY_PNG_DATA_URI}},
-                ],
-            }
-        ]
+        messages=_figure_messages()
     )
     assert free_image_ids == {"vision_free"}
+
+
+def test_free_image_pool_skips_single_tool_agent_for_multi_tool_request() -> None:
+    """Image entitlement must not reopen #940 for multi-tool figure traffic."""
+    client = _SequencedProxyClient(
+        {
+            "primary_vision": {"model": "primary-vision-model"},
+            "fallback_vision": {"model": "fallback-vision-model"},
+        }
+    )
+    orchestrator = _image_free_pool_with_tool_evidence(
+        client, primary_tool_tags=("tool_call:single",)
+    )
+
+    result = orchestrator.proxy_completion(_two_tool_figure_request())
+
+    assert result["model"] == "fallback-vision-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_vision"]
+
+
+def test_free_image_pool_skips_single_tool_agent_when_parallel_calls_requested() -> None:
+    """Explicit parallel_tool_calls:true excludes tool_call:single image free agents."""
+    client = _SequencedProxyClient(
+        {
+            "primary_vision": {"model": "primary-vision-model"},
+            "fallback_vision": {"model": "fallback-vision-model"},
+        }
+    )
+    orchestrator = _image_free_pool_with_tool_evidence(
+        client, primary_tool_tags=("tool_call:single",)
+    )
+
+    result = orchestrator.proxy_completion(
+        _one_tool_figure_request(parallel_tool_calls=True)
+    )
+
+    assert result["model"] == "fallback-vision-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_vision"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _one_tool_figure_request(),
+        _two_tool_figure_request(parallel_tool_calls=False),
+    ],
+    ids=["single_tool_without_flag", "parallel_calls_disabled"],
+)
+def test_free_image_pool_keeps_single_tool_agent_for_single_call_shapes(
+    body: dict[str, Any],
+) -> None:
+    """Shapes no provider evidence rejects keep the single-call image agent eligible."""
+    client = _SequencedProxyClient(
+        {
+            "primary_vision": {"model": "primary-vision-model"},
+            "fallback_vision": {"model": "fallback-vision-model"},
+        }
+    )
+    orchestrator = _image_free_pool_with_tool_evidence(
+        client, primary_tool_tags=("tool_call:single",)
+    )
+
+    result = orchestrator.proxy_completion(body)
+
+    assert result["model"] == "primary-vision-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_vision"]
+
+
+def test_free_image_pool_fails_closed_when_only_single_tool_image_agent_exists() -> None:
+    """Only a doomed tool_call:single image free agent must fail before provider I/O."""
+    client = _SequencedProxyClient(
+        {"solo_vision": {"model": "solo-vision-model"}}
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "solo_vision",
+                "solo-vision-model",
+                tags=(*_IMAGE_FREE_TAGS, "tool_call:single"),
+                base_url="mock://solo",
+            )
+        ],
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="no eligible provider candidate"):
+        orchestrator.proxy_completion(_two_tool_figure_request())
+
+    assert client.calls == []
+
+
+def test_free_image_pool_ids_compose_tool_call_exclusion() -> None:
+    """Direct pool query excludes tool_call:single under multi-tool image shape."""
+    single = ModelAgent(
+        "single_vision",
+        "single-vision",
+        tags=(*_IMAGE_FREE_TAGS, "tool_call:single"),
+        base_url="mock://single",
+    )
+    multi = ModelAgent(
+        "multi_vision",
+        "multi-vision",
+        tags=(*_IMAGE_FREE_TAGS, "tool_call:multi"),
+        base_url="mock://multi",
+    )
+    orchestrator = TaskOrchestrator([single, multi])
+    body = _two_tool_figure_request()
+    ids = orchestrator._free_pool_agent_ids(
+        messages=body["messages"], chat_body=body
+    )
+    assert ids == {"multi_vision"}
+    eligible = orchestrator._free_pool_agent_ids(
+        messages=body["messages"],
+        chat_body=_one_tool_figure_request(),
+    )
+    assert eligible == {"single_vision", "multi_vision"}
 
 
 if __name__ == "__main__":
     test_free_image_request_fails_closed_when_only_text_free_agents_exist()
     test_free_image_request_serves_image_capable_free_agent()
     test_text_only_free_request_still_excludes_vision_free_agent()
+    test_free_image_pool_skips_single_tool_agent_for_multi_tool_request()
+    test_free_image_pool_skips_single_tool_agent_when_parallel_calls_requested()
+    test_free_image_pool_keeps_single_tool_agent_for_single_call_shapes(
+        _one_tool_figure_request()
+    )
+    test_free_image_pool_keeps_single_tool_agent_for_single_call_shapes(
+        _two_tool_figure_request(parallel_tool_calls=False)
+    )
+    test_free_image_pool_fails_closed_when_only_single_tool_image_agent_exists()
+    test_free_image_pool_ids_compose_tool_call_exclusion()
     print("ok")

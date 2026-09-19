@@ -6100,13 +6100,27 @@ class TaskOrchestrator:
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
         if agent is None:
-            agent = self._select_agent(
-                text,
-                "worker",
-                free_only=requested_model == self.FREE_MODEL,
-                prompt_context=prompt_context,
-                effort_profile=effort_profile,
+            image_tags = (
+                self._image_input_required_tags(messages)
+                if isinstance(messages, list)
+                else ()
             )
+            try:
+                agent = self._select_agent(
+                    text,
+                    "worker",
+                    free_only=requested_model == self.FREE_MODEL,
+                    required_tags=image_tags,
+                    prompt_context=prompt_context,
+                    effort_profile=effort_profile,
+                )
+            except RuntimeError as exc:
+                if image_tags:
+                    raise ValueError(
+                        "no enabled model supports required tags: "
+                        + ", ".join(image_tags)
+                    ) from exc
+                raise
         replica_agent_ids = (
             set.intersection(*(set(value) for value in file_replicas.values()))
             if isinstance(file_replicas, dict) and file_replicas
@@ -7748,15 +7762,28 @@ class TaskOrchestrator:
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
         effort_profile = self._role_effort_profile("worker")
+        required_tags = self._image_input_required_tags(messages)
         stream_kwargs: dict[str, Any] = {}
         if effort_profile is not None:
             stream_kwargs["effort_profile"] = effort_profile
         if include_usage:
             stream_kwargs["include_usage"] = True
         pinned = self._requested_agent(model_name)
-        primary = pinned or self._select_agent(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
-        )
+        try:
+            primary = pinned or self._select_agent(
+                text,
+                "worker",
+                free_only=free_only,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+            )
+        except RuntimeError as exc:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                ) from exc
+            raise
         if pinned is not None:
             candidates = [primary]
         else:
@@ -7765,6 +7792,7 @@ class TaskOrchestrator:
                 primary,
                 text,
                 "worker",
+                required_tags=required_tags,
                 allowed_agent_ids=free_ids if free_only else None,
                 prompt_context=prompt_context,
                 effort_profile=effort_profile,
@@ -9116,11 +9144,24 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         requested = self._requested_agent(model_name)
-        ranked_pool: list[ModelAgent] = (
-            [requested] if requested is not None else []
-        ) or self._ranked_agents(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
-        )
+        required_tags = self._image_input_required_tags(messages)
+        try:
+            ranked_pool: list[ModelAgent] = (
+                [requested] if requested is not None else []
+            ) or self._ranked_agents(
+                text,
+                "worker",
+                free_only=free_only,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+            )
+        except RuntimeError as exc:
+            if required_tags:
+                raise ValueError(
+                    "no enabled model supports required tags: "
+                    + ", ".join(required_tags)
+                ) from exc
+            raise
         # Context-window candidate filtering only applies to virtual/role-based
         # selection: an explicitly requested concrete model (``requested`` is
         # not None) is the caller's own choice, and the provider's own error
@@ -9892,6 +9933,7 @@ class TaskOrchestrator:
         is deliberately left out of this filter.
         """
         source = self.agents if candidate_pool is None else list(candidate_pool)
+        shaped_body = self._request_shaped_chat_body(None)
         candidates = [
             agent
             for agent in source
@@ -9901,16 +9943,13 @@ class TaskOrchestrator:
             if (
                 not free_only
                 or (
-                    (
-                        self._is_free_agent(agent)
-                        and self._agent_supports_image_input(agent)
-                    )
+                    self._is_image_capable_free_agent(agent, chat_body=shaped_body)
                     if (
                         IMAGE_INPUT_EVIDENCE_TAG in required_tags
                         or LEGACY_VISION_CAPABILITY_TAG in required_tags
                     )
                     else (
-                        self._is_general_free_agent(agent)
+                        self._is_general_free_agent(agent, chat_body=shaped_body)
                         if chat_only
                         else self._is_free_agent(agent)
                     )
@@ -10121,6 +10160,49 @@ class TaskOrchestrator:
             candidate.model == agent.model for candidate in self.candidates
         ) == 1
 
+    @staticmethod
+    def _agent_rejected_by_single_tool_call_evidence(
+        agent: ModelAgent, chat_body: Mapping[str, Any] | None
+    ) -> bool:
+        """True when discovery proved this agent cannot serve the request's tool shape.
+
+        Issue #940: ``tool_call:single`` is positive evidence that a multi-call
+        / ``parallel_tool_calls: true`` request will 400. Shared by blind
+        general-free and image-capable free admission so multimodal selection
+        cannot reopen the doomed round-trip.
+        """
+        return (
+            chat_body is not None
+            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
+            and _request_requires_parallel_tool_calls(chat_body)
+        )
+
+    def _request_shaped_chat_body(
+        self, chat_body: Mapping[str, Any] | None
+    ) -> Mapping[str, Any] | None:
+        """Prefer an explicit chat body; else tools from request-scoped client settings.
+
+        Route/conduct paths carry tools on ``ModelClient.request_settings`` rather
+        than a passthrough body. Rebuilding the tool-shape fields here keeps
+        :meth:`_free_pool_agent_ids` and :meth:`_ranked_agents` on the same
+        #940 exclusion as ``proxy_completion``.
+        """
+        if isinstance(chat_body, Mapping):
+            return chat_body
+        snapshot = getattr(self.client, "request_settings_snapshot", None)
+        if not callable(snapshot):
+            return None
+        settings = snapshot()
+        if not isinstance(settings, Mapping):
+            return None
+        tools = settings.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return None
+        shaped: dict[str, Any] = {"tools": tools}
+        if "parallel_tool_calls" in settings:
+            shaped["parallel_tool_calls"] = settings["parallel_tool_calls"]
+        return shaped
+
     def _is_general_free_agent(
         self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None
     ) -> bool:
@@ -10151,11 +10233,27 @@ class TaskOrchestrator:
         """
         if not (self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)):
             return False
-        if (
-            chat_body is not None
-            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
-            and _request_requires_parallel_tool_calls(chat_body)
+        if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
+            return False
+        return True
+
+    def _is_image_capable_free_agent(
+        self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None
+    ) -> bool:
+        """Return true for zero-cost agents with image-input evidence for known image traffic.
+
+        Image entitlement is an *additional* predicate on top of
+        :meth:`_is_free_agent`, not a replacement for request-shaped tool-call
+        admission (#940). When ``chat_body`` (or reconstructed request settings)
+        requires parallel/multi tool calls, a ``tool_call:single`` image-capable
+        free agent is excluded before provider I/O — the same composition
+        :meth:`_is_general_free_agent` applies for blind text free traffic.
+        """
+        if not (
+            self._is_free_agent(agent) and self._agent_supports_image_input(agent)
         ):
+            return False
+        if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
             return False
         return True
 
@@ -11950,9 +12048,10 @@ class TaskOrchestrator:
         non-text-input deployments). When the request already carries
         ``image_url`` parts, the modality is no longer unknown: admit
         zero-cost agents with explicit image-input evidence via
-        :meth:`_is_free_agent` so figure-bearing review traffic can reach a
-        vision-capable free model instead of a text-only one that would
-        silently ignore pixels.
+        :meth:`_is_image_capable_free_agent` so figure-bearing review traffic
+        can reach a vision-capable free model instead of a text-only one that
+        would silently ignore pixels. Image entitlement is composed with the
+        same #940 tool-call exclusion — never a replacement for it.
         """
         require_image = False
         if messages is not None:
@@ -11961,16 +12060,17 @@ class TaskOrchestrator:
             body_messages = chat_body.get("messages")
             if isinstance(body_messages, list):
                 require_image = bool(self._source_image_parts(body_messages))
+        shaped_body = self._request_shaped_chat_body(chat_body)
         ids: set[str] = set()
         for candidate in self.agents:
             if not self._zdr_agent_allowed(candidate):
                 continue
             if require_image:
-                if self._is_free_agent(candidate) and self._agent_supports_image_input(
-                    candidate
+                if self._is_image_capable_free_agent(
+                    candidate, chat_body=shaped_body
                 ):
                     ids.add(candidate.id)
-            elif self._is_general_free_agent(candidate, chat_body=chat_body):
+            elif self._is_general_free_agent(candidate, chat_body=shaped_body):
                 ids.add(candidate.id)
         return ids
 
