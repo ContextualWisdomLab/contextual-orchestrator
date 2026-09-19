@@ -6081,6 +6081,11 @@ class TaskOrchestrator:
         # is specific to why the request can't be served.
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
+        image_tags = (
+            self._image_input_required_tags(messages)
+            if isinstance(messages, list)
+            else ()
+        )
         agent = (
             next(
                 (
@@ -6101,11 +6106,6 @@ class TaskOrchestrator:
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
         if agent is None:
-            image_tags = (
-                self._image_input_required_tags(messages)
-                if isinstance(messages, list)
-                else ()
-            )
             try:
                 agent = self._select_agent(
                     text,
@@ -6142,6 +6142,7 @@ class TaskOrchestrator:
                     text,
                     "worker",
                     free_only=requested_model == self.FREE_MODEL,
+                    required_tags=image_tags,
                     prompt_context=prompt_context,
                     effort_profile=effort_profile,
                     )
@@ -6266,6 +6267,7 @@ class TaskOrchestrator:
             agent,
             text,
             "worker",
+            required_tags=image_tags,
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
             effort_profile=effort_profile,
@@ -9258,6 +9260,7 @@ class TaskOrchestrator:
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
+                    required_tags=required_tags,
                     prompt_context=prompt_context,
                 )
             row["realtime_judge"] = {
@@ -9313,6 +9316,7 @@ class TaskOrchestrator:
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
+        required_tags: tuple[str, ...] = (),
         prompt_context: str | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
@@ -9354,7 +9358,10 @@ class TaskOrchestrator:
             }
         fallback_report = {"verifier_output": answer}
         base = self._model_judge_verification(
-            text, fallback_report, free_only=free_only
+            text,
+            fallback_report,
+            free_only=free_only,
+            required_tags=required_tags,
         )
         accepted = bool(base.get("accepted"))
         raw_irt_row = base.get("judge_irt_row")
@@ -10278,7 +10285,9 @@ class TaskOrchestrator:
         :meth:`_is_general_free_agent` applies for blind text free traffic.
         """
         if not (
-            self._is_free_agent(agent) and self._agent_supports_image_input(agent)
+            self._is_free_agent(agent)
+            and self._agent_supports_image_input(agent)
+            and "input:text" in agent.tags
         ):
             return False
         if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
