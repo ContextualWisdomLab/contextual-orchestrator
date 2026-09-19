@@ -387,7 +387,6 @@ def test_free_image_stream_rejects_before_sse_without_image_pool(
         server.server_close()
 
 
-
 @pytest.mark.parametrize("false_form", ["false", 0])
 @pytest.mark.parametrize(
     ("path", "request_content"),
@@ -490,6 +489,7 @@ def test_http_endpoint_scope_normalizes_parallel_tool_false_before_image_admissi
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
 
 def test_endpoint_is_limited_to_supported_surfaces_and_forces_sync() -> None:
     with pytest.raises(RequestError) as exc_info:
