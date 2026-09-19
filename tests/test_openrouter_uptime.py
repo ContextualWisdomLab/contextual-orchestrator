@@ -42,6 +42,7 @@ def _collectors(uptime: float | None):
     collector = OpenRouterUptimeCollector(
         _agents(),
         group_router,
+        quality_router,
         interval_seconds=0.05,
         startup_delay_seconds=0.05,
     )
@@ -52,8 +53,9 @@ def _collectors(uptime: float | None):
 def test_start_without_openrouter_agents_is_inert() -> None:
     """No openrouter members means no thread and no evidence writes."""
     group_router = ModelGroupRouter()
+    quality_router = ModelGroupRouter()
     plain = [ModelAgent("general_agent", "mock-planner", tags=("reasoning",))]
-    collector = OpenRouterUptimeCollector(plain, group_router)
+    collector = OpenRouterUptimeCollector(plain, group_router, quality_router)
     collector.start()
     assert collector.window_evidence("general_agent") == (0.0, 0.0)
     collector.stop()
@@ -213,6 +215,47 @@ def test_update_prior_contract_preserves_observation_counts() -> None:
     assert after["failure_count"] == 1
 
 
+def test_fractional_prior_refresh_preserves_single_observation_exactly() -> None:
+    """Float drift in prior replacement must not erase one completed outcome."""
+    router = ModelGroupRouter()
+    router.register_member("member_c")
+    router.observe_success("member_c", 0.2)
+
+    # 2.0 + (0.4 - 1.0) - 0.4 is 0.9999999999999999 in binary float.
+    # The domain invariant is still exactly one completed Bernoulli outcome.
+    router.update_prior("member_c", 0.4, 1.0)
+
+    report = router.member_report("member_c")
+    assert report["success_count"] == 1
+    assert report["failure_count"] == 0
+    assert router.member_observation_count("member_c") == 1
+
+
+def test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior() -> None:
+    """Large prior mass must not erase completed Bernoulli outcomes."""
+
+    calls: list[tuple[float, float]] = []
+
+    class RecordingRng:
+        def betavariate(self, alpha: float, beta: float) -> float:
+            calls.append((alpha, beta))
+            return 0.5
+
+    router = ModelGroupRouter(rng=RecordingRng())
+    router.observe_success("member_d", 0.2)
+    router.observe_failure("member_d")
+
+    router.update_prior("member_d", 1e20, 1e20)
+    report = router.member_report("member_d")
+    assert report["success_count"] == 1
+    assert report["failure_count"] == 1
+    assert router.member_observation_count("member_d") == 2
+
+    router.update_prior("member_d", 1.0, 1.0)
+    assert router.sampled_ranked_member_ids(["member_d"]) == ["member_d"]
+    assert calls == [(2.0, 2.0)]
+
+
 def test_update_prior_rejects_invalid_components() -> None:
     """Negative or non-finite prior components are rejected outright."""
     import pytest
@@ -248,14 +291,15 @@ def test_availability_poll_cannot_change_answer_quality(uptime, judged):
     assert group_router.member_observation_count(member_id) == 0
 
 
-def test_availability_does_not_reverse_judged_member_order(monkeypatch):
-    """Fixed judged outcomes retain their order despite opposite uptime histories."""
+def test_availability_does_not_change_judged_quality_evidence(monkeypatch):
+    """Opposite uptime histories cannot alter judged-answer evidence or its report order."""
     monkeypatch.setattr(OpenRouterUptimeCollector, "start", lambda _self: None)
     agents = [
         ModelAgent("judged_strong", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
         ModelAgent("judged_weak", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
     ]
     gateway = TaskOrchestrator(agents)
+    member_ids = [agent.id for agent in agents]
     try:
         for agent, accepted in zip(agents, (8, 2), strict=True):
             for _ in range(accepted):
@@ -263,12 +307,12 @@ def test_availability_does_not_reverse_judged_member_order(monkeypatch):
             for _ in range(10 - accepted):
                 gateway._quality_router.observe_failure(agent.id)
         before = gateway._quality_router.snapshot()
-        assert gateway._refine_partition(agents, "worker") == agents
+        assert gateway._quality_router.ranked_member_ids(member_ids) == member_ids
         for agent, uptime in zip(agents, (0.0, 100.0), strict=True):
             monkeypatch.setattr(gateway._openrouter_collector, "_fetch_uptime", lambda _model, value=uptime: value)
             for _ in range(50):
                 gateway._openrouter_collector._poll_agent(agent)
-        assert gateway._refine_partition(agents, "worker") == agents
+        assert gateway._quality_router.ranked_member_ids(member_ids) == member_ids
         assert gateway._quality_router.snapshot() == before
     finally:
         gateway.close()
@@ -282,7 +326,8 @@ def test_transport_refresh_does_not_import_answer_benchmark_prior(monkeypatch):
     for router in (group_router, reference):
         router.observe_success(agent.id, 1.0)
         router.observe_failure(agent.id)
-    collector = OpenRouterUptimeCollector([agent], group_router)
+    quality_router = ModelGroupRouter()
+    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
     collector._fetch_uptime = lambda _model: 100.0
     collector._poll_agent(agent)
     reference.update_prior(agent.id, 2.0, 1.0)
@@ -305,11 +350,12 @@ def test_invalid_endpoint_percentage_cannot_update_evidence(monkeypatch, raw_val
     http_response = BytesIO(response_body)
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
     group_router = ModelGroupRouter()
+    quality_router = ModelGroupRouter()
     agent = _agents()[0]
     group_router.observe_success(agent.id, 0.2)
     group_router.observe_failure(agent.id)
     report_before = group_router.snapshot()
-    collector = OpenRouterUptimeCollector([agent], group_router)
+    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
 
     collector._poll_agent(agent)
 
@@ -332,8 +378,9 @@ def test_endpoint_percentage_parsing_preserves_valid_and_absent_values(monkeypat
     http_response = BytesIO(('{"data":{"endpoints":' + raw_endpoints + '}}').encode())
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
     group_router = ModelGroupRouter()
+    quality_router = ModelGroupRouter()
     agent = _agents()[0]
-    collector = OpenRouterUptimeCollector([agent], group_router)
+    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
 
     collector._poll_agent(agent)
 
@@ -362,7 +409,9 @@ def test_endpoint_request_preserves_author_slug_boundary(monkeypatch, model_id, 
         return http_response
 
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", checked_open)
-    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
+    collector = OpenRouterUptimeCollector(
+        [], ModelGroupRouter(), ModelGroupRouter()
+    )
 
     assert collector._fetch_uptime(model_id) == 99.5
     assert http_response.closed
@@ -379,7 +428,9 @@ def test_malformed_model_path_never_reaches_transport(monkeypatch, model_id):
         pytest.fail("malformed model ID reached transport")
 
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", reject_open)
-    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
+    collector = OpenRouterUptimeCollector(
+        [], ModelGroupRouter(), ModelGroupRouter()
+    )
 
     assert collector._fetch_uptime(model_id) is None
 
@@ -391,5 +442,7 @@ if __name__ == "__main__":
     test_unavailable_uptime_poll_is_a_no_op()
     test_background_loop_accumulates_and_stop_joins()
     test_update_prior_contract_preserves_observation_counts()
+    test_fractional_prior_refresh_preserves_single_observation_exactly()
+    test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior()
     test_update_prior_rejects_invalid_components()
     print("ok")

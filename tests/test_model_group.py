@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 
 import pytest
 
@@ -139,6 +140,10 @@ def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> No
 
     assert canonical_group_name("shared-reasoning-model") == "shared_reasoning_model"
     assert orchestrator._requested_agent("shared-reasoning-model") == high
+    # Live serving now samples from each measured member's posterior
+    # (sampled_ranked_member_ids); a fixed seed keeps this assertion
+    # deterministic while still exercising the sampled path.
+    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(high.id)
     orchestrator._group_router.observe_success(low.id, 0.1)
     assert orchestrator._requested_agent("shared_reasoning_model") == low
@@ -271,6 +276,7 @@ def test_explicit_group_alias_routes_plain_completion_to_measured_member() -> No
     first = ModelAgent("provider_one_model", "vendor-one/model-a", group_name="shared_reasoning_model")
     second = ModelAgent("provider_two_model", "vendor-two/model-b", group_name="shared_reasoning_model")
     orchestrator = TaskOrchestrator([first, second])
+    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(first.id)
     orchestrator._group_router.observe_success(second.id, 0.1)
 
@@ -340,7 +346,58 @@ def test_group_selects_measured_member_for_every_model_capability(capability: st
     first = ModelAgent("first_member", "provider/first", tags=(tag,), group_name="shared_model")
     second = ModelAgent("second_member", "provider/second", tags=(tag,), group_name="shared_model")
     orchestrator = TaskOrchestrator([first, second])
+    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(first.id)
     orchestrator._group_router.observe_success(second.id, 0.1)
 
     assert orchestrator.select_capability_agent(capability, "shared-model") == second
+
+
+def test_sampled_ranking_draws_each_unobserved_members_own_prior() -> None:
+    """Cold-start selection is Thompson sampling, not caller-order fallback."""
+    calls: list[tuple[float, float]] = []
+    draws = iter((0.2, 0.8))
+
+    class SequenceRng:
+        def betavariate(self, alpha: float, beta: float) -> float:
+            calls.append((alpha, beta))
+            return next(draws)
+
+    router = ModelGroupRouter(rng=SequenceRng())
+    assert router.sampled_ranked_member_ids(["member_b", "member_a"]) == [
+        "member_a",
+        "member_b",
+    ]
+    assert calls == [(1.0, 1.0), (1.0, 1.0)]
+
+
+def test_sampled_ranking_fails_closed_for_an_improper_beta_shape() -> None:
+    """Thompson sampling requires strictly positive Beta shape parameters."""
+    router = ModelGroupRouter(rng=random.Random(0))
+    router.register_member("degenerate_member")
+    router.update_prior("degenerate_member", 0.0, 0.0)
+    router.observe_failure("degenerate_member")
+
+    with pytest.raises(ValueError, match="strictly positive Beta"):
+        router.sampled_ranked_member_ids(["degenerate_member"])
+
+
+def test_sampled_ranking_orders_exact_posterior_draws_without_frequency_threshold() -> None:
+    """One draw per posterior determines the live order exactly."""
+    calls: list[tuple[float, float]] = []
+    draws = iter((0.1, 0.9))
+
+    class SequenceRng:
+        def betavariate(self, alpha: float, beta: float) -> float:
+            calls.append((alpha, beta))
+            return next(draws)
+
+    router = ModelGroupRouter(rng=SequenceRng())
+    router.observe_failure("loser")
+    router.observe_success("winner", 1.0)
+
+    assert router.sampled_ranked_member_ids(["loser", "winner"]) == [
+        "winner",
+        "loser",
+    ]
+    assert calls == [(1.0, 2.0), (2.0, 1.0)]
