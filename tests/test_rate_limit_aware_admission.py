@@ -597,6 +597,53 @@ def test_route_once_preserves_recovered_attempts_on_malformed_exhaustion() -> No
     orchestrator.close()
 
 
+def test_route_once_preserves_attempts_across_judge_rejected_worker_rounds() -> None:
+    """A later direct worker success must not erase an earlier failover receipt."""
+    orchestrator = TaskOrchestrator(_free_route_agents(), tool_retry_attempts=1)
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [
+                _rate_limited_upstream_error(1.0),
+                _rate_limited_upstream_error(1.0),
+            ],
+            "fallback_free_agent": ["first answer", "second answer"],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    judge_results = iter((False, True))
+
+    def judge_worker_answer(**kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        accepted = next(judge_results)
+        return {
+            "accepted": accepted,
+            "reason": "accepted" if accepted else "retry another worker",
+            "verifier_output": "",
+            "judge": "model",
+        }
+
+    orchestrator._realtime_route_judge = judge_worker_answer  # type: ignore[method-assign]
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "hello"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "second answer"
+    assert result["route"]["eligible_agent_ids"] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert [attempt["outcome"] for attempt in result["route"]["attempted"]] == [
+        "retryable_transport",
+        "retryable_transport",
+        "served",
+        "served",
+    ]
+    assert result["route"]["terminal_reason"] == "served"
+    orchestrator.close()
+
+
 @pytest.mark.parametrize("malformed_agent_id", ["primary_free_agent", "fallback_free_agent"])
 def test_route_once_preserves_malformed_taxonomy_for_mixed_size_exhaustion(
     malformed_agent_id: str,
@@ -715,6 +762,18 @@ def test_http_route_once_storm_without_budget_returns_429() -> None:
     assert status == 429, body
     assert response.getheader("retry-after") == "9"
     assert body["error"]["code"] == PROVIDER_RATE_LIMITED_CODE
+    assert body["error"]["detail"]["route"]["eligible_agent_ids"] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert [
+        attempt["outcome"]
+        for attempt in body["error"]["detail"]["route"]["attempted"]
+    ] == ["retryable_transport", "retryable_transport"]
+    assert (
+        body["error"]["detail"]["route"]["terminal_reason"]
+        == "rate_limit_wait_budget_exhausted"
+    )
 
 
 def test_http_route_once_storm_with_no_retry_after_waits_the_assumed_cooldown() -> None:
