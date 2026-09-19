@@ -96,7 +96,7 @@ def _serve():
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    return server, server.server_address[1], token, coordinator
+    return server, thread, server.server_address[1], token, coordinator
 
 
 def _request(method, url, token=None, body=None):
@@ -376,7 +376,7 @@ def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> Non
 
 
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
-    server, port, token, coordinator = _serve()
+    server, thread, port, token, coordinator = _serve()
     base = f"http://127.0.0.1:{port}"
     request = CONTRACT["request"]
     submit_path = CONTRACT["endpoint"]["submit_path"]
@@ -442,12 +442,13 @@ def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
             assert expected in values, f"dimension {dimension} not attributed to {expected}"
     finally:
         server.shutdown()
+        thread.join(timeout=5)
         server.server_close()
 
 
 def test_batch_embeddings_accepts_openai_style_input_field() -> None:
     """The endpoint also accepts the OpenAI-style ``input`` (string or list)."""
-    server, port, token, _coordinator = _serve()
+    server, thread, port, token, _coordinator = _serve()
     base = f"http://127.0.0.1:{port}"
     try:
         status, document = _request(
@@ -461,6 +462,7 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         assert document["status"] == "completed"
     finally:
         server.shutdown()
+        thread.join(timeout=5)
         server.server_close()
 
 

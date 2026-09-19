@@ -32,3 +32,9 @@ either streaming surface commits SSE headers.
 Streamed route judging now inherits the request's image entitlement, and runtime
 image admission excludes non-chat image-edit/video agents before any HTTP/SSE
 success response or judge call.
+
+The exact-head verification path now uses the supported `referencing` registry
+instead of deprecated `jsonschema.RefResolver`, follows the renamed provider
+embedding claim-lease constant, treats a null batch wait timeout as unbounded,
+and closes every touched loopback listener after shutdown. Multimodal HTTP
+fixtures declare image input explicitly instead of relying on a text-only mock.
