@@ -17,7 +17,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   the persisted workflow record returned by the Chat Completions API. A
   malformed-response exhaustion after a recovered 429/503 round now also
   retains every attempt from both rounds without changing its
-  `ProviderResponseError` taxonomy.
+  `ProviderResponseError` taxonomy. Mixed malformed-response/413 exhaustion
+  likewise retains that taxonomy in either candidate order, and the HTTP 413
+  response now exposes the attached all-413 route receipt.
 - Non-streaming `route_once` now snapshots worker failover evidence before the
   realtime judge performs its own model call, so judge routing cannot erase or
   replace the worker's typed `orchestration.route.attempted[]` receipt.

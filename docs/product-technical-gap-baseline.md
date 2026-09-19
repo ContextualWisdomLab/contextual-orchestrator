@@ -34,13 +34,27 @@ A later exact-head review found one remaining two-round loss path: after a
 fully rate-limited round was recovered, a second round ending in
 `ProviderResponseError` bypassed the upstream-error recovery handler and
 published only the second round's `fail_closed` attempts. RED source
-`6d0a115a4766a5c0a7dbb97a7b62cc6e63b9fac2` reproduces that omission while
+`2b6f121919825f1979aa79220cc7fadfdae23fae` reproduces that omission while
 requiring the concrete malformed-response taxonomy. GREEN source
-`a45761cd9091914bea1736797ec85328e976304f` attaches the accumulated first
+`542db31df564aef1d1fcb7db89793fec379cbc98` attaches the accumulated first
 round and current second round to the existing response error. The focused
 regression passes with warnings treated as errors. Exact-head hosted gates,
 independent review, protected merge, immutable release, and consumer adoption
 remain required; this evidence is Proposed rather than production authority.
+
+Fresh exact-head review then found two terminal-boundary gaps. A bounded pool
+mixing one 413 with one malformed response fell through to a generic
+`RuntimeError` in either candidate order, while the special HTTP 413 handler
+discarded the all-413 route receipt already attached by the orchestrator. RED
+`306a482895aacd5d2b8c3fec6e1da6b1ced66853` reproduces all three cases. GREEN
+`29dc62093b3224044907d5278556764e60f78921` counts bounded size failures when
+selecting the final concrete malformed-response taxonomy and passes
+`ProviderRequestTooLargeError.detail` through the dedicated HTTP handler. The
+three new regressions pass, and the rate-limit plus malformed-synthesis suites
+pass 38 tests. The local environment still lacks locked `pytest-asyncio`, so
+its inherited unknown-config warning is recorded rather than suppressed or
+reported warning-clean. Hosted exact-head gates and independent review remain
+required.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
