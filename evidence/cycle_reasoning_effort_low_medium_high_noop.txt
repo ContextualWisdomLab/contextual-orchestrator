@@ -1,1 +1,0 @@
-reasoning_effort / reasoning.effort: accept none/minimal/low/medium/high (casefold) as default-effort no-ops; unknown levels fail closed. Local: 1310 passed.

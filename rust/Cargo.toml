@@ -1,3 +1,0 @@
-[workspace]
-members = ["token_counter", "decision_receipt"]
-resolver = "2"

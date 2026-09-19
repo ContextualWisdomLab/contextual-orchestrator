@@ -1,3 +1,0 @@
-reasoning_effort / reasoning.effort minimal (casefold) omit no-op on chat,
-completions surface, and Responses. none still omit; low+ still reject.
-Local: 1255 passed.

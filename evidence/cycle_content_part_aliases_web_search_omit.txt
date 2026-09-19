@@ -1,3 +1,0 @@
-content parts: input_text/output_text→text, input_image→image_url (casefold).
-web_search_options: nested null/empty omit; remaining non-empty still reject.
-Local: 1220 passed.

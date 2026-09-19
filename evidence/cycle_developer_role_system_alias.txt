@@ -1,3 +1,0 @@
-developer message role (casefold) aliases to system for modern OpenAI SDKs.
-function role still named-reject → use tool.
-Local: 1232 passed.

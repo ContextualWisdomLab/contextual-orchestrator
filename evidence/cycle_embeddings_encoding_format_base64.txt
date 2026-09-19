@@ -1,2 +1,0 @@
-embeddings encoding_format base64: little-endian float32 base64 strings.
-float still default; casefold/pad accepted. Local: 1272 passed.
