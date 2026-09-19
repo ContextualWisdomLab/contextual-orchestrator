@@ -1,5 +1,21 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-20 route evidence ownership repair (proposed)
+
+PR #1205 RED head `b5ebdb24cbacf6a859c397f60aceec43679e74cd`
+reproduces a worker failover receipt being erased when the realtime judge
+performs a nested `_invoke`: the returned route omitted
+`retryable_transport` and `served`. GREEN source
+`5c53ee5b3b502c105b82467ec0e859c931687ec4` snapshots and clears the
+worker-owned thread-local receipt immediately after worker invocation, before
+judge traffic can overwrite it. The exact focused regression passes; the
+four related route/API suites pass 94 tests. Local dependency installation did
+not include the repository's locked pytest-asyncio plugin and the predecessor
+API-contract file still imports deprecated `jsonschema.RefResolver`, so those
+three warnings are recorded rather than presented as warning-clean evidence.
+Fresh hosted exact-head Checks and independent review remain required; no
+immutable release or downstream consumer pin is claimed.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`

@@ -12,6 +12,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Non-streaming `route_once` now snapshots worker failover evidence before the
+  realtime judge performs its own model call, so judge routing cannot erase or
+  replace the worker's typed `orchestration.route.attempted[]` receipt.
 - Held-out judge-effect evidence now requires a declared sample size. The
   hidden 1,000-row default is removed. The harness run still writes 1,000 as
   this run's choice.
