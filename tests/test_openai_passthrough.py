@@ -27,6 +27,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     _responses_to_chat_payload,
 )
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
     SecurityConfig,
     build_server,
@@ -362,7 +363,8 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _serve() -> tuple[object, int, str]:
@@ -372,13 +374,28 @@ def _serve() -> tuple[object, int, str]:
     return server, server.server_address[1], token
 
 
-def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_http_all_auto_candidates_rejecting_size_returns_413(cleanup_fails) -> None:
     """Provider-size exhaustion remains an OpenAI-compatible 413 at the gateway."""
+    retained_errors = []
+    original_closers = []
+
     class RejectingClient(ModelClient):
         def proxy_send_once(self, agent, endpoint, payload):
-            raise urllib.error.HTTPError(
+            assert all(error.closed for error in retained_errors), "close before next candidate"
+            response_error = urllib.error.HTTPError(
                 "https://provider.example/v1", 413, "too large", None, None
             )
+            original_close = response_error.close
+            original_closers.append(original_close)
+            if cleanup_fails:
+                def failing_close():
+                    """A secondary cleanup failure must preserve the final 413."""
+                    original_close()
+                    raise OSError("private cleanup failure")
+                response_error.close = failing_close
+            retained_errors.append(response_error)
+            raise response_error
 
         proxy_send = proxy_send_once
 
@@ -429,8 +446,13 @@ def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
             },
             token,
         )
+        assert len(retained_errors) == 2
+        assert all(error.closed for error in retained_errors)
     finally:
         server.shutdown()
+        server.server_close()
+        for original_close in original_closers:
+            original_close()
 
     assert status == 413
     assert body["error"]["code"] == "request_too_large"
@@ -489,6 +511,152 @@ def test_http_virtual_structured_synthesis_failure_returns_provider_error() -> N
     assert "synthetic provider outage" not in json.dumps(body)
 
 
+def test_http_named_tool_passthrough_exposes_bounded_attempt_evidence_on_502() -> None:
+    """Named tool passthrough keeps request-scoped candidate evidence on the wire.
+
+    Virtual ``orchestrator/free`` + tools now take the Fugu route/conduct path on
+    main (``named_tool_passthrough`` requires a concrete model). Free-pool
+    multi-candidate sticky HTTP coverage remains in
+    ``tests/test_passthrough_provider_failover.py``.
+    """
+
+    class ConnectingNamedPool(ModelClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            del endpoint, payload
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_connection_error",
+                message=f"the provider {agent.id} connection failed or did not finish in time",
+                client_status=502,
+                provider_status=None,
+                retryable=True,
+                transport="passthrough",
+            )
+
+        proxy_send = proxy_send_once
+
+    token = "passthrough_token"
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary",
+                "free-primary-model",
+                tags=("cost:free",),
+                provider_name="free-primary",
+                priority=2,
+            ),
+            ModelAgent(
+                "free_backup",
+                "free-backup-model",
+                tags=("cost:free",),
+                provider_name="free-backup",
+                priority=1,
+            ),
+        ],
+        client=ConnectingNamedPool(),  # type: ignore[arg-type]
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": "free-primary-model",
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 502
+    assert body["error"]["code"] == "provider_connection_error"
+    assert body["error"]["detail"]["selected_candidate_ids"] == ["free_primary"]
+    assert body["error"]["detail"]["terminal_reason"] == "terminal_provider_failure"
+    assert body["error"]["detail"]["attempts"] == [
+        {
+            "agent_id": "free_primary",
+            "model": "free-primary-model",
+            "provider_name": "free-primary",
+            "attempt_number": 1,
+            "error_code": "provider_connection_error",
+            "client_status": 502,
+            "provider_status": None,
+            "retryable": True,
+            "transport": "passthrough",
+            "phase": "transport",
+            "failover_decision": "sticky_candidate_failure",
+        },
+    ]
+    assert "use the tool" not in json.dumps(body)
+
+
+def test_http_named_tool_passthrough_raw_timeout_does_not_replay() -> None:
+    """Named tool passthrough keeps an ambiguous timeout on its selected candidate."""
+
+    class TimeoutNamedPool(ModelClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            del endpoint, payload
+            if agent.id == "free_primary":
+                raise TimeoutError("provider timed out")
+            return {"id": "chatcmpl-free", "object": "chat.completion", "model": agent.model, "choices": []}
+
+        proxy_send = proxy_send_once
+
+    token = "passthrough_token"
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_primary",
+                "free-primary-model",
+                tags=("cost:free",),
+                provider_name="free-primary",
+                priority=2,
+            ),
+            ModelAgent(
+                "free_backup",
+                "free-backup-model",
+                tags=("cost:free",),
+                provider_name="free-backup",
+                priority=1,
+            ),
+        ],
+        client=TimeoutNamedPool(),  # type: ignore[arg-type]
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": "free-primary-model",
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 502
+    assert body["error"]["code"] == "provider_outcome_unknown"
+    assert body["error"]["detail"]["retryable"] is False
+    assert body["error"]["detail"]["terminal_reason"] == "terminal_provider_failure"
+    assert [item["agent_id"] for item in body["error"]["detail"]["attempts"]] == [
+        "free_primary"
+    ]
+    assert "provider timed out" not in json.dumps(body)
+
+
+
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
@@ -504,6 +672,7 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
         )
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200  # previously rejected 400 'unknown_fields'
     assert body["object"] == "chat.completion"
     assert body["echo"]["response_format"] == {"type": "json_object"}
@@ -539,6 +708,7 @@ def test_lineage_structured_payload_accepts_session_without_provider_forwarding(
         )
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["echo"]["response_format"] == {"type": "json_object"}
     assert "session_id" not in body["echo"]
@@ -560,6 +730,7 @@ def test_http_rejects_invalid_top_level_session_id(session_id: object) -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 400
     assert body["error"]["code"] == "invalid_session_id"
 
@@ -579,6 +750,7 @@ def test_http_gateway_default_response_format_resolves_concrete_agent() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 200
     assert body["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
@@ -618,6 +790,7 @@ def test_http_structured_virtual_models_reject_ineligible_pools(
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 400
     assert expected_message in body["error"]["message"]
@@ -650,6 +823,7 @@ def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 400
     assert "vision" in body["error"]["message"]
@@ -662,6 +836,7 @@ def test_http_responses_endpoint_passes_through() -> None:
         status, body = _post(url, {"model": "mock-planner", "input": "hello"}, token)
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["object"] == "response"
 
@@ -688,6 +863,7 @@ def test_http_virtual_responses_tools_are_conducted_not_single_model_passthrough
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 200
     assert body["object"] == "response"
@@ -707,6 +883,7 @@ def test_http_models_endpoint_lists_configured_models() -> None:
             body = json.loads(response.read().decode("utf-8"))
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["object"] == "list"
     # Disabled models are omitted: an inference-scope caller should never see
@@ -744,6 +921,7 @@ def test_http_plain_prompt_still_uses_orchestration_path() -> None:
         status, body = _post(url, {"model": "mock-planner", "messages": [{"role": "user", "content": "hi"}]}, token)
     finally:
         server.shutdown()
+        server.server_close()
     assert status == 200
     assert body["object"] == "chat.completion"
     assert "echo" not in body  # orchestration path, not passthrough

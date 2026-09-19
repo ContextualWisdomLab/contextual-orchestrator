@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -67,6 +68,7 @@ def test_http_batch_embeddings_accepts_priority_bulk() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_accepts_channel_batch() -> None:
@@ -85,6 +87,7 @@ def test_http_batch_embeddings_accepts_channel_batch() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_rejects_invalid_priority() -> None:
@@ -105,6 +108,7 @@ def test_http_batch_embeddings_rejects_invalid_priority() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_rejects_channel_turbo() -> None:
@@ -123,6 +127,7 @@ def test_http_batch_embeddings_rejects_channel_turbo() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_batch_embeddings_baseline_without_routing() -> None:
@@ -135,3 +140,4 @@ def test_http_batch_embeddings_baseline_without_routing() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

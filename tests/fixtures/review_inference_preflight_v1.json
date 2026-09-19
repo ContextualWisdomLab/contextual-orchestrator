@@ -1,0 +1,106 @@
+{
+  "contract_version": "review_inference_preflight_v1",
+  "authentication_scope": "inference",
+  "discovery_path": "/v1/models",
+  "inference_path": "/v1/chat/completions",
+  "required_model": "orchestrator/free",
+  "probe_requests": {
+    "json_object": {
+      "model": "orchestrator/free",
+      "zdr_only": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Return a JSON object with probe_status equal to ready."
+        }
+      ],
+      "response_format": {
+        "type": "json_object"
+      }
+    },
+    "json_schema": {
+      "model": "orchestrator/free",
+      "zdr_only": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Return probe_status equal to ready using the supplied schema."
+        }
+      ],
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "review_probe",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "probe_status": {
+                "type": "string",
+                "enum": [
+                  "ready"
+                ]
+              }
+            },
+            "required": [
+              "probe_status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "tool_call": {
+      "model": "orchestrator/free",
+      "zdr_only": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Call review_probe with probe_status equal to ready."
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "review_probe",
+            "description": "Confirm the review request contract without side effects.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "probe_status": {
+                  "type": "string",
+                  "enum": [
+                    "ready"
+                  ]
+                }
+              },
+              "required": [
+                "probe_status"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "tool_choice": {
+        "type": "function",
+        "function": {
+          "name": "review_probe"
+        }
+      }
+    }
+  },
+  "safe_evidence_fields": [
+    "contract_version",
+    "gateway_revision",
+    "observed_at",
+    "requested_model",
+    "zdr_requested",
+    "probe_name",
+    "http_status",
+    "result",
+    "error_category"
+  ],
+  "evidence_ceiling": "request capability and configured gateway free/ZDR policy; no provider retention attestation or durable availability guarantee"
+}

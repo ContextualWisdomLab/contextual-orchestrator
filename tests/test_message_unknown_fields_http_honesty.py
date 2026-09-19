@@ -38,7 +38,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -79,6 +80,7 @@ def test_http_chat_rejects_unknown_message_fields() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_known_optional_message_keys() -> None:
@@ -106,6 +108,7 @@ def test_http_chat_accepts_known_optional_message_keys() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_legacy_function_role() -> None:
@@ -132,6 +135,7 @@ def test_http_chat_rejects_legacy_function_role() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_unknown_message_fields_on_tools_passthrough() -> None:
@@ -166,6 +170,7 @@ def test_http_chat_unknown_message_fields_on_tools_passthrough() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

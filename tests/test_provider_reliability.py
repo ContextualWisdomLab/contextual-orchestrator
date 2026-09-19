@@ -22,11 +22,16 @@ from dataclasses import replace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.credentials import (  # noqa: E402
+    InMemoryCredentialBackend,
+    set_backend,
+)
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
     ProviderRequestTooLargeError,
     ProviderResponseError,
+    _log_provider_attempt_failed,
     is_transient_error,
 )
 from contextual_orchestrator.provider_errors import (  # noqa: E402
@@ -38,6 +43,47 @@ from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
+
+
+@pytest.mark.parametrize("status", [425, 429, 503, None, 0, True, "429", 600])
+def test_attempt_log_preserves_only_valid_numeric_upstream_status(caplog, status) -> None:
+    """Logs distinguish missing status without reading bodies or exposing diagnostics."""
+    body = io.BytesIO(b"private_response_body")
+    failure = urllib.error.HTTPError(
+        "https://provider.example/private", status,
+        "https://provider.example/private private_failure_text", None, body,
+    )
+    agent = ModelAgent("local_worker", "mock-local")
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+        _log_provider_attempt_failed(agent, 0, failure, True)
+    expected = status if type(status) is int and 100 <= status <= 599 else None
+    assert f"provider_status={expected}" in caplog.text
+    assert "error_message=<omitted>" in caplog.text
+    assert "provider.example" not in caplog.text
+    assert "private_failure_text" not in caplog.text
+    assert "private_response_body" not in caplog.text
+    assert body.tell() == 0
+
+
+def test_attempt_log_handles_typed_and_non_http_failures_without_stringifying(caplog) -> None:
+    """A typed status survives; a non-HTTP failure remains explicitly unknown."""
+    class UnprintableFailure(RuntimeError):
+        def __str__(self):
+            raise AssertionError("failure text must not be evaluated")
+
+    failures = [
+        (ProviderUpstreamError(
+            agent_id="local_worker", model="mock-local", error_code="service_unavailable",
+            message="private_failure_text", client_status=503, provider_status=503,
+        ), 503),
+        (UnprintableFailure(), None),
+    ]
+    for failure, expected in failures:
+        caplog.clear()
+        with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+            _log_provider_attempt_failed(ModelAgent("local_worker", "mock-local"), 0, failure, True)
+        assert f"provider_status={expected}" in caplog.text
+        assert "private_failure_text" not in caplog.text
 
 
 def _stopped_http_error() -> urllib.error.HTTPError:
@@ -252,6 +298,34 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
     assert all(0.0 <= d <= client.retry_backoff_cap for d in delays)
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError("read timed out"), ConnectionResetError("connection reset")],
+)
+def test_ambiguous_post_send_failure_is_never_retried(failure: OSError) -> None:
+    """An unknown provider outcome must not be replayed by the transport loop."""
+
+    class AmbiguousClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=3, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            del agent, payload, destination
+            self.attempts += 1
+            raise failure
+
+    client = AmbiguousClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.retryable is False
+
+
 def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -> None:
     class LocalDownClient(ModelClient):
         def __init__(self) -> None:
@@ -273,7 +347,7 @@ def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -
     assert client.attempts == 1
 
 
-def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
+def test_local_retry_budget_never_replays_an_ambiguous_outcome() -> None:
     class LocalFlakyClient(ModelClient):
         def __init__(self) -> None:
             super().__init__(max_retries=5, local_max_retries=1, retry_backoff=0.0)
@@ -281,17 +355,17 @@ def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
 
         def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
-            if self.attempts == 1:
-                raise urllib.error.URLError("local server restarted")
-            return "recovered"
+            raise urllib.error.URLError("local server restarted")
 
     client = LocalFlakyClient()
     agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
-    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
-    assert client.attempts == 2
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
 
 
-def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
+def test_local_retry_budget_does_not_override_unknown_outcome_safety() -> None:
     class LocalFlakyClient(ModelClient):
         def __init__(self) -> None:
             super().__init__(max_retries=0, local_max_retries=2, retry_backoff=0.0)
@@ -299,14 +373,14 @@ def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
 
         def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
-            if self.attempts < 3:
-                raise urllib.error.URLError("local server is restarting")
-            return "recovered"
+            raise urllib.error.URLError("local server is restarting")
 
     client = LocalFlakyClient()
     agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
-    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
-    assert client.attempts == 3
+    with pytest.raises(ProviderUpstreamError) as caught:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.attempts == 1
+    assert caught.value.error_code == "provider_outcome_unknown"
 
 
 def test_local_passthrough_retry_budget_is_not_capped_by_remote_retry_default() -> None:
@@ -420,9 +494,24 @@ class _AgentDownClient(ModelClient):
 
 
 def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDownClient]:
+    """Build a scripted two-worker failover fixture without extra judge calls."""
     agents = [
-        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
-        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+        ModelAgent(
+            "primary_worker",
+            "mock",
+            base_url="mock://private-primary.example",
+            api_key_env="PRIVATE_PRIMARY_CREDENTIAL",
+            tags=("reasoning", "writing"),
+            priority=5,
+        ),
+        ModelAgent(
+            "backup_worker",
+            "mock",
+            base_url="mock://private-backup.example",
+            api_key_env="PRIVATE_BACKUP_CREDENTIAL",
+            tags=("reasoning", "writing"),
+            priority=1,
+        ),
     ]
     client = _AgentDownClient(down_id)
     orchestrator = TaskOrchestrator(agents, client=client)
@@ -433,6 +522,7 @@ def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDown
 
 
 def test_failover_to_backup_agent_when_primary_fails() -> None:
+    """Record ordered failover without claiming propensity or leaking configuration."""
     orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
     result = orchestrator.route_once([{"role": "user", "content": "route this"}])
     assert result["answer"] == "[backup_worker] answer"
@@ -440,6 +530,24 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert row["served_agent_id"] == "backup_worker"
     assert row["failover_from"] == "primary_worker"
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
+    design = row["selection_design"]
+    assert design["assignment_mechanism"] == "deterministic_ranked"
+    assert design["propensity_status"] == "not_identified"
+    assert design["selected_probability"] is None
+    assert [value.split(":", 1)[0] for value in design["candidate_deployment_ids"]] == [
+        "primary_worker",
+        "backup_worker",
+    ]
+    assert [value.split(":", 1)[0] for value in design["attempted_deployment_ids"]] == [
+        "primary_worker",
+        "backup_worker",
+    ]
+    assert design["selected_deployment_id"].startswith("backup_worker:")
+    serialized_design = json.dumps(design)
+    assert "base_url" not in serialized_design
+    assert "api_key" not in serialized_design
+    assert "private-primary.example" not in serialized_design
+    assert "PRIVATE_PRIMARY_CREDENTIAL" not in serialized_design
 
 
 def test_route_advances_on_413_and_preserves_exhausted_size_error() -> None:
@@ -805,6 +913,152 @@ def test_free_model_exhausted_pool_fails_closed_never_promotes_to_priced_agent()
 
     assert excinfo.value.client_status == 503
     assert excinfo.value.agent_id == "free_route_b"
+    assert client.calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in client.calls
+
+
+def test_unallowlisted_provider_host_is_classified_upstream_error() -> None:
+    """Live orchestrator/free 500s were raw RuntimeError from host allowlisting."""
+    client = ModelClient(allowed_provider_hosts={"ok.example"})
+    agent = ModelAgent(
+        "blocked_agent",
+        "blocked-model",
+        base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+    )
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            client._validate_provider(agent)
+    finally:
+        set_backend(None)
+    assert excinfo.value.client_status == 502
+    assert excinfo.value.retryable is False
+    assert excinfo.value.error_code == "provider_connection_error"
+    assert "allowlisted" in str(excinfo.value)
+    assert "blocked.example" not in str(excinfo.value)
+
+
+def test_passthrough_allowlist_failure_reports_passthrough_transport() -> None:
+    """Passthrough validation evidence must name the surface that invoked it."""
+    client = ModelClient(allowed_provider_hosts={"ok.example"})
+    agent = ModelAgent(
+        "blocked_agent",
+        "blocked-model",
+        base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+    )
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            client.proxy_send_once(
+                agent,
+                "chat/completions",
+                {"messages": [{"role": "user", "content": "hello"}]},
+            )
+    finally:
+        set_backend(None)
+
+    assert excinfo.value.transport == "passthrough"
+
+
+def test_free_model_advances_past_unallowlisted_provider_host() -> None:
+    """A host-allowlist miss must skip to the next free candidate, not 500."""
+    calls: list[str] = []
+    blocked = ModelAgent(
+        "free_route_a",
+        "free_route_a-model",
+        base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+        tags=("reasoning", "cost:free"),
+    )
+
+    class AllowlistThenOk(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(allowed_provider_hosts={"ok.example"})
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                self._validate_provider(blocked)
+            return f"[{agent.id}] answer"
+
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        orchestrator = _free_pool_orchestrator(
+            AllowlistThenOk(), free_ids=("free_route_a", "free_route_b")
+        )
+        orchestrator.tool_retry_attempts = 0
+        result = orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+    finally:
+        set_backend(None)
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+    assert calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in calls
+
+
+def test_free_model_exhausted_allowlist_pool_fails_closed_as_502() -> None:
+    """Every free candidate missing the host allowlist must not collapse to HTTP 500."""
+    blocked_by_id = {
+        "free_route_a": ModelAgent(
+            "free_route_a",
+            "free_route_a-model",
+            base_url="https://blocked-a.example/v1",
+            credential_key="MODEL_KEY",
+            tags=("reasoning", "cost:free"),
+        ),
+        "free_route_b": ModelAgent(
+            "free_route_b",
+            "free_route_b-model",
+            base_url="https://blocked-b.example/v1",
+            credential_key="MODEL_KEY",
+            tags=("reasoning", "cost:free"),
+        ),
+    }
+
+    class AllBlocked(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(allowed_provider_hosts={"ok.example"})
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            self.calls.append(agent.id)
+            self._validate_provider(blocked_by_id[agent.id])
+            raise AssertionError("allowlisted host was not supposed to be reached")
+
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    client = AllBlocked()
+    try:
+        orchestrator = _free_pool_orchestrator(
+            client, free_ids=("free_route_a", "free_route_b")
+        )
+        orchestrator.tool_retry_attempts = 0
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            orchestrator.route_once(
+                [{"role": "user", "content": "route this"}],
+                model_name=TaskOrchestrator.FREE_MODEL,
+            )
+    finally:
+        set_backend(None)
+
+    assert excinfo.value.client_status == 502
+    assert "all " not in str(excinfo.value)
+    assert "role=" not in str(excinfo.value)
     assert client.calls == ["free_route_a", "free_route_b"]
     assert "priced_worker" not in client.calls
 

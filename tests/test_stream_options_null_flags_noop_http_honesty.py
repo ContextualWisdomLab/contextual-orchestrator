@@ -39,7 +39,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _post_raw(port: int, path: str, payload: dict) -> tuple[int, str, str]:
@@ -61,7 +62,8 @@ def _post_raw(port: int, path: str, payload: dict) -> tuple[int, str, str]:
                 response.read().decode("utf-8"),
             )
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
+        with exc:
+            return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
 
 
 def _server():
@@ -100,6 +102,7 @@ def test_http_chat_accepts_stream_options_null_flags_without_stream() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_stream_options_null_flags_without_stream() -> None:
@@ -122,6 +125,7 @@ def test_http_completions_accepts_stream_options_null_flags_without_stream() -> 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_stream_options_null_flags() -> None:
@@ -143,6 +147,7 @@ def test_http_responses_accepts_stream_options_null_flags() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_include_usage_true() -> None:
@@ -171,6 +176,7 @@ def test_http_chat_accepts_include_usage_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_tools_streams_include_reported_usage() -> None:
@@ -220,6 +226,7 @@ def test_http_chat_tools_streams_include_reported_usage() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 class _NoUsageToolProvider:
@@ -355,6 +362,7 @@ def test_http_chat_tools_streams_unavailable_usage_when_provider_omits_it() -> N
         finally:
             server.shutdown()
             thread.join(timeout=5)
+            server.server_close()
 
 
 def test_http_chat_tools_do_not_reconstruct_tool_schema_usage() -> None:
@@ -410,6 +418,7 @@ def test_http_chat_tools_do_not_reconstruct_tool_schema_usage() -> None:
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
+                server.server_close()
 
     small_tools = [
         {
@@ -440,13 +449,8 @@ def test_http_chat_tools_do_not_reconstruct_tool_schema_usage() -> None:
         assert frame["usage_measurement_status"] == "unavailable"
 
 
-def test_http_chat_response_format_only_streams_still_reject_include_usage() -> None:
-    """response_format-only (conduct mode, no tools) keeps failing closed.
-
-    Its usage comes from a multi-step workflow's cost ledger, which may be
-    unmeasured -- unlike single-agent tools passthrough, which always has
-    the one upstream call's own real, reported usage available.
-    """
+def test_http_chat_response_format_only_streams_omit_unmeasured_usage() -> None:
+    """Conduct streaming succeeds but does not expose estimated ledger usage."""
     server, thread, port = _server()
     try:
         status, _, body = _post_raw(
@@ -460,11 +464,19 @@ def test_http_chat_response_format_only_streams_still_reject_include_usage() -> 
                 "response_format": {"type": "json_object"},
             },
         )
-        assert status == 400, body
-        assert "invalid_stream_options" in body
+        assert status == 200, body
+        frames = [
+            json.loads(frame[len("data: "):])
+            for frame in body.split("\n\n")
+            if frame.startswith("data: ") and frame != "data: [DONE]"
+        ]
+        assert frames
+        assert all(frame.get("choices") for frame in frames)
+        assert all(frame["usage"] is None for frame in frames)
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_non_boolean_non_null_flag() -> None:
@@ -485,6 +497,7 @@ def test_http_chat_rejects_non_boolean_non_null_flag() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
@@ -495,6 +508,6 @@ if __name__ == "__main__":
     test_http_chat_tools_streams_include_reported_usage()
     test_http_chat_tools_streams_unavailable_usage_when_provider_omits_it()
     test_http_chat_tools_do_not_reconstruct_tool_schema_usage()
-    test_http_chat_response_format_only_streams_still_reject_include_usage()
+    test_http_chat_response_format_only_streams_omit_unmeasured_usage()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")

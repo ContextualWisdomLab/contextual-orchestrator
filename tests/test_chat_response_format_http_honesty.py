@@ -42,7 +42,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -68,6 +69,7 @@ def test_http_chat_accepts_response_format_text() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_json_object() -> None:
@@ -85,6 +87,7 @@ def test_http_chat_accepts_response_format_json_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_synthesis_classifies_upstream_404() -> None:
@@ -123,6 +126,7 @@ def test_http_structured_synthesis_classifies_upstream_404() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() -> None:
@@ -165,6 +169,7 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
@@ -312,6 +317,7 @@ def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> No
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_structured_workflow_never_reuses_request_scoped_missing_model() -> None:
@@ -369,6 +375,7 @@ def test_virtual_structured_workflow_never_reuses_request_scoped_missing_model()
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_structured_workflow_exhausts_each_missing_model_once() -> None:
@@ -411,6 +418,7 @@ def test_virtual_structured_workflow_exhausts_each_missing_model_once() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_explicit_structured_model_preserves_model_not_found() -> None:
@@ -445,6 +453,7 @@ def test_explicit_structured_model_preserves_model_not_found() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_explicit_structured_model_preserves_authentication_error() -> None:
@@ -478,6 +487,7 @@ def test_explicit_structured_model_preserves_authentication_error() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_virtual_missing_models_record_each_circuit_failure_once() -> None:
@@ -517,6 +527,7 @@ def test_virtual_missing_models_record_each_circuit_failure_once() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_chat_rejects_batch_routing() -> None:
@@ -537,6 +548,7 @@ def test_http_structured_chat_rejects_batch_routing() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_chat_applies_sampling_to_evidence_calls() -> None:
@@ -572,6 +584,7 @@ def test_http_structured_chat_applies_sampling_to_evidence_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_image_rejects_text_only_model_as_client_error() -> None:
@@ -602,6 +615,7 @@ def test_http_structured_image_rejects_text_only_model_as_client_error() -> None
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> None:
@@ -632,6 +646,7 @@ def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_fails_closed_when_provider_violates_valid_json_schema() -> None:
@@ -661,6 +676,7 @@ def test_http_chat_fails_closed_when_provider_violates_valid_json_schema() -> No
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_surfaces_machine_readable_provider_response_failure_kind() -> None:
@@ -727,6 +743,7 @@ def test_http_chat_surfaces_machine_readable_provider_response_failure_kind() ->
         orchestrator.client.chat = original_chat
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_unknown_response_format_type() -> None:
@@ -745,6 +762,7 @@ def test_http_chat_rejects_unknown_response_format_type() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_json_object_with_sibling_keys() -> None:
@@ -766,6 +784,7 @@ def test_http_chat_rejects_json_object_with_sibling_keys() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_json_schema_without_schema_body() -> None:
@@ -789,6 +808,7 @@ def test_http_chat_rejects_json_schema_without_schema_body() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_non_object_response_format() -> None:
@@ -807,6 +827,7 @@ def test_http_chat_rejects_non_object_response_format() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_response_format_omitted() -> None:
@@ -823,6 +844,7 @@ def test_http_chat_accepts_response_format_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
