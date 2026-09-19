@@ -145,6 +145,11 @@ redistribution is unclear.
   (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
   Grounds workflow steps, recursion depth, decomposition, and access-list
   scope as first-class ablation factors.
+- Zhang, A. L., Kraska, T., & Khattab, O. (2026). *Recursive language models*
+  (arXiv:2512.24601, Version 3). https://arxiv.org/abs/2512.24601
+  Cited by the request-partitioning ADR and doctoring receipts as external
+  motivation for bounded ownership of long inputs. Citation only; this is not
+  a reproduction of RLM experiments.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
@@ -286,6 +291,7 @@ that the papers were fully reviewed, their claims reproduced, or PDFs licensed.
 | 2506.22316 | [Polytomous judge benchmark](../benchmarks/2026-08-11-polytomous-llm-judge.md) and [judge calibration ADR](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md) |
 | 2110.15150 | [Purpose-limited protection ADR](../planning/adrs/0028-purpose-limited-pii-protection.md) |
 | 2601.17814 | [Model-group specification](../model-group-product-technical-spec.md) and [free-pool admission research](../research/review-gateway-free-pool-admission.md) |
+| 2512.24601 | [Request partitioning ADR](../planning/adrs/0135-whole-request-partitioning.md) and [learned-policy authority receipt](../doctoring/learned_policy_authority_20260910.md) |
 
 Scope: explicit arXiv URL, colon, and DOI-style identifiers in tracked Python,
 Rust, Markdown, and TOML files. This is a discovery census, not a complete
