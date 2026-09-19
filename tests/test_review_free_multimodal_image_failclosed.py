@@ -713,7 +713,10 @@ def test_runtime_image_pool_normalizes_persisted_modality_tags(tmp_path) -> None
     writer._pool_store.save(persisted)
 
     restored = TaskOrchestrator([], agents_db=database_path)
+    restored_agent = restored._agent("persisted_vision")
 
+    assert restored._agent_requires_non_text_input(restored_agent)
+    assert restored._agent_supports_image_input(restored_agent)
     assert restored._free_pool_agent_ids(messages=_figure_messages()) == {
         "persisted_vision"
     }
