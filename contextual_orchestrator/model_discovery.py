@@ -2289,6 +2289,13 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         is_general_chat_agent_model_id(discovered.model_id)
     ):
         raise ValueError("model is not eligible for a general chat agent")
+    capabilities = tuple(value.strip().casefold() for value in discovered.capabilities)
+    input_modalities = tuple(
+        value.strip().casefold() for value in discovered.input_modalities
+    )
+    output_modalities = tuple(
+        value.strip().casefold() for value in discovered.output_modalities
+    )
     return ModelAgent(
         id=agent_id_for(discovered),
         model=discovered.model_id,
@@ -2303,10 +2310,10 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(("spend:blocked",) if not discovered.spend_admitted else ()),
             *privacy_tags_for_discovered(discovered),
             *discovery_tool_call_tags(discovered),
-            *discovered.capabilities,
-            *(f"capability:{value}" for value in discovered.capabilities),
-            *(f"input:{value}" for value in discovered.input_modalities),
-            *(f"output:{value}" for value in discovered.output_modalities),
+            *capabilities,
+            *(f"capability:{value}" for value in capabilities),
+            *(f"input:{value}" for value in input_modalities),
+            *(f"output:{value}" for value in output_modalities),
         ),
         priority=priority,
         disabled=True,

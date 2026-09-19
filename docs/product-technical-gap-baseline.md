@@ -1,5 +1,32 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-19 free multimodal review routing — Proposed
+
+Canonical owner PR
+[#1203](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1203)
+at source commit `15e8eb663a0675e0f89caafcfdcb05742a6ecf16` repairs the
+`orchestrator/free` image-admission boundary used by the proposed
+`ContextualWisdomLab/.github` DOCX/HWPX review leaf #2281. Five RED
+regressions proved that Responses conversion selected a higher-priority
+text-only model, template planning and the model judge dropped
+`input:image`, mixed-case discovery evidence was unroutable, and the changed
+admission predicate was still published as readiness contract v1.
+
+The owner now carries normalized `input:image` evidence through Responses,
+template roles, conducted invocation, and model judging; readiness contract
+v2 records the predicate change. Focused RED-to-GREEN verification completed
+15 tests, and the related discovery/judge/review-gateway suites completed 244
+tests with warnings treated as errors. Ruff, `compileall`, and diff checks
+passed. The full local collection is not claimed: its environment lacks the
+native `fast_mlsirm` module and NumPy, while unrelated stale tests still import
+the removed `_DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS` symbol and deprecated
+`jsonschema.RefResolver` fails under warnings-as-errors.
+
+Status remains **Proposed**. Protected exact-head Checks, independent review,
+ordinary merge, immutable owner release, and consumer pin are still required.
+Leaf #2281 also still needs DOCX/HWPX relationship-order and source-position
+provenance repair; the owner fix does not complete or bypass that leaf work.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`

@@ -63,7 +63,7 @@ REVIEW_MAX_BODY_BYTES = 32 * 1024 * 1024
 
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
-REVIEW_READINESS_CONTRACT_VERSION = "1"
+REVIEW_READINESS_CONTRACT_VERSION = "2"
 """Versioned owner readiness/admission contract for the free review pool.
 
 Consumers pin this version to know exactly which readiness/admission

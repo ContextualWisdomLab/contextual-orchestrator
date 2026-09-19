@@ -363,6 +363,74 @@ def test_free_image_pool_ids_compose_tool_call_exclusion() -> None:
     assert eligible == {"single_vision", "multi_vision"}
 
 
+def test_responses_free_image_request_routes_to_image_agent() -> None:
+    """Responses image parts must survive conversion into free-pool admission."""
+    client = _SequencedProxyClient(
+        {
+            "text_free": {"model": "text-only-model", "output": []},
+            "vision_free": {"model": "vision-model", "output": []},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "text_free",
+                "text-only-model",
+                priority=10,
+                tags=("cost:free", "reasoning", "writing", "input:text", "output:text"),
+            ),
+            ModelAgent(
+                "vision_free",
+                "vision-model",
+                tags=_IMAGE_FREE_TAGS,
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Review this figure."},
+                        {"type": "input_image", "image_url": _TINY_PNG_DATA_URI},
+                    ],
+                }
+            ],
+        },
+        endpoint="responses",
+        single_agent=True,
+    )
+
+    assert result["model"] == "vision-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["vision_free"]
+
+
+def test_free_image_template_plan_selects_image_agents() -> None:
+    """Every template role must retain the request's image requirement."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "vision_free",
+                "vision-model",
+                tags=(*_IMAGE_FREE_TAGS, "planning", "research", "verification"),
+            )
+        ]
+    )
+
+    steps = orchestrator._plan(
+        "Review this figure.",
+        model_name=TaskOrchestrator.FREE_MODEL,
+        required_tags=("input:image",),
+    )
+
+    assert {step.agent_id for step in steps} == {"vision_free"}
+
+
 if __name__ == "__main__":
     test_free_image_request_fails_closed_when_only_text_free_agents_exist()
     test_free_image_request_serves_image_capable_free_agent()

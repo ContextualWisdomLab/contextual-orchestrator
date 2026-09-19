@@ -3334,6 +3334,28 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
     )
 
 
+def test_agent_from_discovered_normalizes_capability_and_modality_tags() -> None:
+    """Provider casing must not make explicit image evidence unroutable."""
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="vendor/vision-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("Chat", "Vision"),
+        input_modalities=("Text", "Image"),
+        output_modalities=("Text",),
+        is_free=True,
+    )
+
+    tags = agent_from_discovered(discovered).tags
+
+    assert "capability:vision" in tags
+    assert "input:image" in tags
+    assert "output:text" in tags
+    assert "input:Image" not in tags
+
+
 def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
     """Every persistence path receives the same provider-declared privacy tags."""
     discovered = DiscoveredModel(

@@ -5,3 +5,10 @@ typed 400 when no image-capable free candidate remains — never a 200 that
 silently ignores DOCX/HWPX figures (issue #1202). Image free admission now
 composes the existing #940 `tool_call:single` request-shaped exclusion
 instead of replacing general-free tool-call gating.
+
+The follow-up repair carries the same `input:image` requirement through
+single-agent Responses conversion, template planning, every conducted role,
+and model-judge selection. Discovery capability/modality evidence is now
+case-normalized before routing, the changed admission predicate is published
+as review-readiness contract v2, and the review request ceiling is pinned by
+test to the documented 32 MiB owner contract.

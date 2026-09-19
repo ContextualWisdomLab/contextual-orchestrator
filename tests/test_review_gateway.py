@@ -247,7 +247,7 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     assert security.auth_token == "local-review-token"
     assert security.allow_public_bind is False
     assert security.max_body_bytes == review_gateway.REVIEW_MAX_BODY_BYTES
-    assert review_gateway.REVIEW_MAX_BODY_BYTES >= 8 * 2 * 1024 * 1024
+    assert review_gateway.REVIEW_MAX_BODY_BYTES == 32 * 1024 * 1024
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
 
 

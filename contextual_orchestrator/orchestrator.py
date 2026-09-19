@@ -6056,6 +6056,7 @@ class TaskOrchestrator:
         else:
             text = _coerce_input_text(body.get("input"))
             response_messages = _responses_to_chat_payload(body).get("messages", [])
+            messages = response_messages
             prompt_context = self._prompt_interaction(response_messages)
         requested_model = body.get("model")
         # Selector nature for the rate-limit-storm admission decision below
@@ -6233,7 +6234,7 @@ class TaskOrchestrator:
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
-            self._free_pool_agent_ids(chat_body=body)
+            self._free_pool_agent_ids(messages=messages, chat_body=body)
             if requested_model == self.FREE_MODEL
             else (
                 {
@@ -9409,7 +9410,6 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         task = self._latest_user_text(messages)
-        source_images = self._source_image_parts(messages)
         required_tags = self._image_input_required_tags(messages)
         caller_instructions = "\n\n".join(
             instruction
@@ -9419,7 +9419,9 @@ class TaskOrchestrator:
         )
         plan_source = "template"
         if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
-            steps = self._plan(task, model_name=model_name)
+            steps = self._plan(
+                task, model_name=model_name, required_tags=required_tags
+            )
         elif self.policy.workflow_planning == "generated":
             try:
                 tool_scope = (
@@ -9433,10 +9435,10 @@ class TaskOrchestrator:
             except BudgetExceededError:
                 raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
-                steps = self._plan(task)
+                steps = self._plan(task, required_tags=required_tags)
                 plan_source = "template_fallback"
         else:
-            steps = self._plan(task)
+            steps = self._plan(task, required_tags=required_tags)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
         tool_result: dict[str, Any] | None = None
@@ -9605,6 +9607,7 @@ class TaskOrchestrator:
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
                     excluded_agent_ids=_excluded_agent_ids,
+                    required_tags=required_tags,
                 )
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
@@ -9618,6 +9621,7 @@ class TaskOrchestrator:
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
                     excluded_agent_ids=_excluded_agent_ids,
+                    required_tags=required_tags,
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
@@ -9829,14 +9833,38 @@ class TaskOrchestrator:
         return steps
 
     def _plan(
-        self, task: str, *, model_name: str = GATEWAY_DEFAULT_MODEL
+        self,
+        task: str,
+        *,
+        model_name: str = GATEWAY_DEFAULT_MODEL,
+        required_tags: tuple[str, ...] = (),
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
         free_only = model_name == self.FREE_MODEL
-        thinker = (requested or self._select_agent(task, "thinker", free_only=free_only)).id
-        worker = (requested or self._select_agent(task, "worker", free_only=free_only)).id
-        verifier = (requested or self._select_agent(task, "verifier", free_only=free_only)).id
-        synthesizer = (requested or self._select_agent(task, "synthesizer", free_only=free_only)).id
+        thinker = (
+            requested
+            or self._select_agent(
+                task, "thinker", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        worker = (
+            requested
+            or self._select_agent(
+                task, "worker", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        verifier = (
+            requested
+            or self._select_agent(
+                task, "verifier", free_only=free_only, required_tags=required_tags
+            )
+        ).id
+        synthesizer = (
+            requested
+            or self._select_agent(
+                task, "synthesizer", free_only=free_only, required_tags=required_tags
+            )
+        ).id
         return [
             WorkflowStep(0, "thinker", thinker, "Decompose the task and identify the best execution strategy."),
             WorkflowStep(1, "worker", worker, "Execute the core task using the plan.", (0,)),
@@ -12082,6 +12110,7 @@ class TaskOrchestrator:
         free_only: bool = False,
         allowed_agent_ids: set[str] | None = None,
         excluded_agent_ids: set[str] | None = None,
+        required_tags: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
@@ -12112,7 +12141,12 @@ class TaskOrchestrator:
         try:
             judge = next(
                 agent
-                for agent in self._ranked_agents(task, "verifier", free_only=free_only)
+                for agent in self._ranked_agents(
+                    task,
+                    "verifier",
+                    free_only=free_only,
+                    required_tags=required_tags,
+                )
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
             )

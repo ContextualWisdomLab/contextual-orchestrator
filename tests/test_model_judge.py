@@ -353,7 +353,7 @@ def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -
             return SimpleNamespace(
                 accepted=True,
                 rationale=completion["answer"],
-                criterion_scores={},
+                criterion_scores={"evidence_quality": 1.0, "risk_signal": 1.0},
                 usage=None,
                 orchestration_mode="route",
                 to_irt_row=lambda *, item_type: (1, 1),
@@ -377,6 +377,75 @@ def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -
             "task", {"verifier_output": "report"}, free_only=True
         )
     assert client.agent_ids == ["free_duplicate"]
+
+
+def test_free_image_judge_keeps_image_capability_requirement() -> None:
+    """A figure workflow's judge must remain inside the image-capable free pool."""
+    class _ProxyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_ids: list[str] = []
+
+        def proxy_send(self, agent: ModelAgent, endpoint: str, body: dict) -> dict:  # type: ignore[override]
+            self.agent_ids.append(agent.id)
+            return {"choices": [{"message": {"content": '{"decision":"ACCEPT","reason":"free"}'}}]}
+
+    class _StructuredJudge(_ScriptedFastJudge):
+        def judge(self, **_: object) -> object:
+            completion = self.adapter.complete_structured(
+                [{"role": "user", "content": "judge"}],
+                response_format={"type": "json_object"},
+            )
+            return SimpleNamespace(
+                accepted=True,
+                rationale=completion["answer"],
+                criterion_scores={"evidence_quality": 1.0, "risk_signal": 1.0},
+                usage=None,
+                orchestration_mode="route",
+                to_irt_row=lambda *, item_type: (1, 1),
+            )
+
+    client = _ProxyClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "text_free",
+                "text-model",
+                priority=100,
+                tags=("verification", "cost:free", "input:text", "output:text"),
+            ),
+            ModelAgent(
+                "vision_free",
+                "vision-model",
+                tags=(
+                    "verification",
+                    "cost:free",
+                    "input:text",
+                    "input:image",
+                    "output:text",
+                ),
+            ),
+        ],
+        client=client,
+    )
+    components = orchestrator_module.FastMLSIRMJudgeComponents(
+        judge_cls=_StructuredJudge,
+        criterion_cls=_ScriptedCriterion,
+        format_error=ValueError,
+    )
+
+    with patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", return_value=components
+    ):
+        result = orchestrator._model_judge_verification(
+            "Review this figure.",
+            {"verifier_output": "report"},
+            free_only=True,
+            required_tags=("input:image",),
+        )
+
+    assert result["accepted"] is True, result
+    assert client.agent_ids == ["vision_free"]
 
 
 def test_structured_model_judge_rejects() -> None:
