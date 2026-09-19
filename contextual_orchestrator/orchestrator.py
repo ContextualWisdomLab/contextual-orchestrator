@@ -38,6 +38,7 @@ import urllib.error
 import urllib.request
 
 import certifi
+from egressweave import EgressNotAllowedError, EgressPolicy, validate_egress_url_details
 from jsonschema.validators import validator_for
 
 from .chat_capability import (
@@ -3943,17 +3944,8 @@ class ModelClient:
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
-        if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
-            raise ProviderUpstreamError(
-                agent_id=agent.id,
-                model=agent.model,
-                error_code="provider_connection_error",
-                message=f"{agent.id} provider host is not allowlisted",
-                client_status=502,
-                provider_status=None,
-                retryable=False,
-                transport="chat",
-            )
+        if self.allowed_provider_hosts:
+            return self._validate_allowlisted_provider(agent)
         addresses = self._resolve_addresses(hostname, parsed.port or 443)
         for _family, sockaddr in addresses:
             ip_address = ipaddress.ip_address(sockaddr[0])
@@ -3966,6 +3958,35 @@ class ModelClient:
             ):
                 raise RuntimeError(f"{agent.id} provider resolves to non-public address")
         return addresses[0]
+
+    def _validate_allowlisted_provider(self, agent: ModelAgent) -> ProviderDestination:
+        """Validate an allowlisted https provider via EgressWeave's SSRF/DNS-rebinding guard.
+
+        Delegates the host-allowlist match and per-address global-routability
+        check to EgressWeave (CWE-918/CWE-350) instead of the hand-rolled loop
+        above; that loop stays only for the no-allowlist-configured default,
+        which EgressWeave's allowlist model cannot express (an empty
+        allowlist there rejects every host, not none).
+        """
+        policy = EgressPolicy.from_hosts(self.allowed_provider_hosts, allow_local=False)
+        try:
+            validated = validate_egress_url_details(agent.base_url, policy=policy)
+        except EgressNotAllowedError as exc:
+            raise RuntimeError(f"{agent.id} provider host is not allowlisted") from exc
+        if validated is None:
+            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+        # Reuse EgressWeave's already-validated, already-resolved addresses
+        # directly rather than re-resolving — re-resolving here would reopen
+        # the validate-then-connect DNS-rebinding gap EgressWeave closes.
+        return self._egress_address_to_destination(validated.addresses[0], validated.port)
+
+    @staticmethod
+    def _egress_address_to_destination(address: str, port: int) -> ProviderDestination:
+        """Build a (family, sockaddr) pair from one already-validated EgressWeave address."""
+        ip_address = ipaddress.ip_address(address)
+        if isinstance(ip_address, ipaddress.IPv6Address):
+            return (socket.AF_INET6, (address, port, 0, 0))
+        return (socket.AF_INET, (address, port))
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""
@@ -5088,6 +5109,7 @@ class _StateStore:
                 if not self._export_identifier(request_id) or request_id != admitted_identity:
                     observations.append({"admission_sequence": admission_sequence,
                                          "request_id": None, "link_status": "identity_unavailable",
+                                         "decision_latency_ms": None,
                                          "workflow_outcomes": [], "batch_associations": [],
                                          "links_truncated": False, "invalid_association_count": 0})
                     continue
@@ -5128,8 +5150,13 @@ class _StateStore:
                     measurement.update(initial_phase)
                 if phases and not invalid_phase:
                     measurement.update(phase)
+                measurement["selection_elapsed_ns"] = phase.get(
+                    "selection_elapsed_ns",
+                    initial_phase.get("selection_elapsed_ns") if valid_initial else None,
+                ) if not invalid_phase else None
                 for field_name in ("selection_elapsed_ns", "durable_ack_elapsed_ns", "first_provider_elapsed_ns"):
-                    field_value = measurement.get(field_name)
+                    field_value = (phase.get(field_name) if field_name == "durable_ack_elapsed_ns"
+                                   else measurement.get(field_name))
                     row[field_name] = field_value if type(field_value) is int and 0 <= field_value <= 2**64 - 1 else None
                     if field_value is not None and row[field_name] is None:
                         row["invalid_association_count"] += 1
@@ -5142,6 +5169,12 @@ class _StateStore:
                 ):
                     row["durable_ack_elapsed_ns"] = None
                     row["invalid_association_count"] += 1
+                # Convert only the validated request acknowledgement, never generation time.
+                validated_acknowledgement = row["durable_ack_elapsed_ns"]
+                row["decision_latency_ms"] = (
+                    validated_acknowledgement / 1_000_000
+                    if validated_acknowledgement is not None else None
+                )
                 policy_hash = measurement.get("policy_snapshot_hash")
                 row["policy_snapshot_hash"] = policy_hash if (
                     isinstance(policy_hash, str) and len(policy_hash) == 64
@@ -19439,6 +19472,13 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
         raise
 
 
+def _require_released_optimizer_selection_contract() -> None:
+    """Fail closed until fast-mlsirm releases candidate-selection authority."""
+    raise RuntimeError(
+        "optimizer selection requires a released fast-mlsirm candidate-selection contract"
+    )
+
+
 def optimize_orchestration(
     candidates: list[dict[str, Any]],
     tasks: list[dict[str, Any]],
@@ -19462,6 +19502,7 @@ def optimize_orchestration(
     mean rounding. This descriptive evidence does not establish calibration or
     applicability of the existing selection policy.
     """
+    _require_released_optimizer_selection_contract()
     results: list[dict[str, Any]] = []
     usage_receipts: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -19521,6 +19562,7 @@ def evolve_orchestration(
     Per-config ``score_observations`` retain input-task order before mean rounding.
     Their availability does not qualify the existing fitness policy psychometrically.
     """
+    _require_released_optimizer_selection_contract()
     rng = random.Random(seed)
     params = sorted(search_space)
 
