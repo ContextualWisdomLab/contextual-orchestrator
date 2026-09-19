@@ -62,6 +62,30 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def _post_raw(port: int, payload: dict) -> tuple[int, str, bytes]:
+    """Return the HTTP status and media type without assuming a JSON response."""
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return (
+                response.status,
+                response.headers.get_content_type(),
+                response.read(),
+            )
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return exc.code, exc.headers.get_content_type(), exc.read()
+
+
 def _serve(orchestrator: TaskOrchestrator):
     server = build_server(
         orchestrator,
@@ -191,6 +215,31 @@ def test_free_image_request_fails_closed_when_only_text_free_agents_exist() -> N
         server.server_close()
 
 
+def test_free_image_stream_fails_before_sse_when_only_text_free_agents_exist() -> None:
+    """Image admission must fail before a streaming HTTP 200 is committed."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "text_free",
+                "mock-text-free",
+                tags=("cost:free", "reasoning", "writing", "input:text", "output:text"),
+                base_url="mock://text",
+            )
+        ]
+    )
+    server, thread, port = _serve(orchestrator)
+    try:
+        payload = _figure_payload()
+        payload["stream"] = True
+        status, media_type, body = _post_raw(port, payload)
+        assert status == 400, body
+        assert media_type != "text/event-stream"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_free_image_request_serves_image_capable_free_agent() -> None:
     """When a free text+image agent exists, figure-bearing free traffic reaches it."""
     orchestrator = TaskOrchestrator(
@@ -246,6 +295,43 @@ def test_text_only_free_request_still_excludes_vision_free_agent() -> None:
         messages=_figure_messages()
     )
     assert free_image_ids == {"vision_free"}
+
+
+@pytest.mark.parametrize("part_type", ["input_image", " Image_Url "])
+def test_free_image_aliases_enter_image_pool_before_validation(part_type: str) -> None:
+    """Accepted chat aliases must carry image entitlement during preflight."""
+    vision = ModelAgent(
+        "vision_free",
+        "mock-vision-free",
+        tags=_IMAGE_FREE_TAGS,
+        base_url="mock://vision",
+    )
+    text = ModelAgent(
+        "text_free",
+        "mock-text-free",
+        tags=("cost:free", "reasoning", "writing", "input:text", "output:text"),
+        base_url="mock://text",
+    )
+    messages = _figure_messages()
+    messages[0]["content"][1]["type"] = part_type
+
+    assert TaskOrchestrator([vision, text])._free_pool_agent_ids(messages=messages) == {
+        "vision_free"
+    }
+
+
+def test_free_image_pool_excludes_disabled_vision_agent() -> None:
+    """A disabled image agent must not make preflight appear serviceable."""
+    disabled = ModelAgent(
+        "disabled_vision",
+        "disabled-vision-model",
+        tags=_IMAGE_FREE_TAGS,
+        disabled=True,
+    )
+
+    assert TaskOrchestrator([disabled])._free_pool_agent_ids(
+        messages=_figure_messages()
+    ) == set()
 
 
 def test_free_image_pool_skips_single_tool_agent_for_multi_tool_request() -> None:
