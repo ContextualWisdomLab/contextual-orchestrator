@@ -56,3 +56,9 @@ Worker preflight now excludes agents whose operator policy lists `worker` in
 before streaming commits SSE. The related judge and Responses fixtures now
 model an admitted text+image chat deployment and keep virtual passthrough in
 the synthetic transport, preventing fixture defects from hiding owner failures.
+
+An intermediate Contents-API update embedded an output truncation marker and
+removed 4,042 source lines, making the module syntactically invalid. The
+ordinary-forward repair restores the complete canonical source blob, reapplies
+only the verified role-aware preflight delta, and pins compilation plus the
+affected 91-test warnings-as-errors suite before review can proceed.
