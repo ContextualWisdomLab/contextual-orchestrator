@@ -2463,6 +2463,7 @@ def _require_pool_model(
             if messages is not None and orchestrator._free_pool_agent_ids(
                 messages=messages,
                 chat_body=chat_body,
+                role="worker",
             ):
                 return model_name
             if messages is not None and orchestrator._image_input_required_tags(
