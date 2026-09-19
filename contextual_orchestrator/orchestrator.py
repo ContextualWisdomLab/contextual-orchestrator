@@ -13813,9 +13813,17 @@ class TaskOrchestrator:
                 "Deal owner",
                 ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
                 "repository_artifact",
-                "ready",
-                "Reviewer delay, review bot delay, and queued model review are not concrete blockers.",
-                "Escalate only concrete security, API contract, document, or product defects.",
+                "warning" if saleability["review_process_policy"]["is_blocker"] else "ready",
+                (
+                    saleability["review_process_policy"]["blocker_definition"]
+                    if saleability["review_process_policy"]["is_blocker"]
+                    else "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers."
+                ),
+                (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if saleability["review_process_policy"]["is_blocker"]
+                    else "Block only on concrete security, API contract, document, or product defects."
+                ),
             ),
             self._buyer_evidence_item(
                 "packaging_decision",

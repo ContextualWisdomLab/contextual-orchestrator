@@ -11,10 +11,9 @@ certificate.
 
 Figma Code Connect is not used.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without a concrete failure are not blockers. Blockers
-are concrete security failures, API contract failures, document contract
-mismatches, reproducible product defects, or Code Connect usage.
+Review process matches release authorization. A missing or failing snapshot
+is a blocker. Review delay is not a blocker only after exact-head checks,
+independent approval, and findings evidence pass.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 Contextual Orchestrator as one enterprise control-plane product until a second

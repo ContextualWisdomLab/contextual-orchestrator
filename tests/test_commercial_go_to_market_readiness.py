@@ -133,7 +133,7 @@ def test_commercial_go_to_market_readiness_endpoint_openapi_admin_and_docs_contr
         "Commercial Go-To-Market Readiness",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Review process matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Go-To-Market Inputs",
         "Runtime Shape",

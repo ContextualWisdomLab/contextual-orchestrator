@@ -143,7 +143,7 @@ def test_commercial_investment_committee_memo_endpoint_openapi_admin_and_docs_co
         "KRW 2B Commercial Investment Committee Memo",
         "local_commercial_investment_committee_memo",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Review process matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
     ]:
         assert expected_text in memo_doc

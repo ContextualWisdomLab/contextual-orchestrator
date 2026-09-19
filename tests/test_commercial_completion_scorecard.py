@@ -126,7 +126,7 @@ def test_commercial_completion_scorecard_endpoint_openapi_admin_and_docs_contrac
         "Commercial Completion Scorecard",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Review process matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Runtime Shape",
         "Completion Status Rules",

@@ -132,7 +132,7 @@ def test_commercial_purchase_approval_packet_endpoint_openapi_admin_and_docs_con
         "KRW 2B Commercial Purchase Approval Packet",
         "local_commercial_purchase_approval_packet",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Review process matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
     ]:
         assert expected_text in approval_doc

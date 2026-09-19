@@ -97,6 +97,8 @@ def test_commercial_evidence_export_report_packages_buyer_diligence_index() -> N
     assert sections["runtime_reports"]["evidence_type"] == "measured_local"
     assert sections["buyer_packet_documents"]["evidence_type"] == "repository_artifact"
     assert sections["figma_stakeholder_artifacts"]["evidence_type"] == "figma_artifact"
+    assert sections["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in sections["review_process_policy"]["evidence"]
     assert report["review_process_policy"]["is_blocker"] is True
     assert report["related_runtime_reports"]["saleability_status"] == "saleability_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"

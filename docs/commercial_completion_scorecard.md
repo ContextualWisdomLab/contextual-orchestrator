@@ -22,9 +22,9 @@ Connect is not used.
 | Ponytail | Single-repo product is retained; library/submodule split is deferred until explicit extraction triggers exist. | Ready when no new dependency or split is introduced for this increment. | Block only if packaging creates avoidable review, release, or provenance overhead. |
 | Data Analytics | Measured local evidence and proposed production or buyer-specific KPIs are separated. | Ready when each KPI has an evidence type. | Block only if measured and proposed claims are mixed. |
 
-Review process is not a blocker. Review delay, model-review delay, or queued
-review automation is not a product blocker unless it reports a concrete
-security, contract, or functional defect.
+Review process matches release authorization. A missing or failing snapshot
+is a blocker. Review delay is not a blocker only after exact-head checks,
+independent approval, and findings evidence pass.
 
 ## Plugin Completion Criteria
 
