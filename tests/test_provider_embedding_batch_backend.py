@@ -20,7 +20,7 @@ from contextual_orchestrator.batch_routing import (
     ProviderEmbeddingBatchBackend,
     _DaemonWorkerPool,
 )
-from contextual_orchestrator.cost_router import _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+from contextual_orchestrator.cost_router import _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
@@ -593,7 +593,7 @@ def test_durable_provider_embedding_backend_survives_unbounded_client_timeout() 
     coordinator = CostRoutingCoordinator(orchestrator, job_registry=registry)
 
     backend = coordinator._embedding_backends["provider"]
-    assert backend._claim_lease_seconds == _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+    assert backend._claim_lease_seconds == _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
     backend.close()
 
 
