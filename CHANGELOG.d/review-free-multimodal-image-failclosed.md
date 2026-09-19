@@ -62,3 +62,8 @@ removed 4,042 source lines, making the module syntactically invalid. The
 ordinary-forward repair restores the complete canonical source blob, reapplies
 only the verified role-aware preflight delta, and pins compilation plus the
 affected 91-test warnings-as-errors suite before review can proceed.
+
+Runtime admission now case-normalizes persisted `input:*` tags. Durable rows
+written before constructor normalization therefore keep their text+image
+eligibility after restart, while explicit text-only evidence still overrides
+the legacy `vision` fallback.

@@ -90,6 +90,18 @@ admits, unqualified legacy `vision` admits, and text-only explicit evidence
 rejects. The extracted exact production method and RED contract compile;
 hosted exact-head acceptance remains pending.
 
+Durable-pool RED `a3b7fc3d` with predicate refinement `c250f4b7` proved that
+rows written before constructor normalization retained case-variant
+`input:Text` / `input:Image` tags. `_AgentPoolStore.load_all()` restored those
+bytes unchanged, while runtime admission compared lowercase literals, so a
+previously admitted free image model became unreachable after restart.
+Runtime input-modality evidence is now normalized once at the admission
+boundary; explicit-input precedence and the unqualified legacy `vision`
+fallback are unchanged. The persisted restart regression, multimodal routing,
+agent-pool, discovery, bootstrap, and review-gateway selection completed **265
+tests** with warnings as errors. This repairs compatibility with existing rows;
+it does not promote Proposed catalog evidence or hosted acceptance.
+
 Status remains **Proposed**. Protected exact-head Checks, independent review,
 ordinary merge, immutable owner release, and consumer pin are still required.
 Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,

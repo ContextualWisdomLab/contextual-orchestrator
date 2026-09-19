@@ -10173,6 +10173,15 @@ class TaskOrchestrator:
             router.forget_members(member_ids)
 
     @staticmethod
+    def _normalized_agent_input_tags(agent: ModelAgent) -> set[str]:
+        """Return normalized persisted input-modality evidence."""
+        return {
+            normalized_tag
+            for tag in agent.tags
+            if (normalized_tag := tag.strip().casefold()).startswith("input:")
+        }
+
+    @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
         """Return whether an agent's discovery-derived tags declare non-text input.
 
@@ -10188,7 +10197,8 @@ class TaskOrchestrator:
         question independently of each other.
         """
         return requires_non_text_input(
-            tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
+            tag[len("input:"):]
+            for tag in TaskOrchestrator._normalized_agent_input_tags(agent)
         )
 
     def _is_free_agent(self, agent: ModelAgent) -> bool:
@@ -10310,7 +10320,7 @@ class TaskOrchestrator:
         explicit ``input:image`` without ``input:text`` is image-only and is
         rejected for the mixed text/image review envelope.
         """
-        input_tags = {tag for tag in agent.tags if tag.startswith("input:")}
+        input_tags = self._normalized_agent_input_tags(agent)
         if not (
             self._is_free_agent(agent)
             and _is_general_chat_agent(agent)
@@ -12092,10 +12102,12 @@ class TaskOrchestrator:
     @staticmethod
     def _agent_supports_image_input(agent: ModelAgent) -> bool:
         """True when explicit input evidence or an unqualified legacy tag admits images."""
-        input_tags = {tag for tag in agent.tags if tag.startswith("input:")}
+        input_tags = TaskOrchestrator._normalized_agent_input_tags(agent)
         if input_tags:
             return IMAGE_INPUT_EVIDENCE_TAG in input_tags
-        return LEGACY_VISION_CAPABILITY_TAG in agent.tags
+        return any(
+            tag.strip().casefold() == LEGACY_VISION_CAPABILITY_TAG for tag in agent.tags
+        )
 
     @staticmethod
     def _agent_matches_required_tags(
