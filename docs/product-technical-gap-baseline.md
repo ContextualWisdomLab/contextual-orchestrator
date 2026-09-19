@@ -7189,3 +7189,22 @@ PRs #995, #1203, and #1205 remain open and preserve their product deltas.
 Queued, skipped, cancelled, or predecessor Checks are not acceptance evidence;
 each dependent exact head must be ordinarily restacked on the protected repair
 after it merges, then reacquire terminal Checks and independent review.
+
+
+After collection was restored, the focused provider-embedding suite exposed two
+additional protected-main contract regressions. A stale assertion still expected
+the removed implicit seven-day execution timeout even though the application,
+Agent, and Gateway default is null. The synchronous completion path then passed
+that null through `ProviderEmbeddingBatchBackend.wait`, whose annotation and
+`math.isfinite` call accepted only numeric values. This raised `TypeError`
+instead of waiting for terminal provider completion. The owner repair keeps the
+execution timeout null, accepts `float | None` at the wait boundary, and maps
+both null and non-finite values to `threading.Event.wait(timeout=None)`; finite
+caller deadlines retain their existing cancellation behavior.
+
+Strict-warning revalidation also attributed an unclosed listener to
+`test_server_shutdown_closes_embedding_workers`: `shutdown()` stopped the
+serving loop and closed the injected embedding backend but did not release the
+test-owned listening socket. The fixture now calls `server_close()` in
+`finally` after the serving thread joins. This changes no production server
+lifecycle policy and keeps ResourceWarning visible as a failure signal.
