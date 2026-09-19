@@ -14,6 +14,8 @@ as review-readiness contract v2, and the review request ceiling is pinned by
 test to the documented 32 MiB owner contract.
 
 Direct-route judging and proxy replica/failover ranking now retain the same
-image requirement, and runtime image pools require both `input:text` and
-`input:image` evidence so a mixed figure review cannot fall through to a
-text-only or image-only model after initial selection.
+image requirement. Runtime image pools reject explicit `input:image`-only
+evidence, require `input:text` when any `input:*` evidence is present, and
+retain the documented legacy `vision` admission when no `input:*` tags exist;
+a mixed figure review therefore cannot fall through to a text-only or
+explicitly image-only model after initial selection.

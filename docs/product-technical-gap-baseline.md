@@ -4,28 +4,36 @@
 
 Canonical owner PR
 [#1203](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1203)
-at source commit `15e8eb663a0675e0f89caafcfdcb05742a6ecf16` repairs the
+at exact head `864b0dc720898fcce6aea3a47097511d8820334d` (tree
+`306ab24c706dfa1f39283533536f33aca756bae6`) repairs the
 `orchestrator/free` image-admission boundary used by the proposed
 `ContextualWisdomLab/.github` DOCX/HWPX review leaf #2281. Five RED
 regressions proved that Responses conversion selected a higher-priority
 text-only model, template planning and the model judge dropped
 `input:image`, mixed-case discovery evidence was unroutable, and the changed
-admission predicate was still published as readiness contract v1.
+admission predicate was still published as readiness contract v1. Follow-up
+RED cases then proved that proxy failover and realtime judging could lose the
+image requirement, explicit image-only rows entered the mixed envelope, and
+the first fix also rejected documented legacy `vision` agents with no
+`input:*` evidence.
 
-The owner now carries normalized `input:image` evidence through Responses,
-template roles, conducted invocation, and model judging; readiness contract
-v2 records the predicate change. Focused RED-to-GREEN verification completed
-15 tests, and the related discovery/judge/review-gateway suites completed 244
-tests with warnings treated as errors. Ruff, `compileall`, and diff checks
-passed. The full local collection is not claimed: its environment lacks the
+The owner now carries normalized image evidence through Responses, template
+roles, conducted invocation, proxy failover, realtime judging, and model
+judging; readiness contract v2 records the predicate change. Explicit
+`input:image` without `input:text` is rejected, while legacy `vision` with no
+`input:*` declaration remains eligible. Current focused RED-to-GREEN
+verification completed 15 tests; `compileall` and diff checks passed. Earlier
+head `f8783af9` completed 244 related tests with warnings treated as errors and
+Ruff. The full local collection is not claimed: its environment lacks the
 native `fast_mlsirm` module and NumPy, while unrelated stale tests still import
 the removed `_DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS` symbol and deprecated
 `jsonschema.RefResolver` fails under warnings-as-errors.
 
 Status remains **Proposed**. Protected exact-head Checks, independent review,
 ordinary merge, immutable owner release, and consumer pin are still required.
-Leaf #2281 also still needs DOCX/HWPX relationship-order and source-position
-provenance repair; the owner fix does not complete or bypass that leaf work.
+Leaf #2281 has repaired DOCX relationship order but still needs HWPX
+relationship-order and source-position provenance; the owner fix does not
+complete or bypass that leaf work.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
