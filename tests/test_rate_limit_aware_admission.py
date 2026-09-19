@@ -29,7 +29,11 @@ from typing import Any
 import pytest
 
 from contextual_orchestrator import ModelAgent, ReasoningEffortProfile, TaskOrchestrator
-from contextual_orchestrator.orchestrator import ModelClient, ProviderResponseError
+from contextual_orchestrator.orchestrator import (
+    ModelClient,
+    ProviderRequestTooLargeError,
+    ProviderResponseError,
+)
 from contextual_orchestrator.provider_errors import (
     PROVIDER_RATE_LIMITED_CODE,
     ProviderUpstreamError,
@@ -591,6 +595,90 @@ def test_route_once_preserves_recovered_attempts_on_malformed_exhaustion() -> No
     assert route["terminal_reason"] == "eligible_set_exhausted"
     assert slept == [pytest.approx(1.0, abs=0.5)]
     orchestrator.close()
+
+
+@pytest.mark.parametrize("malformed_agent_id", ["primary_free_agent", "fallback_free_agent"])
+def test_route_once_preserves_malformed_taxonomy_for_mixed_size_exhaustion(
+    malformed_agent_id: str,
+) -> None:
+    """A mixed malformed/413 pool keeps the fail-closed response taxonomy."""
+    orchestrator = TaskOrchestrator(_free_route_agents(), tool_retry_attempts=0)
+    size_agent_id = (
+        "fallback_free_agent"
+        if malformed_agent_id == "primary_free_agent"
+        else "primary_free_agent"
+    )
+    orchestrator.client.chat = QueuedChatOutcomes(
+        {
+            malformed_agent_id: [ProviderResponseError("malformed provider response")],
+            size_agent_id: [ProviderRequestTooLargeError("provider limit exceeded")],
+        }
+    )
+
+    with pytest.raises(ProviderResponseError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "large structured request"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    route = excinfo.value.detail["route"]
+    assert route["eligible_agent_ids"] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert [attempt["outcome"] for attempt in route["attempted"]] == (
+        ["fail_closed", "request_too_large"]
+        if malformed_agent_id == "primary_free_agent"
+        else ["request_too_large", "fail_closed"]
+    )
+    assert route["terminal_reason"] == "eligible_set_exhausted"
+    orchestrator.close()
+
+
+def test_http_route_once_all_size_exhaustion_preserves_route_evidence() -> None:
+    """The special HTTP 413 handler exposes the route receipt attached by the owner."""
+    orchestrator = TaskOrchestrator(_free_route_agents(), tool_retry_attempts=0)
+    orchestrator.client.chat = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [
+                ProviderRequestTooLargeError("primary provider limit exceeded")
+            ],
+            "fallback_free_agent": [
+                ProviderRequestTooLargeError("fallback provider limit exceeded")
+            ],
+        }
+    )
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        status, body, _response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "large request"}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 413
+    assert body["error"]["code"] == "request_too_large"
+    route = body["error"]["detail"]["route"]
+    assert route["eligible_agent_ids"] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "request_too_large",
+        "request_too_large",
+    ]
+    assert route["terminal_reason"] == "request_too_large_exhausted"
 
 
 def test_http_route_once_storm_without_budget_returns_429() -> None:
