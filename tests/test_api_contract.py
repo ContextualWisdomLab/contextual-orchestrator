@@ -393,6 +393,30 @@ def test_orchestration_route_schema_validates_route_once_failover() -> None:
     validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
     outcomes = [attempt["outcome"] for attempt in route["attempted"]]
     assert outcomes == ["retryable_transport", "served"]
+    assert route["terminal_reason"] == "served"
     body = chat_completion_response(result, include_trace=True)
+    assert body["orchestration"]["route"] == route
     assert body["orchestration"]["route"]["attempted"][0]["outcome"] == "retryable_transport"
-    assert body["orchestration"]["route"]["terminal_reason"] == "served"
+
+
+def test_route_once_success_on_first_attempt_omits_route_evidence() -> None:
+    """A clean first-try route_once response must not invent failed attempt rows."""
+
+    class _ServeFirstClient:
+        def chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+            del messages, kwargs
+            return "first-try answer"
+
+        def take_usage(self) -> None:
+            return None
+
+    orchestrator = TaskOrchestrator(
+        _stream_failover_agents()[:1],
+        client=_ServeFirstClient(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+    assert result["answer"] == "first-try answer"
+    assert "route" not in result
+    response = chat_completion_response(result)
+    assert "route" not in response.get("orchestration", {})
