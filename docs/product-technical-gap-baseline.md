@@ -30,6 +30,18 @@ passes but remains non-authoritative because the ad-hoc environment lacks the
 locked OpenAI SDK and retains pre-existing allowlist/selection-design failures.
 Hosted exact-head security, package, and model-behavior gates remain required.
 
+A later exact-head review found one remaining two-round loss path: after a
+fully rate-limited round was recovered, a second round ending in
+`ProviderResponseError` bypassed the upstream-error recovery handler and
+published only the second round's `fail_closed` attempts. RED source
+`6d0a115a4766a5c0a7dbb97a7b62cc6e63b9fac2` reproduces that omission while
+requiring the concrete malformed-response taxonomy. GREEN source
+`a45761cd9091914bea1736797ec85328e976304f` attaches the accumulated first
+round and current second round to the existing response error. The focused
+regression passes with warnings treated as errors. Exact-head hosted gates,
+independent review, protected merge, immutable release, and consumer adoption
+remain required; this evidence is Proposed rather than production authority.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
