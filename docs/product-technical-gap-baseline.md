@@ -34,9 +34,9 @@ A later exact-head review found one remaining two-round loss path: after a
 fully rate-limited round was recovered, a second round ending in
 `ProviderResponseError` bypassed the upstream-error recovery handler and
 published only the second round's `fail_closed` attempts. RED source
-`2b6f121919825f1979aa79220cc7fadfdae23fae` reproduces that omission while
+`6d0a115a4766a5c0a7dbb97a7b62cc6e63b9fac2` reproduces that omission while
 requiring the concrete malformed-response taxonomy. GREEN source
-`542db31df564aef1d1fcb7db89793fec379cbc98` attaches the accumulated first
+`a45761cd9091914bea1736797ec85328e976304f` attaches the accumulated first
 round and current second round to the existing response error. The focused
 regression passes with warnings treated as errors. Exact-head hosted gates,
 independent review, protected merge, immutable release, and consumer adoption
