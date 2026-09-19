@@ -88,7 +88,7 @@ def test_commercial_close_readiness_report_separates_local_packet_from_buyer_sig
     assert report["close_summary"]["blocked_count"] == 0
     assert report["close_summary"]["warning_count"] == 4
     assert report["close_summary"]["buyer_signature_gap_count"] == 4
-    assert report["close_summary"]["review_process_is_blocker"] is False
+    assert report["close_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     assert items["sellable_product_packet"]["completion_state"] == "ready"
     assert items["contract_close_packet"]["completion_state"] == "ready"

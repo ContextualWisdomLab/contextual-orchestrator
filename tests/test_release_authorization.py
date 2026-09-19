@@ -373,6 +373,9 @@ def test_product_evidence_and_release_authority_are_separate() -> None:
     }
     assert report["release_status"] == "commercial_release_blocked"
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
+    assert report["release_authorization"]["authorized"] is False
+    assert report["review_process_policy"]["is_blocker"] is True
+    assert report["review_process_policy"]["authorization_status"] == "release_authorization_blocked"
 
 
 def test_valid_authority_flows_through_commercial_readiness_wrappers() -> None:
@@ -426,7 +429,10 @@ def test_valid_authority_flows_through_commercial_readiness_wrappers() -> None:
 
     assert release["release_authorization"]["blockers"] == []
     assert release["release_status"] == "commercial_release_ready_with_warnings"
+    assert release["review_process_policy"]["is_blocker"] is False
+    assert release["review_process_policy"]["authorization_status"] == "release_authorized"
     assert procurement["release_authorization"]["status"] == "release_authorized"
+    assert procurement["review_process_policy"]["is_blocker"] is False
     assert contract["related_runtime_reports"]["release_authorization_status"] == "release_authorized"
     assert onboarding["release_authorization"]["blockers"] == []
     assert onboarding["related_runtime_reports"]["release_authorization_status"] == "release_authorized"

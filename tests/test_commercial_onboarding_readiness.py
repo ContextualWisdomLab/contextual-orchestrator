@@ -88,7 +88,7 @@ def test_commercial_onboarding_readiness_report_turns_open_inputs_into_actions()
     assert report["onboarding_summary"]["warning_count"] == 2
     assert report["onboarding_summary"]["support_slo_action_count"] == 1
     assert report["onboarding_summary"]["buyer_input_action_count"] == 1
-    assert report["onboarding_summary"]["review_process_is_blocker"] is False
+    assert report["onboarding_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     assert items["buyer_kickoff_packet"]["completion_state"] == "ready"
     assert items["telemetry_capture_plan"]["completion_state"] == "ready"

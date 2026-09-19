@@ -89,7 +89,7 @@ def test_commercial_go_to_market_readiness_report_indexes_sellable_packet_and_fo
     assert report["go_to_market_summary"]["warning_count"] == 2
     assert report["go_to_market_summary"]["buyer_signature_gap_count"] == 4
     assert report["go_to_market_summary"]["external_or_production_gap_count"] == 5
-    assert report["go_to_market_summary"]["review_process_is_blocker"] is False
+    assert report["go_to_market_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     for item_name in [
         "commercial_close_packet",

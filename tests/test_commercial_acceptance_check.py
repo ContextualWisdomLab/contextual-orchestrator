@@ -98,7 +98,7 @@ def test_commercial_acceptance_check_report_classifies_external_gaps_as_warnings
     ]
     assert items["verification_evidence"]["evidence_type"] == "measured_local"
     assert items["figma_stakeholder_artifacts"]["evidence_type"] == "figma_artifact"
-    assert report["review_process_policy"]["is_blocker"] is False
+    assert report["review_process_policy"]["is_blocker"] is True
     assert report["related_runtime_reports"]["commercial_export_status"] == "commercial_export_ready_with_warnings"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["acceptance_links"]["runtime_endpoint"] == "/api/v1/commercial_acceptance_checks/latest"

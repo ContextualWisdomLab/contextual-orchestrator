@@ -87,7 +87,7 @@ def test_commercial_demo_scenario_report_packages_buyer_demo() -> None:
     assert report["demo_summary"]["blocked_count"] == 0
     assert report["demo_summary"]["warning_count"] == 1
     assert report["demo_summary"]["persona_count"] == 5
-    assert report["demo_summary"]["review_process_is_blocker"] is False
+    assert report["demo_summary"]["review_process_is_blocker"] is True
     assert report["demo_summary"]["code_connect_used"] is False
     assert report["concrete_blockers"] == []
     for step_name in [

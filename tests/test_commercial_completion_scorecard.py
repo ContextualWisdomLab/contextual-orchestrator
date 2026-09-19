@@ -88,7 +88,7 @@ def test_commercial_completion_scorecard_report_aggregates_program_completion() 
     assert report["completion_summary"]["blocked_count"] == 0
     assert report["completion_summary"]["warning_count"] == 1
     assert report["completion_summary"]["external_input_group_count"] == 3
-    assert report["completion_summary"]["review_process_is_blocker"] is False
+    assert report["completion_summary"]["review_process_is_blocker"] is True
     assert report["completion_summary"]["code_connect_used"] is False
     assert report["concrete_blockers"] == []
     for item_name in [

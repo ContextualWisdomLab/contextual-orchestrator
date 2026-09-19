@@ -88,7 +88,7 @@ def test_commercial_investment_committee_memo_report_packages_executive_decision
     assert report["memo_summary"]["blocked_count"] == 0
     assert report["memo_summary"]["warning_count"] == 2
     assert report["memo_summary"]["section_count"] == 10
-    assert report["memo_summary"]["review_process_is_blocker"] is False
+    assert report["memo_summary"]["review_process_is_blocker"] is True
     assert report["memo_summary"]["code_connect_used"] is False
     assert report["concrete_blockers"] == []
     for section_name in [

@@ -87,7 +87,7 @@ def test_commercial_proposal_packet_report_packages_buyer_proposal() -> None:
     assert report["proposal_summary"]["blocked_count"] == 0
     assert report["proposal_summary"]["warning_count"] == 2
     assert report["proposal_summary"]["section_count"] == 10
-    assert report["proposal_summary"]["review_process_is_blocker"] is False
+    assert report["proposal_summary"]["review_process_is_blocker"] is True
     assert report["proposal_summary"]["code_connect_used"] is False
     assert report["concrete_blockers"] == []
     for section_name in [

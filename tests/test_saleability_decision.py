@@ -79,8 +79,9 @@ def test_saleability_decision_report_classifies_warnings_and_non_blockers() -> N
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_saleability_decision"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["review_process_policy"]["is_blocker"] is False
-    assert report["review_process_policy"]["blocker_definition"] == "concrete security, API contract, document, or product defect"
+    assert report["review_process_policy"]["is_blocker"] is True
+    assert report["review_process_policy"]["authorization_status"] == "release_authorization_blocked"
+    assert "exact-head checks" in report["review_process_policy"]["blocker_definition"]
     assert report["concrete_blockers"] == []
     assert report["warning_conditions"][0]["evidence_type"] == "proposed_until_production"
     assert report["warning_conditions"][1]["evidence_type"] == "proposed_until_buyer_specific"

@@ -319,3 +319,34 @@ def evaluate_release_authorization(
         findings_inventory_complete=findings_complete,
         unresolved_finding_count=unresolved_finding_count,
     )
+
+
+def review_process_policy(authority: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Buyer-report flag that matches release authorization, not a constant.
+
+    A missing snapshot is blocked, so the report must not say review delay is
+    non-blocking. A passing snapshot is the only case that is not a blocker.
+    """
+    authorization = evaluate_release_authorization(authority)
+    is_blocker = not authorization["authorized"]
+    if is_blocker:
+        return {
+            "is_blocker": True,
+            "authorization_status": authorization["status"],
+            "non_blocker_examples": [],
+            "blocker_definition": (
+                "release authorization is blocked until exact-head checks, "
+                "independent approval, and findings evidence all pass"
+            ),
+        }
+    return {
+        "is_blocker": False,
+        "authorization_status": authorization["status"],
+        "non_blocker_examples": [
+            "reviewer delay",
+            "review bot delay",
+            "queued model review",
+            "pending check without concrete failure",
+        ],
+        "blocker_definition": "concrete security, API contract, document, or product defect",
+    }

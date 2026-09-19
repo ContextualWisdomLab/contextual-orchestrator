@@ -91,7 +91,7 @@ def test_commercial_launch_readiness_report_tracks_launch_inputs() -> None:
     assert report["launch_summary"]["buyer_environment_gap_count"] == 1
     assert report["launch_summary"]["production_telemetry_gap_count"] == 1
     assert report["launch_summary"]["commercial_signature_gap_count"] == 1
-    assert report["launch_summary"]["review_process_is_blocker"] is False
+    assert report["launch_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     for item_name in [
         "go_to_market_packet",

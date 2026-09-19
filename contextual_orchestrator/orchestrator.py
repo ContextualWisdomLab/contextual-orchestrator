@@ -48,7 +48,7 @@ from .chat_capability import (
 )
 from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
-from .release_authorization import evaluate_release_authorization
+from .release_authorization import evaluate_release_authorization, review_process_policy
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
@@ -13590,6 +13590,7 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer-facing saleability decision for high-value review."""
         handoff = self.commercial_handoff_bundle_report(
@@ -13620,6 +13621,7 @@ class TaskOrchestrator:
             saleability_status = "saleability_ready"  # pragma: no cover
             decision_label = "Ready for buyer diligence"  # pragma: no cover
 
+        review_policy = review_process_policy(release_authority)
         return {
             "saleability_status": saleability_status,
             "decision_label": decision_label,
@@ -13636,7 +13638,7 @@ class TaskOrchestrator:
                 "included_artifact_count": len(handoff["included_artifacts"]),
                 "blocked_count": len(concrete_blockers),
                 "warning_count": len(warning_conditions),
-                "review_process_is_blocker": False,
+                "review_process_is_blocker": review_policy["is_blocker"],
             },
             "decision_basis": [
                 {
@@ -13662,16 +13664,7 @@ class TaskOrchestrator:
             ],
             "concrete_blockers": concrete_blockers,
             "warning_conditions": warning_conditions,
-            "review_process_policy": {
-                "is_blocker": False,
-                "non_blocker_examples": [
-                    "reviewer delay",
-                    "review bot delay",
-                    "queued model review",
-                    "pending check without concrete failure",
-                ],
-                "blocker_definition": "concrete security, API contract, document, or product defect",
-            },
+            "review_process_policy": review_policy,
             "related_runtime_reports": {
                 "buyer_handoff_status": handoff["bundle_status"],
                 **handoff["related_runtime_reports"],
@@ -13685,12 +13678,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a portable buyer due-diligence export index for commercial review."""
         saleability = self.saleability_decision_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -13878,12 +13873,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer acceptance check over the commercial evidence export."""
         evidence_export = self.commercial_evidence_export_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -14098,6 +14095,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -16417,6 +16415,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()

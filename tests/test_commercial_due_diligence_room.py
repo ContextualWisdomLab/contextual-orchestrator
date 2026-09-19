@@ -87,7 +87,7 @@ def test_commercial_due_diligence_room_report_packages_buyer_evidence_room() -> 
     assert report["diligence_summary"]["blocked_count"] == 0
     assert report["diligence_summary"]["warning_count"] == 2
     assert report["diligence_summary"]["section_count"] == 10
-    assert report["diligence_summary"]["review_process_is_blocker"] is False
+    assert report["diligence_summary"]["review_process_is_blocker"] is True
     assert report["diligence_summary"]["code_connect_used"] is False
     assert report["concrete_blockers"] == []
     for section_name in [

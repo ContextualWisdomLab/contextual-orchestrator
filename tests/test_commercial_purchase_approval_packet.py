@@ -87,7 +87,7 @@ def test_commercial_purchase_approval_packet_report_packages_buyer_approval() ->
     assert report["approval_summary"]["blocked_count"] == 0
     assert report["approval_summary"]["warning_count"] == 2
     assert report["approval_summary"]["gate_count"] == 10
-    assert report["approval_summary"]["review_process_is_blocker"] is False
+    assert report["approval_summary"]["review_process_is_blocker"] is True
     assert report["approval_summary"]["code_connect_used"] is False
     assert report["concrete_blockers"] == []
     for gate_name in [

@@ -86,7 +86,7 @@ def test_commercial_buyer_acceptance_workflow_report_maps_runbook_steps() -> Non
     assert "not a valuation guarantee" in report["source_note"]
     assert report["workflow_summary"]["blocked_count"] == 0
     assert report["workflow_summary"]["warning_count"] == 2
-    assert report["workflow_summary"]["review_process_is_blocker"] is False
+    assert report["workflow_summary"]["review_process_is_blocker"] is True
     assert report["workflow_summary"]["code_connect_used"] is False
     assert report["concrete_blockers"] == []
     for step_name in [
