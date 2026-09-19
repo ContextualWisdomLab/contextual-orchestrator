@@ -11251,6 +11251,22 @@ class TaskOrchestrator:
                         decision = classify_provider_transport_failure(exc.retryable)
                     elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
+                            # Default and auto routes have no allow-list, so
+                            # this used to rethrow before the recorder and
+                            # drop both the prior failover and this malformed
+                            # attempt. Keep the response-error taxonomy.
+                            _append_typed_route_failure(
+                                route_attempts, agent, exc, transport="chat"
+                            )
+                            if route_attempts:
+                                _attach_route_evidence_to_response_error(
+                                    exc,
+                                    _route_evidence_payload(
+                                        eligible_agent_ids=eligible_agent_ids,
+                                        attempted=route_attempts,
+                                        terminal_reason="fail_closed",
+                                    ),
+                                )
                             raise
                         bounded_provider_response_failures += 1
                         last_provider_response_error = exc

@@ -45,6 +45,7 @@ from contextual_orchestrator.tool_fallback import (
     ToolExecutionError,
     ToolFailureKind,
     ToolFallbackStoppedError,
+    classify_tool_failure,
 )
 
 
@@ -822,6 +823,108 @@ def test_route_once_preserves_malformed_taxonomy_for_mixed_size_exhaustion(
         else ["request_too_large", "fail_closed"]
     )
     assert route["terminal_reason"] == "eligible_set_exhausted"
+    orchestrator.close()
+
+
+def _default_route_agents() -> list[ModelAgent]:
+    """Two ungrouped workers so a default/auto route failsover with no allow-list."""
+    return [
+        ModelAgent(
+            "primary_worker",
+            "primary-model",
+            priority=10,
+            tags=("reasoning", "writing"),
+        ),
+        ModelAgent(
+            "fallback_worker",
+            "fallback-model",
+            priority=1,
+            tags=("reasoning", "writing"),
+        ),
+    ]
+
+
+def _wrapped_provider_tool_stop(agent_id: str) -> ToolFallbackStoppedError:
+    """The already-wrapped stop ``_provider_tool_execution_stopped`` returns."""
+    decision = classify_tool_failure(
+        ToolExecutionError(
+            "provider reported terminal tool execution state",
+            tool_name="provider_tool_runtime",
+            kind=ToolFailureKind.TRANSPORT_ERROR,
+            outcome_unknown=True,
+        )
+    )
+    return ToolFallbackStoppedError(agent_id, decision)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL],
+)
+def test_default_route_malformed_after_failover_keeps_response_route(
+    model_name: str,
+) -> None:
+    """A default/auto failover must attach route before rethrowing a malformed response."""
+    orchestrator = TaskOrchestrator(_default_route_agents(), tool_retry_attempts=0)
+    orchestrator.client.chat = QueuedChatOutcomes(
+        {
+            "primary_worker": [_service_unavailable(1.0)],
+            "fallback_worker": [ProviderResponseError("malformed fallback response")],
+        }
+    )
+
+    with pytest.raises(ProviderResponseError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=model_name,
+        )
+
+    assert type(excinfo.value) is ProviderResponseError
+    route = excinfo.value.detail["route"]
+    assert [row["agent_id"] for row in route["attempted"]] == [
+        "primary_worker",
+        "fallback_worker",
+    ]
+    assert [row["outcome"] for row in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    assert route["terminal_reason"] == "fail_closed"
+    orchestrator.close()
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL],
+)
+def test_default_route_wrapped_tool_stop_keeps_prior_attempts(
+    model_name: str,
+) -> None:
+    """An already-wrapped provider tool stop still carries the prior failover row."""
+    orchestrator = TaskOrchestrator(_default_route_agents(), tool_retry_attempts=0)
+    orchestrator.client.chat = QueuedChatOutcomes(
+        {
+            "primary_worker": [_service_unavailable(1.0)],
+            "fallback_worker": [_wrapped_provider_tool_stop("fallback_worker")],
+        }
+    )
+
+    with pytest.raises(ToolFallbackStoppedError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=model_name,
+        )
+
+    route = excinfo.value.detail["route"]
+    assert [row["outcome"] for row in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    terminal = route["attempted"][-1]
+    assert terminal["agent_id"] == "fallback_worker"
+    assert "error_code" not in terminal
+    assert "provider_status" not in terminal
+    assert route["terminal_reason"] == "fail_closed"
     orchestrator.close()
 
 
