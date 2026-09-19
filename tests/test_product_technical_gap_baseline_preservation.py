@@ -30,3 +30,17 @@ def test_product_technical_gap_baseline_preserves_protected_authority_sections()
         "docs/product-technical-gap-baseline.md dropped protected authority sections: "
         + ", ".join(missing)
     )
+
+def test_multimodal_owner_evidence_preserves_verified_repair_lineage() -> None:
+    """Keep judge failover and role-aware preflight repairs reconstructable."""
+
+    baseline = BASELINE_PATH.read_text(encoding="utf-8")
+    required_revisions = (
+        "7f69bacb0d35f00e6902df8e440efeafbe08dbe3",
+        "37435b5e82e9fe53abc67b032c67df83425c0250",
+        "2b5c290ca56526c26f390949aecd87d85c2462b6",
+        "b7440092d1cda47008271ed658fe372f536dd58f",
+    )
+
+    assert all(revision in baseline for revision in required_revisions)
+
