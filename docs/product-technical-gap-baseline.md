@@ -4,8 +4,8 @@
 
 Canonical owner PR
 [#1203](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1203)
-at exact head `864b0dc720898fcce6aea3a47097511d8820334d` (tree
-`306ab24c706dfa1f39283533536f33aca756bae6`) repairs the
+with functional repair `7f30351ccb36bb676ad0b23fe71ea1cce9f98645`
+(tree `157468c88470e93dc2f3e19f03acbf34ff32219f`) repairs the
 `orchestrator/free` image-admission boundary used by the proposed
 `ContextualWisdomLab/.github` DOCX/HWPX review leaf #2281. Five RED
 regressions proved that Responses conversion selected a higher-priority
@@ -15,14 +15,19 @@ admission predicate was still published as readiness contract v1. Follow-up
 RED cases then proved that proxy failover and realtime judging could lose the
 image requirement, explicit image-only rows entered the mixed envelope, and
 the first fix also rejected documented legacy `vision` agents with no
-`input:*` evidence.
+`input:*` evidence. A later endpoint regression proved that preflight and
+pool admission still rejected an endpoint-local image-capable free agent
+before request-aware selection.
 
 The owner now carries normalized image evidence through Responses, template
 roles, conducted invocation, proxy failover, realtime judging, and model
 judging; readiness contract v2 records the predicate change. Explicit
 `input:image` without `input:text` is rejected, while legacy `vision` with no
-`input:*` declaration remains eligible. Current focused RED-to-GREEN
-verification completed 15 tests; `compileall` and diff checks passed. Earlier
+`input:*` declaration remains eligible. Endpoint preflight, Chat Completions,
+and Responses now apply that same request-shaped pool boundary; endpoints
+without local eligible capacity still fail closed. Current related
+RED-to-GREEN verification completed 118 tests; `compileall` and diff checks
+passed. Earlier
 head `f8783af9` completed 244 related tests with warnings treated as errors and
 Ruff. The full local collection is not claimed: its environment lacks the
 native `fast_mlsirm` module and NumPy, while unrelated stale tests still import
