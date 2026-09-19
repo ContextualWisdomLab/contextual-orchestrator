@@ -11010,6 +11010,7 @@ class TaskOrchestrator:
                 return output, served_id, served_model, usage
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
+        bounded_request_too_large_failures = 0
         last_provider_response_error: ProviderResponseError | None = None
         every_failure_was_request_too_large = True
         # The final classified upstream failure survives the candidate loop so a
@@ -11049,6 +11050,7 @@ class TaskOrchestrator:
                         )
                 except Exception as exc:
                     if _is_request_too_large_error(exc):
+                        bounded_request_too_large_failures += 1
                         _append_typed_route_failure(
                             route_attempts,
                             agent,
@@ -11203,7 +11205,9 @@ class TaskOrchestrator:
                 return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None
-            and bounded_provider_response_failures == len(candidates)
+            and bounded_provider_response_failures
+            + bounded_request_too_large_failures
+            == len(candidates)
         ):
             if route_attempts:
                 raise _attach_route_evidence_to_response_error(
