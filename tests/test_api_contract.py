@@ -158,6 +158,15 @@ def test_openapi_capability_requests_have_endpoint_specific_contracts() -> None:
         assert schema["properties"]["zdr_only"]["type"] == "boolean"
 
 
+def test_openapi_input_token_count_nullable_controls_match_runtime() -> None:
+    """Publish the count endpoint's nullable model and truncation contract."""
+    request_schema = OPENAPI_SPEC["paths"]["/v1/responses/input_tokens"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    model_schema = request_schema["properties"]["model"]
+    truncation_schema = request_schema["properties"]["truncation"]
+    assert model_schema["type"] == ["string", "null"]
+    assert truncation_schema == {"type": ["string", "null"], "enum": ["auto", "disabled", None]}
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
     test_openapi_uses_resource_oriented_operation_ids()

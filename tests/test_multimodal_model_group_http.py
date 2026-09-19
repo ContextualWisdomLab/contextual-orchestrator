@@ -19,6 +19,16 @@ from contextual_orchestrator.video_jobs import VideoJobContractError
 TOKEN = "multimodal_group_token"
 
 
+@pytest.fixture
+def raise_test_http_error(request):
+    """Register synthetic provider errors for close after their consumer runs."""
+    def raise_provider_error(provider_error: urllib.error.HTTPError):
+        request.addfinalizer(provider_error.close)
+        raise provider_error
+
+    return raise_provider_error
+
+
 def _equivalence(capability: str) -> dict[str, object]:
     return {
         "contract_id": "reviewed_replica_contract",
@@ -52,7 +62,8 @@ def _post_error(port: int, path: str, payload: dict) -> tuple[int, dict]:
     try:
         _post(port, path, payload)
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        with exc:
+            return exc.code, json.loads(exc.read())
     raise AssertionError("request unexpectedly succeeded")
 
 
@@ -72,7 +83,8 @@ def _get_error(port: int, path: str, *, token: str = TOKEN) -> tuple[int, dict]:
     try:
         _get(port, path, token=token)
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        with exc:
+            return exc.code, json.loads(exc.read())
     raise AssertionError("request unexpectedly succeeded")
 
 
@@ -112,6 +124,7 @@ def test_json_capability_endpoints_use_measured_group_member(
         assert json.loads(raw)["model"] == "provider/second"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_speech_endpoint_preserves_binary_media_response() -> None:
@@ -127,6 +140,257 @@ def test_speech_endpoint_preserves_binary_media_response() -> None:
         assert status == 200 and content_type == "audio/mpeg" and raw == b"mock audio"
     finally:
         server.shutdown()
+        server.server_close()
+
+
+def test_responses_input_tokens_requires_explicit_capability_and_validates_result() -> None:
+    """Forward only supported count fields and preserve the authoritative result."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    successes: list[str] = []
+    original_observe_success = orchestrator._group_router.observe_success
+    orchestrator._group_router.observe_success = (  # type: ignore[method-assign]
+        lambda agent_id, latency: successes.append(agent_id) or original_observe_success(agent_id, latency)
+    )
+    calls: list[tuple[str, dict]] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, endpoint, payload: calls.append((endpoint, payload))
+        or {"object": "response.input_tokens", "input_tokens": 17}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, raw, content_type = _post(
+            server.server_address[1],
+            "/v1/responses/input_tokens",
+            {"model": "provider/token-counter", "input": "hello", "zdr_only": False},
+        )
+        assert status == 200 and content_type == "application/json"
+        assert json.loads(raw) == {"object": "response.input_tokens", "input_tokens": 17}
+        assert calls == [("responses/input_tokens", {"model": "provider/token-counter", "input": "hello"})]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_responses_input_tokens_accepts_nullable_model_and_zero_count() -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    forwarded: list[dict] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, payload: forwarded.append(payload)
+        or {"object": "response.input_tokens", "input_tokens": 0}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, raw, _ = _post(
+            server.server_address[1], "/v1/responses/input_tokens", {"model": None, "input": "hello"}
+        )
+        assert status == 200
+        assert json.loads(raw)["input_tokens"] == 0
+        assert forwarded[0]["model"] == "provider/token-counter"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_responses_input_tokens_rejects_malformed_provider_count_before_success_accounting() -> None:
+    """Reject boolean counts without recording a successful provider outcome."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    successes: list[str] = []
+    original_observe_success = orchestrator._group_router.observe_success
+    orchestrator._group_router.observe_success = (  # type: ignore[method-assign]
+        lambda agent_id, latency: successes.append(agent_id) or original_observe_success(agent_id, latency)
+    )
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda *_args: {"object": "response.input_tokens", "input_tokens": True}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(
+            server.server_address[1],
+            "/v1/responses/input_tokens",
+            {"input": "hello"},
+        )
+        assert status == 502
+        assert error["error"]["code"] == "invalid_input_token_count_response"
+        assert successes == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_responses_input_tokens_does_not_infer_capability_from_model_name() -> None:
+    """Require an operator-declared count capability instead of model-name inference."""
+    agent = ModelAgent("plain_agent", "responses-input-token-model")
+    orchestrator = TaskOrchestrator([agent])
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(
+            server.server_address[1],
+            "/v1/responses/input_tokens",
+            {"model": "responses-input-token-model", "input": "hello"},
+        )
+        assert status == 503
+        assert error["error"]["code"] == "capability_unavailable"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_responses_input_tokens_accepts_optional_official_shapes_and_rejects_bad_truncation() -> None:
+    """Preserve mixed tool definitions and reject malformed truncation inputs."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    forwarded: list[dict] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, payload: forwarded.append(payload)
+        or {"object": "response.input_tokens", "input_tokens": 1}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, _raw, _ = _post(
+            server.server_address[1], "/v1/responses/input_tokens",
+            {"input": None, "tools": [
+                {"type": "web_search_preview"},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+            ]},
+        )
+        assert status == 200
+        assert forwarded[0]["tools"] == [
+            {"type": "web_search_preview"},
+            {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+        ]
+        status, error = _post_error(
+            server.server_address[1], "/v1/responses/input_tokens", {"truncation": []}
+        )
+        assert status == 400 and error["error"]["code"] == "invalid_truncation"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("reference", [("conversation", {"id": "foreign_conv"}), ("conversation", "foreign_conv"), ("previous_response_id", "resp_foreign")])
+def test_responses_input_tokens_rejects_remote_references_before_provider_egress(reference: tuple[str, object]) -> None:
+    """Reject unowned provider references without invoking shared credentials."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        reference_field, reference_value = reference
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", {reference_field: reference_value})
+        assert status == 400 and error["error"]["code"] == f"invalid_{reference_field}"
+        assert calls == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("payload", [
+    {"input": [{"type": "item_reference", "id": "foreign_item"}]},
+    {"input": [{"type": "input_file", "file_id": "foreign_file"}]},
+    {"input": [{"type": "input_image", "file_id": "foreign_image"}]},
+    {"tools": [{"type": "file_search", "vector_store_ids": ["foreign_store"]}]},
+    {"tools": [{"type": "code_interpreter", "container": {"file_ids": ["foreign_file"]}}]},
+    {"tools": [{"type": "code_interpreter", "container": "foreign_container"}]},
+])
+def test_responses_input_tokens_rejects_nested_unbound_resources_before_provider_egress(payload: dict) -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", payload)
+        assert status == 400
+        assert error["error"]["code"] in {"invalid_input_reference", "invalid_input_file_reference", "invalid_tool_resource_reference"}
+        assert calls == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_responses_input_tokens_preserves_schema_ids_and_omitted_item_reference_type() -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    forwarded: list[dict] = []
+    orchestrator.client.proxy_send = lambda _agent, _endpoint, payload: forwarded.append(payload) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, _raw, _ = _post(server.server_address[1], "/v1/responses/input_tokens", {
+            "input": [{"id": "item_1", "content": [{"type": "input_text", "text": "schema id"}]}],
+            "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}],
+        })
+        assert status == 200
+        assert forwarded[0]["input"][0]["id"] == "item_1"
+        assert forwarded[0]["tools"][0]["parameters"]["properties"]["id"]["type"] == "string"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("item", [{"id": "foreign_item"}, {"id": "foreign_item", "type": None}, {"id": "foreign_item", "type": "item_reference"}])
+def test_responses_input_tokens_rejects_top_level_item_references(item: dict) -> None:
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", {"input": [item]})
+        assert status == 400 and error["error"]["code"] == "invalid_input_reference"
+        assert calls == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_responses_input_tokens_requires_auth_before_provider_egress(request) -> None:
+    """Reject unauthenticated count requests before invoking the provider."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    calls: list[object] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda *_args: calls.append(True) or {"object": "response.input_tokens", "input_tokens": 1}
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            _post(server.server_address[1], "/v1/responses/input_tokens", {"input": "hello"}, token="wrong")
+        request.addfinalizer(raised.value.close)
+        assert raised.value.code == 401
+        assert calls == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("provider_result", [None, {"object": "response.input_tokens"}, {"object": "response.input_tokens", "input_tokens": -1}, {"object": "response.input_tokens", "input_tokens": "1"}])
+def test_responses_input_tokens_rejects_other_malformed_counts(provider_result: object) -> None:
+    """Reject malformed provider count envelopes at the authenticated HTTP boundary."""
+    agent = ModelAgent("token_counter", "provider/token-counter", tags=("responses_input_tokens",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send = lambda *_args: provider_result  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, error = _post_error(server.server_address[1], "/v1/responses/input_tokens", {"input": "hello"})
+        assert status == 502 and error["error"]["code"] == "invalid_input_token_count_response"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_speech_endpoint_rejects_non_object_provider_routing() -> None:
@@ -258,6 +522,7 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
         ]
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_video_followup_rejects_reconfigured_provider_account() -> None:
@@ -297,6 +562,7 @@ def test_video_followup_rejects_reconfigured_provider_account() -> None:
         assert followups == []
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_video_submission_does_not_race_uncancellable_async_jobs() -> None:
@@ -340,6 +606,7 @@ def test_video_submission_does_not_race_uncancellable_async_jobs() -> None:
         assert submissions == ["first_video"]
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_video_job_is_scoped_to_authenticated_principal() -> None:
@@ -361,6 +628,7 @@ def test_video_job_is_scoped_to_authenticated_principal() -> None:
         assert _get(port, f"/v1/videos/{job_id}", token="tenant-one")[0] == 200
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_video_submission_ledgers_only_concrete_provider_usage() -> None:
@@ -397,6 +665,7 @@ def test_video_submission_ledgers_only_concrete_provider_usage() -> None:
         assert row["measurement_status"] == "measured"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_untrackable_video_submission_is_not_recorded_as_routing_success() -> None:
@@ -444,9 +713,10 @@ def test_video_provider_outage_returns_documented_503() -> None:
         assert body["error"]["code"] == "video_provider_unavailable"
     finally:
         server.shutdown()
+        server.server_close()
 
 
-def test_expired_provider_video_job_stops_polling_with_404() -> None:
+def test_expired_provider_video_job_stops_polling_with_404(raise_test_http_error) -> None:
     """An upstream-gone job tells the client to submit a new request."""
     agent = ModelAgent("video_owner", "provider/video", tags=("video",))
     orchestrator = TaskOrchestrator([agent])
@@ -454,7 +724,7 @@ def test_expired_provider_video_job_stops_polling_with_404() -> None:
         lambda _agent, _endpoint, _payload: {"id": "provider-job", "status": "queued"}
     )
     orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
-        lambda _agent, endpoint, **_kwargs: (_ for _ in ()).throw(
+        lambda _agent, endpoint, **_kwargs: raise_test_http_error(
             urllib.error.HTTPError(endpoint, 404, "gone", {}, None)
         )
     )
@@ -474,6 +744,7 @@ def test_expired_provider_video_job_stops_polling_with_404() -> None:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
@@ -501,7 +772,7 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
     assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
 
 
-def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+def test_capability_request_size_exhaustion_preserves_413_without_penalty(raise_test_http_error) -> None:
     """Oversized capability requests do not degrade provider health."""
     agents = [
         ModelAgent("first_image", "provider/image", tags=("image",), group_name="image_group"),
@@ -510,7 +781,7 @@ def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> N
     orchestrator = TaskOrchestrator(agents)
 
     def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
-        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+        raise_test_http_error(urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None))
 
     orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
 
@@ -527,7 +798,7 @@ def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> N
     )
 
 
-def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty(raise_test_http_error) -> None:
     """413s in the equivalent-endpoint race do not open provider circuits."""
     agents = [
         ModelAgent(
@@ -548,7 +819,7 @@ def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty(
     orchestrator = TaskOrchestrator(agents)
 
     def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
-        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+        raise_test_http_error(urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None))
 
     orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
 
@@ -565,13 +836,13 @@ def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty(
     )
 
 
-def test_capability_request_size_exhaustion_returns_http_413() -> None:
+def test_capability_request_size_exhaustion_returns_http_413(raise_test_http_error) -> None:
     """Capability routes keep oversized upstream requests as client errors."""
     agent = ModelAgent("image_member", "provider/image", tags=("image",), group_name="image_group")
     orchestrator = TaskOrchestrator([agent])
 
     def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
-        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+        raise_test_http_error(urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None))
 
     orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
@@ -586,6 +857,7 @@ def test_capability_request_size_exhaustion_returns_http_413() -> None:
         assert body["error"]["code"] == "request_too_large"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:
@@ -728,6 +1000,7 @@ def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
         assert status == 400 and body["error"]["code"] == "invalid_model"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 @pytest.mark.parametrize("model", ("", "   "))
@@ -746,6 +1019,7 @@ def test_capability_endpoint_rejects_explicit_empty_model(model: str) -> None:
         assert status == 400 and body["error"]["code"] == "invalid_model"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 @pytest.mark.parametrize(
@@ -831,3 +1105,23 @@ def test_fast_empty_media_response_cannot_beat_slower_valid_response() -> None:
         capability="image",
         endpoint="images/generations",
     ) == {"data": [{"url": "https://example.invalid/image.png"}]}
+
+
+@pytest.mark.parametrize("request_policy", [{"zdr_only": True}, {"model": "orchestrator/free"}])
+def test_input_token_count_rejects_unverified_policy_before_egress(request_policy: dict) -> None:
+    """A count capability alone cannot establish free pricing or ZDR eligibility."""
+    provider_agent = ModelAgent("count_provider", "provider/count-model", tags=("responses_input_tokens",))
+    task_orchestrator = TaskOrchestrator([provider_agent])
+    provider_calls: list[object] = []
+    task_orchestrator.client.proxy_send = lambda *call_args: provider_calls.append(call_args)  # type: ignore[method-assign]
+    http_server = build_server(task_orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=http_server.serve_forever, daemon=True).start()
+    try:
+        status_code, response_body = _post_error(
+            http_server.server_address[1], "/v1/responses/input_tokens", {"input": "hello", **request_policy}
+        )
+        assert status_code in (400, 503), response_body
+        assert provider_calls == []
+    finally:
+        http_server.shutdown()
+        http_server.server_close()
