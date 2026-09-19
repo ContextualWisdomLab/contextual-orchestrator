@@ -41,6 +41,17 @@ run reached 856 passed / 1 skipped before exposing another stale completions
 listener cleanup, which was repaired and then passed its 4-test file; the
 borrowed verifier also lacks the configured asyncio plugin.
 
+HTTP-boundary RED `1527821a5b61d2e114e8d34e5f9bc5163a4b9b0a`
+proved that endpoint preflight consumed raw accepted false forms
+(`parallel_tool_calls: "false"` and `0`) before the serving path normalized
+them. With two tools, that falsely rejected the endpoint's only
+`tool_call:single` image-capable free agent as unavailable. GREEN
+`a7ed3364eb2c40b543ed0d0421d1aa14ea1ed985` normalizes the flag once at
+the shared Chat/Responses HTTP boundary before endpoint admission; invalid
+forms still fail closed. The focused endpoint plus multimodal suites completed
+46 tests with warnings treated as errors. This is local source evidence, not
+hosted or release evidence.
+
 A preservation regression at ordinary-forward RED `33e3998ac9f6b1373cdfda83a760f19214f2237c`
 proved that the branch snapshot had dropped 87 of 148 protected level-two
 sections, including PRD, TRD, Context Map, roadmap, delivery-gate, and incident
