@@ -54,6 +54,13 @@ OpenCode Zen and OpenCode Go; only rows that already satisfy the shared
 general-free serving contract enter the pool.
 """
 
+# Aligned with ContextualWisdomLab/.github Noema document review leaf
+# (``MAX_DOCUMENT_IMAGES=8``, ``MAX_DOCUMENT_IMAGE_BYTES=2 MiB``). Base64
+# expands ~4/3, and the JSON also carries paper text/tables — 32 MiB is the
+# owner-side request ceiling so eight 2 MiB figures plus text fit without
+# inventing a second per-part quota on the gateway.
+REVIEW_MAX_BODY_BYTES = 32 * 1024 * 1024
+
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
 REVIEW_READINESS_CONTRACT_VERSION = "1"
@@ -322,7 +329,10 @@ def main() -> None:
         orchestrator,
         host=args.host,
         port=args.port,
-        security=SecurityConfig(auth_token=auth_token),
+        security=SecurityConfig(
+            auth_token=auth_token,
+            max_body_bytes=REVIEW_MAX_BODY_BYTES,
+        ),
     )
 
 
