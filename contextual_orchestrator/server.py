@@ -6795,6 +6795,14 @@ def build_server(
                 request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
                 if path in {"/v1/chat/completions", "/v1/responses"}:
+                    if "parallel_tool_calls" in body:
+                        normalized_parallel_tool_calls = _coerce_optional_bool(
+                            body.get("parallel_tool_calls"),
+                            error_code="invalid_parallel_tool_calls",
+                            message="parallel_tool_calls must be a boolean",
+                        )
+                        if normalized_parallel_tool_calls is not None:
+                            body["parallel_tool_calls"] = normalized_parallel_tool_calls
                     endpoint_routing = _validate_routing(
                         body.get("routing"), allow_endpoint=True
                     )
