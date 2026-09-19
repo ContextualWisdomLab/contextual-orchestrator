@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 
 from contextual_orchestrator import ModelAgent, ReasoningEffortProfile, TaskOrchestrator
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import ModelClient, ProviderResponseError
 from contextual_orchestrator.provider_errors import (
     PROVIDER_RATE_LIMITED_CODE,
     ProviderUpstreamError,
@@ -548,6 +548,49 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
     assert slept == [pytest.approx(1.0, abs=0.5)]
     assert chat_outcomes.calls.count("primary_free_agent") == 2
     assert chat_outcomes.calls.count("fallback_free_agent") == 1
+
+
+def test_route_once_preserves_recovered_attempts_on_malformed_exhaustion() -> None:
+    """A post-recovery malformed pool keeps both rounds in the final receipt."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    slept: list[float] = []
+    orchestrator._rate_limit_sleep = slept.append
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [
+                _rate_limited_upstream_error(1.0),
+                ProviderResponseError("malformed primary response"),
+            ],
+            "fallback_free_agent": [
+                _rate_limited_upstream_error(1.0),
+                ProviderResponseError("malformed fallback response"),
+            ],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    with pytest.raises(ProviderResponseError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    route = excinfo.value.detail["route"]
+    assert route["eligible_agent_ids"] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport",
+        "retryable_transport",
+        "fail_closed",
+        "fail_closed",
+    ]
+    assert route["terminal_reason"] == "eligible_set_exhausted"
+    assert slept == [pytest.approx(1.0, abs=0.5)]
+    orchestrator.close()
 
 
 def test_http_route_once_storm_without_budget_returns_429() -> None:
