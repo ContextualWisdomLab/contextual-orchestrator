@@ -9243,6 +9243,7 @@ class TaskOrchestrator:
             "verifier_output": "",
             "judge": "model",
         }
+        route_evidence: dict[str, Any] | None = None
         tried_ids: set[str] = set()
         extras: dict[str, Any] | None = None
         for attempt_index, candidate in enumerate(ranked_pool):
@@ -9261,6 +9262,8 @@ class TaskOrchestrator:
                     prompt_token_lower_bound=prompt_bound,
                 )
             )
+            route_evidence = self._last_route_evidence
+            self._last_route_evidence = None
             extras = getattr(self, "_last_assistant_message", None)
             self._last_assistant_message = None
             output_budget = getattr(self, "_last_output_budget", None)
@@ -9348,8 +9351,6 @@ class TaskOrchestrator:
             result = self._with_context_window_evidence(
                 result, prompt_bound, prompt_bound_source, context_window_excluded
             )
-        route_evidence = self._last_route_evidence
-        self._last_route_evidence = None
         if isinstance(route_evidence, dict):
             result["route"] = route_evidence
         return self._with_effort_snapshot(result)
