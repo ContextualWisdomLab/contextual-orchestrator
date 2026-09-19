@@ -8,9 +8,12 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dataclasses import replace
+
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.api_contract import OPENAPI_SPEC  # noqa: E402
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
+from contextual_orchestrator.orchestrator import chat_completion_response  # noqa: E402
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 
 
@@ -352,3 +355,44 @@ def test_orchestration_route_attempt_schema_validates_streaming_fallback() -> No
     }
     validate(failed_attempt, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
     assert failed_attempt["outcome"] == "retryable_transport"
+
+
+class _RouteOnceFailThenServeClient:
+    """Minimal non-streaming double: first candidate's ``chat`` raises, second serves."""
+
+    def chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+        del messages, kwargs
+        if agent.id == "primary_worker":
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="service_unavailable",
+                message="provider rejected the request with HTTP 503",
+                client_status=503,
+                provider_status=503,
+                retryable=True,
+                transport="chat",
+            )
+        return "served by fallback"
+
+    def take_usage(self) -> None:
+        return None
+
+
+def test_orchestration_route_schema_validates_route_once_failover() -> None:
+    """A real non-streaming route_once failover's route validates against the contract."""
+    orchestrator = TaskOrchestrator(
+        _stream_failover_agents(), client=_RouteOnceFailThenServeClient()
+    )
+    # Mechanical failover only — judge traffic would obscure typed attempt rows.
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+    assert result["answer"] == "served by fallback"
+    route = result["route"]
+    schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
+    validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    outcomes = [attempt["outcome"] for attempt in route["attempted"]]
+    assert outcomes == ["retryable_transport", "served"]
+    body = chat_completion_response(result, include_trace=True)
+    assert body["orchestration"]["route"]["attempted"][0]["outcome"] == "retryable_transport"
+    assert body["orchestration"]["route"]["terminal_reason"] == "served"

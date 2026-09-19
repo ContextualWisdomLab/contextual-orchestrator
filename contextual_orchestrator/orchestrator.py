@@ -1430,10 +1430,11 @@ def _typed_attempt_entry(
 ) -> dict[str, Any]:
     """Build one typed per-attempt evidence entry shared by every fallback path.
 
-    Both the structured-synthesis candidate loop
-    (``_orchestrated_provider_completion``) and the single-worker streaming
-    fallback (``stream_route``) call this so a failed attempt carries the
-    same fixed ``outcome`` vocabulary: ``request_too_large``,
+    The structured-synthesis candidate loop
+    (``_orchestrated_provider_completion``), the single-worker streaming
+    fallback (``stream_route``), and non-streaming ``route_once``'s shared
+    ``_invoke`` failover loop call this so a failed attempt carries the same
+    fixed ``outcome`` vocabulary: ``request_too_large``,
     ``retryable_transport``, ``deadline_exceeded`` (the administrator model
     timeout introduced by PR #1053's ``model_timeout`` error code -- reused
     here rather than inventing a second vocabulary), or ``fail_closed``.
@@ -1455,6 +1456,71 @@ def _typed_attempt_entry(
         "retryable": classified.retryable,
         "transport": classified.transport,
     }
+
+
+def _append_typed_route_failure(
+    attempts: list[dict[str, Any]],
+    agent: ModelAgent,
+    exc: BaseException,
+    *,
+    transport: str,
+    request_too_large: bool = False,
+) -> None:
+    """Record one failed candidate before ``_invoke`` advances to the next agent."""
+    classified = (
+        exc
+        if isinstance(exc, ProviderUpstreamError)
+        else classify_provider_failure(
+            exc,
+            agent_id=agent.id,
+            model=agent.model,
+            transport=transport,
+        )
+    )
+    if not isinstance(classified, ProviderUpstreamError):
+        return
+    attempts.append(
+        _typed_attempt_entry(
+            agent.id,
+            agent.model,
+            classified,
+            request_too_large=request_too_large,
+        )
+    )
+
+
+def _route_evidence_payload(
+    *,
+    eligible_agent_ids: list[str],
+    attempted: list[dict[str, Any]],
+    terminal_reason: str,
+) -> dict[str, Any]:
+    """Build the shared ``orchestration.route`` evidence object."""
+    return {
+        "eligible_agent_ids": eligible_agent_ids,
+        "attempted": list(attempted),
+        "terminal_reason": terminal_reason,
+    }
+
+
+def _attach_route_evidence_to_upstream_error(
+    error: ProviderUpstreamError,
+    route_payload: dict[str, Any],
+) -> ProviderUpstreamError:
+    """Copy ``route_payload`` into one caller-facing upstream error."""
+    extra_detail = dict(error.extra_detail)
+    extra_detail["route"] = route_payload
+    return ProviderUpstreamError(
+        agent_id=error.agent_id,
+        model=error.model,
+        error_code=error.error_code,
+        message=str(error),
+        client_status=error.client_status,
+        provider_status=error.provider_status,
+        retryable=error.retryable,
+        transport=error.transport,
+        extra_detail=extra_detail,
+    )
 
 
 @contextmanager
@@ -5518,6 +5584,7 @@ class TaskOrchestrator:
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
         self._context_window_local = threading.local()
+        self._route_evidence_local = threading.local()
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
@@ -9074,6 +9141,16 @@ class TaskOrchestrator:
         """Store this thread's most recent context-window exclusion evidence."""
         self._context_window_local.value = value
 
+    @property
+    def _last_route_evidence(self) -> dict[str, Any] | None:
+        """Typed route attempt evidence from THIS thread's most recent ``_invoke`` call."""
+        return getattr(self._route_evidence_local, "value", None)
+
+    @_last_route_evidence.setter
+    def _last_route_evidence(self, value: dict[str, Any] | None) -> None:
+        """Store this thread's pending route attempt evidence."""
+        self._route_evidence_local.value = value
+
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -9250,6 +9327,10 @@ class TaskOrchestrator:
             result = self._with_context_window_evidence(
                 result, prompt_bound, prompt_bound_source, context_window_excluded
             )
+        route_evidence = self._last_route_evidence
+        self._last_route_evidence = None
+        if isinstance(route_evidence, dict):
+            result["route"] = route_evidence
         return self._with_effort_snapshot(result)
 
     def _realtime_route_judge(
@@ -10775,6 +10856,7 @@ class TaskOrchestrator:
         self._last_assistant_message = None
         self._last_output_budget = None
         self._last_context_window_excluded = []
+        self._last_route_evidence = None
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
@@ -10803,6 +10885,8 @@ class TaskOrchestrator:
             ]
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        route_attempts: list[dict[str, Any]] = []
+        eligible_agent_ids = [candidate.id for candidate in candidates]
         race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
@@ -10943,6 +11027,13 @@ class TaskOrchestrator:
                         )
                 except Exception as exc:
                     if _is_request_too_large_error(exc):
+                        _append_typed_route_failure(
+                            route_attempts,
+                            agent,
+                            exc,
+                            transport="chat",
+                            request_too_large=True,
+                        )
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
@@ -10985,6 +11076,9 @@ class TaskOrchestrator:
                         ):
                             excluded_agent_ids.add(agent.id)
                             self._record_failure(agent.id)
+                            _append_typed_route_failure(
+                                route_attempts, agent, exc, transport="chat"
+                            )
                             break
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
@@ -11003,6 +11097,9 @@ class TaskOrchestrator:
                         decision = classify_tool_failure(exc)
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
+                        _append_typed_route_failure(
+                            route_attempts, agent, exc, transport="chat"
+                        )
                         break
                     elif isinstance(exc, _LocalProviderAdmissionTimeout):
                         decision = downgrade_to_failover(
@@ -11038,6 +11135,9 @@ class TaskOrchestrator:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
+                    _append_typed_route_failure(
+                        route_attempts, agent, exc, transport="chat"
+                    )
                     break
                 # Success: one Bernoulli observation plus measured latency, and
                 # provider-reported completion tokens when available feeding the
@@ -11065,17 +11165,53 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
+                if route_attempts:
+                    route_attempts.append(
+                        {
+                            "agent_id": agent.id,
+                            "model": agent.model,
+                            "outcome": "served",
+                        }
+                    )
+                    self._last_route_evidence = _route_evidence_payload(
+                        eligible_agent_ids=eligible_agent_ids,
+                        attempted=route_attempts,
+                        terminal_reason="served",
+                    )
                 return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
         ):
+            if route_attempts:
+                raise _attach_route_evidence_to_upstream_error(
+                    classify_provider_failure(
+                        last_provider_response_error,
+                        agent_id=agent.id,
+                        model=agent.model,
+                        transport="chat",
+                    ),
+                    _route_evidence_payload(
+                        eligible_agent_ids=eligible_agent_ids,
+                        attempted=route_attempts,
+                        terminal_reason="eligible_set_exhausted",
+                    ),
+                ) from None
             raise last_provider_response_error
         if candidates and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
         if last_upstream_error is not None:
+            if route_attempts:
+                raise _attach_route_evidence_to_upstream_error(
+                    last_upstream_error,
+                    _route_evidence_payload(
+                        eligible_agent_ids=eligible_agent_ids,
+                        attempted=route_attempts,
+                        terminal_reason="eligible_set_exhausted",
+                    ),
+                ) from None
             raise last_upstream_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
@@ -19669,6 +19805,7 @@ def chat_completion_response(
         "prompt_token_lower_bound": result.get("prompt_token_lower_bound"),
         "prompt_token_bound_source": result.get("prompt_token_bound_source"),
         "context_window_excluded": result.get("context_window_excluded") or None,
+        "route": result.get("route"),
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
