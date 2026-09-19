@@ -7098,6 +7098,57 @@ class TaskOrchestrator:
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     try:
                         if isinstance(exc, ToolFallbackStoppedError):
+                            current_route = (
+                                exc.detail.get("route")
+                                if isinstance(exc.detail, dict)
+                                else None
+                            )
+                            current_attempts = (
+                                list(current_route.get("attempted", ()))
+                                if isinstance(current_route, dict)
+                                else []
+                            )
+                            if not any(
+                                isinstance(row, dict)
+                                and row.get("agent_id") == candidate.id
+                                for row in current_attempts
+                            ):
+                                _append_tool_stop_route_attempt(
+                                    current_attempts,
+                                    candidate,
+                                    transport="structured_synthesis",
+                                )
+                            merged_attempts = [*attempts, *current_attempts]
+                            current_eligible = (
+                                list(current_route.get("eligible_agent_ids", ()))
+                                if isinstance(current_route, dict)
+                                else []
+                            )
+                            if merged_attempts:
+                                _attach_route_evidence_to_tool_stop(
+                                    exc,
+                                    _route_evidence_payload(
+                                        eligible_agent_ids=list(
+                                            dict.fromkeys(
+                                                [
+                                                    *eligible_agent_ids,
+                                                    *current_eligible,
+                                                ]
+                                            )
+                                        ),
+                                        attempted=merged_attempts,
+                                        terminal_reason="fail_closed",
+                                    ),
+                                )
+                            # A prior candidate already set this flag, so the
+                            # outer handler will not record this terminal stop.
+                            # Group stability still needs this candidate once.
+                            # Do not also trip the circuit: fail-closed tool
+                            # stops are not provider-health failures.
+                            if synthesis_failure_recorded and (
+                                candidate.group_name or free_only
+                            ):
+                                self._group_router.observe_failure(candidate.id)
                             raise
                         request_too_large = _is_request_too_large_error(exc)
                         saw_request_too_large = saw_request_too_large or request_too_large
