@@ -41,6 +41,11 @@ from contextual_orchestrator.provider_errors import (
     resolve_retry_after_seconds,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server
+from contextual_orchestrator.tool_fallback import (
+    ToolExecutionError,
+    ToolFailureKind,
+    ToolFallbackStoppedError,
+)
 
 
 def _headers(pairs: dict[str, str] | None = None) -> Message:
@@ -594,6 +599,138 @@ def test_route_once_preserves_recovered_attempts_on_malformed_exhaustion() -> No
     ]
     assert route["terminal_reason"] == "eligible_set_exhausted"
     assert slept == [pytest.approx(1.0, abs=0.5)]
+    orchestrator.close()
+
+
+def _service_unavailable(retry_after_seconds: float) -> ProviderUpstreamError:
+    """Classified 503 the chat transport already handed to ``_invoke``."""
+    return ProviderUpstreamError(
+        agent_id="unit",
+        model="unit-model",
+        error_code="service_unavailable",
+        message="upstream unavailable",
+        client_status=503,
+        provider_status=503,
+        retryable=True,
+        transport="chat",
+        extra_detail={"retry_after_seconds": retry_after_seconds},
+    )
+
+
+def _ambiguous_tool_stop() -> ToolExecutionError:
+    return ToolExecutionError(
+        "request may have completed token=must-not-leak",
+        tool_name="send_message",
+        kind=ToolFailureKind.TRANSPORT_ERROR,
+        outcome_unknown=True,
+    )
+
+
+def test_http_fail_closed_after_503_keeps_route_and_stops() -> None:
+    """HTTP 409 keeps the earlier 503 and the terminal tool stop, then stops."""
+    agents = [
+        *_free_route_agents(),
+        ModelAgent(
+            "untried_free_agent",
+            "untried-free-model",
+            priority=0,
+            provider_name="untried",
+            tags=("cost:free", "reasoning", "coding"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents, tool_retry_attempts=0)
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_service_unavailable(1.0)],
+            "fallback_free_agent": [_ambiguous_tool_stop()],
+            "untried_free_agent": ["must not run"],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        status, body, _response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 409, body
+    assert body["error"]["code"] == "tool_execution_stopped"
+    assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
+    route = body["error"]["detail"]["route"]
+    assert route["eligible_agent_ids"] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+        "untried_free_agent",
+    ]
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    assert [attempt["agent_id"] for attempt in route["attempted"]] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert route["terminal_reason"] == "fail_closed"
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent"]
+    assert "must-not-leak" not in json.dumps(body)
+
+
+def test_route_once_fail_closed_keeps_attempts_from_the_wait_round() -> None:
+    """A tool stop after a 503 storm still carries the waited round's attempts."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    slept: list[float] = []
+    orchestrator._rate_limit_sleep = slept.append
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [
+                _service_unavailable(0.01),
+                _service_unavailable(0.01),
+            ],
+            "fallback_free_agent": [
+                _service_unavailable(0.01),
+                _ambiguous_tool_stop(),
+            ],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    with pytest.raises(ToolFallbackStoppedError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert type(excinfo.value) is ToolFallbackStoppedError
+    route = excinfo.value.route
+    assert route["terminal_reason"] == "fail_closed"
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport",
+        "retryable_transport",
+        "retryable_transport",
+        "fail_closed",
+    ]
+    assert chat_outcomes.calls == [
+        "primary_free_agent",
+        "fallback_free_agent",
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert slept == [pytest.approx(0.01, abs=0.5)]
     orchestrator.close()
 
 

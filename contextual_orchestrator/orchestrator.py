@@ -1522,6 +1522,15 @@ def _attach_route_evidence_to_response_error(
     return error
 
 
+def _attach_route_evidence_to_tool_stop(
+    error: ToolFallbackStoppedError,
+    route_payload: dict[str, Any],
+) -> ToolFallbackStoppedError:
+    """Attach route evidence without converting a tool stop into another error."""
+    error.route = route_payload
+    return error
+
+
 @contextmanager
 def _local_provider_slot(
     agent: ModelAgent,
@@ -11122,6 +11131,18 @@ class TaskOrchestrator:
                         # convert this to failover without an explicit product
                         # decision distinguishing which failure kinds that would
                         # actually be safe for.
+                        _append_typed_route_failure(
+                            route_attempts, agent, exc, transport="chat"
+                        )
+                        if route_attempts:
+                            _attach_route_evidence_to_tool_stop(
+                                exc,
+                                _route_evidence_payload(
+                                    eligible_agent_ids=eligible_agent_ids,
+                                    attempted=route_attempts,
+                                    terminal_reason="fail_closed",
+                                ),
+                            )
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
@@ -11199,7 +11220,20 @@ class TaskOrchestrator:
                     if decision.circuit_failure:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
-                        raise ToolFallbackStoppedError(agent.id, decision) from None
+                        _append_typed_route_failure(
+                            route_attempts, agent, exc, transport="chat"
+                        )
+                        stopped = ToolFallbackStoppedError(agent.id, decision)
+                        if route_attempts:
+                            _attach_route_evidence_to_tool_stop(
+                                stopped,
+                                _route_evidence_payload(
+                                    eligible_agent_ids=eligible_agent_ids,
+                                    attempted=route_attempts,
+                                    terminal_reason="fail_closed",
+                                ),
+                            )
+                        raise stopped from None
                     _append_typed_route_failure(
                         route_attempts, agent, exc, transport="chat"
                     )
@@ -12075,6 +12109,36 @@ class TaskOrchestrator:
                             str(current_route.get("terminal_reason"))
                             if isinstance(current_route, dict)
                             else "eligible_set_exhausted"
+                        ),
+                    ),
+                ) from None
+            except ToolFallbackStoppedError as exc:
+                if not recovered_attempts:
+                    raise
+                current_route = exc.route if isinstance(exc.route, dict) else None
+                current_attempts = (
+                    list(current_route.get("attempted", ()))
+                    if current_route is not None
+                    else []
+                )
+                current_eligible = (
+                    list(current_route.get("eligible_agent_ids", ()))
+                    if current_route is not None
+                    else []
+                )
+                raise _attach_route_evidence_to_tool_stop(
+                    exc,
+                    _route_evidence_payload(
+                        eligible_agent_ids=list(
+                            dict.fromkeys(
+                                [*recovered_eligible_agent_ids, *current_eligible]
+                            )
+                        ),
+                        attempted=[*recovered_attempts, *current_attempts],
+                        terminal_reason=(
+                            str(current_route.get("terminal_reason") or "fail_closed")
+                            if current_route is not None
+                            else "fail_closed"
                         ),
                     ),
                 ) from None

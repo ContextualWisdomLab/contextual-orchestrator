@@ -83,9 +83,16 @@ class ToolExecutionError(RuntimeError):
 class ToolFallbackStoppedError(RuntimeError):
     """Raised when retry or cross-agent failover would risk an unsafe replay."""
 
-    def __init__(self, agent_id: str, decision: ToolFailureDecision) -> None:
+    def __init__(
+        self,
+        agent_id: str,
+        decision: ToolFailureDecision,
+        *,
+        route: dict | None = None,
+    ) -> None:
         self.agent_id = agent_id
         self.decision = decision
+        self.route = route
         super().__init__(
             "tool execution stopped safely "
             f"(agent={agent_id}, reason={decision.reason_code})"
