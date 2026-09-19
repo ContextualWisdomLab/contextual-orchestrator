@@ -12190,7 +12190,7 @@ class TaskOrchestrator:
             }
         judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
-            judge = next(
+            eligible_judges = [
                 agent
                 for agent in self._ranked_agents(
                     task,
@@ -12200,7 +12200,9 @@ class TaskOrchestrator:
                 )
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
-            )
+            ]
+            judge = eligible_judges[0]
+            judge_allowed_agent_ids = {agent.id for agent in eligible_judges}
             # The judge is one bounded provider call.  Do not pass the
             # planning strategy ("template"/"generated") as an
             # orchestration mode or recursively conduct another workflow.
@@ -12209,7 +12211,7 @@ class TaskOrchestrator:
                 task,
                 judge.id,
                 mode="route",
-                allowed_agent_ids=allowed_agent_ids,
+                allowed_agent_ids=judge_allowed_agent_ids,
                 excluded_agent_ids=excluded_agent_ids,
             )
             fast_judge = components.judge_cls(
