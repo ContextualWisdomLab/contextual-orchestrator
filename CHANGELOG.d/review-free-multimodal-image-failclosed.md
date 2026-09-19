@@ -25,3 +25,6 @@ predicate during endpoint preflight and pool admission. Chat Completions and
 Responses therefore admit an endpoint-local free text+image agent, while a
 text-only request still cannot treat that vision deployment as the blind free
 pool and an endpoint without eligible local capacity still fails closed.
+Chat image aliases are normalized before admission, disabled agents cannot
+prove capacity, and an empty request-aware image pool returns HTTP 400 before
+either streaming surface commits SSE headers.

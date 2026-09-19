@@ -236,10 +236,8 @@ def test_endpoint_scope_accepts_request_aware_free_image_pool() -> None:
                         "content": [
                             {"type": "text", "text": "Review this figure."},
                             {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "data:image/png;base64,AA=="
-                                },
+                                "type": " Image_Url ",
+                                "image_url": "data:image/png;base64,AA==",
                             },
                         ],
                     }
@@ -304,6 +302,85 @@ def test_http_endpoint_scope_accepts_free_image_pool(
         )
         assert status == 200, document
         assert set(orchestrator.client.agent_ids) == {"vision_free"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("path", "request_content"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Review this figure."},
+                            {
+                                "type": "image_url",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Review this figure."},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_free_image_stream_rejects_before_sse_without_image_pool(
+    path: str, request_content: dict
+) -> None:
+    """Missing image capacity must return HTTP 400 before SSE starts."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "text_free",
+                "text-free-model",
+                tags=("cost:free", "reasoning", "writing", "input:text", "output:text"),
+            )
+        ],
+        client=_RecordingClient(),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _post_json(
+            server,
+            path,
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "stream": True,
+                **request_content,
+            },
+        )
+        assert status == 400, document
+        assert document["error"]["code"] == "invalid_model"
     finally:
         server.shutdown()
         thread.join(timeout=5)

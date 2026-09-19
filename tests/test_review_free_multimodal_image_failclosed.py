@@ -63,7 +63,7 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
 
 
 def _post_raw(port: int, payload: dict) -> tuple[int, str, bytes]:
-    """Return the HTTP status and media type without assuming a JSON response."""
+    """Return the HTTP status and media type without assuming JSON."""
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -215,6 +215,28 @@ def test_free_image_request_fails_closed_when_only_text_free_agents_exist() -> N
         server.server_close()
 
 
+def test_request_aware_free_pool_excludes_disabled_image_agents() -> None:
+    """Disabled image agents never prove request capacity."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "text_free",
+                "text-free-model",
+                tags=("cost:free", "reasoning", "writing", "input:text", "output:text"),
+            ),
+            ModelAgent(
+                "disabled_vision",
+                "disabled-vision-model",
+                tags=_IMAGE_FREE_TAGS,
+                disabled=True,
+            )
+        ]
+    )
+    orchestrator.agents.append(orchestrator.candidates[1])
+
+    assert orchestrator._free_pool_agent_ids(messages=_figure_messages()) == set()
+
+
 def test_free_image_stream_fails_before_sse_when_only_text_free_agents_exist() -> None:
     """Image admission must fail before a streaming HTTP 200 is committed."""
     orchestrator = TaskOrchestrator(
@@ -318,20 +340,6 @@ def test_free_image_aliases_enter_image_pool_before_validation(part_type: str) -
     assert TaskOrchestrator([vision, text])._free_pool_agent_ids(messages=messages) == {
         "vision_free"
     }
-
-
-def test_free_image_pool_excludes_disabled_vision_agent() -> None:
-    """A disabled image agent must not make preflight appear serviceable."""
-    disabled = ModelAgent(
-        "disabled_vision",
-        "disabled-vision-model",
-        tags=_IMAGE_FREE_TAGS,
-        disabled=True,
-    )
-
-    assert TaskOrchestrator([disabled])._free_pool_agent_ids(
-        messages=_figure_messages()
-    ) == set()
 
 
 def test_free_image_pool_skips_single_tool_agent_for_multi_tool_request() -> None:

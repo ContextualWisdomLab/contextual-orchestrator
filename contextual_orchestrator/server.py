@@ -2460,20 +2460,19 @@ def _require_pool_model(
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
-            if messages is not None:
-                required_tags = orchestrator._image_input_required_tags(messages)
-                if orchestrator._free_pool_agent_ids(
-                    messages=messages,
-                    chat_body=chat_body,
-                ):
-                    return model_name
-                if required_tags:
-                    raise RequestError(
-                        400,
-                        "invalid_model",
-                        "no enabled zero-cost model satisfies required tags: "
-                        + ", ".join(required_tags),
-                    )
+            if messages is not None and orchestrator._free_pool_agent_ids(
+                messages=messages,
+                chat_body=chat_body,
+            ):
+                return model_name
+            if messages is not None and orchestrator._image_input_required_tags(
+                messages
+            ):
+                raise RequestError(
+                    400,
+                    "invalid_model",
+                    "no enabled zero-cost model supports required tags: input:image",
+                )
             if any(zdr_allowed(agent) and orchestrator._is_general_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
@@ -6800,7 +6799,9 @@ def build_server(
                         body.get("routing"), allow_endpoint=True
                     )
                     endpoint_messages = body.get("messages")
-                    if path == "/v1/responses":
+                    if path == "/v1/chat/completions":
+                        endpoint_messages = _validate_messages(endpoint_messages)
+                    else:
                         try:
                             endpoint_messages = _responses_to_chat_payload(body)[
                                 "messages"
@@ -7161,8 +7162,8 @@ def build_server(
                         orchestrator,
                         model_name,
                         messages=(
-                            body.get("messages")
-                            if isinstance(body.get("messages"), list)
+                            endpoint_messages
+                            if isinstance(endpoint_messages, list)
                             else None
                         ),
                         chat_body=body,
