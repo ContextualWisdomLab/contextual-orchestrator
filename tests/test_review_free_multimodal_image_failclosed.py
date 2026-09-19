@@ -553,6 +553,20 @@ def test_runtime_image_pool_requires_text_and_image_input() -> None:
     }
 
 
+def test_runtime_image_pool_preserves_legacy_vision_admission() -> None:
+    """Legacy vision evidence implies mixed text/image input when input tags are absent."""
+    legacy_vision = ModelAgent(
+        "legacy_vision",
+        "legacy-vision-model",
+        tags=("cost:free", "vision", "output:text"),
+    )
+    orchestrator = TaskOrchestrator([legacy_vision])
+
+    assert orchestrator._free_pool_agent_ids(messages=_figure_messages()) == {
+        "legacy_vision"
+    }
+
+
 if __name__ == "__main__":
     test_free_image_request_fails_closed_when_only_text_free_agents_exist()
     test_free_image_request_serves_image_capable_free_agent()

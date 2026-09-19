@@ -10283,11 +10283,15 @@ class TaskOrchestrator:
         requires parallel/multi tool calls, a ``tool_call:single`` image-capable
         free agent is excluded before provider I/O — the same composition
         :meth:`_is_general_free_agent` applies for blind text free traffic.
+        A legacy ``vision`` tag without ``input:*`` evidence remains eligible;
+        explicit ``input:image`` without ``input:text`` is image-only and is
+        rejected for the mixed text/image review envelope.
         """
+        input_tags = {tag for tag in agent.tags if tag.startswith("input:")}
         if not (
             self._is_free_agent(agent)
             and self._agent_supports_image_input(agent)
-            and "input:text" in agent.tags
+            and (not input_tags or "input:text" in input_tags)
         ):
             return False
         if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
