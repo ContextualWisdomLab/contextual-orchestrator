@@ -298,47 +298,37 @@ class ModelGroupRouter:
     def sampled_ranked_member_ids(
         self, member_ids: list[str] | tuple[str, ...]
     ) -> list[str]:
-        """Order member ids best-first by one live Thompson-sampled draw per member.
+        """Order member ids by one Thompson draw from every Beta posterior.
 
-        Same physical quantity as :meth:`ranked_member_ids` -- P(success | data)
-        divided by EWMA latency -- except a member with at least one real
-        observation (:meth:`member_observation_count` > 0) contributes one draw
-        from its own Beta(alpha, beta) posterior (Thompson, 1933) instead of the
-        posterior mean, so a group's traffic keeps probabilistically exploring
-        every credible member in proportion to genuine remaining uncertainty
-        rather than letting whichever member currently leads the point estimate
-        absorb all subsequent traffic -- the correct, intended behavior at the
-        thin per-member observation counts this free-tier gateway actually runs
-        at (Chapelle & Li, 2011; Agrawal & Goyal, 2012).
+        Every candidate, including a cold-start member still at its prior,
+        participates in posterior sampling. This is the Thompson (1933)
+        selection rule; caller order is not decision evidence. Invalid or
+        improper Beta shapes fail closed instead of falling back to a mean.
 
-        A member still at the shared prior (no real observation yet) keeps its
-        exact :data:`UNOBSERVED_MEMBER_SCORE`, unsampled -- the "no evidence ->
-        caller's static order survives untouched" contract holds identically to
-        :meth:`ranked_member_ids`.
-
-        Uses this router's own injected ``rng`` -- a plain, non-cryptographic
-        :class:`random.Random` (a routing weight, not a security boundary).
+        The sampled stability probability is divided by the same measured EWMA
+        latency term used by :meth:`ranked_member_ids`; members without a
+        latency observation retain the ledger's existing neutral reference
+        latency.
         """
         scored: dict[str, float] = {}
         with self._lock:
             for member_id in member_ids:
                 state = self._members.get(member_id)
-                if state is None or self._observation_count_locked(member_id) == 0:
-                    scored[member_id] = UNOBSERVED_MEMBER_SCORE
-                    continue
+                if state is None:
+                    state = self._blank_state(member_id)
                 alpha = float(state["alpha"])
                 beta = float(state["beta"])
-                stability_sample = (
-                    self._rng.betavariate(alpha, beta)
-                    if alpha > 0.0 and beta > 0.0
-                    # Degenerate Beta shape (an operator/prior_resolver
-                    # pseudo-count of exactly 0.0 -- update_prior already
-                    # permits this): the distribution collapses to a point
-                    # mass, so fall back to the same closed-form mean
-                    # _score_locked uses, instead of raising out of
-                    # betavariate() (`ValueError: alpha and beta must be > 0`).
-                    else alpha / (alpha + beta)
-                )
+                if (
+                    not math.isfinite(alpha)
+                    or not math.isfinite(beta)
+                    or alpha <= 0.0
+                    or beta <= 0.0
+                ):
+                    raise ValueError(
+                        "live Thompson sampling requires strictly positive Beta "
+                        f"shape parameters for {member_id!r}"
+                    )
+                stability_sample = self._rng.betavariate(alpha, beta)
                 ewma = state["ewma"]
                 latency = (
                     1.0 if ewma is None else max(float(ewma), self._min_latency_seconds)
