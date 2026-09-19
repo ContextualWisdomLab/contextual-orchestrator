@@ -1,5 +1,35 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-20 route evidence ownership repair (proposed)
+
+PR #1205 RED head `b5ebdb24cbacf6a859c397f60aceec43679e74cd`
+reproduces a worker failover receipt being erased when the realtime judge
+performs a nested `_invoke`: the returned route omitted
+`retryable_transport` and `served`. GREEN source
+`5c53ee5b3b502c105b82467ec0e859c931687ec4` snapshots and clears the
+worker-owned thread-local receipt immediately after worker invocation, before
+judge traffic can overwrite it. The exact focused regression passes; the
+four related route/API suites pass 94 tests. Local dependency installation did
+not include the repository's locked pytest-asyncio plugin and the predecessor
+API-contract file still imports deprecated `jsonschema.RefResolver`, so those
+three warnings are recorded rather than presented as warning-clean evidence.
+Fresh hosted exact-head Checks and independent review remain required; no
+immutable release or downstream consumer pin is claimed.
+
+The next exact-head review exposed three additional loss boundaries. RED head
+`bdcb80ff12d5fb2b5298df7e705ff79bffcc7c5c` proves that malformed-response
+exhaustion was reclassified as `ProviderUpstreamError`, all-413 exhaustion
+discarded its typed attempts, and a successful retry after a 429/503 storm
+discarded the entire first round. GREEN source
+`1432bb6d31364ce48e467d57ab9fc086de9035d3` attaches evidence to the existing
+exception objects, accumulates recovery rounds through the shared wrapper, and
+copies the final route receipt into the persisted workflow/API record. The API
+contract and rate-limit suites pass 35 tests; the two terminal taxonomy
+regressions also pass in focused execution. A broader local sweep reached 193
+passes but remains non-authoritative because the ad-hoc environment lacks the
+locked OpenAI SDK and retains pre-existing allowlist/selection-design failures.
+Hosted exact-head security, package, and model-behavior gates remain required.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`

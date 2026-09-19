@@ -569,8 +569,13 @@ def test_route_advances_on_413_and_preserves_exhausted_size_error() -> None:
         raise ProviderRequestTooLargeError("provider request body is too large")
 
     client.chat = all_too_large  # type: ignore[method-assign]
-    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider") as caught:
         orchestrator.route_once([{"role": "user", "content": "large request"}])
+    assert caught.value.detail["route"]["terminal_reason"] == "request_too_large_exhausted"
+    assert [attempt["outcome"] for attempt in caught.value.detail["route"]["attempted"]] == [
+        "request_too_large",
+        "request_too_large",
+    ]
 
 
 def test_structural_provider_response_stops_before_tool_failover() -> None:
@@ -650,7 +655,7 @@ def test_all_structurally_invalid_bounded_members_preserve_provider_error() -> N
 
     orchestrator = TaskOrchestrator(agents, client=MalformedPoolClient())
 
-    with pytest.raises(ProviderResponseError, match="backup_worker"):
+    with pytest.raises(ProviderResponseError, match="backup_worker") as caught:
         orchestrator._invoke(
             agents[0],
             [{"role": "user", "content": "route this"}],
@@ -658,6 +663,8 @@ def test_all_structurally_invalid_bounded_members_preserve_provider_error() -> N
             role="worker",
             allowed_agent_ids={agent.id for agent in agents},
         )
+    assert caught.value.detail["route"]["terminal_reason"] == "eligible_set_exhausted"
+    assert len(caught.value.detail["route"]["attempted"]) == 2
 
 
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
