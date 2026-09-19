@@ -83,7 +83,7 @@ def test_commercial_gap_register_report_classifies_external_gaps_and_release_aut
     assert report["gap_summary"]["total_gap_count"] == 2
     assert report["gap_summary"]["production_gap_count"] == 1
     assert report["gap_summary"]["buyer_specific_gap_count"] == 1
-    assert report["gap_summary"]["blocked_count"] == 3
+    assert report["gap_summary"]["blocked_count"] == 1
     assert report["gap_summary"]["release_authority_blocker_count"] == 1
     assert report["concrete_blockers"] == []
     assert [item["gap_status"] for item in report["gap_items"]] == [

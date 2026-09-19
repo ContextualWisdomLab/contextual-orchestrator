@@ -84,12 +84,12 @@ def test_commercial_acceptance_check_report_classifies_external_gaps_as_warnings
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_acceptance_check"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["acceptance_summary"]["blocked_count"] == 1
+    assert report["acceptance_summary"]["blocked_count"] == 0
     assert report["acceptance_summary"]["warning_count"] == 3
     assert report["concrete_blockers"] == []
     assert report["follow_up_items"][0]["evidence_type"] == "proposed_until_production"
     assert report["follow_up_items"][1]["evidence_type"] == "proposed_until_buyer_specific"
-    assert items["runtime_endpoint_chain"]["completion_state"] == "blocked"
+    assert items["runtime_endpoint_chain"]["completion_state"] == "ready"
     assert items["buyer_packet_documents"]["evidence_type"] == "repository_artifact"
     assert items["admin_operator_surface"]["sources"] == [
         "/admin",

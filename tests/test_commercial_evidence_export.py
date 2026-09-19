@@ -84,7 +84,8 @@ def test_commercial_evidence_export_report_packages_buyer_diligence_index() -> N
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_evidence_export"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["export_summary"]["blocked_count"] == 1
+    assert report["export_summary"]["blocked_count"] == 0
+    assert sections["saleability_decision"]["completion_state"] == "ready"
     assert report["export_summary"]["warning_count"] == 2
     assert report["concrete_blockers"] == []
     assert report["required_external_evidence"][0]["evidence_type"] == "proposed_until_production"

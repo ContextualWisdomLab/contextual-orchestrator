@@ -135,16 +135,18 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
     artifacts = artifact_by_name(report)
 
     assert report["release_status"] == "commercial_release_blocked"
-    assert report["product_evidence_status"] == "commercial_release_blocked"
+    assert report["product_evidence_status"] == "commercial_release_ready_with_warnings"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_release_candidate"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["release_summary"]["blocked_count"] == 3
-    assert report["release_summary"]["product_blocked_count"] == 2
+    assert report["release_summary"]["blocked_count"] == 1
+    assert report["release_summary"]["product_blocked_count"] == 0
     assert report["release_summary"]["warning_count"] == 2
     assert report["release_summary"]["release_authority_blocker_count"] == 1
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert report["concrete_blockers"] == []
+    assert artifacts["commercial_acceptance_check"]["completion_state"] == "ready"
+    assert artifacts["runtime_endpoint_chain"]["completion_state"] == "ready"
     assert report["external_release_gaps"][0]["evidence_type"] == "proposed_until_production"
     assert report["external_release_gaps"][1]["evidence_type"] == "proposed_until_buyer_specific"
     assert artifacts["commercial_acceptance_check"]["sources"] == [
@@ -205,7 +207,7 @@ def test_product_evidence_status_blocks_when_release_artifact_is_missing(monkeyp
     )
 
     assert report["product_evidence_status"] == "commercial_release_blocked"
-    assert report["release_summary"]["product_blocked_count"] == 3
+    assert report["release_summary"]["product_blocked_count"] == 1
     assert report["release_status"] == "commercial_release_blocked"
 
 

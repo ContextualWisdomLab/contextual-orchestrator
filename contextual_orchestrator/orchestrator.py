@@ -13708,7 +13708,9 @@ class TaskOrchestrator:
             }
             for item in saleability["warning_conditions"]
         ]
-        saleability_state = "blocked" if saleability["saleability_status"] == "saleability_blocked" else "ready"
+        # Saleability status also blocks when the authority snapshot is missing.
+        # That gate stays on export_status and must not mark this product section blocked.
+        saleability_state = "blocked" if concrete_blockers else "ready"
         export_sections = [
             self._buyer_evidence_item(
                 "saleability_decision",
@@ -13891,8 +13893,10 @@ class TaskOrchestrator:
             return (root / path).is_file()
 
         concrete_blockers = evidence_export["concrete_blockers"]
-        export_blocked = evidence_export["export_status"] == "commercial_export_blocked"
-        runtime_state = "blocked" if export_blocked or concrete_blockers else "ready"
+        # Export status also blocks when the authority snapshot is missing.
+        # That gate must not mark the product runtime chain blocked.
+        export_product_blocked = evidence_export["export_summary"]["blocked_count"] > 0
+        runtime_state = "blocked" if export_product_blocked or concrete_blockers else "ready"
         acceptance_items = [
             self._buyer_evidence_item(
                 "runtime_endpoint_chain",
@@ -14114,8 +14118,11 @@ class TaskOrchestrator:
             return (root / path).is_file()
 
         concrete_blockers = acceptance["concrete_blockers"]
-        acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
-        runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
+        # Authorization is its own gate. An acceptance block that exists only
+        # because the snapshot is missing must not mark product artifacts
+        # blocked or change product_evidence_status.
+        product_acceptance_blocked = acceptance["acceptance_summary"]["blocked_count"] > 0
+        runtime_state = "blocked" if product_acceptance_blocked else "ready"
         release_authorization = evaluate_release_authorization(release_authority)
         release_artifacts = [
             self._buyer_evidence_item(
