@@ -700,6 +700,25 @@ def test_runtime_image_pool_rejects_legacy_vision_when_explicit_input_is_text_on
     assert orchestrator._free_pool_agent_ids(messages=_figure_messages()) == set()
 
 
+def test_runtime_image_pool_normalizes_persisted_modality_tags(tmp_path) -> None:
+    """Durable pre-normalization modality tags remain eligible after restart."""
+    database_path = str(tmp_path / "agent-pool.db")
+    persisted = ModelAgent(
+        "persisted_vision",
+        "persisted-vision-model",
+        tags=("cost:free", "input:Text", "input:Image", "output:text"),
+    )
+    writer = TaskOrchestrator([persisted], agents_db=database_path)
+    assert writer._pool_store is not None
+    writer._pool_store.save(persisted)
+
+    restored = TaskOrchestrator([], agents_db=database_path)
+
+    assert restored._free_pool_agent_ids(messages=_figure_messages()) == {
+        "persisted_vision"
+    }
+
+
 if __name__ == "__main__":
     test_free_image_request_fails_closed_when_only_text_free_agents_exist()
     test_free_image_request_serves_image_capable_free_agent()
