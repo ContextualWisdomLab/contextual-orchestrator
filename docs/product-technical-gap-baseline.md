@@ -55,6 +55,19 @@ forms still fail closed. The focused endpoint plus multimodal suites completed
 46 tests with warnings treated as errors. This is local source evidence, not
 hosted or release evidence.
 
+Current-head P1 RED `2b5c290ca56526c26f390949aecd87d85c2462b6`
+proved that a free image candidate excluded from the `worker` role could still
+satisfy HTTP preflight and commit HTTP 200/SSE before routing rejected it. The
+same generation corrected two stale fixtures: the judge now represents an
+admitted text+image chat candidate with a valid two-criterion IRT result, and
+the Responses endpoint fake owns `proxy_send_once` instead of reaching a real
+transport. GREEN `1b31f8cd6a73cf98ac873e7f569caeddcd234257`
+(tree `5d45fc5395e4b5ccfa2e7f47ea30f74a13e75418`) makes request-aware
+free-pool preflight role-aware without changing ordinary internal pool
+selection. The three affected suites complete **91 tests** with warnings as
+errors; compileall and diff checks pass. Hosted exact-head protection remains
+required.
+
 A preservation regression at ordinary-forward RED `33e3998ac9f6b1373cdfda83a760f19214f2237c`
 proved that the branch snapshot had dropped 87 of 148 protected level-two
 sections, including PRD, TRD, Context Map, roadmap, delivery-gate, and incident
@@ -64,9 +77,10 @@ Accepted or claim hosted acceptance.
 
 Status remains **Proposed**. Protected exact-head Checks, independent review,
 ordinary merge, immutable owner release, and consumer pin are still required.
-Leaf #2281 has repaired DOCX relationship order but still needs HWPX
-relationship-order and source-position provenance; the owner fix does not
-complete or bypass that leaf work.
+Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,
+but remains Draft/Proposed until exact-head hosted protection, independent
+review, this owner's ordinary merge and immutable release, and a consumer pin
+all complete. The owner fix does not bypass those gates.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
