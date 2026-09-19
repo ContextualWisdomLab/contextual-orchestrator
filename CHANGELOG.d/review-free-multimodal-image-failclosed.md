@@ -38,3 +38,9 @@ instead of deprecated `jsonschema.RefResolver`, follows the renamed provider
 embedding claim-lease constant, treats a null batch wait timeout as unbounded,
 and closes every touched loopback listener after shutdown. Multimodal HTTP
 fixtures declare image input explicitly instead of relying on a text-only mock.
+
+Endpoint preflight now normalizes accepted false forms of
+`parallel_tool_calls` before request-shaped pool admission. A
+`tool_call:single` vision endpoint therefore remains eligible for
+`"false"` and `0` requests, while invalid forms still fail closed before
+provider I/O.
