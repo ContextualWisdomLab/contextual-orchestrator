@@ -12091,11 +12091,11 @@ class TaskOrchestrator:
 
     @staticmethod
     def _agent_supports_image_input(agent: ModelAgent) -> bool:
-        """True when an agent carries discovery or legacy image-input evidence."""
-        return (
-            IMAGE_INPUT_EVIDENCE_TAG in agent.tags
-            or LEGACY_VISION_CAPABILITY_TAG in agent.tags
-        )
+        """True when explicit input evidence or an unqualified legacy tag admits images."""
+        input_tags = {tag for tag in agent.tags if tag.startswith("input:")}
+        if input_tags:
+            return IMAGE_INPUT_EVIDENCE_TAG in input_tags
+        return LEGACY_VISION_CAPABILITY_TAG in agent.tags
 
     @staticmethod
     def _agent_matches_required_tags(
