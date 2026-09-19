@@ -79,6 +79,17 @@ authority. The repair restores the complete protected `main` baseline and
 keeps this Proposed owner section additive; it does not promote the lane to
 Accepted or claim hosted acceptance.
 
+Capability-precedence RED `8f8755dc2f43d6ae154f9528af9e244508084a31`
+proved that a legacy `vision` tag could still admit a row whose explicit
+`input:text` evidence denied image input. GREEN
+`efedb3f5ceecb28183ca2263eba47b1c182112e9` makes explicit `input:*`
+evidence authoritative and consults legacy `vision` only when no explicit
+input evidence exists. Exact remote behavior verification covers four
+boundaries: `vision` plus `input:text` rejects, explicit `input:image`
+admits, unqualified legacy `vision` admits, and text-only explicit evidence
+rejects. The extracted exact production method and RED contract compile;
+hosted exact-head acceptance remains pending.
+
 Status remains **Proposed**. Protected exact-head Checks, independent review,
 ordinary merge, immutable owner release, and consumer pin are still required.
 Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,
