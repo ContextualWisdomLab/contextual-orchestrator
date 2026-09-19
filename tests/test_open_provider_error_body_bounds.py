@@ -64,7 +64,11 @@ class _FakeConnection:
     def __init__(self, response: _RecordingErrorResponse) -> None:
         self._response = response
         self.closed = False
+        self.sock = None
         _FakeConnection.last = self
+
+    def connect(self, *args: object, **kwargs: object) -> None:
+        """Match ``HTTPConnection.connect``; the fake never opens a socket."""
 
     def request(self, *args: object, **kwargs: object) -> None:
         pass

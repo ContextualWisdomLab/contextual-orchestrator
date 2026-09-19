@@ -42,6 +42,7 @@ def _collectors(uptime: float | None):
     collector = OpenRouterUptimeCollector(
         _agents(),
         group_router,
+        quality_router,
         interval_seconds=0.05,
         startup_delay_seconds=0.05,
     )
@@ -52,8 +53,9 @@ def _collectors(uptime: float | None):
 def test_start_without_openrouter_agents_is_inert() -> None:
     """No openrouter members means no thread and no evidence writes."""
     group_router = ModelGroupRouter()
+    quality_router = ModelGroupRouter()
     plain = [ModelAgent("general_agent", "mock-planner", tags=("reasoning",))]
-    collector = OpenRouterUptimeCollector(plain, group_router)
+    collector = OpenRouterUptimeCollector(plain, group_router, quality_router)
     collector.start()
     assert collector.window_evidence("general_agent") == (0.0, 0.0)
     collector.stop()
@@ -282,7 +284,8 @@ def test_transport_refresh_does_not_import_answer_benchmark_prior(monkeypatch):
     for router in (group_router, reference):
         router.observe_success(agent.id, 1.0)
         router.observe_failure(agent.id)
-    collector = OpenRouterUptimeCollector([agent], group_router)
+    quality_router = ModelGroupRouter()
+    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
     collector._fetch_uptime = lambda _model: 100.0
     collector._poll_agent(agent)
     reference.update_prior(agent.id, 2.0, 1.0)
@@ -305,11 +308,12 @@ def test_invalid_endpoint_percentage_cannot_update_evidence(monkeypatch, raw_val
     http_response = BytesIO(response_body)
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
     group_router = ModelGroupRouter()
+    quality_router = ModelGroupRouter()
     agent = _agents()[0]
     group_router.observe_success(agent.id, 0.2)
     group_router.observe_failure(agent.id)
     report_before = group_router.snapshot()
-    collector = OpenRouterUptimeCollector([agent], group_router)
+    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
 
     collector._poll_agent(agent)
 
@@ -332,8 +336,9 @@ def test_endpoint_percentage_parsing_preserves_valid_and_absent_values(monkeypat
     http_response = BytesIO(('{"data":{"endpoints":' + raw_endpoints + '}}').encode())
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
     group_router = ModelGroupRouter()
+    quality_router = ModelGroupRouter()
     agent = _agents()[0]
-    collector = OpenRouterUptimeCollector([agent], group_router)
+    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
 
     collector._poll_agent(agent)
 
@@ -362,7 +367,7 @@ def test_endpoint_request_preserves_author_slug_boundary(monkeypatch, model_id, 
         return http_response
 
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", checked_open)
-    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
+    collector = OpenRouterUptimeCollector([], ModelGroupRouter(), ModelGroupRouter())
 
     assert collector._fetch_uptime(model_id) == 99.5
     assert http_response.closed
@@ -379,7 +384,7 @@ def test_malformed_model_path_never_reaches_transport(monkeypatch, model_id):
         pytest.fail("malformed model ID reached transport")
 
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", reject_open)
-    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
+    collector = OpenRouterUptimeCollector([], ModelGroupRouter(), ModelGroupRouter())
 
     assert collector._fetch_uptime(model_id) is None
 
