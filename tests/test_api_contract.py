@@ -482,6 +482,10 @@ def test_route_once_preserves_worker_failover_evidence_across_realtime_judge() -
         "primary_worker", "primary_worker", "fallback_worker", "primary_worker"
     ]
     assert [attempt["agent_id"] for attempt in result["route"]["attempted"]] == client.calls[:3]
+    assert [
+        value.split(":", 1)[0]
+        for value in result["trace"][0]["selection_design"]["attempted_deployment_ids"]
+    ] == client.calls[:3]
     assert [attempt["outcome"] for attempt in result["route"]["attempted"]] == [
         "retryable_transport",
         "retryable_transport",

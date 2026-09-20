@@ -48,6 +48,41 @@ removed because concrete Responses streaming is rejected as invalid_stream and
 Chat streaming uses SSE rather than the assumed non-streaming JSON contract;
 no streaming fix or acceptance is claimed.
 
+## Request receipt and virtual-response follow-up, 2026-09-20
+
+At #1212 `898a7cb97fac7b10d35e7ca6e5e0d2484d3a29cf`, the remaining
+selection_design KeyError comes from dropped implementation: the tests remain,
+but request snapshot scoping, selection attempt collection, and receipt
+construction are absent. Reuse the request/receipt hunks of existing #1088
+commit `e569cefa70079a64734ac0f5e47965f9efec3f3d` and its deployment-hash
+fixture update. Do not copy its dependency, ranking/prior, or persistence changes.
+Worker receipts capture attempts before the nested judge and exclude earlier
+worker rounds. A strengthened API regression checks that the judge is absent.
+
+An expanded strict run passed 175 test bodies but exited 1 during final cleanup:
+five raw 429 responses leaked from the virtual proxy caller of proxy_send_once.
+This is production ownership, distinct from #1211's test-owned classifiers.
+The virtual loop converts those raw responses to typed errors; it now closes
+in finally after classification/cooldown diagnostics, before failover or return.
+Cleanup Exception does not replace the original outcome; BaseException remains
+unmasked. Two direct closure assertions fail on the unchanged #1212 source and
+pass after repair, including an injected cleanup OSError. Together with the
+original KeyError, this bounded RED is 3 failed, exit 1.
+
+A wait-round test used a 10ms real cooldown with a fake sleep. Under host pressure
+the cooldown expired during execution and the test missed its intended branch.
+It now advances a controlled monotonic clock with its sleep hook; production
+cooldown policy is unchanged.
+
+Final source validation: 179 passed, 21.91s, process exit 0, under -W error across
+rate-limit admission, provider reliability, HTTP resource lifecycle, API contract,
+request policy/effort snapshots, and the existing stream receipt and race-failover
+receipt cases. Four selection-receipt identity tests separately pass, exit 0.
+The isolated environment needed binary-only numpy 2.5.3 and fast-mlsirm 0.11.3
+wheels to collect the latter module; no native build or numerical experiment ran.
+These dependency versions do not establish locked-install, complete-suite,
+hosted-gate, independent-review or protected-merge acceptance.
+
 ## Trace HTTP fixture successor, 2026-09-13
 
 Base: #1140 at `38c0603af2fd8fcb204f65be47081ada9d6bd35c`.

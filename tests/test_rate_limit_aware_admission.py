@@ -699,13 +699,20 @@ def test_http_fail_closed_after_503_keeps_route_and_stops() -> None:
     assert "must-not-leak" not in json.dumps(body)
 
 
-def test_route_once_fail_closed_keeps_attempts_from_the_wait_round() -> None:
+def test_route_once_fail_closed_keeps_attempts_from_the_wait_round(monkeypatch) -> None:
     """A tool stop after a 503 storm still carries the waited round's attempts."""
     orchestrator = TaskOrchestrator(
         _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
     )
     slept: list[float] = []
-    orchestrator._rate_limit_sleep = slept.append
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    def advance_clock(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    orchestrator._rate_limit_sleep = advance_clock
     chat_outcomes = QueuedChatOutcomes(
         {
             "primary_free_agent": [

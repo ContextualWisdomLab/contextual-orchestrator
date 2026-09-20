@@ -1301,7 +1301,7 @@ def test_selection_receipt_does_not_mix_catalog_revisions() -> None:
         selected_id = receipt["selected_deployment_id"]
         assert selected_id == (
             "audit_candidate:"
-            "f30639fe9ae8729e57eb659445325038a92c6c6e8d6810b8f84b36f3bce46bb9"
+            "91dad5c97d95337b359e020fd9d2636cfaeebb0257622cc5490620ed7cf5b13e"
         )
         assert receipt["candidate_deployment_ids"] == [selected_id]
         assert receipt["attempted_deployment_ids"] == [selected_id]
