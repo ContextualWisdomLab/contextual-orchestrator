@@ -116,6 +116,17 @@ fails closed as typed HTTP 400 before provider I/O; route mode retains its
 worker-only admission. This is Proposed exact-source evidence, not hosted
 acceptance, release, or consumer completion.
 
+Responses-conduct RED `45323e12401590e17773718be53d133ea37f34c6`
+proves that non-stream image-bearing `orchestrator/free` Responses with a
+structured output contract were preflighted as worker-only route traffic, then
+entered the four-role conduct plan and surfaced a missing `thinker` as HTTP 500.
+GREEN `3a76ce9e35c66d92828608c92d1c1ab0ab694c57` derives the preflight mode
+from the same tools, response-format, and provider-path facts that select
+conduct execution. Missing conduct capacity now fails closed as typed HTTP 400;
+streamed route requests retain worker-only admission and their existing typed
+stream restrictions. This remains Proposed exact-source evidence pending hosted
+Checks, independent review, ordinary merge, immutable release, and consumer pin.
+
 Mode-alias RED `10f96453a6050ab47575e4975aa068cb4f899e23` proved that
 Chat Completions selected `orchestration`, `orchestration_mode`, and `mode`
 with truthiness chaining. Explicit `null`, blank strings, `false`, and `0`
