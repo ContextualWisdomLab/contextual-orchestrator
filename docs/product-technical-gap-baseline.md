@@ -116,6 +116,16 @@ fails closed as typed HTTP 400 before provider I/O; route mode retains its
 worker-only admission. This is Proposed exact-source evidence, not hosted
 acceptance, release, or consumer completion.
 
+Mode-alias RED `10f96453a6050ab47575e4975aa068cb4f899e23` proved that
+Chat Completions selected `orchestration`, `orchestration_mode`, and `mode`
+with truthiness chaining. Explicit `null`, blank strings, `false`, and `0`
+therefore collapsed into omitted-mode `auto` instead of reaching the typed
+`invalid_mode` boundary. GREEN
+`c3e4e94cf6566f6a0187c502d279dccc6989d4a1` selects the first present alias
+rather than the first truthy value. The exact extracted selection/validation
+probe covers 15 hostile alias/value pairs plus omitted-auto and normalized
+conduct (18 assertions total); full hosted acceptance remains pending.
+
 Status remains **Proposed**. Protected exact-head Checks, independent review,
 ordinary merge, immutable owner release, and consumer pin are still required.
 Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,
