@@ -83,6 +83,44 @@ wheels to collect the latter module; no native build or numerical experiment ran
 These dependency versions do not establish locked-install, complete-suite,
 hosted-gate, independent-review or protected-merge acceptance.
 
+## Lint and hash-locked install follow-up, 2026-09-20
+
+Independent source review runs on MacBookAir as Orca task task_2228be0c8458,
+dispatch ctx_35aa434c1886, against unchanged PR1210-1213 heads. It is an
+independent agent review, not a substitute for non-author GitHub approval.
+
+At #1213 fea207fc, Ruff reports two F821 errors where a nested recovery helper
+captures the exception-target name. Bind the original ProviderUpstreamError as
+a default argument to preserve the exact exception without a free exception-cell
+reference. The bounded changed-file Ruff check and security.yml actionlint pass.
+
+The actual require-hashes installer rejects the VCS fast-mlsirm requirement
+before installing. Reuse #1088's fast-mlsirm0.11.3 and anyio4.14.2 declarations
+and runtime-contract fixture; regenerate requirements.lock with uv pip compile
+and uv.lock with uv lock, never hand-edit hashes. A binary-only dry-run targeting
+Python3.12/Linux x86_64 verifies the46-package installation plan, exit0. The
+macOS3.14 attempt instead fails a NumPy2.5.2 artifact hash mismatch; refreshing
+NumPy index metadata reproduces the same lock entries. No hash bypass or
+macOS locked-install acceptance is claimed. Pinned-metadata pip-audit using
+--no-deps --disable-pip reports46 dependencies and zero known vulnerabilities;
+this does not validate downloaded artifacts or replace the hosted audit/SBOM gate.
+
+Rate-limit admission, released-runtime contract and repository security metadata
+regressions:49 passed in13.66s, strict warnings, exit0. No native build ran.
+
+## Independent conduct-receipt correction
+
+Review https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1213#pullrequestreview-5259873532
+reproduced request-wide attempt accumulation across conduct roles and incorrect
+selected deployment after failover. The same issue also appeared in the separate
+exact-head acceptance comment. Capture the attempt offset at each step and resolve
+the returned served_id through the configured agent lookup before constructing
+the receipt. Unknown served identity raises instead of fabricating provenance.
+Three regressions (ordinary conduct, fail-first worker, unknown identity) fail
+on the original implementation. Existing candidate selection, denial and retry
+policies are unchanged. Original PR heads remain immutable; this successor
+requires its own exact-head review and hosted checks.
+
 ## Trace HTTP fixture successor, 2026-09-13
 
 Base: #1140 at `38c0603af2fd8fcb204f65be47081ada9d6bd35c`.

@@ -328,6 +328,7 @@ dependencies = [
 
 [package.optional-dependencies]
 api = [
+    { name = "anyio" },
     { name = "fastapi" },
     { name = "uvicorn" },
 ]
@@ -360,10 +361,11 @@ native-build = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", marker = "extra == 'db'", specifier = ">=1.17" },
+    { name = "anyio", marker = "extra == 'api'", specifier = "==4.14.2" },
     { name = "atheris", marker = "python_full_version >= '3.12' and extra == 'fuzz'", specifier = "==3.1.0" },
     { name = "cryptography", specifier = ">=43.0" },
     { name = "egressweave", specifier = ">=0.1.0,<0.2.0" },
-    { name = "fast-mlsirm", marker = "python_full_version >= '3.12'", git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git?rev=09f762ded35786dd1078222a4577ff09d649816f" },
+    { name = "fast-mlsirm", specifier = "==0.11.3" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.128.0" },
     { name = "greenlet", marker = "extra == 'db'", specifier = ">=3.2" },
     { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.100" },
@@ -460,10 +462,26 @@ wheels = [
 
 [[package]]
 name = "fast-mlsirm"
-version = "0.9.1"
-source = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git?rev=09f762ded35786dd1078222a4577ff09d649816f#09f762ded35786dd1078222a4577ff09d649816f" }
+version = "0.11.3"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2b/89/04d9c55e5854afde1a20b2e3f907a3da4c50716255bc5e65118767fdd9be/fast_mlsirm-0.11.3.tar.gz", hash = "sha256:1fbc5483b44c5dc39b057f5a8db246eae1394dbebdc6b93eca8ca2f49a9b9ff8", size = 1538857, upload-time = "2026-09-17T22:20:11.395Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/ad/76451e1a629427d2a0d0451f08aedccd72ac4c451430d6372bcba788a73e/fast_mlsirm-0.11.3-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:1913579af80be7e6be735820bcde41c426e88e7769892e845e1e1584e60d957e", size = 9312053, upload-time = "2026-09-18T09:46:08.824Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/8e/28d6fab4ca719049b8e00a892c3ab6d05b335c60e54c9ab17e70aaa55d4e/fast_mlsirm-0.11.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:dcc15298f404cfead24a3a6b1dd55ca4715fbd5594279566a1834a752322bf2e", size = 4962980, upload-time = "2026-09-17T22:57:27.17Z" },
+    { url = "https://files.pythonhosted.org/packages/42/d3/080417903271cce8237b8cebcd1e79247782d60be6a8c74b4714cab4fe07/fast_mlsirm-0.11.3-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7017d98c6ee74a6b811e0fd00ef9e0b20faa39a1909ecf130ebec3fe7310501f", size = 5726313, upload-time = "2026-09-18T09:46:10.535Z" },
+    { url = "https://files.pythonhosted.org/packages/be/f5/e80f8cdd0f74abd2a86aaa8968914f4b4df72ddc4c030a9f0171bac873ba/fast_mlsirm-0.11.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:980e1eb98edef0f0b33c2fbc631005c05fff0aa2892061506428c6abc0310e7e", size = 5834699, upload-time = "2026-09-18T09:46:11.821Z" },
+    { url = "https://files.pythonhosted.org/packages/64/97/3c5f21dc58ad260d63b92036c064ecd21d26d469c1123940daaaabdda027/fast_mlsirm-0.11.3-cp312-cp312-win_amd64.whl", hash = "sha256:9bbb9061aa08711a78898415617967052be041b08968ace6191322dc7fcfcf4f", size = 5858112, upload-time = "2026-09-18T09:46:14.148Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/20/103ba525d4eb10fb6c5082174213221cb73292bd1f28bd20b3f3e57a00de/fast_mlsirm-0.11.3-cp313-cp313-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:353990c25673ff9f62e49ce03e1c16045c69ffbc06c27c4bd4c2c2a5f7ae344f", size = 9311763, upload-time = "2026-09-18T09:46:15.45Z" },
+    { url = "https://files.pythonhosted.org/packages/83/08/6df915571cefeea908d7950b07a97bf3fb583de2207f9f9ae36e9d198cca/fast_mlsirm-0.11.3-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2cc2cc3508eef006d67d93e887183e91ec756e26fcf6b72c9c5a6247ba62e90a", size = 5727481, upload-time = "2026-09-18T09:46:17.067Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/8f/5e175681f8d230485d83470143eb486fd885c84f76faf3302de772accaba/fast_mlsirm-0.11.3-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:eeb14887a4f20643ea0bf339a06df9ef8eefdbb88f9afdcd49a0792f531f6faa", size = 5835009, upload-time = "2026-09-18T09:46:18.945Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/95/c53af89e3d07cb0418983e9347532fc360c5f1295f9e08ab18f01fc7a201/fast_mlsirm-0.11.3-cp313-cp313-win_amd64.whl", hash = "sha256:8c6bd1a229b5d06c05cc7ecf6689b255e6c1a9ae135ce38dc266d1a223b16912", size = 5857788, upload-time = "2026-09-18T09:46:20.143Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/c4/8f1c7d030958db340709b7010891323df646c8b4bda553ae043197423b00/fast_mlsirm-0.11.3-cp314-cp314-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:4a6e3aea03cfc93fb450869c8c156987cf6107ba68a72190ae6867aa46dfd8e0", size = 9315138, upload-time = "2026-09-18T09:46:22.032Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/e0/c32b713c061a277f65dd70c1ef087ab33c38d7944a878be6ca1e8b22d94a/fast_mlsirm-0.11.3-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9470dd55acdca32d95113bdbfe322ac84b554176bd125bfb902c3960e88fd371", size = 5732090, upload-time = "2026-09-18T09:46:23.741Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/a4/ec1efdbf98e1333cc2d376060ce0415309a1530b0ce995295ba59f76aeef/fast_mlsirm-0.11.3-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4dd7382d5f889c59451a5c12b39c7b8aebb87c91ef696f6cb2b050eb3753d867", size = 5836653, upload-time = "2026-09-18T09:46:25.005Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/fe/c6f14fc5da70070d25350fbcbc9a3c011e5b8e8a2c5a0bf88e46cc14dd5e/fast_mlsirm-0.11.3-cp314-cp314-win_amd64.whl", hash = "sha256:910ed13b562f81d5905081095be7faa5395ea9c033f988cfd170074a27dba738", size = 5859716, upload-time = "2026-09-18T09:46:26.246Z" },
 ]
 
 [[package]]
