@@ -96,6 +96,63 @@ def test_http_chat_still_rejects_mode_cascade() -> None:
         server.server_close()
 
 
+def test_http_free_image_conduct_preflights_every_workflow_role() -> None:
+    """Explicit conduct must reject a free pool that only admits its worker."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only_free_image",
+                "mock-vision-free",
+                tags=(
+                    "cost:free",
+                    "reasoning",
+                    "writing",
+                    "input:text",
+                    "input:image",
+                    "output:text",
+                ),
+                provider_exclusions=("thinker", "verifier", "synthesizer"),
+            )
+        ]
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "mode": "conduct",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "inspect"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "data:image/png;base64,iVBORw0KGgo="
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+        assert status == 400, body
+        assert "invalid_model" in json.dumps(body)
+        assert "thinker" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_http_embeddings_dimensions_digit_string_still_named_reject() -> None:
     """Digit-string dimensions coerce then fail closed (not applied)."""
     server, thread, port = _server()
@@ -165,5 +222,6 @@ def test_http_embeddings_dimensions_digit_string_still_named_reject() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_mode_casefold_route_conduct_auto()
     test_http_chat_still_rejects_mode_cascade()
+    test_http_free_image_conduct_preflights_every_workflow_role()
     test_http_embeddings_dimensions_digit_string_still_named_reject()
     print("ok")
