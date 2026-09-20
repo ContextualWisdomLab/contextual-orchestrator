@@ -67,3 +67,9 @@ Runtime admission now case-normalizes persisted `input:*` tags. Durable rows
 written before constructor normalization therefore keep their text+image
 eligibility after restart, while explicit text-only evidence still overrides
 the legacy `vision` fallback.
+
+Explicit `conduct` admission now preflights all four required workflow roles
+for `orchestrator/free`, including image-bearing and structured-response
+requests. A worker-only pool therefore returns typed HTTP 400 before provider
+I/O instead of entering the template plan and surfacing a missing-role 500;
+ordinary route admission remains worker-scoped.

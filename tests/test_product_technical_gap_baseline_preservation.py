@@ -40,7 +40,8 @@ def test_multimodal_owner_evidence_preserves_verified_repair_lineage() -> None:
         "37435b5e82e9fe53abc67b032c67df83425c0250",
         "2b5c290ca56526c26f390949aecd87d85c2462b6",
         "b7440092d1cda47008271ed658fe372f536dd58f",
+        "cf78470d892eb52e4e860cc30c67282fffc835eb",
+        "5ebab72d952dcd50b30c065247edfd88d669f38a",
     )
 
     assert all(revision in baseline for revision in required_revisions)
-
