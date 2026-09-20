@@ -12,6 +12,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Structured non-stream `/v1/responses` requests now preflight every required
+  conduct role for `orchestrator/free`. Image-capable worker-only pools fail
+  closed with typed HTTP 400 before template planning instead of surfacing a
+  missing-role HTTP 500; ordinary and streamed route admission remains
+  worker-scoped.
 - Held-out judge-effect evidence now requires a declared sample size. The
   hidden 1,000-row default is removed. The harness run still writes 1,000 as
   this run's choice.
