@@ -62,6 +62,26 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def _post_responses(port: int, payload: dict) -> tuple[int, dict]:
+    """POST one JSON request to the Responses endpoint."""
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/responses",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
 def _post_raw(port: int, payload: dict) -> tuple[int, str, bytes]:
     """Return the HTTP status and media type without assuming JSON."""
     request = urllib.request.Request(
@@ -282,6 +302,50 @@ def test_free_image_stream_fails_before_sse_when_vision_agent_excludes_worker() 
         status, media_type, body = _post_raw(port, payload)
         assert status == 400, body
         assert media_type != "text/event-stream"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_free_image_structured_responses_preflight_all_conduct_roles() -> None:
+    """Structured image Responses must reject a missing conduct role with HTTP 400."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "thinker_excluded_vision",
+                "thinker-excluded-vision-model",
+                tags=_IMAGE_FREE_TAGS,
+                provider_exclusions=("thinker",),
+                base_url="mock://vision",
+            )
+        ]
+    )
+    server, thread, port = _serve(orchestrator)
+    try:
+        status, body = _post_responses(
+            port,
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Review this figure."},
+                            {
+                                "type": "input_image",
+                                "image_url": _TINY_PNG_DATA_URI,
+                            },
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_model"
+        assert "conduct role: thinker" in body["error"]["message"]
     finally:
         server.shutdown()
         thread.join(timeout=5)
