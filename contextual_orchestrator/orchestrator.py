@@ -10015,6 +10015,11 @@ class TaskOrchestrator:
             )
             and (not chat_only or _is_general_chat_agent(agent))
             and self._agent_matches_required_tags(agent, required_tags)
+            and (
+                not chat_only
+                or not {IMAGE_INPUT_EVIDENCE_TAG, LEGACY_VISION_CAPABILITY_TAG}.intersection(required_tags)
+                or self._is_mixed_image_chat_agent(agent)
+            )
         ]
         if chat_only:
             candidates = _eligible_role_effort_candidates(
@@ -10320,17 +10325,21 @@ class TaskOrchestrator:
         explicit ``input:image`` without ``input:text`` is image-only and is
         rejected for the mixed text/image review envelope.
         """
-        input_tags = self._normalized_agent_input_tags(agent)
-        if not (
-            self._is_free_agent(agent)
-            and _is_general_chat_agent(agent)
-            and self._agent_supports_image_input(agent)
-            and (not input_tags or "input:text" in input_tags)
-        ):
+        if not (self._is_free_agent(agent) and self._is_mixed_image_chat_agent(agent)):
             return False
         if self._agent_rejected_by_single_tool_call_evidence(agent, chat_body):
             return False
         return True
+
+    @staticmethod
+    def _is_mixed_image_chat_agent(agent: ModelAgent) -> bool:
+        """Require both text and image input evidence independently of price."""
+        input_tags = TaskOrchestrator._normalized_agent_input_tags(agent)
+        return (
+            _is_general_chat_agent(agent)
+            and TaskOrchestrator._agent_supports_image_input(agent)
+            and (not input_tags or "input:text" in input_tags)
+        )
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 
@@ -12141,6 +12150,19 @@ class TaskOrchestrator:
         would silently ignore pixels. Image entitlement is composed with the
         same #940 tool-call exclusion — never a replacement for it.
         """
+        return self._chat_pool_agent_ids(
+            messages=messages, chat_body=chat_body, role=role, free_only=True
+        )
+
+    def _chat_pool_agent_ids(
+        self,
+        *,
+        messages: list[ChatMessage] | None = None,
+        chat_body: Mapping[str, Any] | None = None,
+        role: str | None = None,
+        free_only: bool = False,
+    ) -> set[str]:
+        """Check request-shaped chat capacity without ranking or provider I/O."""
         require_image = False
         if messages is not None:
             require_image = bool(self._image_input_required_tags(messages))
@@ -12161,11 +12183,15 @@ class TaskOrchestrator:
             ):
                 continue
             if require_image:
-                if self._is_image_capable_free_agent(
-                    candidate, chat_body=shaped_body
+                if (
+                    self._is_image_capable_free_agent(candidate, chat_body=shaped_body)
+                    if free_only else self._is_mixed_image_chat_agent(candidate)
                 ):
                     ids.add(candidate.id)
-            elif self._is_general_free_agent(candidate, chat_body=shaped_body):
+            elif (
+                self._is_general_free_agent(candidate, chat_body=shaped_body)
+                if free_only else _is_general_chat_agent(candidate)
+            ):
                 ids.add(candidate.id)
         return ids
 

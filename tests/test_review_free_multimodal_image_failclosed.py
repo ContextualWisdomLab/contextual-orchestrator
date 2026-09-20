@@ -82,10 +82,10 @@ def _post_responses(port: int, payload: dict) -> tuple[int, dict]:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def _post_raw(port: int, payload: dict) -> tuple[int, str, bytes]:
+def _post_raw(port: int, payload: dict, path: str = "/v1/chat/completions") -> tuple[int, str, bytes]:
     """Return the HTTP status and media type without assuming JSON."""
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/chat/completions",
+        f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -888,3 +888,54 @@ def test_free_image_pool_excludes_non_chat_media_agents(
     assert TaskOrchestrator([media_agent])._free_pool_agent_ids(
         messages=_figure_messages()
     ) == set()
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL])
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses"])
+@pytest.mark.parametrize("tags", [("input:text",), ("input:image",), ("input:text", "input:image")])
+def test_virtual_image_stream_requires_mixed_worker_capacity(model, path, tags) -> None:
+    """Both virtual stream endpoints reject missing or role-excluded mixed capacity."""
+    agent = ModelAgent("candidate_agent", "candidate-model", "mock://candidate", tags=tags,
+                       provider_exclusions=("worker",) if len(tags) == 2 else ())
+    orchestrator = TaskOrchestrator([agent])
+    server, thread, port = _serve(orchestrator)
+    try:
+        payload = _figure_payload(model=model)
+        payload["stream"] = True
+        if path == "/v1/responses":
+            payload.pop("messages")
+            payload["input"] = [{"role": "user", "content": [
+                {"type": "input_text", "text": "Review this figure."},
+                {"type": "input_image", "image_url": _TINY_PNG_DATA_URI},
+            ]}]
+        status, media_type, body = _post_raw(port, payload, path)
+        assert status == 400, body
+        assert media_type == "application/json"
+        assert json.loads(body)["error"]["code"] == "invalid_model"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_paid_image_ranking_requires_text_capability() -> None:
+    """Paid routing preserves the same mixed-input contract as free routing."""
+    image_only = ModelAgent("image_only", "candidate-model", tags=("input:image", "output:text"))
+    mixed = ModelAgent("mixed_agent", "mixed-model", tags=("input:text", "input:image"))
+    orchestrator = TaskOrchestrator([image_only, mixed])
+    ranked = orchestrator._ranked_agents("Review figure", "worker", required_tags=("input:image",))
+    assert [agent.id for agent in ranked] == [mixed.id]
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL])
+@pytest.mark.parametrize("tags", [("input:text", "input:image"), ("vision",)])
+def test_virtual_image_preflight_accepts_paid_mixed_capacity(model, tags) -> None:
+    """Automatic image admission must retain paid and legacy vision capacity."""
+    from contextual_orchestrator.server import _require_pool_model
+
+    orchestrator = TaskOrchestrator([
+        ModelAgent("paid_agent", "candidate-model", "mock://candidate", tags=tags)
+    ])
+    assert _require_pool_model(
+        orchestrator, model, messages=_figure_messages(), orchestration_mode="conduct"
+    ) == model

@@ -2458,6 +2458,22 @@ def _require_pool_model(
     }:
         if required_capability is None:
             if model_name != TaskOrchestrator.FREE_MODEL:
+                if messages is not None and orchestrator._image_input_required_tags(messages):
+                    roles = (
+                        ("thinker", "worker", "verifier", "synthesizer")
+                        if orchestration_mode == "conduct" else ("worker",)
+                    )
+                    if all(
+                        orchestrator._chat_pool_agent_ids(
+                            messages=messages, chat_body=chat_body, role=role
+                        )
+                        for role in roles
+                    ):
+                        return model_name
+                    raise RequestError(
+                        400, "invalid_model",
+                        "no enabled model supports required text/image input and roles",
+                    )
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
