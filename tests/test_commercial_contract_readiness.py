@@ -89,7 +89,7 @@ def test_commercial_contract_readiness_report_tracks_terms_and_buyer_warnings() 
     assert report["contract_summary"]["support_slo_gap_count"] == 1
     assert report["contract_summary"]["buyer_order_form_gap_count"] == 1
     assert report["contract_summary"]["release_authority_blocker_count"] == 1
-    assert report["contract_summary"]["review_process_is_blocker"] is False
+    assert report["contract_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert items["license_commercial_rights"]["completion_state"] == "ready"

@@ -15,9 +15,9 @@ production compliance certificate.
 
 Figma Code Connect is not used.
 
-Review process is not a blocker. Review delay, review bot delay, queued model
-review, or a pending check without a concrete failure is process state, not a
-commercial evidence export blocker.
+Review process matches release authorization. A missing or failing snapshot
+is a blocker. Review delay is not a blocker only after exact-head checks,
+independent approval, and findings evidence pass.
 
 Do not create a separate library, Git submodule, or extracted package now. The
 export reviews one product: a compatible inference API plus an admin evidence
@@ -48,7 +48,9 @@ control plane.
 - `required_external_evidence`: production and buyer-specific evidence that
   remains warning-only until a live environment or named buyer exists;
 - `concrete_blockers`: blocked saleability artifacts;
-- `review_process_policy`: explicit rule that reviewer delay is not a blocker;
+- `review_process_policy`: matches release authorization. A missing or failing
+  snapshot is a blocker; review delay is not a blocker only after exact-head
+  checks, independent approval, and findings evidence pass.
 - `library_split_decision`: current single-product packaging decision;
 - `export_links`: durable Figma, FigJam, endpoint, and document references.
 

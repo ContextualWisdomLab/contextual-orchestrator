@@ -11,10 +11,9 @@ compliance certificate, or revenue proof.
 
 Figma Code Connect is not used.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without a concrete failure are not blockers. Blockers
-are concrete security failures, API contract failures, document contract
-mismatches, reproducible product defects, or Code Connect usage.
+Review process matches release authorization. A missing or failing snapshot
+is a blocker. Review delay is not a blocker only after exact-head checks,
+independent approval, and findings evidence pass.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 Contextual Orchestrator as one enterprise control-plane product until a second
@@ -50,8 +49,9 @@ creates an extraction trigger.
   evidence, analytics truthfulness packet, stakeholder artifacts packet, buyer
   signature/budget follow-up, production/external proof follow-up,
   review-process policy, and packaging decision;
-- `concrete_blockers`: only concrete product, security, API contract, document,
-  or Code Connect failures;
+- `concrete_blockers`: concrete product, security, API contract, document,
+  or Code Connect failures, including a missing or failing release-authority
+  snapshot propagated through the buyer evidence packet;
 - `go_to_market_status_rules`: stable ready/warning/blocked rules;
 - `related_runtime_reports`: close, value, security attestation, evidence
   export, buyer handoff, saleability, and lower-level readiness context;
@@ -67,7 +67,7 @@ creates an extraction trigger.
 | --- | --- |
 | `commercial_go_to_market_ready` | Close, value, security, evidence, saleability, admin, analytics, stakeholder artifacts, buyer inputs, external proof, review policy, and packaging evidence are ready. |
 | `commercial_go_to_market_ready_with_warnings` | Repo-local GTM packet is ready while buyer signatures, budget/PO, DPA/security acceptance, production telemetry, reference proof, hosted scan, or third-party attestation remain explicit warnings. |
-| `commercial_go_to_market_blocked` | Missing local GTM packet evidence, concrete product defect, API contract failure, security failure, document mismatch, or Code Connect usage blocks GTM readiness. |
+| `commercial_go_to_market_blocked` | A missing or failing release-authority snapshot, missing local GTM packet evidence, concrete product defect, API contract failure, security failure, document mismatch, or Code Connect usage blocks GTM readiness. |
 
 ## KRW 2B Commercial Go To Market Readiness
 
@@ -91,7 +91,9 @@ or production evidence already exists:
 - production and external proof follow-up remains a warning until hosted scans,
   third-party attestation, reference proof, and production telemetry are
   attached or waived;
-- review-process delay remains non-blocking until a concrete failure appears;
+- review-process delay is non-blocking only after exact-head checks,
+  independent approval, and findings evidence pass; a missing or failing
+  release-authority snapshot blocks readiness;
 - single-product packaging remains the default until a real extraction trigger
   exists.
 

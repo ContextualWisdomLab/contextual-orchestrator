@@ -75,16 +75,17 @@ def test_saleability_decision_report_classifies_warnings_and_non_blockers() -> N
         },
     )
 
-    assert report["saleability_status"] == "saleability_ready_with_warnings"
+    assert report["saleability_status"] == "saleability_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_saleability_decision"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["review_process_policy"]["is_blocker"] is False
-    assert report["review_process_policy"]["blocker_definition"] == "concrete security, API contract, document, or product defect"
+    assert report["review_process_policy"]["is_blocker"] is True
+    assert report["review_process_policy"]["authorization_status"] == "release_authorization_blocked"
+    assert "exact-head checks" in report["review_process_policy"]["blocker_definition"]
     assert report["concrete_blockers"] == []
     assert report["warning_conditions"][0]["evidence_type"] == "proposed_until_production"
     assert report["warning_conditions"][1]["evidence_type"] == "proposed_until_buyer_specific"
-    assert report["decision_summary"]["blocked_count"] == 0
+    assert report["decision_summary"]["blocked_count"] == 1
     assert report["decision_summary"]["warning_count"] == 2
     assert report["related_runtime_reports"]["buyer_handoff_status"] == "buyer_handoff_ready_with_warnings"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
@@ -104,7 +105,7 @@ def test_saleability_decision_endpoint_openapi_admin_and_docs_contract() -> None
     assert "/api/v1/saleability_decisions/latest" in decision_doc
     assert "KRW 2B Saleability Decision Gate" in decision_doc
     assert "Figma Code Connect is not used" in decision_doc
-    assert "Review process is not a blocker" in decision_doc
+    assert "matches release authorization" in decision_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in decision_doc
 
     server = build_server(

@@ -89,7 +89,7 @@ def test_commercial_procurement_readiness_report_tracks_ready_packet_and_warning
     assert report["procurement_summary"]["production_gap_count"] == 1
     assert report["procurement_summary"]["buyer_specific_gap_count"] == 1
     assert report["procurement_summary"]["release_authority_blocker_count"] == 1
-    assert report["procurement_summary"]["review_process_is_blocker"] is False
+    assert report["procurement_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert items["license_and_rights"]["completion_state"] == "ready"

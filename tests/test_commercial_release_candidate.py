@@ -145,6 +145,8 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
     assert report["release_summary"]["release_authority_blocker_count"] == 1
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert report["concrete_blockers"] == []
+    assert artifacts["commercial_acceptance_check"]["completion_state"] == "ready"
+    assert artifacts["runtime_endpoint_chain"]["completion_state"] == "ready"
     assert report["external_release_gaps"][0]["evidence_type"] == "proposed_until_production"
     assert report["external_release_gaps"][1]["evidence_type"] == "proposed_until_buyer_specific"
     assert artifacts["commercial_acceptance_check"]["sources"] == [
@@ -160,7 +162,7 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
         "/api/v1/commercial_release_candidates/latest",
     ]
     assert artifacts["figma_stakeholder_artifacts"]["evidence_type"] == "figma_artifact"
-    assert report["related_runtime_reports"]["commercial_acceptance_status"] == "commercial_acceptance_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_acceptance_status"] == "commercial_acceptance_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["release_links"]["runtime_endpoint"] == "/api/v1/commercial_release_candidates/latest"
 
@@ -300,19 +302,64 @@ def test_server_accepts_only_a_kv_signed_release_authority_snapshot() -> None:
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        port = server.server_address[1]
         try:
             status, report = get_json(
-                f"http://127.0.0.1:{server.server_address[1]}/api/v1/commercial_release_candidates/latest",
+                f"http://127.0.0.1:{port}/api/v1/commercial_release_candidates/latest",
                 "admin_secret",
             )
+            buyer_paths = [
+                "/api/v1/saleability_decisions/latest",
+                "/api/v1/commercial_evidence_exports/latest",
+                "/api/v1/commercial_acceptance_checks/latest",
+                "/api/v1/commercial_buyer_acceptance_workflows/latest",
+                "/api/v1/commercial_demo_scenarios/latest",
+                "/api/v1/commercial_proposal_packets/latest",
+                "/api/v1/commercial_purchase_approval_packets/latest",
+                "/api/v1/commercial_due_diligence_rooms/latest",
+                "/api/v1/commercial_investment_committee_memos/latest",
+            ]
+            buyer_reports = [get_json(f"http://127.0.0.1:{port}{path}", "admin_secret") for path in buyer_paths]
         finally:
             server.shutdown()
             thread.join(timeout=5)
             server.server_close()
         assert status == 200
         assert report["release_authorization"]["authorized"] is True
+        for path, (buyer_status, buyer_report) in zip(buyer_paths, buyer_reports):
+            assert buyer_status == 200, path
+            assert buyer_report["review_process_policy"]["is_blocker"] is False, path
+            assert buyer_report["review_process_policy"]["authorization_status"] == "release_authorized", path
     finally:
         set_backend(None)
+
+
+def test_nested_commercial_reports_forward_release_authority() -> None:
+    """Intermediate buyer reports must not drop a snapshot the caller supplied."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"))]
+    )
+    authority = valid_release_authority()
+    seen: list[tuple[str, object]] = []
+    export = orchestrator.commercial_evidence_export_report
+    saleability = orchestrator.saleability_decision_report
+
+    def wrapped_export(*args: object, **kwargs: object) -> dict:
+        seen.append(("export", kwargs.get("release_authority")))
+        return export(*args, **kwargs)
+
+    def wrapped_saleability(*args: object, **kwargs: object) -> dict:
+        seen.append(("saleability", kwargs.get("release_authority")))
+        return saleability(*args, **kwargs)
+
+    orchestrator.commercial_evidence_export_report = wrapped_export  # type: ignore[method-assign]
+    orchestrator.saleability_decision_report = wrapped_saleability  # type: ignore[method-assign]
+    orchestrator.commercial_go_to_market_readiness_report(
+        release_authority=authority
+    )
+    forwarded = [item for item in seen if item[0] in {"export", "saleability"}]
+    assert forwarded
+    assert all(item[1] is authority for item in forwarded)
 
 
 if __name__ == "__main__":  # pragma: no cover

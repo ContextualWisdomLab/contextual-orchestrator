@@ -11,8 +11,9 @@ implementation owners.
 
 It is not a valuation guarantee, purchase commitment, signed order, legal
 opinion, production compliance certificate, or revenue proof. Figma Code Connect is not used.
-Review process is not a blocker unless a concrete security, API contract,
-document, or product defect is found.
+Review process matches release authorization. A missing or failing snapshot
+is a blocker. Review delay is not a blocker only after exact-head checks,
+independent approval, and findings evidence pass.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 the product as a single repository and one deployable control plane until there
@@ -74,7 +75,7 @@ PO, or go-live authorization remain explicit warnings.
 
 Blocked: `commercial_purchase_approval_blocked` means security failure, API
 contract regression, document mismatch, runtime defect, missing local approval
-evidence, or Code Connect usage blocks purchase approval.
+evidence, a missing or failing release-authority snapshot, or Code Connect usage blocks purchase approval.
 
 ## Plugin Responsibilities
 

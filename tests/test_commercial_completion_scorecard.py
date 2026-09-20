@@ -80,32 +80,33 @@ def test_commercial_completion_scorecard_report_aggregates_program_completion() 
     )
     items = item_by_name(report)
 
-    assert report["completion_status"] == "commercial_completion_ready_with_warnings"
+    assert report["completion_status"] == "commercial_completion_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_completion_scorecard"
     assert "not a valuation guarantee" in report["source_note"]
     assert "production compliance certificate" in report["source_note"]
-    assert report["completion_summary"]["blocked_count"] == 0
-    assert report["completion_summary"]["warning_count"] == 1
+    assert report["completion_summary"]["blocked_count"] == 2
+    assert report["completion_summary"]["warning_count"] == 2
     assert report["completion_summary"]["external_input_group_count"] == 3
-    assert report["completion_summary"]["review_process_is_blocker"] is False
+    assert report["completion_summary"]["review_process_is_blocker"] is True
     assert report["completion_summary"]["code_connect_used"] is False
-    assert report["concrete_blockers"] == []
+    assert report["concrete_blockers"] == ["commercial_launch_blocked"]
     for item_name in [
         "product_design_evidence",
         "figma_artifacts",
         "superpowers_plan_evidence",
         "ponytail_packaging_decision",
         "data_analytics_truthfulness",
-        "runtime_endpoint_chain",
         "verification_packet",
-        "review_process_policy",
     ]:
         assert items[item_name]["completion_state"] == "ready"
+    assert items["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in items["review_process_policy"]["evidence"]
+    assert items["runtime_endpoint_chain"]["completion_state"] == "blocked"
     assert items["production_buyer_followups"]["completion_state"] == "warning"
     assert items["production_buyer_followups"]["source_gap_status"] == "external_input_required"
     assert report["related_runtime_reports"]["commercial_readiness_status"] == "commercial_ready"
-    assert report["related_runtime_reports"]["commercial_launch_status"] == "commercial_launch_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_launch_status"] == "commercial_launch_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["completion_links"]["runtime_endpoint"] == "/api/v1/commercial_completion_scorecards/latest"
 
@@ -126,7 +127,7 @@ def test_commercial_completion_scorecard_endpoint_openapi_admin_and_docs_contrac
         "Commercial Completion Scorecard",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Review process matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Runtime Shape",
         "Completion Status Rules",

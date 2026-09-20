@@ -6212,18 +6212,21 @@ def build_server(
                     self._send(orchestrator.saleability_decision_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_evidence_exports/latest":
                     self._send(orchestrator.commercial_evidence_export_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_acceptance_checks/latest":
                     self._send(orchestrator.commercial_acceptance_check_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_release_candidates/latest":
@@ -6314,36 +6317,42 @@ def build_server(
                     self._send(orchestrator.commercial_buyer_acceptance_workflow_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_demo_scenarios/latest":
                     self._send(orchestrator.commercial_demo_scenario_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_proposal_packets/latest":
                     self._send(orchestrator.commercial_proposal_packet_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_purchase_approval_packets/latest":
                     self._send(orchestrator.commercial_purchase_approval_packet_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_due_diligence_rooms/latest":
                     self._send(orchestrator.commercial_due_diligence_room_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_investment_committee_memos/latest":
                     self._send(orchestrator.commercial_investment_committee_memo_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/workflow_runs":

@@ -87,7 +87,7 @@ def test_commercial_operations_readiness_report_tracks_operations_handoff_warnin
     assert report["operations_summary"]["blocked_count"] == 0
     assert report["operations_summary"]["warning_count"] == 4
     assert report["operations_summary"]["production_evidence_action_count"] == 4
-    assert report["operations_summary"]["review_process_is_blocker"] is False
+    assert report["operations_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     assert items["deployment_runbook"]["completion_state"] == "ready"
     assert items["security_legal_handoff"]["completion_state"] == "ready"

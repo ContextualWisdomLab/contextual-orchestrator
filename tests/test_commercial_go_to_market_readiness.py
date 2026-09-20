@@ -80,28 +80,31 @@ def test_commercial_go_to_market_readiness_report_indexes_sellable_packet_and_fo
     )
     items = item_by_name(report)
 
-    assert report["go_to_market_status"] == "commercial_go_to_market_ready_with_warnings"
+    assert report["go_to_market_status"] == "commercial_go_to_market_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_go_to_market_readiness"
     assert "not a valuation guarantee" in report["source_note"]
     assert "revenue proof" in report["source_note"]
-    assert report["go_to_market_summary"]["blocked_count"] == 0
-    assert report["go_to_market_summary"]["warning_count"] == 2
+    assert report["go_to_market_summary"]["blocked_count"] == 3
+    assert report["go_to_market_summary"]["warning_count"] == 3
     assert report["go_to_market_summary"]["buyer_signature_gap_count"] == 4
     assert report["go_to_market_summary"]["external_or_production_gap_count"] == 5
-    assert report["go_to_market_summary"]["review_process_is_blocker"] is False
+    assert report["go_to_market_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     for item_name in [
-        "commercial_close_packet",
         "economic_value_packet",
         "security_trust_packet",
-        "buyer_evidence_packet",
-        "saleability_decision_packet",
         "admin_operator_evidence",
         "analytics_truthfulness_packet",
         "stakeholder_artifacts_packet",
     ]:
         assert items[item_name]["completion_state"] == "ready"
+    for item_name in [
+        "commercial_close_packet",
+        "buyer_evidence_packet",
+        "saleability_decision_packet",
+    ]:
+        assert items[item_name]["completion_state"] == "blocked"
     assert items["buyer_signature_budget_follow_up"]["completion_state"] == "warning"
     assert items["buyer_signature_budget_follow_up"]["source_gap_status"] == "buyer_signature_required"
     assert items["production_external_proof_follow_up"]["completion_state"] == "warning"
@@ -109,7 +112,9 @@ def test_commercial_go_to_market_readiness_report_indexes_sellable_packet_and_fo
         "external_or_production_input_required"
     )
     assert items["packaging_decision"]["completion_state"] == "ready"
-    assert report["related_runtime_reports"]["commercial_close_status"] == "commercial_close_ready_with_warnings"
+    assert items["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in items["review_process_policy"]["evidence"]
+    assert report["related_runtime_reports"]["commercial_close_status"] == "commercial_close_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["go_to_market_links"]["runtime_endpoint"] == "/api/v1/commercial_go_to_market_readiness/latest"
 
@@ -130,7 +135,7 @@ def test_commercial_go_to_market_readiness_endpoint_openapi_admin_and_docs_contr
         "Commercial Go-To-Market Readiness",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Review process matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Go-To-Market Inputs",
         "Runtime Shape",
