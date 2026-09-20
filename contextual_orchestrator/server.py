@@ -7190,10 +7190,18 @@ def build_server(
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
                     mode = _validate_mode(
-                        body.get("orchestration")
-                        or body.get("orchestration_mode")
-                        or body.get("mode")
-                        or "auto"
+                        next(
+                            (
+                                body[key]
+                                for key in (
+                                    "orchestration",
+                                    "orchestration_mode",
+                                    "mode",
+                                )
+                                if key in body
+                            ),
+                            "auto",
+                        )
                     )
                     _require_pool_model(
                         orchestrator,
