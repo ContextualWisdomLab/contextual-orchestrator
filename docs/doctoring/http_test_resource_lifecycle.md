@@ -26,6 +26,28 @@ The four remaining failures are three allowlist error-taxonomy assertions and
 one missing selection_design field, not ResourceWarnings. Full-suite and
 protected-delivery acceptance remain unverified.
 
+## Separate allowlist endpoint follow-up, 2026-09-20
+
+The resource-cleanup slice above exposed three independent taxonomy failures:
+`_validate_allowlisted_provider` replaced EgressWeave rejection with plain
+RuntimeError, bypassing existing ProviderUpstreamError handling. The shared
+validator now emits a bounded, non-retryable provider_connection_error with
+client status 502 and unknown provider status. The deny decision, resolved
+address reuse, and no-send boundary remain unchanged; passthrough keeps its
+existing transport reclassification.
+
+Two real loopback HTTP regressions call Chat Completions and Responses through
+build_server and the real ModelClient admission path. With the unchanged
+production source at `e77087a131f1347d943215c9b3a55645d0f407a1`, both return
+500/internal_error (2 failed, exit 1). With the repair, both return JSON 502;
+transport sentinels record zero upstream calls and all client/listener handles
+close. Together with the four existing allowlist regressions: 6 passed, 46
+deselected, exit 0. These are local non-streaming endpoint checks, not deployed
+provider health or successful inference. An exploratory streaming assertion was
+removed because concrete Responses streaming is rejected as invalid_stream and
+Chat streaming uses SSE rather than the assumed non-streaming JSON contract;
+no streaming fix or acceptance is claimed.
+
 ## Trace HTTP fixture successor, 2026-09-13
 
 Base: #1140 at `38c0603af2fd8fcb204f65be47081ada9d6bd35c`.

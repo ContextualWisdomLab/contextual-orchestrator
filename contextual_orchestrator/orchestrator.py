@@ -4067,10 +4067,19 @@ class ModelClient:
         policy = EgressPolicy.from_hosts(self.allowed_provider_hosts, allow_local=False)
         try:
             validated = validate_egress_url_details(agent.base_url, policy=policy)
-        except EgressNotAllowedError as exc:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted") from exc
+        except EgressNotAllowedError:
+            validated = None
         if validated is None:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_connection_error",
+                message="provider endpoint is not allowlisted or publicly routable",
+                client_status=502,
+                provider_status=None,
+                retryable=False,
+                transport="chat",
+            ) from None
         # Reuse EgressWeave's already-validated, already-resolved addresses
         # directly rather than re-resolving — re-resolving here would reopen
         # the validate-then-connect DNS-rebinding gap EgressWeave closes.

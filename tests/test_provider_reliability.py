@@ -1313,3 +1313,52 @@ if __name__ == "__main__":
             fn()
             print(f"ok {name}")
     print("ok")
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/responses"])
+def test_http_allowlist_rejection_is_502_before_transport(monkeypatch, endpoint):
+    """Real non-streaming HTTP admission fails before any upstream send."""
+    import http.client
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    agent = ModelAgent(
+        "blocked_agent", "blocked-model", base_url="https://blocked.example/v1",
+        credential_key="", api_key_env="", tags=("reasoning", "writing"),
+    )
+    client = ModelClient(allowed_provider_hosts={"ok.example"})
+    calls = []
+
+    def unexpected_send(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("denied provider must never reach transport")
+
+    monkeypatch.setattr(client, "_send", unexpected_send)
+    monkeypatch.setattr(client, "_send_raw", unexpected_send)
+    orchestrator = TaskOrchestrator([agent], client=client, tool_retry_attempts=0)
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token="unit-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=10)
+    try:
+        payload = {"model": agent.model, "stream": False}
+        if endpoint == "/v1/responses":
+            payload["input"] = "hello"
+        else:
+            payload["messages"] = [{"role": "user", "content": "hello"}]
+        connection.request("POST", endpoint, body=json.dumps(payload), headers={
+            "Authorization": "Bearer unit-token", "Content-Type": "application/json",
+        })
+        with connection.getresponse() as response:
+            body = json.loads(response.read())
+            assert response.status == 502, body
+            assert response.getheader("Content-Type").startswith("application/json")
+        assert body["error"]["code"] == "provider_connection_error"
+        assert "blocked.example" not in json.dumps(body)
+        assert calls == []
+        assert response.closed
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+    assert not worker.is_alive()
