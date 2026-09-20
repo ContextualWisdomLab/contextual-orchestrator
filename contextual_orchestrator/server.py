@@ -2431,6 +2431,7 @@ def _require_pool_model(
     required_capability: str | None = None,
     messages: list[dict[str, Any]] | None = None,
     chat_body: Mapping[str, Any] | None = None,
+    orchestration_mode: str = "route",
 ) -> str:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
@@ -2460,12 +2461,33 @@ def _require_pool_model(
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
-            if messages is not None and orchestrator._free_pool_agent_ids(
-                messages=messages,
-                chat_body=chat_body,
-                role="worker",
-            ):
-                return model_name
+            if messages is not None:
+                required_roles = (
+                    ("thinker", "worker", "verifier", "synthesizer")
+                    if orchestration_mode == "conduct"
+                    else ("worker",)
+                )
+                missing_role = next(
+                    (
+                        role
+                        for role in required_roles
+                        if not orchestrator._free_pool_agent_ids(
+                            messages=messages,
+                            chat_body=chat_body,
+                            role=role,
+                        )
+                    ),
+                    None,
+                )
+                if missing_role is None:
+                    return model_name
+                if orchestration_mode == "conduct":
+                    raise RequestError(
+                        400,
+                        "invalid_model",
+                        "no enabled zero-cost model is available for "
+                        f"conduct role: {missing_role}",
+                    )
             if messages is not None and orchestrator._image_input_required_tags(
                 messages
             ):
@@ -7167,6 +7189,12 @@ def build_server(
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
+                    mode = _validate_mode(
+                        body.get("orchestration")
+                        or body.get("orchestration_mode")
+                        or body.get("mode")
+                        or "auto"
+                    )
                     _require_pool_model(
                         orchestrator,
                         model_name,
@@ -7176,6 +7204,9 @@ def build_server(
                             else None
                         ),
                         chat_body=body,
+                        orchestration_mode=(
+                            "conduct" if body.get("response_format") else mode
+                        ),
                     )
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
@@ -7384,7 +7415,6 @@ def build_server(
                             self._send(response_payload)
                         return
                     messages = _validate_messages(body.get("messages"))
-                    mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     # Require model — silent default to contextual-orchestrator hid
