@@ -11294,6 +11294,23 @@ class TaskOrchestrator:
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         if decision.circuit_failure:  # pragma: no branch - retry-classified failures always trip the circuit
                             self._record_failure(agent.id)
+                        if isinstance(exc, ProviderUpstreamError):
+                            _append_typed_route_failure(
+                                route_attempts, agent, exc, transport="chat"
+                            )
+                        else:
+                            # The retry decision is already the authority for
+                            # this tool failure. Do not reclassify it as a
+                            # provider api_error merely to build the receipt.
+                            route_attempts.append(
+                                {
+                                    "agent_id": agent.id,
+                                    "model": agent.model,
+                                    "outcome": "retryable_transport",
+                                    "retryable": True,
+                                    "transport": "chat",
+                                }
+                            )
                         if self.tool_retry_backoff_seconds:
                             retry_ceiling = min(
                                 self.tool_retry_backoff_seconds
