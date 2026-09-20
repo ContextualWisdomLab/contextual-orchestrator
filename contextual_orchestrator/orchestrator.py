@@ -6988,6 +6988,9 @@ class TaskOrchestrator:
                 self._group_router.observe_failure(candidate.id)
             synthesis_failure_recorded = True
 
+        synthesis_route_attempts: list[dict[str, Any]] = []
+        synthesis_eligible_agent_ids: list[str] = []
+
         def send_synthesis(
             payload: dict[str, Any],
             *,
@@ -7015,12 +7018,16 @@ class TaskOrchestrator:
                     ),
                 ]
             )
-            attempts: list[dict[str, Any]] = []
-            eligible_agent_ids = [candidate.id for candidate in ordered_candidates]
+            attempts = synthesis_route_attempts
+            eligible_agent_ids = synthesis_eligible_agent_ids
+            eligible_agent_ids.extend(
+                candidate.id for candidate in ordered_candidates
+                if candidate.id not in eligible_agent_ids
+            )
 
             def route_evidence(*, terminal_reason: str) -> dict[str, Any]:
                 return {
-                    "eligible_agent_ids": eligible_agent_ids,
+                    "eligible_agent_ids": list(eligible_agent_ids),
                     "attempted": list(attempts),
                     "terminal_reason": terminal_reason,
                 }
