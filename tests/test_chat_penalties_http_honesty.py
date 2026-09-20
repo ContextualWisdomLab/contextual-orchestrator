@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -66,6 +67,7 @@ def test_http_chat_accepts_presence_and_frequency_penalty() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_presence_penalty_out_of_range() -> None:
@@ -85,6 +87,7 @@ def test_http_chat_rejects_presence_penalty_out_of_range() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_frequency_penalty_out_of_range() -> None:
@@ -104,6 +107,7 @@ def test_http_chat_rejects_frequency_penalty_out_of_range() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_presence_penalty_non_number() -> None:
@@ -123,6 +127,7 @@ def test_http_chat_rejects_presence_penalty_non_number() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_penalties_in_range() -> None:
@@ -142,6 +147,7 @@ def test_http_completions_accepts_penalties_in_range() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_penalties_omitted() -> None:
@@ -159,6 +165,7 @@ def test_http_chat_accepts_penalties_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

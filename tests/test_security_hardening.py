@@ -121,6 +121,48 @@ def test_external_principal_resolver_survives_bearer_rotation() -> None:
     assert security.principal_id(old_headers) == security.principal_id(rotated_headers)
 
 
+def test_single_token_mode_keeps_the_documented_trace_escape_hatch() -> None:
+    """With only auth_token configured, it still authorizes the trace purpose."""
+    security = SecurityConfig(auth_token="only-token")
+    headers = {"authorization": "Bearer only-token"}
+    assert security.authorize(headers, "trace", "127.0.0.1") == "trace.read"
+
+
+def test_split_token_mode_without_trace_token_fails_closed_for_trace() -> None:
+    """Split admin/inference mode has no verified trace claim without trace_token."""
+    security = SecurityConfig(admin_token="admin-token", inference_token="inference-token")
+    for token in ("admin-token", "inference-token"):
+        try:
+            security.authorize({"authorization": f"Bearer {token}"}, "trace", "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"{token} incorrectly authorized the trace scope")
+
+
+def test_split_token_mode_trace_token_authorizes_only_trace() -> None:
+    """A configured trace_token authorizes trace and nothing else."""
+    security = SecurityConfig(
+        admin_token="admin-token", inference_token="inference-token", trace_token="trace-token"
+    )
+    trace_headers = {"authorization": "Bearer trace-token"}
+    assert security.authorize(trace_headers, "trace", "127.0.0.1") == "trace.read"
+    for scope in ("admin", "inference"):
+        try:
+            security.authorize(trace_headers, scope, "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"trace_token incorrectly authorized the {scope} scope")
+    for token in ("admin-token", "inference-token"):
+        try:
+            security.authorize({"authorization": f"Bearer {token}"}, "trace", "127.0.0.1")
+        except Exception as exc:
+            assert "invalid" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"{token} incorrectly authorized the trace scope")
+
+
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
     headers = {"content-type": "application/json", "connection": "close"}
     if token:
@@ -323,6 +365,47 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert inference_status == 200
     assert inference_body["orchestration"]["mode"] == "route"
     assert "trace" not in inference_body["orchestration"]
+
+
+def test_inference_readiness_is_read_only_and_admin_refresh_stays_privileged() -> None:
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(
+            auth_token="", admin_token="admin_secret", inference_token="inference_secret"
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    def get(path: str, token: str) -> tuple[int, dict]:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            headers={"authorization": f"Bearer {token}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    try:
+        inference_status, inference_body = get(
+            "/api/v1/provider_readiness?refresh=true", "inference_secret"
+        )
+        admin_status, admin_body = get(
+            "/api/v1/provider_readiness/latest?refresh=false", "admin_secret"
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert inference_status == 400
+    assert inference_body["error"]["code"] == "readiness_refresh_forbidden"
+    assert admin_status == 200
+    assert admin_body["probe"] == "none"
 
 
 def test_single_and_split_token_modes_cannot_be_combined() -> None:
@@ -574,18 +657,44 @@ def test_provider_allowlist_ignores_request_time_environment_changes() -> None:
         base_url="https://provider.example/v1",
         credential_key="remote-key",
     )
+    # An allowlisted host is validated via EgressWeave, which resolves DNS
+    # itself (socket.getaddrinfo) rather than through ModelClient._resolve_addresses
+    # — patch at that shared boundary so both the old and new code paths agree.
     with patch.dict(
         "contextual_orchestrator.orchestrator.os.environ",
         {"CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "other.example"},
     ), patch(
         "contextual_orchestrator.orchestrator.get_credential",
         return_value="secret",
-    ), patch.object(
-        client,
-        "_resolve_addresses",
-        return_value=[(socket.AF_INET, ("93.184.216.34", 443))],
+    ), patch(
+        "socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
     ):
         assert client._validate_provider(agent) == (socket.AF_INET, ("93.184.216.34", 443))
+
+
+def test_provider_allowlist_rejects_allowlisted_host_resolving_to_private_address() -> None:
+    """EgressWeave's per-address check still applies to an allowlisted host."""
+    client = ModelClient(allowed_provider_hosts={"provider.example"})
+    agent = ModelAgent(
+        "remote_agent",
+        "remote-model",
+        base_url="https://provider.example/v1",
+        credential_key="remote-key",
+    )
+    with patch(
+        "contextual_orchestrator.orchestrator.get_credential",
+        return_value="secret",
+    ), patch(
+        "socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    ):
+        try:
+            client._validate_provider(agent)
+        except RuntimeError as exc:
+            assert "allowlisted" in str(exc)
+        else:
+            raise AssertionError("allowlisted host resolving to a private address should fail")
 
 
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:

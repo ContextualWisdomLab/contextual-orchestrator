@@ -30,6 +30,7 @@ from .model_discovery import (
 from .orchestrator import ModelClient, TaskOrchestrator
 from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
+from .tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
 
 REVIEW_CREDENTIAL_NAMES = PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
@@ -38,6 +39,7 @@ REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
     "NVIDIA_NIM_API_KEY_SUB",
     "OPENROUTER_API_KEY",
     "OPENCODE_ZEN_API_KEY",
+    "EXPERIENTAL_LABS_API_KEY",
 )
 """Provider-account sources authorized to contribute to ``orchestrator/free``.
 
@@ -242,9 +244,20 @@ def build_review_orchestrator(
                 priority=0,
             )
         )
+    # ``TaskOrchestrator``'s generic default (1) caps internal failover at two
+    # candidates for every caller regardless of pool size. The org's
+    # opencode-review-dispatch workflow calls ``orchestrator/free`` exactly
+    # once per review and falls back to a model-unavailable evidence-only
+    # review on any rejected/failed answer (OPENCODE_MODEL_ATTEMPTS=1,
+    # OPENCODE_POOL_MAX_CYCLES=1 in ContextualWisdomLab/.github). Since this
+    # is the review pool's only external attempt, size the internal failover
+    # budget to the admitted catalog instead of the generic default, bounded
+    # by the documented hard ceiling.
+    tool_retry_attempts = min(max(len(agents) - 1, 0), MAX_TOOL_RETRY_ATTEMPTS)
     return TaskOrchestrator(
         agents,
         client=ModelClient(),
+        tool_retry_attempts=tool_retry_attempts,
     )
 
 
