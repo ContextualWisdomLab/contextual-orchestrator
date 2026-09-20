@@ -77,6 +77,32 @@ def test_http_chat_accepts_mode_casefold_route_conduct_auto() -> None:
         server.server_close()
 
 
+
+def test_http_chat_rejects_explicit_falsey_mode_aliases() -> None:
+    """Explicit invalid aliases must not collapse into omitted-mode auto."""
+
+    server, thread, port = _server()
+    try:
+        for key in ("orchestration", "orchestration_mode", "mode"):
+            for value in (None, "", "  ", False, 0):
+                status, body = _post(
+                    port,
+                    {
+                        "model": "mock-planner",
+                        "messages": [
+                            {"role": "user", "content": f"{key}={value!r}"}
+                        ],
+                        key: value,
+                    },
+                )
+                assert status == 400, (key, value, body)
+                assert "invalid_mode" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_http_chat_still_rejects_mode_cascade() -> None:
     server, thread, port = _server()
     try:
@@ -221,6 +247,7 @@ def test_http_embeddings_dimensions_digit_string_still_named_reject() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_mode_casefold_route_conduct_auto()
+    test_http_chat_rejects_explicit_falsey_mode_aliases()
     test_http_chat_still_rejects_mode_cascade()
     test_http_free_image_conduct_preflights_every_workflow_role()
     test_http_embeddings_dimensions_digit_string_still_named_reject()
