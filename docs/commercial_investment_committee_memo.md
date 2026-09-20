@@ -82,7 +82,7 @@ external attestations remain explicit warnings.
 
 Blocked: `commercial_investment_committee_blocked` means security failure, API
 contract regression, document mismatch, runtime defect, missing local memo
-evidence, or Code Connect usage blocks committee recommendation.
+evidence, a missing or failing release-authority snapshot, or Code Connect usage blocks committee recommendation.
 
 ## Plugin Responsibilities
 

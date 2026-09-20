@@ -44,8 +44,9 @@ creates an extraction trigger.
   onboarding/operations packet, buyer evidence export packet, signed order
   form/MSA, DPA/security acceptance, budget approval/PO, go-live authorization,
   review-process policy, and packaging decision;
-- `concrete_blockers`: only concrete product, security, API contract, document,
-  or Code Connect failures;
+- `concrete_blockers`: concrete product, security, API contract, document,
+  or Code Connect failures, including a missing or failing release-authority
+  snapshot propagated through the buyer evidence packet;
 - `close_status_rules`: stable ready/warning/blocked rules;
 - `related_runtime_reports`: value, security attestation, contract,
   onboarding, operations, evidence export, and lower-level readiness context;
@@ -60,7 +61,7 @@ creates an extraction trigger.
 | --- | --- |
 | `commercial_close_ready` | Sellable product packet, contract packet, onboarding/operations packet, evidence export, signatures, DPA/security acceptance, budget/PO, go-live authorization, review policy, and packaging evidence are ready. |
 | `commercial_close_ready_with_warnings` | Repo-local close packet is ready while buyer signatures, DPA/security acceptance, budget/PO, or go-live authorization remain explicit warnings. |
-| `commercial_close_blocked` | Missing local close evidence, concrete product defect, API contract failure, security failure, document mismatch, or Code Connect usage blocks close readiness. |
+| `commercial_close_blocked` | A missing or failing release-authority snapshot, missing local close evidence, concrete product defect, API contract failure, security failure, document mismatch, or Code Connect usage blocks close readiness. |
 
 ## KRW 2B Commercial Close Readiness
 
@@ -81,7 +82,9 @@ already signed or approved every external input:
   buyer procurement confirms payment authority;
 - go-live authorization remains a buyer-signature warning until production
   activation or paid onboarding is approved;
-- review-process delay remains non-blocking until a concrete failure appears;
+- review-process delay is non-blocking only after exact-head checks,
+  independent approval, and findings evidence pass; a missing or failing
+  release-authority snapshot blocks readiness;
 - single-product packaging remains the default until a real extraction trigger
   exists.
 

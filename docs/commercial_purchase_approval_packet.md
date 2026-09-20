@@ -75,7 +75,7 @@ PO, or go-live authorization remain explicit warnings.
 
 Blocked: `commercial_purchase_approval_blocked` means security failure, API
 contract regression, document mismatch, runtime defect, missing local approval
-evidence, or Code Connect usage blocks purchase approval.
+evidence, a missing or failing release-authority snapshot, or Code Connect usage blocks purchase approval.
 
 ## Plugin Responsibilities
 

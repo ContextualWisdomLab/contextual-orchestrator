@@ -142,6 +142,7 @@ Warning:
 
 Blocked:
 
+- missing or failing release-authority snapshot;
 - security test failure;
 - API or document contract mismatch;
 - reproducible product defect;
@@ -174,7 +175,7 @@ The endpoint returns:
 |---|---|
 | `commercial_completion_ready` | Product Design, Figma, Superpowers, Ponytail, Data Analytics, runtime, verification, review policy, packaging, and external inputs are ready. |
 | `commercial_completion_ready_with_warnings` | Repo-local program completion evidence is ready while buyer environment, production telemetry, commercial signatures, or other external inputs remain explicit warnings. |
-| `commercial_completion_blocked` | Security failure, API contract regression, document mismatch, reproducible product defect, missing local completion evidence, or Code Connect usage blocks completion. |
+| `commercial_completion_blocked` | A missing or failing release-authority snapshot, security failure, API contract regression, document mismatch, reproducible product defect, missing local completion evidence, or Code Connect usage blocks completion. |
 
 FigJam artifact: `KRW 2B Commercial Completion Runtime Scorecard`.
 
