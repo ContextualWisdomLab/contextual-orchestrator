@@ -8070,6 +8070,15 @@ def build_server(
                                 "invalid_stream",
                                 "stream is not supported for this model on /v1/responses; use the gateway default, orchestrator/auto, or orchestrator/free",
                             )
+                    responses_requires_conduct = not stream and (
+                        bool(body.get("tools"))
+                        or bool(body.get("response_format"))
+                        or (
+                            isinstance(body.get("text"), dict)
+                            and bool(body["text"].get("format"))
+                        )
+                        or _responses_virtual_requires_provider_path(input_value, body)
+                    )
                     if model_name in {
                         TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
                         TaskOrchestrator.AUTO_MODEL,
@@ -8084,6 +8093,9 @@ def build_server(
                                 else None
                             ),
                             chat_body=body,
+                            orchestration_mode=(
+                                "conduct" if responses_requires_conduct else "route"
+                            ),
                         )
                     responses_attribution = dict(
                         _validate_attribution(body.get("attribution")) or {}
