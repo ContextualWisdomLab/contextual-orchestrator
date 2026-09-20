@@ -1,5 +1,31 @@
 # HTTP test resource lifecycle
 
+## Review follow-up, 2026-09-20
+
+Base `26b71dbbef11f1779a83495b0b2096a6bd7e2c3d` (#1210): seven
+previously identified strict failures reproduced, exit 1 (6.25s). All seven
+are test-owned HTTPError objects: three header inspections, the stopped/generic
+409 classifier, and three fake chat implementations that convert responses
+into typed failures without handing the raw response to ModelClient.
+The classifiers borrow responses; they must not close their callers' handles.
+
+Explicit response scopes now close these objects, including sibling logging,
+status-classification, exhausted-pool and tool-shaped-message tests. Closing
+assertions run after each scope; reused responses remain open across retries.
+No production cleanup, endpoint, retry or security policy changes in this slice.
+
+Isolated Python 3.14 source command (no cargo/maturin build):
+`python -m pytest -q -W error --tb=short tests/test_rate_limit_aware_admission.py tests/test_provider_reliability.py tests/test_http_resource_lifecycle.py`.
+The two original modules alone were 21 failed/63 passed (25.66s, exit 1).
+After repair, the three-module command is 117 passed/4 failed (25.67s, exit 1).
+The seven named failures and sibling resource failures are absent. All 37
+HTTP lifecycle tests passed, including final cleanup, close-before-backoff,
+cleanup-error preservation, and raw caller-owned response handoff. These use
+transport doubles; they are not deployed endpoint or wire-delivery evidence.
+The four remaining failures are three allowlist error-taxonomy assertions and
+one missing selection_design field, not ResourceWarnings. Full-suite and
+protected-delivery acceptance remain unverified.
+
 ## Trace HTTP fixture successor, 2026-09-13
 
 Base: #1140 at `38c0603af2fd8fcb204f65be47081ada9d6bd35c`.

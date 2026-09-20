@@ -89,18 +89,21 @@ def test_parse_retry_after_missing_or_unparseable_is_unknown() -> None:
 
 
 def test_resolve_retry_after_prefers_retry_after_header() -> None:
-    exc = _rate_limited_error(headers={"Retry-After": "3", "x-ratelimit-reset": "99"})
-    assert resolve_retry_after_seconds(exc) == 3.0
+    with _rate_limited_error(headers={"Retry-After": "3", "x-ratelimit-reset": "99"}) as exc:
+        assert resolve_retry_after_seconds(exc) == 3.0
+    assert exc.closed
 
 
 def test_resolve_retry_after_falls_back_to_ratelimit_reset_header() -> None:
-    exc = _rate_limited_error(headers={"x-ratelimit-reset-requests": "7"})
-    assert resolve_retry_after_seconds(exc) == 7.0
+    with _rate_limited_error(headers={"x-ratelimit-reset-requests": "7"}) as exc:
+        assert resolve_retry_after_seconds(exc) == 7.0
+    assert exc.closed
 
 
 def test_resolve_retry_after_unknown_when_neither_header_present() -> None:
-    exc = _rate_limited_error(headers={})
-    assert resolve_retry_after_seconds(exc) is None
+    with _rate_limited_error(headers={}) as exc:
+        assert resolve_retry_after_seconds(exc) is None
+    assert exc.closed
 
 
 # --------------------------------------------------------------------------

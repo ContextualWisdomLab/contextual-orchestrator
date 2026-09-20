@@ -49,6 +49,14 @@ def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
 
 
+def _classified_http_error(code: int, agent: ModelAgent) -> ProviderUpstreamError:
+    """The fake transport owns responses it converts to typed failures."""
+    with _http_error(code) as response:
+        failure = classify_provider_failure(response, agent_id=agent.id, model=agent.model)
+    assert response.closed
+    return failure
+
+
 @pytest.mark.parametrize("status", [425, 429, 503, None, 0, True, "429", 600])
 def test_attempt_log_preserves_only_valid_numeric_upstream_status(caplog, status) -> None:
     """Logs distinguish missing status without reading bodies or exposing diagnostics."""
@@ -58,15 +66,18 @@ def test_attempt_log_preserves_only_valid_numeric_upstream_status(caplog, status
         "https://provider.example/private private_failure_text", None, body,
     )
     agent = ModelAgent("local_worker", "mock-local")
-    with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
-        _log_provider_attempt_failed(agent, 0, failure, True)
-    expected = status if type(status) is int and 100 <= status <= 599 else None
-    assert f"provider_status={expected}" in caplog.text
-    assert "error_message=<omitted>" in caplog.text
-    assert "provider.example" not in caplog.text
-    assert "private_failure_text" not in caplog.text
-    assert "private_response_body" not in caplog.text
-    assert body.tell() == 0
+    with failure:
+        with caplog.at_level("DEBUG", logger="contextual_orchestrator.orchestrator"):
+            _log_provider_attempt_failed(agent, 0, failure, True)
+        expected = status if type(status) is int and 100 <= status <= 599 else None
+        assert f"provider_status={expected}" in caplog.text
+        assert "error_message=<omitted>" in caplog.text
+        assert "provider.example" not in caplog.text
+        assert "private_failure_text" not in caplog.text
+        assert "private_response_body" not in caplog.text
+        assert body.tell() == 0
+
+    assert failure.closed and body.closed
 
 
 def test_attempt_log_handles_typed_and_non_http_failures_without_stringifying(caplog) -> None:
@@ -126,9 +137,13 @@ def _tool_description_too_long_error() -> urllib.error.HTTPError:
 def test_transient_classification_matches_status_and_network_errors() -> None:
     for code in (408, 409, 425, 429, 500, 502, 503, 504):
         assert code in TRANSIENT_HTTP_STATUS
-        assert is_transient_error(_http_error(code)), f"{code} should be transient"
+        with _http_error(code) as response:
+            assert is_transient_error(response), f"{code} should be transient"
+        assert response.closed
     for code in (400, 401, 403, 404, 422):
-        assert not is_transient_error(_http_error(code)), f"{code} must not be retried"
+        with _http_error(code) as response:
+            assert not is_transient_error(response), f"{code} must not be retried"
+        assert response.closed
     assert is_transient_error(urllib.error.URLError("dns"))
     assert is_transient_error(TimeoutError("read timeout"))
     assert is_transient_error(socket.timeout("slow"))
@@ -212,9 +227,10 @@ def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> N
 
 
 def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -> None:
-    stopped = _stopped_http_error()
-    assert not is_transient_error(stopped)
-    assert is_transient_error(_http_error(409))
+    with _stopped_http_error() as stopped, _http_error(409) as conflict:
+        assert not is_transient_error(stopped)
+        assert is_transient_error(conflict)
+    assert stopped.closed and conflict.closed
 
 
 def test_oversized_tool_description_becomes_provider_request_too_large() -> None:
@@ -879,9 +895,9 @@ def test_free_model_advances_through_the_free_pool_on_retryable_5xx() -> None:
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
             calls.append(agent.id)
             if agent.id == "free_route_a":
-                raise classify_provider_failure(_http_error(502), agent_id=agent.id, model=agent.model)
+                raise _classified_http_error(502, agent)
             if agent.id == "free_route_b":
-                raise classify_provider_failure(_http_error(503), agent_id=agent.id, model=agent.model)
+                raise _classified_http_error(503, agent)
             return f"[{agent.id}] answer"
 
     orchestrator = _free_pool_orchestrator(
@@ -925,7 +941,7 @@ def test_free_model_advances_through_the_free_pool_on_non_retryable_4xx() -> Non
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
             calls.append(agent.id)
             if agent.id == "free_route_a":
-                raise classify_provider_failure(_http_error(400), agent_id=agent.id, model=agent.model)
+                raise _classified_http_error(400, agent)
             return f"[{agent.id}] answer"
 
     orchestrator = _free_pool_orchestrator(
@@ -962,9 +978,7 @@ def test_free_model_exhausted_pool_fails_closed_never_promotes_to_priced_agent()
             if agent.id == "priced_worker":  # pragma: no cover - must never be reached
                 return "[priced_worker] answer"
             return_status = 502 if agent.id == "free_route_a" else 503
-            raise classify_provider_failure(
-                _http_error(return_status), agent_id=agent.id, model=agent.model
-            )
+            raise _classified_http_error(return_status, agent)
 
     client = AllFreeRoutesDown()
     orchestrator = _free_pool_orchestrator(client, free_ids=("free_route_a", "free_route_b"))
@@ -1169,13 +1183,16 @@ def test_free_model_failover_survives_a_tool_shaped_provider_message() -> None:
     orchestrator = _free_pool_orchestrator(
         ToolShapedFailureThenBackup(), free_ids=("free_route_a", "free_route_b")
     )
-    result = orchestrator.route_once(
-        [{"role": "user", "content": "route this"}],
-        model_name=TaskOrchestrator.FREE_MODEL,
-    )
+    with tool_shaped_error:
+        result = orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
 
-    assert result["answer"] == "[free_route_b] answer"
-    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+        assert result["answer"] == "[free_route_b] answer"
+        assert result["trace"][0]["served_agent_id"] == "free_route_b"
+
+    assert tool_shaped_error.closed
 
 
 def test_auto_model_still_fails_over_on_retryable_5xx_without_change() -> None:
@@ -1189,7 +1206,7 @@ def test_auto_model_still_fails_over_on_retryable_5xx_without_change() -> None:
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
             self.calls.append(agent.id)
             if agent.id == "auto_primary":
-                raise classify_provider_failure(_http_error(502), agent_id=agent.id, model=agent.model)
+                raise _classified_http_error(502, agent)
             return f"[{agent.id}] answer"
 
     agents = [
