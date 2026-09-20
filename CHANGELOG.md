@@ -12,6 +12,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Safe same-agent retries now preserve every failed attempt before retrying and the eventual served attempt in the typed route receipt, without misclassifying tool failures as provider API errors.
 - Terminal `route_once` tool stops now retain every prior candidate attempt and
   the final `fail_closed` attempt in the existing secret-free HTTP 409 route
   receipt. API-contract tests no longer use deprecated `jsonschema.RefResolver`.
