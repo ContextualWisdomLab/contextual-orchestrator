@@ -369,7 +369,7 @@ def test_admin_state_exposes_both_routing_ledgers() -> None:
     orchestrator = _orch(ModelAgent("worker_agent", "mock", tags=("reasoning",)))
     orchestrator._quality_router.observe_success("worker_agent", 0.5, output_tokens=25)
     evidence = orchestrator.admin_state()["routing_evidence"]
-    assert set(evidence) == {"transport", "quality", "health"}
+    assert set(evidence) == {"transport", "quality", "health", "health_policy"}
     assert evidence["quality"]["worker_agent"]["ewma_tokens_per_second"] == pytest.approx(50.0)
     assert evidence["transport"]["worker_agent"]["ewma_tokens_per_second"] is None
 

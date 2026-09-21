@@ -2043,8 +2043,60 @@ def _is_omit_equivalent_control(key: str, value: Any) -> bool:
 #: evidence measured those at p50 ~265-302 s each. ``fast`` is an immediate
 #: rejection (404, 400, 500, malformed body). 429 and 413 never reach the
 #: health ledger at all -- quota and request size are not member health.
-_SLOW_HEALTH_ERROR_CODES = frozenset({"provider_timeout", "provider_connection_error"})
+_SLOW_HEALTH_ERROR_CODES = frozenset(
+    {
+        "provider_timeout",
+        "provider_connection_error",
+        # ModelClient wraps a dropped/timed-out chat connection as
+        # provider_outcome_unknown before _invoke sees it; an administrator
+        # model deadline is likewise a full post-send wait.
+        PROVIDER_OUTCOME_UNKNOWN_CODE,
+        "model_timeout",
+    }
+)
 _SLOW_HEALTH_PROVIDER_STATUSES = frozenset({408, 502, 504})
+
+
+#: The single deployable switch for the observed-health quarantine: a KV
+#: (credential-registry) setting read once at ``TaskOrchestrator``
+#: construction. Bootstrap may copy it from the environment into the KV
+#: (``review_gateway.register_review_credentials``); runtime never reads env.
+OBSERVED_HEALTH_QUARANTINE_SETTING = "CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE"
+_SWITCH_ON = frozenset({"enabled", "true", "on", "1"})
+_SWITCH_OFF = frozenset({"disabled", "false", "off", "0"})
+
+
+def _resolve_observed_health_quarantine(explicit: bool | None) -> tuple[bool, str]:
+    """Resolve the quarantine switch and its audit source.
+
+    An explicit boolean wins (``source='argument'``). Otherwise the KV value
+    decides (``'kv'``); unset is off (``'default'``). A value that is neither
+    on nor off fails construction instead of silently picking a policy. A
+    KV backend error keeps the legacy policy (``'kv_unavailable'``).
+    """
+    if explicit is not None:
+        if not isinstance(explicit, bool):
+            raise TypeError("observed_health_quarantine must be a boolean or None")
+        return explicit, "argument"
+    try:
+        raw = get_credential(OBSERVED_HEALTH_QUARANTINE_SETTING)
+    except Exception:  # noqa: BLE001 - an unreadable KV keeps the legacy breaker
+        _LOGGER.warning(
+            "observed_health_quarantine_kv_unavailable setting=%s enabled=False",
+            OBSERVED_HEALTH_QUARANTINE_SETTING,
+        )
+        return False, "kv_unavailable"
+    if raw is None or not str(raw).strip():
+        return False, "default"
+    value = str(raw).strip().casefold()
+    if value in _SWITCH_ON:
+        return True, "kv"
+    if value in _SWITCH_OFF:
+        return False, "kv"
+    raise ValueError(
+        f"{OBSERVED_HEALTH_QUARANTINE_SETTING} must be one of "
+        "enabled/disabled/true/false/on/off/1/0"
+    )
 
 
 def classify_health_failure(exc: BaseException | None) -> str:
@@ -5577,7 +5629,7 @@ class TaskOrchestrator:
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
         rate_limit_unknown_cooldown_seconds: float = 5.0,
-        observed_health_quarantine: bool = False,
+        observed_health_quarantine: bool | None = None,
     ) -> None:
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
@@ -5712,9 +5764,13 @@ class TaskOrchestrator:
         # in the runbook. A half-open failure doubles the cooldown up to
         # circuit_max_cooldown_seconds; nothing is excluded permanently.
         # These are breaker knobs only: no timeout, retry or 413/429 policy.
-        if not isinstance(observed_health_quarantine, bool):
-            raise TypeError("observed_health_quarantine must be a boolean")
-        self.observed_health_quarantine = observed_health_quarantine
+        # One deployable switch: an explicit constructor boolean wins;
+        # otherwise the KV setting OBSERVED_HEALTH_QUARANTINE_SETTING is read
+        # once here (KV, not env). Unset means off (legacy 3/30).
+        (
+            self.observed_health_quarantine,
+            self.observed_health_quarantine_source,
+        ) = _resolve_observed_health_quarantine(observed_health_quarantine)
         self._circuit_health: dict[str, dict[str, Any]] = {}
         self._circuit_clock: Callable[[], float] | None = None
         self.slow_failure_weight = 2.0
@@ -5723,6 +5779,16 @@ class TaskOrchestrator:
         self.circuit_failure_window = 10
         self.circuit_failure_rate_min_observations = 6
         self.circuit_failure_rate_threshold = 0.6
+        # Startup audit line: which breaker policy this process serves with
+        # (the review sidecar logs at DEBUG, so it lands in the CI artifact).
+        _LOGGER.info(
+            "observed_health_quarantine enabled=%s source=%s setting=%s "
+            "slow_failure_cooldown_seconds=%s",
+            self.observed_health_quarantine,
+            self.observed_health_quarantine_source,
+            OBSERVED_HEALTH_QUARANTINE_SETTING,
+            self.slow_failure_cooldown_seconds,
+        )
         # Per-agent provider-declared quota cooldown (Retry-After / x-ratelimit-reset*),
         # tracked separately from the health circuit breaker above: a 429 is quota
         # exhaustion, not a model health failure, so it must never trip or feed
@@ -11666,6 +11732,24 @@ class TaskOrchestrator:
             current_request_id() or "-",
         )
         return ordered
+
+    def circuit_health_policy(self) -> dict[str, Any]:
+        """Audit view of the active breaker policy and where the switch came from."""
+        return {
+            "observed_health_quarantine": self.observed_health_quarantine,
+            "source": self.observed_health_quarantine_source,
+            "setting_name": OBSERVED_HEALTH_QUARANTINE_SETTING,
+            "circuit_failure_threshold": self.circuit_failure_threshold,
+            "circuit_reset_seconds": float(self.circuit_reset_seconds),
+            "slow_failure_weight": float(self.slow_failure_weight),
+            "slow_failure_cooldown_seconds": float(self.slow_failure_cooldown_seconds),
+            "circuit_max_cooldown_seconds": float(self.circuit_max_cooldown_seconds),
+            "circuit_failure_window": int(self.circuit_failure_window),
+            "circuit_failure_rate_min_observations": int(
+                self.circuit_failure_rate_min_observations
+            ),
+            "circuit_failure_rate_threshold": float(self.circuit_failure_rate_threshold),
+        }
 
     def circuit_health_snapshot(self) -> dict[str, dict[str, Any]]:
         """Bounded per-member breaker/health evidence (no prompt or provider text)."""
@@ -19353,6 +19437,7 @@ class TaskOrchestrator:
                 "transport": self._group_router.snapshot(),
                 "quality": self._quality_router.snapshot(),
                 "health": self.circuit_health_snapshot(),
+                "health_policy": self.circuit_health_policy(),
             },
             "recent_workflow_runs": [
                 self._shorten_run(run)

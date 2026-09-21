@@ -140,7 +140,8 @@ push or open a PR.
   unknown-outcome no-replay controls alongside it. Transport spies are not wire
   delivery evidence. Preserve the default-null model timeout.
 
-- Observed-health quarantine (`observed_health_quarantine`, operator opt-in,
+- Observed-health quarantine (one switch: KV setting
+  `CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE`, operator opt-in,
   default off = legacy 3/30) weights slow post-send failures for breaker and
   candidate order only; it never authorizes retry or changes timeouts. Keep
   the never-empty fallback and in-memory restart semantics. Replay limits and

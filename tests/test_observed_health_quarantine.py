@@ -29,7 +29,14 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     classify_health_failure,
 )
+from contextual_orchestrator.credentials import (  # noqa: E402
+    InMemoryCredentialBackend,
+    register_credential,
+    set_backend,
+)
+from contextual_orchestrator.orchestrator import OBSERVED_HEALTH_QUARANTINE_SETTING  # noqa: E402
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
+from contextual_orchestrator.review_gateway import register_review_credentials  # noqa: E402
 
 _LOGGER_NAME = "contextual_orchestrator.orchestrator"
 
@@ -130,6 +137,16 @@ def test_failure_classes_separate_slow_post_send_from_fast_rejections() -> None:
     )
     assert classify_health_failure(not_found) == "fast"
     assert classify_health_failure(RuntimeError("opaque")) == "fast"
+
+
+def test_wrapped_post_send_failures_stay_slow_class() -> None:
+    """ModelClient wraps a dropped connection as provider_outcome_unknown before _invoke sees it."""
+    for code in ("provider_outcome_unknown", "model_timeout"):
+        wrapped = ProviderUpstreamError(
+            agent_id="a", model="m", error_code=code, message="x",
+            client_status=502, provider_status=None, retryable=False,
+        )
+        assert classify_health_failure(wrapped) == "slow_transport", code
 
 
 def test_served_slow_failure_demotes_agent_for_the_next_request() -> None:
@@ -282,6 +299,50 @@ def test_health_snapshot_is_bounded_and_prompt_free() -> None:
     }
     assert "task" not in repr(snapshot)
     assert orchestrator.admin_state()["routing_evidence"]["health"] == snapshot
+
+
+@contextmanager
+def _fresh_kv() -> Iterator[None]:
+    set_backend(InMemoryCredentialBackend())
+    try:
+        yield
+    finally:
+        set_backend(None)
+
+
+def _launcher_shaped() -> TaskOrchestrator:
+    """Construct exactly as the review launcher does: no policy argument."""
+    return TaskOrchestrator([ModelAgent("solo_worker", "mock")], client=ModelClient())
+
+
+def test_kv_switch_is_the_single_deployable_activation_and_is_audited() -> None:
+    with _fresh_kv():
+        default = _launcher_shaped()
+        assert (default.observed_health_quarantine, default.observed_health_quarantine_source) == (False, "default")
+        register_review_credentials({OBSERVED_HEALTH_QUARANTINE_SETTING: "enabled\n"})
+        with _captured_logs(logging.INFO) as buffer:
+            enabled = _launcher_shaped()
+        assert enabled.observed_health_quarantine is True
+        assert f"observed_health_quarantine enabled=True source=kv setting={OBSERVED_HEALTH_QUARANTINE_SETTING}" in buffer.getvalue()
+        policy = enabled.admin_state()["routing_evidence"]["health_policy"]
+        assert policy["observed_health_quarantine"] is True and policy["source"] == "kv"
+        assert policy["slow_failure_cooldown_seconds"] == 360.0
+        # An explicit constructor boolean still wins over the KV value.
+        assert TaskOrchestrator([ModelAgent("solo_worker", "mock")], observed_health_quarantine=False).observed_health_quarantine is False
+
+
+def test_kv_switch_off_values_and_invalid_value_fail_closed() -> None:
+    with _fresh_kv():
+        register_credential(OBSERVED_HEALTH_QUARANTINE_SETTING, "disabled")
+        off = _launcher_shaped()
+        assert (off.observed_health_quarantine, off.observed_health_quarantine_source) == (False, "kv")
+        register_credential(OBSERVED_HEALTH_QUARANTINE_SETTING, "maybe")
+        try:
+            _launcher_shaped()
+        except ValueError as exc:
+            assert OBSERVED_HEALTH_QUARANTINE_SETTING in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("an unrecognized switch value must fail construction")
 
 
 if __name__ == "__main__":

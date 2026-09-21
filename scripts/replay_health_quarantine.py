@@ -150,11 +150,14 @@ def replay_run(
     totals: dict,
     policy: dict | None = None,
     demotion: bool = True,
+    exclude_429: bool = False,
 ) -> None:
     """Drive one fresh orchestrator through one run's attempts in time order.
 
     ``policy`` overrides breaker attributes (for sensitivity runs);
     ``demotion=False`` ignores slow-failure demotion to isolate quarantine.
+    ``exclude_429=True`` is the 429-study counterfactual: served provider
+    429s are kept out of the ledger (as the passthrough path already does).
     """
     agents = {}
     for attempt in attempts:
@@ -179,6 +182,7 @@ def replay_run(
     skipped: set[int] = set()
     first_after_open: set[str] = set()
     harmful_requests: set[str] = set()
+    streak_429: dict[str, bool] = {}
     for stamp, kind, index in events:
         clock["now"] = stamp
         attempt = attempts[index]
@@ -237,9 +241,14 @@ def replay_run(
             continue
         if attempt["ok"]:
             orchestrator._record_success(agent_id)
+            streak_429[agent_id] = False
             continue
         if attempt["status"] in _NEVER_HEALTH:
             continue
+        if served and attempt["status"] == "429" and attempt["recorded"]:
+            totals["served_429_charged"] += 1
+            if exclude_429:
+                continue
         if served and not attempt["recorded"]:
             continue  # the deployed path did not charge it to the breaker
         before = orchestrator.circuit_health_snapshot().get(agent_id, {}).get("open_count", 0)
@@ -249,12 +258,45 @@ def replay_run(
                 _synthetic_failure(attempt["error_type"], attempt["status"])
             ),
         )
+        streak_429[agent_id] = streak_429.get(agent_id, False) or attempt["status"] == "429"
         if orchestrator.circuit_health_snapshot()[agent_id]["open_count"] > before:
             totals["quarantine_episodes"] += 1
+            if streak_429[agent_id]:
+                totals["episodes_with_429_in_streak"] += 1
+            streak_429[agent_id] = False
             first_after_open.add(agent_id)
             if not served:
                 totals["preflight_triggered_episodes"] += 1
     totals["harmful_requests"] += len(harmful_requests)
+
+
+def deployed_429_opens(path: Path) -> dict[str, int]:
+    """Count deployed ``circuit_opened`` events whose charged streak held a 429.
+
+    Reads the deployed (legacy 3/30) log itself, independent of the replay:
+    the charged failures for an agent since its last clear/reset/open.
+    """
+    streak: dict[str, list[str]] = defaultdict(list)
+    last_status: dict[str, str] = {}
+    counts = {"deployed_circuit_opened": 0, "deployed_opened_with_429_in_streak": 0}
+    for line in path.read_text(errors="replace").splitlines():
+        failed = _FAILED.match(line)
+        if failed:
+            last_status[failed.group(2)] = failed.group(4)
+            continue
+        charged = _CIRCUIT_FAILURE.match(line)
+        if charged:
+            streak[charged.group(2)].append(last_status.get(charged.group(2), "?"))
+            continue
+        edge = re.match(_TS + r"circuit_(opened|cleared|reset) agent_id=(\S+)", line)
+        if edge:
+            agent_id = edge.group(3)
+            if edge.group(2) == "opened":
+                counts["deployed_circuit_opened"] += 1
+                if "429" in streak[agent_id]:
+                    counts["deployed_opened_with_429_in_streak"] += 1
+            streak[agent_id] = []
+    return counts
 
 
 def main(argv: list[str] | None = None) -> dict:
@@ -264,6 +306,7 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--include-preflight", action="store_true")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--no-demotion", action="store_true")
+    parser.add_argument("--exclude-429", action="store_true")
     parser.add_argument(
         "--legacy-like",
         action="store_true",
@@ -281,12 +324,17 @@ def main(argv: list[str] | None = None) -> dict:
             totals=totals,
             policy=policy,
             demotion=demotion,
+            exclude_429=args.exclude_429,
         )
+        deployed = deployed_429_opens(path)
+        for key, value in deployed.items():
+            totals[key] += value
     summary = {
         "runs": len(logs),
         "include_preflight": args.include_preflight,
         "demotion": demotion,
         "policy_overrides": policy,
+        "exclude_429": args.exclude_429,
         **{key: round(value, 1) for key, value in sorted(totals.items())},
     }
     text = json.dumps(summary, indent=2, sort_keys=True)

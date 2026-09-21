@@ -5723,10 +5723,11 @@ observations can remain evidence but are not by themselves a production
 policy.
 
 **Amendment (2026-09-22): operator opt-in mechanism, default unchanged.**
-`TaskOrchestrator(observed_health_quarantine=True)` adds failure-class
+The KV setting `CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE=enabled`
+(or `TaskOrchestrator(observed_health_quarantine=True)`) adds failure-class
 weighting, a cooldown longer than one slow attempt, a failure-rate window that
 a single success cannot erase, a half-open probe, and demotion of members
-whose last failure was slow. The default stays `False`, which is the legacy
+whose last failure was slow. The default stays off, which is the legacy
 3/30 policy, per the boundary above. Replay evidence, proposed values and the
 enablement decision are in
 [the observed-health runbook](doctoring/observed-health-quarantine.md).
