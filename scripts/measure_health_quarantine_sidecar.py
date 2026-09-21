@@ -197,6 +197,7 @@ def run(mode: str, requests: int, slow_seconds: float, fast_seconds: float) -> d
                 }
             )
     return {
+        "label": "SYNTHETIC - fake in-process provider at 1/1000 time scale; not provider-real",
         "mode": mode,
         "health_policy": orchestrator.admin_state()["routing_evidence"].get("health_policy"),
         "slow_seconds": slow_seconds,

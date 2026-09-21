@@ -61,7 +61,7 @@ mechanism therefore extends that ledger rather than adding a second breaker.
 | Concern | Behavior |
 | --- | --- |
 | Signal | Real served-request outcomes. Every existing `_record_failure` / `_record_success` call site feeds the ledger. Where the exception is in hand (`_invoke`, `stream_route`, and the explicit and virtual passthrough loops), the call passes `failure_class=classify_health_failure(exc)`. The launcher preflight is not duplicated. The two single-call picks outside the failover loop, auto-mode triage and the conduct model judge, use the same order when the switch is on: open members are skipped and demoted ones are tried last. |
-| Failure class | `slow_transport`: `provider_timeout`, `provider_connection_error`, `provider_outcome_unknown` (how `ModelClient` wraps a dropped chat connection before `_invoke` sees it) or `model_timeout`; status 408/502/504; or a raw timeout, reset, `RemoteDisconnected` or `URLError`. `fast`: everything else. Call sites that pass no class count as `unclassified` with weight 1. 413 and passthrough 429 never reach the ledger, the same as before. |
+| Failure class | `slow_transport`: `provider_timeout`, `provider_connection_error`, `provider_outcome_unknown` (how `ModelClient` wraps a dropped chat connection before `_invoke` sees it) or `model_timeout`; status 408/502/504; or a raw timeout, reset, `RemoteDisconnected` or `URLError`. `fast`: everything else. Call sites that pass no class count as `unclassified` with weight 1. 413 and provider 429 never reach the ledger on any chat path (route, stream, passthrough); 503 does. |
 | Demotion | Once a member's latest failure is slow, `_failover_candidates` keeps it eligible but stable-sorts it behind members without a recent slow failure. The result of request N therefore changes the order for request N+1. A single failure never excludes a member. |
 | Quarantine | The breaker opens when any of these holds: (a) the weighted consecutive score (slow = `slow_failure_weight` 2.0, else 1.0) reaches `circuit_failure_threshold` 3, which means two slow failures or three fast ones; (b) at least 6 of the last 10 outcomes are recorded and the failure rate is at least 0.6 (a single success no longer erases the evidence); (c) the half-open probe fails. |
 | Cooldown | A trip that involved a slow failure lasts `slow_failure_cooldown_seconds` (360 s, longer than the longest observed slow failure of 302.3 s). A trip from fast failures only uses `circuit_reset_seconds` (30 s). Each half-open failure doubles the cooldown, capped at `circuit_max_cooldown_seconds` (3600 s). Any success resets the escalation level. Exclusion is never permanent. |
@@ -70,7 +70,7 @@ mechanism therefore extends that ledger rather than adding a second breaker.
 | Metrics | WARNING `circuit_opened ... reset_seconds=<cooldown> failure_class=... trigger=consecutive|failure_rate|half_open_failure request_id=...`; INFO `circuit_half_open`, `circuit_recovered`; DEBUG `circuit_failure ... failure_class=...`. `circuit_health_snapshot()` holds bounded per-member fields: state, model, provider, counts, class, cooldown, remaining, window rate and open count. It is exposed at `admin_state()["routing_evidence"]["health"]`; `test_measured_routing_evidence` pins the key set. No prompt text or provider body text is included. |
 | Concurrency | All ledger reads and writes happen under `_circuit_lock`. Concurrent failures open the breaker exactly once (tested with 16 threads). |
 | Restart | State is in memory only. After a process restart, every member starts unquarantined and undemoted. Each Noema sidecar is a fresh process, so learning is scoped to one run. |
-| Unchanged | Model timeouts (the default null timeout stays), retry and replay authorization, 413/429 handling and model-policy defaults are all untouched. The class only weights health; it never authorizes a retry. |
+| Unchanged | Model timeouts (the default null timeout stays), retry and replay authorization, 413 handling and model-policy defaults are all untouched. Provider 429 handling was aligned across paths (see the 429 section). The class only weights health; it never authorizes a retry. |
 
 Compatibility note: `_circuit_open` now tests `opened_at` instead of
 `failures >= threshold`. With the flag off the two tests are equivalent,
@@ -120,8 +120,9 @@ clock set to the log timestamps.
   (92,186 s).
 - **What feeds the ledger.** A served failure feeds the ledger only if the
   deployed log shows the deployed path charged it, meaning a
-  `circuit_failure` line follows it. 413 is never charged. Served 429 on the
-  `_invoke` path is charged.
+  `circuit_failure` line follows it. 413 is never charged. The deployed pin
+  charged served 429 on the `_invoke` path; `--legacy-like`/`--include-429`
+  replay that, while the default replay excludes 429 as current code does.
 - **Forced attempts.** An attempt that started while the deployed breaker was
   open (`circuit_opened` less than 30 s earlier, not cleared) was forced by
   the never-empty fallback or by a pinned model. The replay never counts such
@@ -139,6 +140,8 @@ python3 scripts/replay_health_quarantine.py <artifacts_dir> \
   --json docs/doctoring/observed-health-quarantine-replay-served.json
 python3 scripts/replay_health_quarantine.py <artifacts_dir> --include-preflight \
   --json docs/doctoring/observed-health-quarantine-replay-preflight-whatif.json
+python3 scripts/replay_health_quarantine.py <artifacts_dir> --include-429 \
+  --json docs/doctoring/observed-health-quarantine-replay-include-429.json
 python3 scripts/replay_health_quarantine.py <artifacts_dir> --legacy-like   # deployed default
 python3 scripts/replay_health_quarantine.py <artifacts_dir> --no-demotion
 ```
@@ -370,9 +373,23 @@ and `test_kv_switch_off_values_and_invalid_value_fail_closed`.
 
 No launcher Python change is needed.
 
-## 429 study (analysis only; 429 behavior unchanged)
+## 429 policy (implemented on this branch)
 
-**Code, at this branch:**
+A provider 429 now records only the quota cooldown on every chat path:
+`_invoke` and `stream_route` share `TaskOrchestrator._charges_breaker`, which
+mirrors the passthrough `skip_breaker` rule. A 503 still charges the breaker.
+`stream_route` previously recorded no quota cooldown at all; it now records
+one. Model-group stability observation (`_group_router.observe_failure`) is
+unchanged: `_invoke` and `stream_route` still observe a 429 there, while
+passthrough skips it. That residual difference is out of scope here.
+
+Pinning regression: `tests/test_rate_limit_breaker_asymmetry.py`, one fixture
+through route, stream and passthrough. For 429 it asserts the cooldown is
+recorded, `_circuit` has no entry and the health ledger is empty. For 503 it
+asserts exactly one breaker failure. RED at `b073b160`: route charged the
+breaker (`failures == 1.0`) and stream recorded no cooldown.
+
+**Code before this change (`b073b160`), kept for the record:**
 
 - `_invoke` (`orchestrator.py` ~11137–11204) records the quota cooldown
   (`if exc.provider_status in (429, 503): self._record_rate_limit(...)`).
@@ -420,8 +437,10 @@ and messages go through `route_once` and through `proxy_completion`.
   the charged streak since the last clear/reset.
 - Legacy replay (flag off): 64 episodes, 11 with a 429 in the streak.
   Excluding 429 gives 53 episodes.
-- Flag on: 37 episodes, 5 with a 429 in the streak. Excluding 429 gives 32
-  episodes (`observed-health-quarantine-replay-exclude-429.json`).
+- Flag on: 37 episodes, 5 with a 429 in the streak
+  (`observed-health-quarantine-replay-include-429.json`). Excluding 429, as
+  current code does, gives 32 episodes
+  (`observed-health-quarantine-replay-served.json`).
 - Estimated saved seconds: **36,831.6 s including 429 vs 36,827.5 s
   excluding it (Δ 4.1 s)**. False-positive episodes are 1 vs 1, and harmful
   removals 1 vs 1. Charged 429s are fast (p50 0.1 s), so skipping them saves
@@ -447,7 +466,7 @@ and messages go through `route_once` and through `proxy_completion`.
   - The two chat paths disagree today, so the same provider response has
     different consequences depending on the request shape.
 
-**Recommendation (not implemented):** make `_invoke` and `stream_route`
+**Decision (implemented above):** make `_invoke` and `stream_route`
 match the passthrough path. Keep recording the 429 quota cooldown, but do not
 call `_record_failure` for a provider 429. Leave 503 as a real availability
 signal, as the passthrough path does.
@@ -466,7 +485,7 @@ signal, as the passthrough path does.
 2. The 360 s cooldown is an experimental candidate. The corrected sweep
    shows 300–360 s dominating 600 s: slightly lower savings, but 1 harmful
    removal instead of 7. This is tuned on a biased sample.
-3. Whether to adopt the 429 recommendation above in a separate PR.
+3. The 429 alignment is implemented; whether model-group stability should also skip 429 (as passthrough does) is open.
 4. A persisted health ledger across restarts is not implemented, so the
    gateway starts unquarantined.
 5. With the flag off, the legacy judge pick still ignores the breaker. This

@@ -156,8 +156,10 @@ def replay_run(
 
     ``policy`` overrides breaker attributes (for sensitivity runs);
     ``demotion=False`` ignores slow-failure demotion to isolate quarantine.
-    ``exclude_429=True`` is the 429-study counterfactual: served provider
-    429s are kept out of the ledger (as the passthrough path already does).
+    ``exclude_429=True`` mirrors current code: every chat path keeps a
+    provider 429 out of the breaker/ledger. The deployed pin (767e67f)
+    charged ``_invoke`` 429s, so ``--legacy-like`` and ``--include-429``
+    replay with them included.
     """
     agents = {}
     for attempt in attempts:
@@ -306,7 +308,11 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--include-preflight", action="store_true")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--no-demotion", action="store_true")
-    parser.add_argument("--exclude-429", action="store_true")
+    parser.add_argument(
+        "--include-429",
+        action="store_true",
+        help="charge served 429s as the deployed pin did (default: excluded, as current code)",
+    )
     parser.add_argument(
         "--legacy-like",
         action="store_true",
@@ -317,6 +323,7 @@ def main(argv: list[str] | None = None) -> dict:
     totals: dict = defaultdict(float)
     policy = {"observed_health_quarantine": not args.legacy_like}
     demotion = not (args.no_demotion or args.legacy_like)
+    exclude_429 = not (args.include_429 or args.legacy_like)
     for path in logs:
         replay_run(
             parse_run(path),
@@ -324,7 +331,7 @@ def main(argv: list[str] | None = None) -> dict:
             totals=totals,
             policy=policy,
             demotion=demotion,
-            exclude_429=args.exclude_429,
+            exclude_429=exclude_429,
         )
         deployed = deployed_429_opens(path)
         for key, value in deployed.items():
@@ -334,7 +341,7 @@ def main(argv: list[str] | None = None) -> dict:
         "include_preflight": args.include_preflight,
         "demotion": demotion,
         "policy_overrides": policy,
-        "exclude_429": args.exclude_429,
+        "exclude_429": exclude_429,
         **{key: round(value, 1) for key, value in sorted(totals.items())},
     }
     text = json.dumps(summary, indent=2, sort_keys=True)

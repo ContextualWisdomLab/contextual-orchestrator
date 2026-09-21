@@ -14,6 +14,7 @@
       "slow_failure_weight": 2.0,
       "source": "kv"
     },
+    "label": "SYNTHETIC - fake in-process provider at 1/1000 time scale; not provider-real",
     "mode": "kv",
     "provider_calls_by_kind": {
       "chat": 17,
@@ -22,49 +23,49 @@
     },
     "requests": [
       {
-        "latency_ms": 453.5,
+        "latency_ms": 412.1,
         "provider_attempts": 5,
         "slow_attempts": 1,
         "status": 200
       },
       {
-        "latency_ms": 30.3,
+        "latency_ms": 38.1,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 30.2,
+        "latency_ms": 38.0,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 31.9,
+        "latency_ms": 35.5,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 32.0,
+        "latency_ms": 36.1,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 34.5,
+        "latency_ms": 33.1,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 33.7,
+        "latency_ms": 31.7,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 38.6,
+        "latency_ms": 31.3,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
@@ -76,7 +77,7 @@
       "triage": 0
     },
     "slow_seconds": 0.265,
-    "total_latency_ms": 684.7,
+    "total_latency_ms": 655.9,
     "total_provider_attempts": 33,
     "total_slow_attempts": 1
   },
@@ -95,6 +96,7 @@
       "slow_failure_weight": 2.0,
       "source": "default"
     },
+    "label": "SYNTHETIC - fake in-process provider at 1/1000 time scale; not provider-real",
     "mode": "off",
     "provider_calls_by_kind": {
       "chat": 19,
@@ -103,49 +105,49 @@
     },
     "requests": [
       {
-        "latency_ms": 1113.5,
+        "latency_ms": 1339.2,
         "provider_attempts": 5,
         "slow_attempts": 3,
         "status": 200
       },
       {
-        "latency_ms": 839.1,
+        "latency_ms": 834.7,
         "provider_attempts": 5,
         "slow_attempts": 3,
         "status": 200
       },
       {
-        "latency_ms": 842.5,
+        "latency_ms": 835.8,
         "provider_attempts": 5,
         "slow_attempts": 3,
         "status": 200
       },
       {
-        "latency_ms": 567.2,
+        "latency_ms": 560.8,
         "provider_attempts": 4,
         "slow_attempts": 2,
         "status": 200
       },
       {
-        "latency_ms": 571.3,
+        "latency_ms": 563.0,
         "provider_attempts": 4,
         "slow_attempts": 2,
         "status": 200
       },
       {
-        "latency_ms": 567.8,
+        "latency_ms": 556.8,
         "provider_attempts": 4,
         "slow_attempts": 2,
         "status": 200
       },
       {
-        "latency_ms": 560.2,
+        "latency_ms": 556.1,
         "provider_attempts": 4,
         "slow_attempts": 2,
         "status": 200
       },
       {
-        "latency_ms": 564.7,
+        "latency_ms": 554.3,
         "provider_attempts": 4,
         "slow_attempts": 2,
         "status": 200
@@ -157,7 +159,7 @@
       "triage": 0
     },
     "slow_seconds": 0.265,
-    "total_latency_ms": 5626.3,
+    "total_latency_ms": 5800.7,
     "total_provider_attempts": 35,
     "total_slow_attempts": 19
   },
@@ -176,6 +178,7 @@
       "slow_failure_weight": 2.0,
       "source": "argument"
     },
+    "label": "SYNTHETIC - fake in-process provider at 1/1000 time scale; not provider-real",
     "mode": "on",
     "provider_calls_by_kind": {
       "chat": 17,
@@ -184,31 +187,19 @@
     },
     "requests": [
       {
-        "latency_ms": 475.6,
+        "latency_ms": 445.1,
         "provider_attempts": 5,
         "slow_attempts": 1,
         "status": 200
       },
       {
-        "latency_ms": 32.0,
+        "latency_ms": 29.4,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 32.1,
-        "provider_attempts": 4,
-        "slow_attempts": 0,
-        "status": 200
-      },
-      {
-        "latency_ms": 33.2,
-        "provider_attempts": 4,
-        "slow_attempts": 0,
-        "status": 200
-      },
-      {
-        "latency_ms": 31.8,
+        "latency_ms": 33.1,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
@@ -220,13 +211,25 @@
         "status": 200
       },
       {
-        "latency_ms": 34.0,
+        "latency_ms": 27.1,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
       },
       {
-        "latency_ms": 35.6,
+        "latency_ms": 32.2,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 30.9,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 30.4,
         "provider_attempts": 4,
         "slow_attempts": 0,
         "status": 200
@@ -238,7 +241,7 @@
       "triage": 0
     },
     "slow_seconds": 0.265,
-    "total_latency_ms": 705.1,
+    "total_latency_ms": 659.0,
     "total_provider_attempts": 33,
     "total_slow_attempts": 1
   }
