@@ -70,6 +70,9 @@ class OpenRouterUptimeCollector:
         self._interval_seconds = interval_seconds
         self._startup_delay_seconds = startup_delay_seconds
         self._stop_event = threading.Event()
+        # Serializes stop() with the poll's re-check + commit so no evidence
+        # write can land after stop() has returned; the fetch stays outside.
+        self._commit_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._group_router = group_router
         self._openrouter_agents = [a for a in agents if a.provider_name == "openrouter"]
@@ -89,7 +92,8 @@ class OpenRouterUptimeCollector:
 
     def stop(self) -> None:
         """Signal the sweep thread and wait briefly for it to exit."""
-        self._stop_event.set()
+        with self._commit_lock:
+            self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
 
@@ -116,19 +120,22 @@ class OpenRouterUptimeCollector:
         if agent.provider_name != "openrouter":
             return
         uptime = self._fetch_uptime(agent.model)
-        if uptime is None or self._stop_event.is_set():
+        if uptime is None:
             return
         successes = uptime / 100.0
         failures = 1.0 - successes
-        prev_alpha, prev_beta = self._window_evidence.get(agent.id, (0.0, 0.0))
-        next_alpha = prev_alpha + successes
-        next_beta = prev_beta + failures
-        self._window_evidence[agent.id] = (next_alpha, next_beta)
-        self._group_router.update_prior(
-            agent.id,
-            BETA_PRIOR_SUCCESS_COUNT + next_alpha,
-            BETA_PRIOR_FAILURE_COUNT + next_beta,
-        )
+        with self._commit_lock:
+            if self._stop_event.is_set():
+                return
+            prev_alpha, prev_beta = self._window_evidence.get(agent.id, (0.0, 0.0))
+            next_alpha = prev_alpha + successes
+            next_beta = prev_beta + failures
+            self._window_evidence[agent.id] = (next_alpha, next_beta)
+            self._group_router.update_prior(
+                agent.id,
+                BETA_PRIOR_SUCCESS_COUNT + next_alpha,
+                BETA_PRIOR_FAILURE_COUNT + next_beta,
+            )
 
     def _fetch_uptime(self, model_id: str) -> float | None:
         """Fetch best-endpoint 30-minute availability for one logical model.
