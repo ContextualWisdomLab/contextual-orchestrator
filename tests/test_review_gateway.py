@@ -212,6 +212,34 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
 
 
+def test_main_configures_redacted_logging_before_discovery(monkeypatch):
+    """``--log-level INFO`` makes request/discovery summaries reach sidecar stderr."""
+    calls: list[tuple[object, ...]] = []
+    discovered = [
+        _discovered("openrouter", "review-model", "OPENROUTER_API_KEY")
+    ]
+
+    def fake_discover():
+        """Record discovery order relative to logging configuration."""
+        calls.append(("discover",))
+        return discovered, []
+
+    monkeypatch.setattr(review_gateway, "discover_all_models", fake_discover)
+    monkeypatch.setattr(
+        review_gateway,
+        "configure_logging",
+        lambda level, *, redactor: calls.append(("logging", level, redactor)),
+    )
+    monkeypatch.setattr(review_gateway, "serve", lambda orchestrator, **kwargs: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--log-level", "info"])
+
+    review_gateway.main()
+
+    assert calls == [("logging", "INFO", review_gateway.redact_text), ("discover",)]
+
+
 def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch):
     """CLI deployments can explicitly constrain the bootstrap provider array."""
     discovered = [

@@ -21,13 +21,14 @@ from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from .credentials import NotConfigured, get_credential, register_credential
+from .debug_logging import LOG_LEVEL_NAMES, configure_logging
 from .model_discovery import (
     DiscoveredModel,
     agent_from_discovered,
     discover_all_models,
     general_free_serving_candidates,
 )
-from .orchestrator import ModelClient, TaskOrchestrator
+from .orchestrator import ModelClient, TaskOrchestrator, redact_text
 from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
 from .tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
@@ -282,6 +283,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Explicit local bearer token; otherwise resolve --auth-token-key from the KV.",
     )
     parser.add_argument("--auth-token-key", default=REVIEW_AUTH_CREDENTIAL_NAME)
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=LOG_LEVEL_NAMES,
+        default="WARNING",
+        help=(
+            "Root log level. INFO emits discovery_complete and the body-free "
+            "per-request status/latency_ms/request_id summary."
+        ),
+    )
     return parser
 
 
@@ -289,6 +300,7 @@ def main() -> None:
     """Discover providers and serve the authenticated OpenAI-compatible sidecar."""
     parser = _build_parser()
     args = parser.parse_args()
+    configure_logging(args.log_level, redactor=redact_text)
     try:
         register_review_credentials(
             os.environ,
