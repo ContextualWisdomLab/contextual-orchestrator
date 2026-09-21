@@ -10931,6 +10931,9 @@ class TaskOrchestrator:
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
+        # A later non-retryable failure (e.g. one model's 400) must not hide an
+        # earlier transient one: the exhausted pool's surface is order-independent.
+        last_retryable_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -10990,6 +10993,8 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
+                        if exc.retryable:
+                            last_retryable_upstream_error = exc
                         if exc.provider_status in (429, 503):
                             # Quota cooldown, tracked separately from the
                             # circuit breaker below (a 429 is not a model
@@ -11097,6 +11102,8 @@ class TaskOrchestrator:
                 "request body exceeds every eligible provider limit"
             )
         if last_upstream_error is not None:
+            if not last_upstream_error.retryable and last_retryable_upstream_error is not None:
+                raise last_retryable_upstream_error
             raise last_upstream_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
