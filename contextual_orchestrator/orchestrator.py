@@ -10398,7 +10398,7 @@ class TaskOrchestrator:
             ]
         if not candidates:
             return False
-        triage_agent = candidates[0]
+        triage_agent = self._observed_health_order(candidates)[0]
         messages: list[ChatMessage] = [
             {"role": "system", "content": self.TRIAGE_SYSTEM_PROMPT},
             {"role": "user", "content": text},
@@ -11618,6 +11618,20 @@ class TaskOrchestrator:
             a for a in agents if a.id in demoted
         ]
 
+    def _observed_health_order(self, agents: list[ModelAgent]) -> list[ModelAgent]:
+        """Order an auxiliary single-call pick (triage, judge) by observed health.
+
+        These picks take the first ranked agent without the failover loop, so
+        with the opt-in quarantine they skip open members and try demoted
+        ones last (never-empty fallback). Flag off: unchanged legacy order.
+        """
+        if not self.observed_health_quarantine or not agents:
+            return agents
+        healthy = [agent for agent in agents if not self._circuit_open(agent.id)]
+        if not healthy:
+            return self._all_open_fallback(agents)
+        return self._order_by_observed_health(healthy)
+
     def _all_open_fallback(self, agents: list[ModelAgent]) -> list[ModelAgent]:
         """Never return an empty pool: order all-open members least-recently-failed first.
 
@@ -12233,7 +12247,9 @@ class TaskOrchestrator:
         try:
             judge = next(
                 agent
-                for agent in self._ranked_agents(task, "verifier", free_only=free_only)
+                for agent in self._observed_health_order(
+                    self._ranked_agents(task, "verifier", free_only=free_only)
+                )
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
             )
