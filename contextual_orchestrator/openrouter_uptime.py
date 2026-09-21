@@ -116,7 +116,7 @@ class OpenRouterUptimeCollector:
         if agent.provider_name != "openrouter":
             return
         uptime = self._fetch_uptime(agent.model)
-        if uptime is None:
+        if uptime is None or self._stop_event.is_set():
             return
         successes = uptime / 100.0
         failures = 1.0 - successes
