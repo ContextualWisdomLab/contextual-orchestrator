@@ -88,9 +88,17 @@ shape (`{"failures", "opened_at"}`). The new state lives in `_circuit_health`.
 - Full `pytest tests` (non-strict) on base and head: the only difference was
   `test_admin_state_exposes_both_routing_ledgers`, which pinned
   `{"transport", "quality"}` and is updated for the additive `health` key.
-  The other 200 failures and 31 errors are identical on `origin/main`. They
-  are pre-existing: a `cost_router` import error, `selection_design`
-  KeyErrors, egress allowlist and paper-inventory contracts.
+  A second full run also failed
+  `test_provider_error_taxonomy.py::test_invoke_preserves_final_classified_failure_across_candidates`.
+  That test is a wall-clock rate-limit-wait flake: it failed 1 of 4
+  isolated runs on unmodified `origin/main` as well. The other 200 failures
+  and 31 errors are identical on `origin/main`. They are pre-existing: a
+  `cost_router` import error, `selection_design` KeyErrors, egress allowlist
+  and paper-inventory contracts.
+- Flag-on behavior is exercised through `_invoke` and `_failover_candidates`
+  only. `route_once`, virtual-selector `proxy_completion`, `stream_route` and
+  `conduct` ran only with the flag off (full suite). An end-to-end flag-on
+  test belongs with the enablement decision.
 - `-W error` on the 13 neighbor suites: base and head are both nonclean (81
   and 82 failing ids in one run each, with different sets). The failures are
   dominated by the pre-existing `_TemporaryFileCloser` and unclosed
@@ -118,7 +126,11 @@ clock set to the log timestamps.
   an attempt as skippable (`forced_fallback_attempts`).
 - **Fidelity check.** With the flag off (`--legacy-like`), the replay skips
   **0** attempts, and all 30 of its open-state hits coincide with forced
-  attempts. So the replay reproduces the deployed breaker.
+  attempts. The check also runs the other way: the replayed `circuit_opened`
+  count matches the deployed log's count exactly in 99 of 101 runs. In total
+  the replay opens 64 times against 66 deployed; in the two differing runs
+  the replay opens one fewer time, so it errs conservative. The replay
+  therefore reproduces the deployed breaker.
 
 ```bash
 python3 scripts/replay_health_quarantine.py <artifacts_dir> \
