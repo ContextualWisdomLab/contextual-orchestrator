@@ -6685,6 +6685,7 @@ def build_server(
                             },
                             model_name=TaskOrchestrator.FREE_MODEL,
                             provider_request=review_request,
+                            zdr_only=envelope["zdr_only"],
                         )
                     )
                     try:

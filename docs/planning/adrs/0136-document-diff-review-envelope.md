@@ -32,15 +32,18 @@ locator. It sends `POST /v1/document_diff_reviews` a
 `extractor_version`, a `participant_material: false` attestation, and objects
 with `page`, `object_kind`, `locator`, `change`, per-side `sha256:` hashes, and
 bounded per-side text. Figures and blob-level `page` objects carry hashes and
-caption text only, never pixels.
+caption text only, never pixels. An optional `zdr_only` boolean defaults to
+`true`: document reviews use only zero-data-retention routes unless the caller
+explicitly opts out (for example, a public repository). Without an eligible
+route the request fails closed before any provider call.
 
 The gateway validates the envelope before any provider call and rejects:
 unknown fields; inline binary or media (file signatures, `data:` URIs, long
 base64 runs); credential shapes; resident registration numbers;
 participant-data paths or a missing attestation; and hash/change
 inconsistencies. It asks the free pool for structured findings. Each model
-finding must name an envelope object and quote only that object's text (or a
-named related object's text). Otherwise the response is `502
+finding must name an envelope object and quote at least one span of that
+object's text or a named related object's text, and nothing else. Otherwise the response is `502
 unsupported_evidence`. Deterministic rule findings (figure image changed,
 caption unchanged) do not depend on a model.
 

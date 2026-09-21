@@ -36,3 +36,7 @@ provider call.
 - Participant checks are attestation, path segments, and a resident number
   pattern. They are not proof that no participant material exists.
 - No figure pixels are sent in v1.
+- `zdr_only` defaults to `true`. The review leaf should send `false` only for
+  public repositories, mirroring its `require_zdr` visibility decision.
+- Every model finding must quote at least one envelope span; a hash-only
+  figure/page finding without a quote is rejected (`502 unsupported_evidence`).

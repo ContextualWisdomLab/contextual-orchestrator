@@ -37,7 +37,6 @@ MAX_EXPLANATION_LENGTH = 2000
 
 # "page" is a blob-level object for a PDF or image the leaf cannot split further.
 OBJECT_KINDS = frozenset({"paragraph", "table", "figure", "citation", "style", "page"})
-_TEXTLESS_KINDS = frozenset({"figure", "page"})
 CHANGE_KINDS = frozenset({"added", "removed", "modified", "unchanged"})
 FINDING_CATEGORIES = frozenset({"body", "table", "figure", "citation", "format"})
 FINDING_SEVERITIES = frozenset({"blocker", "major", "minor"})
@@ -59,8 +58,10 @@ _ENVELOPE_FIELDS = frozenset(
         "extractor_version",
         "participant_material",
         "objects",
+        "zdr_only",
     }
 )
+_REQUIRED_ENVELOPE_FIELDS = _ENVELOPE_FIELDS - {"zdr_only"}
 _OBJECT_FIELDS = frozenset(
     {
         "page",
@@ -225,9 +226,13 @@ def _validate_object(value: Any, index: int) -> dict[str, Any]:
 
 def validate_document_diff_envelope(body: Any) -> dict[str, Any]:
     """Return a normalized envelope or raise before any provider can see it."""
-    envelope = _exact_object(body, _ENVELOPE_FIELDS, "envelope", required=_ENVELOPE_FIELDS)
+    envelope = _exact_object(body, _ENVELOPE_FIELDS, "envelope", required=_REQUIRED_ENVELOPE_FIELDS)
     if envelope["contract_version"] != CONTRACT_VERSION:
         raise _reject("unsupported_contract", f"contract_version must be {CONTRACT_VERSION}")
+    # Documents default to zero-data-retention routes; a public repository may opt out.
+    zdr_only = envelope.get("zdr_only", True)
+    if type(zdr_only) is not bool:
+        raise _reject("invalid_zdr_only", "zdr_only must be a boolean")
     if envelope["participant_material"] is not False:
         raise _reject("participant_material", "the extractor must attest participant_material=false", 422)
     base_blob = envelope["base_blob"]
@@ -259,6 +264,7 @@ def validate_document_diff_envelope(body: Any) -> dict[str, Any]:
         "head_blob": head_blob,
         "extractor_version": _reference(envelope["extractor_version"], "extractor_version"),
         "participant_material": False,
+        "zdr_only": zdr_only,
         "objects": normalized,
     }
 
@@ -391,7 +397,7 @@ def validate_document_diff_findings(answer: Any, envelope: Mapping[str, Any]) ->
             )
         elif raw["related_evidence"] is not None:
             raise _reject("unsupported_evidence", f"{field}.related_evidence needs related_object_index", 502)
-        if evidence_base is None and evidence_head is None and item["object_kind"] not in _TEXTLESS_KINDS:
+        if evidence_base is None and evidence_head is None and related_evidence is None:
             raise _reject("unsupported_evidence", f"{field} quotes no evidence", 502)
         explanation = raw["explanation"]
         if type(explanation) is not str or not explanation.strip() or len(explanation) > MAX_EXPLANATION_LENGTH:

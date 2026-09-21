@@ -107,13 +107,31 @@ HEAD_DOCX = _docx("118", b"new-flow-diagram" * 64)
 ENVELOPE = _envelope(BASE_DOCX, HEAD_DOCX)
 
 
+_ZDR_REVIEWER = ModelAgent(
+    "free_zdr_reviewer",
+    "mock-free-zdr-reviewer",
+    base_url="mock://reviewer",
+    tags=("review", "cost:free", "privacy:zdr", "response_format", "input:text", "output:text"),
+    priority=1,
+)
+_RETAINING_REVIEWER = ModelAgent(
+    "free_retaining_reviewer",
+    "mock-free-retaining-reviewer",
+    base_url="mock://retaining",
+    tags=("review", "cost:free", "response_format", "input:text", "output:text"),
+    priority=2,
+)
+
+
 @pytest.fixture()
-def gateway(monkeypatch):
-    """Serve one free reviewer and capture every provider payload."""
+def gateway(monkeypatch, request):
+    """Serve free reviewers (ZDR plus a preferred non-ZDR decoy) and capture provider calls."""
     captured: list[dict] = []
+    called: list[str] = []
     answer: dict = {"findings": []}
 
     def fake_mock_raw(self, agent, endpoint, payload):
+        called.append(agent.id)
         captured.append(copy.deepcopy(payload))
         content = json.dumps(answer)
         return {
@@ -126,14 +144,8 @@ def gateway(monkeypatch):
         }
 
     monkeypatch.setattr(ModelClient, "_mock_raw", fake_mock_raw)
-    reviewer = ModelAgent(
-        "free_document_reviewer",
-        "mock-free-reviewer",
-        base_url="mock://reviewer",
-        tags=("review", "cost:free", "response_format", "input:text", "output:text"),
-        priority=0,
-    )
-    server = build_server(TaskOrchestrator([reviewer]), port=0, security=SecurityConfig(auth_token=_TOKEN))
+    agents = getattr(request, "param", [_ZDR_REVIEWER, _RETAINING_REVIEWER])
+    server = build_server(TaskOrchestrator(list(agents)), port=0, security=SecurityConfig(auth_token=_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
@@ -152,6 +164,7 @@ def gateway(monkeypatch):
                 return exc.code, json.loads(exc.read())
 
     try:
+        post.called = called
         yield post, captured, answer
     finally:
         server.shutdown()
@@ -200,6 +213,8 @@ def test_binary_only_docx_pair_yields_located_quoted_findings(gateway) -> None:
     assert "document_diff_review_findings" in [
         payload["response_format"]["json_schema"]["name"] for payload in captured
     ]
+    # Documents default to zero-data-retention routes: the preferred non-ZDR decoy is never called.
+    assert set(post.called) == {"free_zdr_reviewer"}
 
 
 def test_fabricated_evidence_is_rejected(gateway) -> None:
@@ -270,3 +285,63 @@ def test_leaking_or_malformed_envelopes_fail_closed_before_any_provider_call(gat
 
     assert (response_status, body["error"]["code"]) == (status, code), body
     assert captured == []
+
+
+def test_figure_finding_without_any_quote_is_rejected(gateway) -> None:
+    post, _, answer = gateway
+    figure_index = [item["object_kind"] for item in ENVELOPE["objects"]].index("figure")
+    answer["findings"] = [
+        {
+            "category": "figure",
+            "severity": "minor",
+            "object_index": figure_index,
+            "evidence_base": None,
+            "evidence_head": None,
+            "related_object_index": None,
+            "related_evidence": None,
+            "explanation": "The figure looks different.",
+        }
+    ]
+
+    status, body = post(ENVELOPE)
+
+    assert (status, body["error"]["code"]) == (502, "unsupported_evidence"), body
+
+
+@pytest.mark.parametrize("gateway", [[_RETAINING_REVIEWER]], indirect=True)
+def test_documents_fail_closed_without_a_zero_retention_route(gateway) -> None:
+    post, captured, _ = gateway
+
+    status, body = post(ENVELOPE)
+
+    assert status == 400, body
+    assert captured == []
+
+
+@pytest.mark.parametrize("gateway", [[_RETAINING_REVIEWER]], indirect=True)
+def test_public_repository_may_opt_out_of_zero_retention(gateway) -> None:
+    post, _, _ = gateway
+
+    status, body = post({**ENVELOPE, "zdr_only": False})
+
+    assert status == 200, body
+    assert set(post.called) == {"free_retaining_reviewer"}
+
+
+def test_non_boolean_zdr_only_is_rejected(gateway) -> None:
+    post, captured, _ = gateway
+
+    status, body = post({**ENVELOPE, "zdr_only": "yes"})
+
+    assert (status, body["error"]["code"]) == (400, "invalid_zdr_only"), body
+    assert captured == []
+
+
+def test_decoy_is_preferred_once_zero_retention_is_waived(gateway) -> None:
+    """Control: the non-ZDR decoy really is the preferred route, so the default test means something."""
+    post, _, _ = gateway
+
+    status, body = post({**ENVELOPE, "zdr_only": False})
+
+    assert status == 200, body
+    assert "free_retaining_reviewer" in post.called
