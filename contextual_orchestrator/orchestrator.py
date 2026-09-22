@@ -10436,20 +10436,34 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
+        served = next(
+            (agent for agent in self.candidates if agent.id == served_id), None
+        )
+        if served is None:
+            # The pool was refreshed while judging; retention would discard
+            # this deployment's evidence, and the answer is already served.
+            return
+        candidate_id = self._psychometric_candidate_id(served)
+        # Embedding is provider-latency work that depends only on the prompt
+        # context, never on the served agent, so it runs before the
+        # persistence lock is taken: holding the lock across it would
+        # serialize every unrelated observation and retention pass behind one
+        # request's provider call.
+        vector = self._embed_cached(prompt_context)
         with self._psychometric_persistence_lock:
-            served = next(
+            current = next(
                 (agent for agent in self.candidates if agent.id == served_id), None
             )
-            if served is None:
-                # The pool was refreshed while judging; retention would discard
-                # this deployment's evidence, and the answer is already served.
+            if current is None or self._psychometric_candidate_id(current) != candidate_id:
+                # The pool changed while embedding ran: the deployment this
+                # outcome describes is gone, and _retain_psychometric_candidates
+                # would discard its evidence anyway.
                 return
-            candidate_id = self._psychometric_candidate_id(served)
             self._psychometric_router.observe(
                 prompt_context,
                 candidate_id,
                 accepted,
-                self._embed_cached(prompt_context),
+                vector,
                 irt_row,
             )
             if self._store is not None:
