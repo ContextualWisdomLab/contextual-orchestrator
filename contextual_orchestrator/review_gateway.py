@@ -27,7 +27,7 @@ from .model_discovery import (
     discover_all_models,
     general_free_serving_candidates,
 )
-from .orchestrator import ModelClient, TaskOrchestrator
+from .orchestrator import OBSERVED_HEALTH_QUARANTINE_SETTING, ModelClient, TaskOrchestrator
 from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
 from .tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
@@ -170,6 +170,12 @@ def register_review_credentials(
     if auth_value and auth_value.strip():
         register_credential(REVIEW_AUTH_CREDENTIAL_NAME, auth_value)
         registered.append(REVIEW_AUTH_CREDENTIAL_NAME)
+    # Operator opt-in breaker switch (not a credential): bootstrap transport
+    # only; TaskOrchestrator reads and validates it from the KV at startup.
+    switch_value = environment.get(OBSERVED_HEALTH_QUARANTINE_SETTING, "")
+    if isinstance(switch_value, str) and switch_value.strip():
+        register_credential(OBSERVED_HEALTH_QUARANTINE_SETTING, switch_value.strip())
+        registered.append(OBSERVED_HEALTH_QUARANTINE_SETTING)
     return tuple(registered)
 
 

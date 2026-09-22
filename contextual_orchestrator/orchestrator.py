@@ -2036,6 +2036,100 @@ def _is_omit_equivalent_control(key: str, value: Any) -> bool:
     return False
 
 
+#: Observed-health failure classes (bounded vocabulary, see
+#: docs/doctoring/observed-health-quarantine.md). ``slow_transport`` is a
+#: failure that typically spends a full provider round trip before failing
+#: (read timeout, dropped connection, gateway 504/502/408): the Noema sidecar
+#: evidence measured those at p50 ~265-302 s each. ``fast`` is an immediate
+#: rejection (404, 400, 500, malformed body). 429 and 413 never reach the
+#: health ledger at all -- quota and request size are not member health.
+_SLOW_HEALTH_ERROR_CODES = frozenset(
+    {
+        "provider_timeout",
+        "provider_connection_error",
+        # ModelClient wraps a dropped/timed-out chat connection as
+        # provider_outcome_unknown before _invoke sees it; an administrator
+        # model deadline is likewise a full post-send wait.
+        PROVIDER_OUTCOME_UNKNOWN_CODE,
+        "model_timeout",
+    }
+)
+_SLOW_HEALTH_PROVIDER_STATUSES = frozenset({408, 502, 504})
+
+
+#: The single deployable switch for the observed-health quarantine: a KV
+#: (credential-registry) setting read once at ``TaskOrchestrator``
+#: construction. Bootstrap may copy it from the environment into the KV
+#: (``review_gateway.register_review_credentials``); runtime never reads env.
+OBSERVED_HEALTH_QUARANTINE_SETTING = "CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE"
+_SWITCH_ON = frozenset({"enabled", "true", "on", "1"})
+_SWITCH_OFF = frozenset({"disabled", "false", "off", "0"})
+
+
+def _resolve_observed_health_quarantine(explicit: bool | None) -> tuple[bool, str]:
+    """Resolve the quarantine switch and its audit source.
+
+    An explicit boolean wins (``source='argument'``). Otherwise the KV value
+    decides (``'kv'``); unset is off (``'default'``). A value that is neither
+    on nor off fails construction instead of silently picking a policy. A
+    KV backend error keeps the legacy policy (``'kv_unavailable'``).
+    """
+    if explicit is not None:
+        if not isinstance(explicit, bool):
+            raise TypeError("observed_health_quarantine must be a boolean or None")
+        return explicit, "argument"
+    try:
+        raw = get_credential(OBSERVED_HEALTH_QUARANTINE_SETTING)
+    except Exception:  # noqa: BLE001 - an unreadable KV keeps the legacy breaker
+        _LOGGER.warning(
+            "observed_health_quarantine_kv_unavailable setting=%s enabled=False",
+            OBSERVED_HEALTH_QUARANTINE_SETTING,
+        )
+        return False, "kv_unavailable"
+    if raw is None or not str(raw).strip():
+        return False, "default"
+    value = str(raw).strip().casefold()
+    if value in _SWITCH_ON:
+        return True, "kv"
+    if value in _SWITCH_OFF:
+        return False, "kv"
+    raise ValueError(
+        f"{OBSERVED_HEALTH_QUARANTINE_SETTING} must be one of "
+        "enabled/disabled/true/false/on/off/1/0"
+    )
+
+
+def classify_health_failure(exc: BaseException | None) -> str:
+    """Classify one failed provider attempt for the observed-health ledger.
+
+    Returns ``"slow_transport"`` or ``"fast"``. The class only changes how
+    much one failure weighs and how long a resulting quarantine lasts; it
+    never authorizes a retry or replay (that stays with the failure-boundary
+    classifiers in :mod:`contextual_orchestrator.tool_fallback`).
+    """
+    if isinstance(exc, ProviderUpstreamError):
+        if (
+            exc.error_code in _SLOW_HEALTH_ERROR_CODES
+            or exc.provider_status in _SLOW_HEALTH_PROVIDER_STATUSES
+        ):
+            return "slow_transport"
+        return "fast"
+    if isinstance(exc, urllib.error.HTTPError):
+        return "slow_transport" if exc.code in _SLOW_HEALTH_PROVIDER_STATUSES else "fast"
+    if isinstance(
+        exc,
+        (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            socket.timeout,
+            http.client.HTTPException,
+        ),
+    ):
+        return "slow_transport"
+    return "fast"
+
+
 def _is_request_too_large_error(exc: BaseException) -> bool:
     """Recognize request-size rejection through a bounded exception chain."""
     current: BaseException | None = exc
@@ -5270,14 +5364,14 @@ class _StateStore:
             diagnostics = []
             if request_ids:
                 placeholders = ",".join("?" for _ in request_ids)
-                phases = self._conn.execute(
+                phases = self._conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- only "?" placeholders are concatenated; every value is bound
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('initial_decision', 'decision_receipt') "
                     "AND key IN (" + placeholders + ") "
                     "ORDER BY seq DESC LIMIT ?",
                     (*request_ids, 2 * limit + 1),
                 ).fetchall()
-                diagnostics = self._conn.execute(
+                diagnostics = self._conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- only "?" placeholders are concatenated; every value is bound
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
                     "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
@@ -5535,6 +5629,7 @@ class TaskOrchestrator:
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
         rate_limit_unknown_cooldown_seconds: float = 5.0,
+        observed_health_quarantine: bool | None = None,
     ) -> None:
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
@@ -5655,6 +5750,45 @@ class TaskOrchestrator:
         self._provider_readiness_lock = threading.Lock()
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
+        # Observed-outcome health ledger layered on the breaker above (see
+        # docs/doctoring/observed-health-quarantine.md). Explicit operator
+        # opt-in: the product-technical-gap-baseline no-heuristics boundary
+        # (2026-09-07) keeps automatic exclusion at the legacy 3/30 policy
+        # unless an operator enables this. When False, every knob below is
+        # inert and the breaker behaves exactly as before. In-memory only: a
+        # process restart starts every member unquarantined. A slow-class
+        # failure weighs slow_failure_weight toward the threshold and, once it
+        # trips, cools down for slow_failure_cooldown_seconds -- longer than
+        # the longest observed slow failure (302.3 s), unlike
+        # circuit_reset_seconds; the replay sweep (300/360/450/600/1200 s) is
+        # in the runbook. A half-open failure doubles the cooldown up to
+        # circuit_max_cooldown_seconds; nothing is excluded permanently.
+        # These are breaker knobs only: no timeout, retry or 413/429 policy.
+        # One deployable switch: an explicit constructor boolean wins;
+        # otherwise the KV setting OBSERVED_HEALTH_QUARANTINE_SETTING is read
+        # once here (KV, not env). Unset means off (legacy 3/30).
+        (
+            self.observed_health_quarantine,
+            self.observed_health_quarantine_source,
+        ) = _resolve_observed_health_quarantine(observed_health_quarantine)
+        self._circuit_health: dict[str, dict[str, Any]] = {}
+        self._circuit_clock: Callable[[], float] | None = None
+        self.slow_failure_weight = 2.0
+        self.slow_failure_cooldown_seconds = 360.0
+        self.circuit_max_cooldown_seconds = 3600.0
+        self.circuit_failure_window = 10
+        self.circuit_failure_rate_min_observations = 6
+        self.circuit_failure_rate_threshold = 0.6
+        # Startup audit line: which breaker policy this process serves with
+        # (the review sidecar logs at DEBUG, so it lands in the CI artifact).
+        _LOGGER.info(
+            "observed_health_quarantine enabled=%s source=%s setting=%s "
+            "slow_failure_cooldown_seconds=%s",
+            self.observed_health_quarantine,
+            self.observed_health_quarantine_source,
+            OBSERVED_HEALTH_QUARANTINE_SETTING,
+            self.slow_failure_cooldown_seconds,
+        )
         # Per-agent provider-declared quota cooldown (Retry-After / x-ratelimit-reset*),
         # tracked separately from the health circuit breaker above: a 429 is quota
         # exhaustion, not a model health failure, so it must never trip or feed
@@ -6152,7 +6286,9 @@ class TaskOrchestrator:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
                 if _is_ambiguous_passthrough_transport_failure(exc):
-                    self._record_failure(agent.id)
+                    self._record_failure(
+                        agent.id, failure_class=classify_health_failure(exc)
+                    )
                     if agent.group_name:
                         self._group_router.observe_failure(agent.id)
                     unknown = ProviderUpstreamError(
@@ -6357,7 +6493,10 @@ class TaskOrchestrator:
                             # * Explicit concrete model: never reaches this
                             #   multi-candidate loop; kept as defense in depth
                             #   with the typed ``provider_outcome_unknown``.
-                            self._record_failure(candidate.id)
+                            self._record_failure(
+                                candidate.id,
+                                failure_class=classify_health_failure(exc),
+                            )
                             if candidate.group_name:
                                 self._group_router.observe_failure(candidate.id)
                             attempt_receipts.append(
@@ -6453,7 +6592,10 @@ class TaskOrchestrator:
                         or (rate_limit_signal is not None and rate_limit_signal[0] == 429)
                     )
                     if not skip_breaker:
-                        self._record_failure(candidate.id)
+                        self._record_failure(
+                            candidate.id,
+                            failure_class=classify_health_failure(exc),
+                        )
                     if candidate.group_name and not skip_breaker:
                         self._group_router.observe_failure(candidate.id)
                     continue
@@ -7817,8 +7959,21 @@ class TaskOrchestrator:
                     raise
                 last_error = upstream
                 decision = classify_provider_transport_failure(upstream.retryable)
-                if decision.circuit_failure:
-                    self._record_failure(agent.id)
+                rate_limit_signal = self._rate_limited_provider_signal(upstream)
+                if rate_limit_signal is not None:
+                    # Same quota cooldown _invoke and passthrough record.
+                    signal_status, signal_http_error = rate_limit_signal
+                    self._record_rate_limit(
+                        agent.id,
+                        resolve_retry_after_seconds(signal_http_error)
+                        if signal_http_error is not None
+                        else upstream.extra_detail.get("retry_after_seconds"),
+                        status=signal_status,
+                    )
+                if decision.circuit_failure and self._charges_breaker(upstream):
+                    self._record_failure(
+                        agent.id, failure_class=classify_health_failure(upstream)
+                    )
                 if decision.action is ToolFallbackAction.FAIL_CLOSED:
                     raise upstream from None
                 if not request_too_large:
@@ -10320,7 +10475,7 @@ class TaskOrchestrator:
             ]
         if not candidates:
             return False
-        triage_agent = candidates[0]
+        triage_agent = self._observed_health_order(candidates)[0]
         messages: list[ChatMessage] = [
             {"role": "system", "content": self.TRIAGE_SYSTEM_PROMPT},
             {"role": "user", "content": text},
@@ -11005,7 +11160,7 @@ class TaskOrchestrator:
                             and exc.error_code == "model_not_found"
                         ):
                             excluded_agent_ids.add(agent.id)
-                            self._record_failure(agent.id)
+                            self._record_failure(agent.id, failure_class="fast")
                             break
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
@@ -11040,8 +11195,10 @@ class TaskOrchestrator:
                     ):
                         retry_attempt += 1
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
-                        if decision.circuit_failure:  # pragma: no branch - retry-classified failures always trip the circuit
-                            self._record_failure(agent.id)
+                        if decision.circuit_failure and self._charges_breaker(exc):
+                            self._record_failure(
+                                agent.id, failure_class=classify_health_failure(exc)
+                            )
                         if self.tool_retry_backoff_seconds:
                             retry_ceiling = min(
                                 self.tool_retry_backoff_seconds
@@ -11055,8 +11212,10 @@ class TaskOrchestrator:
                         decision = downgrade_to_failover(decision)
                         action = decision.action
                     self._record_tool_fallback(agent.id, decision, retry_attempt)
-                    if decision.circuit_failure:
-                        self._record_failure(agent.id)
+                    if decision.circuit_failure and self._charges_breaker(exc):
+                        self._record_failure(
+                            agent.id, failure_class=classify_health_failure(exc)
+                        )
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
                     break
@@ -11277,8 +11436,15 @@ class TaskOrchestrator:
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
-        # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        healthy = healthy or eligible
+        # Observed served-request health: demote members whose latest failure
+        # was slow or that await a half-open probe. If every eligible agent is
+        # circuit-open, still probe them (least-recently-failed first) rather
+        # than fail with no attempt.
+        healthy = (
+            self._order_by_observed_health(healthy)
+            if healthy
+            else self._all_open_fallback(eligible)
+        )
         if skip_rate_limited:
             not_rate_limited = [
                 agent for agent in healthy if self._rate_limit_remaining(agent.id) is None
@@ -11445,46 +11611,259 @@ class TaskOrchestrator:
             else TaskOrchestrator._chat_response_tool_calls(response)
         )
 
+    def _circuit_now(self) -> float:
+        """Return the breaker clock (monotonic unless a test injects one)."""
+        clock = self._circuit_clock
+        return clock() if clock is not None else time.monotonic()
+
+    def _circuit_health_entry(self, agent_id: str) -> dict[str, Any]:
+        """Return (creating) one member's observed-health entry; caller holds the lock."""
+        health = self._circuit_health.get(agent_id)
+        if health is None:
+            health = {
+                "score": 0.0,
+                "slow_streak": False,
+                "slow_trip": False,
+                "level": 0,
+                "half_open": False,
+                "open_count": 0,
+                "last_failure_at": None,
+                "last_failure_class": None,
+                "window": deque(maxlen=max(1, int(self.circuit_failure_window))),
+            }
+            self._circuit_health[agent_id] = health
+        return health
+
+    def _circuit_cooldown(self, health: Mapping[str, Any] | None) -> float:
+        """Current cooldown: slow trips outlast one failing attempt; half-open failures double it."""
+        if health is None or not self.observed_health_quarantine:
+            return float(self.circuit_reset_seconds)
+        base = (
+            self.slow_failure_cooldown_seconds
+            if health["slow_trip"]
+            else self.circuit_reset_seconds
+        )
+        return float(
+            min(base * (2.0 ** min(int(health["level"]), 16)), self.circuit_max_cooldown_seconds)
+        )
+
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
             state = self._circuit.get(agent_id)
-            if not state or state["failures"] < self.circuit_failure_threshold:
+            if not state or not state["opened_at"]:
                 return False
-            if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
+            health = self._circuit_health.get(agent_id)
+            cooldown = self._circuit_cooldown(health)
+            if self._circuit_now() - state["opened_at"] >= cooldown:
                 state["failures"] = 0.0
                 state["opened_at"] = 0.0
+                if health is not None:
+                    health["half_open"] = self.observed_health_quarantine
+                    health["score"] = 0.0
+                    health["slow_streak"] = False
                 reset_occurred = True
             else:
                 reset_occurred = False
         if reset_occurred:
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug("circuit_reset agent_id=%s", agent_id)
+            if not self.observed_health_quarantine:
+                return False
+            _LOGGER.info(
+                "circuit_half_open agent_id=%s cooldown_seconds=%s request_id=%s",
+                agent_id,
+                cooldown,
+                current_request_id() or "-",
+            )
             return False
         return True
 
-    def _record_failure(self, agent_id: str) -> None:
-        opened = False
+    def _circuit_demoted(self, agent_id: str) -> bool:
+        """True while a member awaits its half-open probe or its latest failure was slow."""
+        if not self.observed_health_quarantine:
+            return False
         with self._circuit_lock:
+            health = self._circuit_health.get(agent_id)
+            return bool(health and (health["half_open"] or health["slow_streak"]))
+
+    def _order_by_observed_health(self, agents: list[ModelAgent]) -> list[ModelAgent]:
+        """Stable-demote suspect members behind members with no recent slow failure."""
+        demoted = {agent.id for agent in agents if self._circuit_demoted(agent.id)}
+        if not demoted:
+            return agents
+        return [a for a in agents if a.id not in demoted] + [
+            a for a in agents if a.id in demoted
+        ]
+
+    def _observed_health_order(self, agents: list[ModelAgent]) -> list[ModelAgent]:
+        """Order an auxiliary single-call pick (triage, judge) by observed health.
+
+        These picks take the first ranked agent without the failover loop, so
+        with the opt-in quarantine they skip open members and try demoted
+        ones last (never-empty fallback). Flag off: unchanged legacy order.
+        """
+        if not self.observed_health_quarantine or not agents:
+            return agents
+        healthy = [agent for agent in agents if not self._circuit_open(agent.id)]
+        if not healthy:
+            return self._all_open_fallback(agents)
+        return self._order_by_observed_health(healthy)
+
+    def _all_open_fallback(self, agents: list[ModelAgent]) -> list[ModelAgent]:
+        """Never return an empty pool: order all-open members least-recently-failed first.
+
+        With the quarantine disabled the legacy ranked order is kept; only
+        the fallback is logged.
+        """
+        if not agents:
+            return agents
+        if not self.observed_health_quarantine:
+            _LOGGER.warning(
+                "circuit_all_open_fallback candidate_count=%d selected_agent_id=%s request_id=%s",
+                len(agents),
+                agents[0].id,
+                current_request_id() or "-",
+            )
+            return agents
+        with self._circuit_lock:
+            last_failed = {
+                agent.id: (self._circuit_health.get(agent.id) or {}).get("last_failure_at")
+                for agent in agents
+            }
+        ordered = sorted(
+            agents,
+            key=lambda agent: -math.inf
+            if last_failed[agent.id] is None
+            else last_failed[agent.id],
+        )
+        _LOGGER.warning(
+            "circuit_all_open_fallback candidate_count=%d selected_agent_id=%s request_id=%s",
+            len(ordered),
+            ordered[0].id,
+            current_request_id() or "-",
+        )
+        return ordered
+
+    def circuit_health_policy(self) -> dict[str, Any]:
+        """Audit view of the active breaker policy and where the switch came from."""
+        return {
+            "observed_health_quarantine": self.observed_health_quarantine,
+            "source": self.observed_health_quarantine_source,
+            "setting_name": OBSERVED_HEALTH_QUARANTINE_SETTING,
+            "circuit_failure_threshold": self.circuit_failure_threshold,
+            "circuit_reset_seconds": float(self.circuit_reset_seconds),
+            "slow_failure_weight": float(self.slow_failure_weight),
+            "slow_failure_cooldown_seconds": float(self.slow_failure_cooldown_seconds),
+            "circuit_max_cooldown_seconds": float(self.circuit_max_cooldown_seconds),
+            "circuit_failure_window": int(self.circuit_failure_window),
+            "circuit_failure_rate_min_observations": int(
+                self.circuit_failure_rate_min_observations
+            ),
+            "circuit_failure_rate_threshold": float(self.circuit_failure_rate_threshold),
+        }
+
+    def circuit_health_snapshot(self) -> dict[str, dict[str, Any]]:
+        """Bounded per-member breaker/health evidence (no prompt or provider text)."""
+        agents = {agent.id: agent for agent in self.candidates}
+        now = self._circuit_now()
+        snapshot: dict[str, dict[str, Any]] = {}
+        with self._circuit_lock:
+            for agent_id in sorted(set(self._circuit) | set(self._circuit_health)):
+                state = self._circuit.get(agent_id) or {"failures": 0.0, "opened_at": 0.0}
+                health = self._circuit_health.get(agent_id)
+                cooldown = self._circuit_cooldown(health)
+                window = list(health["window"]) if health else []
+                remaining = 0.0
+                if state["opened_at"]:
+                    remaining = max(0.0, cooldown - (now - state["opened_at"]))
+                if state["opened_at"] and remaining > 0:
+                    status = "open"
+                elif state["opened_at"] or (health and health["half_open"]):
+                    status = "half_open"
+                else:
+                    status = "closed"
+                agent = agents.get(agent_id)
+                snapshot[agent_id] = {
+                    "state": status,
+                    "model": agent.model if agent else None,
+                    "provider": (
+                        agent.provider_name or self._infer_provider_name(agent.base_url)
+                        if agent
+                        else None
+                    ),
+                    "consecutive_failures": int(state["failures"]),
+                    "weighted_score": float(health["score"]) if health else 0.0,
+                    "last_failure_class": health["last_failure_class"] if health else None,
+                    "cooldown_seconds": cooldown,
+                    "remaining_seconds": round(remaining, 3),
+                    "window_size": len(window),
+                    "window_failure_rate": (
+                        round(sum(window) / len(window), 4) if window else None
+                    ),
+                    "open_count": int(health["open_count"]) if health else 0,
+                }
+        return snapshot
+
+    def _record_failure(self, agent_id: str, *, failure_class: str | None = None) -> None:
+        """Record one failed attempt; ``failure_class`` comes from :func:`classify_health_failure`."""
+        failure_class = failure_class or "unclassified"
+        enabled = self.observed_health_quarantine
+        slow = failure_class == "slow_transport"
+        opened = False
+        trigger = ""
+        cooldown = 0.0
+        with self._circuit_lock:
+            now = self._circuit_now()
             state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
             state["failures"] += 1.0
             failures = state["failures"]
-            if failures >= self.circuit_failure_threshold and not state["opened_at"]:
-                state["opened_at"] = time.monotonic()
+            health = self._circuit_health_entry(agent_id)
+            health["score"] += self.slow_failure_weight if slow and enabled else 1.0
+            health["slow_streak"] = health["slow_streak"] or slow
+            health["last_failure_at"] = now
+            health["last_failure_class"] = failure_class
+            window = health["window"]
+            window.append(True)
+            if not state["opened_at"]:
+                if enabled and health["half_open"]:
+                    trigger = "half_open_failure"
+                elif health["score"] >= self.circuit_failure_threshold:
+                    trigger = "consecutive"
+                elif (
+                    enabled
+                    and len(window) >= self.circuit_failure_rate_min_observations
+                    and sum(window) / len(window) >= self.circuit_failure_rate_threshold
+                ):
+                    trigger = "failure_rate"
+            if trigger:
+                if health["half_open"]:
+                    health["level"] += 1
+                health["half_open"] = False
+                health["slow_trip"] = health["slow_trip"] or health["slow_streak"]
+                health["open_count"] += 1
+                cooldown = self._circuit_cooldown(health)
+                # A zero clock reading would read as "closed"; keep it truthy.
+                state["opened_at"] = now or 1e-9
                 opened = True
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
-                "circuit_failure agent_id=%s failures=%s threshold=%s",
+                "circuit_failure agent_id=%s failures=%s threshold=%s failure_class=%s",
                 agent_id,
                 failures,
                 self.circuit_failure_threshold,
+                failure_class,
             )
         if opened:
             _LOGGER.warning(
-                "circuit_opened agent_id=%s failures=%s threshold=%s reset_seconds=%s",
+                "circuit_opened agent_id=%s failures=%s threshold=%s reset_seconds=%s "
+                "failure_class=%s trigger=%s request_id=%s",
                 agent_id,
                 failures,
                 self.circuit_failure_threshold,
-                self.circuit_reset_seconds,
+                cooldown,
+                failure_class,
+                trigger,
+                current_request_id() or "-",
             )
 
     def _record_embedding_failure(
@@ -11513,8 +11892,25 @@ class TaskOrchestrator:
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:
             cleared = self._circuit.pop(agent_id, None)
+            health = self._circuit_health_entry(agent_id)
+            recovered = bool(health["half_open"])
+            health["score"] = 0.0
+            health["slow_streak"] = False
+            health["half_open"] = False
+            # A closed breaker escalates from zero again.
+            health["level"] = 0
+            health["slow_trip"] = False
+            if recovered:
+                health["window"].clear()
+            health["window"].append(False)
         if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
+        if recovered:
+            _LOGGER.info(
+                "circuit_recovered agent_id=%s request_id=%s",
+                agent_id,
+                current_request_id() or "-",
+            )
 
     #: Statuses for which an absent Retry-After/x-ratelimit-reset* still
     #: records an assumed cooldown. Deliberately 429 only: 503 ("service
@@ -11841,6 +12237,18 @@ class TaskOrchestrator:
                 current = current.__context__
         return None
 
+    def _charges_breaker(self, exc: BaseException) -> bool:
+        """Whether a failed attempt counts against member health.
+
+        A provider 429 is quota capacity, not model health: it records only
+        the quota cooldown (:meth:`_record_rate_limit`) and never feeds the
+        breaker or the observed-health ledger -- the passthrough loop's
+        ``skip_breaker`` rule, shared by ``_invoke`` and ``stream_route``.
+        A 503 stays an availability failure.
+        """
+        signal = self._rate_limited_provider_signal(exc)
+        return signal is None or signal[0] != 429
+
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
             if agent.id == agent_id and _agent_matches_request_endpoint(agent):
@@ -11946,7 +12354,9 @@ class TaskOrchestrator:
         try:
             judge = next(
                 agent
-                for agent in self._ranked_agents(task, "verifier", free_only=free_only)
+                for agent in self._observed_health_order(
+                    self._ranked_agents(task, "verifier", free_only=free_only)
+                )
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
             )
@@ -19049,6 +19459,8 @@ class TaskOrchestrator:
             "routing_evidence": {
                 "transport": self._group_router.snapshot(),
                 "quality": self._quality_router.snapshot(),
+                "health": self.circuit_health_snapshot(),
+                "health_policy": self.circuit_health_policy(),
             },
             "recent_workflow_runs": [
                 self._shorten_run(run)

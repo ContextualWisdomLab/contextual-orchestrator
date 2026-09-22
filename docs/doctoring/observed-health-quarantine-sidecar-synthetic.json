@@ -1,0 +1,248 @@
+{
+  "kv": {
+    "circuit_opened_lines": 0,
+    "health_policy": {
+      "circuit_failure_rate_min_observations": 6,
+      "circuit_failure_rate_threshold": 0.6,
+      "circuit_failure_threshold": 3,
+      "circuit_failure_window": 10,
+      "circuit_max_cooldown_seconds": 3600.0,
+      "circuit_reset_seconds": 30.0,
+      "observed_health_quarantine": true,
+      "setting_name": "CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE",
+      "slow_failure_cooldown_seconds": 360.0,
+      "slow_failure_weight": 2.0,
+      "source": "kv"
+    },
+    "label": "SYNTHETIC - fake in-process provider at 1/1000 time scale; not provider-real",
+    "mode": "kv",
+    "provider_calls_by_kind": {
+      "chat": 17,
+      "structured": 16,
+      "triage": 0
+    },
+    "requests": [
+      {
+        "latency_ms": 412.1,
+        "provider_attempts": 5,
+        "slow_attempts": 1,
+        "status": 200
+      },
+      {
+        "latency_ms": 38.1,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 38.0,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 35.5,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 36.1,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 33.1,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 31.7,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 31.3,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      }
+    ],
+    "slow_calls_by_kind": {
+      "chat": 1,
+      "structured": 0,
+      "triage": 0
+    },
+    "slow_seconds": 0.265,
+    "total_latency_ms": 655.9,
+    "total_provider_attempts": 33,
+    "total_slow_attempts": 1
+  },
+  "off": {
+    "circuit_opened_lines": 1,
+    "health_policy": {
+      "circuit_failure_rate_min_observations": 6,
+      "circuit_failure_rate_threshold": 0.6,
+      "circuit_failure_threshold": 3,
+      "circuit_failure_window": 10,
+      "circuit_max_cooldown_seconds": 3600.0,
+      "circuit_reset_seconds": 30.0,
+      "observed_health_quarantine": false,
+      "setting_name": "CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE",
+      "slow_failure_cooldown_seconds": 360.0,
+      "slow_failure_weight": 2.0,
+      "source": "default"
+    },
+    "label": "SYNTHETIC - fake in-process provider at 1/1000 time scale; not provider-real",
+    "mode": "off",
+    "provider_calls_by_kind": {
+      "chat": 19,
+      "structured": 16,
+      "triage": 0
+    },
+    "requests": [
+      {
+        "latency_ms": 1339.2,
+        "provider_attempts": 5,
+        "slow_attempts": 3,
+        "status": 200
+      },
+      {
+        "latency_ms": 834.7,
+        "provider_attempts": 5,
+        "slow_attempts": 3,
+        "status": 200
+      },
+      {
+        "latency_ms": 835.8,
+        "provider_attempts": 5,
+        "slow_attempts": 3,
+        "status": 200
+      },
+      {
+        "latency_ms": 560.8,
+        "provider_attempts": 4,
+        "slow_attempts": 2,
+        "status": 200
+      },
+      {
+        "latency_ms": 563.0,
+        "provider_attempts": 4,
+        "slow_attempts": 2,
+        "status": 200
+      },
+      {
+        "latency_ms": 556.8,
+        "provider_attempts": 4,
+        "slow_attempts": 2,
+        "status": 200
+      },
+      {
+        "latency_ms": 556.1,
+        "provider_attempts": 4,
+        "slow_attempts": 2,
+        "status": 200
+      },
+      {
+        "latency_ms": 554.3,
+        "provider_attempts": 4,
+        "slow_attempts": 2,
+        "status": 200
+      }
+    ],
+    "slow_calls_by_kind": {
+      "chat": 3,
+      "structured": 16,
+      "triage": 0
+    },
+    "slow_seconds": 0.265,
+    "total_latency_ms": 5800.7,
+    "total_provider_attempts": 35,
+    "total_slow_attempts": 19
+  },
+  "on": {
+    "circuit_opened_lines": 0,
+    "health_policy": {
+      "circuit_failure_rate_min_observations": 6,
+      "circuit_failure_rate_threshold": 0.6,
+      "circuit_failure_threshold": 3,
+      "circuit_failure_window": 10,
+      "circuit_max_cooldown_seconds": 3600.0,
+      "circuit_reset_seconds": 30.0,
+      "observed_health_quarantine": true,
+      "setting_name": "CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE",
+      "slow_failure_cooldown_seconds": 360.0,
+      "slow_failure_weight": 2.0,
+      "source": "argument"
+    },
+    "label": "SYNTHETIC - fake in-process provider at 1/1000 time scale; not provider-real",
+    "mode": "on",
+    "provider_calls_by_kind": {
+      "chat": 17,
+      "structured": 16,
+      "triage": 0
+    },
+    "requests": [
+      {
+        "latency_ms": 445.1,
+        "provider_attempts": 5,
+        "slow_attempts": 1,
+        "status": 200
+      },
+      {
+        "latency_ms": 29.4,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 33.1,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 30.8,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 27.1,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 32.2,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 30.9,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      },
+      {
+        "latency_ms": 30.4,
+        "provider_attempts": 4,
+        "slow_attempts": 0,
+        "status": 200
+      }
+    ],
+    "slow_calls_by_kind": {
+      "chat": 1,
+      "structured": 0,
+      "triage": 0
+    },
+    "slow_seconds": 0.265,
+    "total_latency_ms": 659.0,
+    "total_provider_attempts": 33,
+    "total_slow_attempts": 1
+  }
+}

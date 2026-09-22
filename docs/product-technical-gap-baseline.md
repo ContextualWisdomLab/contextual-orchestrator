@@ -5722,6 +5722,16 @@ repository-authored values. #1000 owns the broad routing repair; #911's
 observations can remain evidence but are not by themselves a production
 policy.
 
+**Amendment (2026-09-22): operator opt-in mechanism, default unchanged.**
+The KV setting `CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE=enabled`
+(or `TaskOrchestrator(observed_health_quarantine=True)`) adds failure-class
+weighting, a cooldown longer than one slow attempt, a failure-rate window that
+a single success cannot erase, a half-open probe, and demotion of members
+whose last failure was slow. The default stays off, which is the legacy
+3/30 policy, per the boundary above. Replay evidence, proposed values and the
+enablement decision are in
+[the observed-health runbook](doctoring/observed-health-quarantine.md).
+
 ## 2026-09-12 Optimizer cardinality acceptance and calibration boundary
 
 Frozen `090b4ec841cfc78b45248b561f1cef6396b57429` rejects incomplete/extra

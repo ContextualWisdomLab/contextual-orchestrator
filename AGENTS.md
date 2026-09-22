@@ -140,6 +140,15 @@ push or open a PR.
   unknown-outcome no-replay controls alongside it. Transport spies are not wire
   delivery evidence. Preserve the default-null model timeout.
 
+- Observed-health quarantine (one switch: KV setting
+  `CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE`, operator opt-in,
+  default off = legacy 3/30) weights slow post-send failures for breaker and
+  candidate order only; it never authorizes retry or changes timeouts. Keep
+  the never-empty fallback and in-memory restart semantics. A provider 429
+  records only the quota cooldown on every chat path; 503 still charges the
+  breaker. Replay limits and owner decisions:
+  `docs/doctoring/observed-health-quarantine.md`.
+
 - Endpoint races require a complete operator-reviewed equivalence contract.
   Never infer equivalence from provider/model names, and never treat missing loser
   usage as free or zero-cost execution.
