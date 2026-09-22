@@ -168,6 +168,7 @@ def run(mode: str, requests: int, slow_seconds: float, fast_seconds: float) -> d
                 headers={"content-type": "application/json", "authorization": f"Bearer {_TOKEN}"},
                 method="POST",
             )
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - fixed http://127.0.0.1 scheme/host; the port is the ephemeral local server this script just started, never external input.
             with urllib.request.urlopen(request, timeout=60) as response:
                 response.read()
     finally:
