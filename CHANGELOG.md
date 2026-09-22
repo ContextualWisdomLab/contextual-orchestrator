@@ -12,6 +12,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Safe same-agent retries now preserve every failed attempt before retrying and the eventual served attempt in the typed route receipt, without misclassifying tool failures as provider API errors.
+- Terminal `route_once` tool stops now retain every prior candidate attempt and
+  the final `fail_closed` attempt in the existing secret-free HTTP 409 route
+  receipt. API-contract tests no longer use deprecated `jsonschema.RefResolver`.
+- Route evidence now preserves the original error subtype for malformed-response
+  and all-413 exhaustion, survives rate-limit recovery retries, and remains on
+  the persisted workflow record returned by the Chat Completions API. A
+  malformed-response exhaustion after a recovered 429/503 round now also
+  retains every attempt from both rounds without changing its
+  `ProviderResponseError` taxonomy. Mixed malformed-response/413 exhaustion
+  likewise retains that taxonomy in either candidate order, and the HTTP 413
+  response now exposes the attached all-413 route receipt. Judge-rejected
+  worker rounds no longer overwrite earlier failover attempts, and a
+  rate-limit wait-budget exhaustion returns the attempts that consumed it.
+- Non-streaming `route_once` now snapshots worker failover evidence before the
+  realtime judge performs its own model call, so judge routing cannot erase or
+  replace the worker's typed `orchestration.route.attempted[]` receipt.
 - Held-out judge-effect evidence now requires a declared sample size. The
   hidden 1,000-row default is removed. The harness run still writes 1,000 as
   this run's choice.

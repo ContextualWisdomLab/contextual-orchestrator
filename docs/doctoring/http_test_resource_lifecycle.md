@@ -1,5 +1,88 @@
 # HTTP test resource lifecycle
 
+## Review follow-up, 2026-09-20
+
+Base `26b71dbbef11f1779a83495b0b2096a6bd7e2c3d` (#1210): seven
+previously identified strict failures reproduced, exit 1 (6.25s). All seven
+are test-owned HTTPError objects: three header inspections, the stopped/generic
+409 classifier, and three fake chat implementations that convert responses
+into typed failures without handing the raw response to ModelClient.
+The classifiers borrow responses; they must not close their callers' handles.
+
+Explicit response scopes now close these objects, including sibling logging,
+status-classification, exhausted-pool and tool-shaped-message tests. Closing
+assertions run after each scope; reused responses remain open across retries.
+No production cleanup, endpoint, retry or security policy changes in this slice.
+
+Isolated Python 3.14 source command (no cargo/maturin build):
+`python -m pytest -q -W error --tb=short tests/test_rate_limit_aware_admission.py tests/test_provider_reliability.py tests/test_http_resource_lifecycle.py`.
+The two original modules alone were 21 failed/63 passed (25.66s, exit 1).
+After repair, the three-module command is 117 passed/4 failed (25.67s, exit 1).
+The seven named failures and sibling resource failures are absent. All 37
+HTTP lifecycle tests passed, including final cleanup, close-before-backoff,
+cleanup-error preservation, and raw caller-owned response handoff. These use
+transport doubles; they are not deployed endpoint or wire-delivery evidence.
+The four remaining failures are three allowlist error-taxonomy assertions and
+one missing selection_design field, not ResourceWarnings. Full-suite and
+protected-delivery acceptance remain unverified.
+
+## Separate allowlist endpoint follow-up, 2026-09-20
+
+The resource-cleanup slice above exposed three independent taxonomy failures:
+`_validate_allowlisted_provider` replaced EgressWeave rejection with plain
+RuntimeError, bypassing existing ProviderUpstreamError handling. The shared
+validator now emits a bounded, non-retryable provider_connection_error with
+client status 502 and unknown provider status. The deny decision, resolved
+address reuse, and no-send boundary remain unchanged; passthrough keeps its
+existing transport reclassification.
+
+Two real loopback HTTP regressions call Chat Completions and Responses through
+build_server and the real ModelClient admission path. With the unchanged
+production source at `e77087a131f1347d943215c9b3a55645d0f407a1`, both return
+500/internal_error (2 failed, exit 1). With the repair, both return JSON 502;
+transport sentinels record zero upstream calls and all client/listener handles
+close. Together with the four existing allowlist regressions: 6 passed, 46
+deselected, exit 0. These are local non-streaming endpoint checks, not deployed
+provider health or successful inference. An exploratory streaming assertion was
+removed because concrete Responses streaming is rejected as invalid_stream and
+Chat streaming uses SSE rather than the assumed non-streaming JSON contract;
+no streaming fix or acceptance is claimed.
+
+## Request receipt and virtual-response follow-up, 2026-09-20
+
+At #1212 `898a7cb97fac7b10d35e7ca6e5e0d2484d3a29cf`, the remaining
+selection_design KeyError comes from dropped implementation: the tests remain,
+but request snapshot scoping, selection attempt collection, and receipt
+construction are absent. Reuse the request/receipt hunks of existing #1088
+commit `e569cefa70079a64734ac0f5e47965f9efec3f3d` and its deployment-hash
+fixture update. Do not copy its dependency, ranking/prior, or persistence changes.
+Worker receipts capture attempts before the nested judge and exclude earlier
+worker rounds. A strengthened API regression checks that the judge is absent.
+
+An expanded strict run passed 175 test bodies but exited 1 during final cleanup:
+five raw 429 responses leaked from the virtual proxy caller of proxy_send_once.
+This is production ownership, distinct from #1211's test-owned classifiers.
+The virtual loop converts those raw responses to typed errors; it now closes
+in finally after classification/cooldown diagnostics, before failover or return.
+Cleanup Exception does not replace the original outcome; BaseException remains
+unmasked. Two direct closure assertions fail on the unchanged #1212 source and
+pass after repair, including an injected cleanup OSError. Together with the
+original KeyError, this bounded RED is 3 failed, exit 1.
+
+A wait-round test used a 10ms real cooldown with a fake sleep. Under host pressure
+the cooldown expired during execution and the test missed its intended branch.
+It now advances a controlled monotonic clock with its sleep hook; production
+cooldown policy is unchanged.
+
+Final source validation: 179 passed, 21.91s, process exit 0, under -W error across
+rate-limit admission, provider reliability, HTTP resource lifecycle, API contract,
+request policy/effort snapshots, and the existing stream receipt and race-failover
+receipt cases. Four selection-receipt identity tests separately pass, exit 0.
+The isolated environment needed binary-only numpy 2.5.3 and fast-mlsirm 0.11.3
+wheels to collect the latter module; no native build or numerical experiment ran.
+These dependency versions do not establish locked-install, complete-suite,
+hosted-gate, independent-review or protected-merge acceptance.
+
 ## Trace HTTP fixture successor, 2026-09-13
 
 Base: #1140 at `38c0603af2fd8fcb204f65be47081ada9d6bd35c`.
