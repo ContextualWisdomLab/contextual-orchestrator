@@ -74,13 +74,16 @@ the cooldown expired during execution and the test missed its intended branch.
 It now advances a controlled monotonic clock with its sleep hook; production
 cooldown policy is unchanged.
 
-Final source validation: 179 passed, 21.91s, process exit 0, under -W error across
+Historical non-target source validation at commit
+`fea207fc4dde4a0bd6bb45ad75baebc21b9cbd19`: 179 passed, 21.91s,
+process exit 0, under -W error across
 rate-limit admission, provider reliability, HTTP resource lifecycle, API contract,
 request policy/effort snapshots, and the existing stream receipt and race-failover
 receipt cases. Four selection-receipt identity tests separately pass, exit 0.
-The isolated environment needed binary-only numpy 2.5.3 and fast-mlsirm 0.11.3
+The isolated environment used binary-only numpy 2.5.3 and fast-mlsirm 0.11.3
 wheels to collect the latter module; no native build or numerical experiment ran.
-These dependency versions do not establish locked-install, complete-suite,
+That differs from this head's locked fast-mlsirm 0.11.4 runtime. These
+historical dependency versions do not establish locked-install, complete-suite,
 hosted-gate, independent-review or protected-merge acceptance.
 
 ## Trace HTTP fixture successor, 2026-09-13
