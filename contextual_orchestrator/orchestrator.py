@@ -12314,6 +12314,7 @@ class TaskOrchestrator:
         recovered_attempts: list[dict[str, Any]] = []
         recovered_eligible_agent_ids: list[str] = []
         while True:
+            cooling_at_round_start = set(self._rate_limited_snapshot())
             try:
                 result = self._invoke(
                     primary,
@@ -12378,10 +12379,38 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not virtual_selector or any(
-                    self._rate_limit_remaining(candidate.id) is None
+                ready = [
+                    candidate
                     for candidate in candidates
+                    if self._rate_limit_remaining(candidate.id) is None
+                ]
+                # A candidate skipped this round only because it was still
+                # cooling, and whose cooldown expired before this check, did
+                # not fail: re-run selection within the wait budget instead
+                # of reading it as a mixed failure. Any other ready candidate
+                # (one that was attempted, or not cooling) still re-raises.
+                round_attempted_ids = {
+                    row.get("agent_id") for row in current_attempts if isinstance(row, dict)
+                }
+                expired_unattempted = [
+                    candidate
+                    for candidate in ready
+                    if candidate.id in cooling_at_round_start
+                    and candidate.id not in round_attempted_ids
+                ]
+                if wait_deadline is None and expired_unattempted:
+                    wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
+                if (
+                    virtual_selector
+                    and ready
+                    and len(expired_unattempted) == len(ready)
+                    and wait_deadline is not None
+                    and time.monotonic() < wait_deadline
                 ):
+                    recovered_attempts = merged_attempts
+                    recovered_eligible_agent_ids = merged_eligible
+                    continue
+                if not virtual_selector or len(expired_unattempted) < len(ready):
                     # Not a genuine storm to wait out: either the caller
                     # pinned one explicit concrete model (fail fast,
                     # unchanged pre-existing contract -- see
