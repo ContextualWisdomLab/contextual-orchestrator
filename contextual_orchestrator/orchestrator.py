@@ -5364,14 +5364,14 @@ class _StateStore:
             diagnostics = []
             if request_ids:
                 placeholders = ",".join("?" for _ in request_ids)
-                phases = self._conn.execute(
+                phases = self._conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- only "?" placeholders are concatenated; every value is bound
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('initial_decision', 'decision_receipt') "
                     "AND key IN (" + placeholders + ") "
                     "ORDER BY seq DESC LIMIT ?",
                     (*request_ids, 2 * limit + 1),
                 ).fetchall()
-                diagnostics = self._conn.execute(
+                diagnostics = self._conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- only "?" placeholders are concatenated; every value is bound
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
                     "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
