@@ -1,3 +1,9 @@
+---
+id: "0135"
+title: "Whole-request partitioning outside model coordination"
+status: proposed
+---
+
 # Whole-request partitioning outside model coordination
 
 Status: Proposed. The kernel and its focused tests are implemented; default HTTP admission, live-provider adapters, and organizational rollout are not complete.
