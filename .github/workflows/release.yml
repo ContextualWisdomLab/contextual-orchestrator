@@ -295,6 +295,13 @@ jobs:
           # appear, because a partial SBOM is silence rather than evidence.
           # A failure here stops the run before `publish` exists, so no tag is
           # created and nothing is published; it is never waived.
+          # The inventory is regenerated here from the released commit's own
+          # lockfiles and refuses to run against modified bytes, so the scopes
+          # the environment SBOM cannot see are enumerated against the exact
+          # source this release publishes rather than against whatever the
+          # security run happened to hold.
+          python -m scripts.ci.dependency_inventory \
+            --repository-root . --output dependency-inventory.json
           python -m scripts.ci.release_license_gate \
             --sbom sbom-download/cyclonedx-sbom.json \
             --pyproject pyproject.toml \

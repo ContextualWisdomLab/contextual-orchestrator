@@ -10,6 +10,7 @@ rather than disappearing.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -62,3 +63,67 @@ def test_security_workflow_publishes_the_inventory_with_the_sbom() -> None:
     assert workflow.index("scripts.ci.dependency_inventory") < workflow.index("Upload CycloneDX SBOM")
     upload = workflow[workflow.index("Upload CycloneDX SBOM") : workflow.index("Run CodeQL analysis")]
     assert "dependency-inventory.json" in upload
+
+
+# --- negative cases: silence must not read as a clean scope ---
+
+
+def _repository(tmp_path: Path, *, uv: str | None = None, npm: dict | None = None) -> Path:
+    """A committed miniature repository, so provenance can be checked."""
+    (tmp_path / "rust").mkdir()
+    (tmp_path / "uv.lock").write_text(
+        uv if uv is not None else '[[package]]\nname = "only_library"\nversion = "1.0"\n', encoding="utf-8")
+    (tmp_path / "rust" / "Cargo.lock").write_text(
+        '[[package]]\nname = "only_crate"\nversion = "0.1.0"\n', encoding="utf-8")
+    (tmp_path / "package-lock.json").write_text(
+        json.dumps(npm if npm is not None else {"packages": {"node_modules/one": {"version": "1.0.0"}}}),
+        encoding="utf-8")
+    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t",
+                                                    "commit", "-qm", "fixture"]):
+        subprocess.run(["git", "-C", str(tmp_path), *command], check=True, capture_output=True)
+    return tmp_path
+
+
+def test_malformed_lock_entry_is_refused_not_skipped(tmp_path) -> None:
+    repository = _repository(tmp_path, uv='[[package]]\nname = "no_version_library"\n')
+
+    assert main(["--repository-root", str(repository), "--output", str(tmp_path / "out.json")]) == 1
+
+
+def test_empty_resolved_set_is_refused(tmp_path) -> None:
+    repository = _repository(tmp_path, uv="version = 1\n")
+
+    assert main(["--repository-root", str(repository), "--output", str(tmp_path / "out.json")]) == 1
+
+
+def test_nested_node_modules_path_keeps_the_real_package_name(tmp_path) -> None:
+    repository = _repository(
+        tmp_path, npm={"packages": {"node_modules/outer/node_modules/inner": {"version": "2.0.0"}}})
+
+    inventory = build_inventory(repository)
+    npm = next(entry for entry in inventory["ecosystems"] if entry["ecosystem"] == "npm")
+
+    assert [package["name"] for package in npm["packages"]] == ["inner"]
+
+
+def test_modified_lockfile_bytes_are_refused(tmp_path) -> None:
+    """An inventory of uncommitted bytes cannot be bound to any released commit."""
+    repository = _repository(tmp_path)
+    (repository / "uv.lock").write_text(
+        '[[package]]\nname = "only_library"\nversion = "9.9"\n', encoding="utf-8")
+
+    inventory = build_inventory(repository)
+    python = next(entry for entry in inventory["ecosystems"] if entry["ecosystem"] == "python")
+
+    assert python["provenance"][0]["matches_commit"] is False
+    assert main(["--repository-root", str(repository), "--output", str(tmp_path / "out.json")]) == 1
+
+
+def test_unresolvable_source_commit_is_refused(tmp_path) -> None:
+    (tmp_path / "rust").mkdir()
+    (tmp_path / "uv.lock").write_text('[[package]]\nname = "l"\nversion = "1"\n', encoding="utf-8")
+    (tmp_path / "rust" / "Cargo.lock").write_text('[[package]]\nname = "c"\nversion = "1"\n', encoding="utf-8")
+    (tmp_path / "package-lock.json").write_text('{"packages":{"node_modules/one":{"version":"1"}}}',
+                                                encoding="utf-8")
+
+    assert main(["--repository-root", str(tmp_path), "--output", str(tmp_path / "out.json")]) == 1
