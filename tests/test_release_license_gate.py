@@ -278,3 +278,38 @@ def test_missing_lockfile_is_an_unprovable_scope(tmp_path) -> None:
     assert any("cannot be proven" in finding for finding in findings)
     assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
                  "--repository-root", str(repository)]) == 1
+
+
+def test_empty_lock_set_is_not_proof_of_no_dependencies(tmp_path) -> None:
+    """A lockfile that resolves nothing while its manifest declares work is unprovable."""
+    repository = _repository(tmp_path)
+    (repository / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (repository / "rust" / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+    (repository / "package-lock.json").write_text(json.dumps({"packages": {}}), encoding="utf-8")
+    (repository / "package.json").write_text('{"dependencies": {"one_npm_package": "1.0.0"}}', encoding="utf-8")
+    sbom = _sbom(_purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"))
+
+    findings = scope_coverage_findings(sbom, str(repository / "pyproject.toml"), str(repository))
+
+    assert {finding.split(":")[0] for finding in findings} >= {"python", "cargo", "npm"}
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository)]) == 1
+
+
+def test_purl_identity_must_match_the_component_fields(tmp_path) -> None:
+    """Coverage is read from the purl, so a purl naming something else is a mismatch."""
+    repository = _repository(tmp_path)
+    sbom = _sbom(
+        _purl_component("direct_library", "1.0", "pkg:pypi/unrelated@999"),
+        _purl_component("transitive_library", "2.0", "pkg:pypi/unrelated@999"),
+        _purl_component("one_cargo_crate", "1.1.5", "pkg:cargo/unrelated@999"),
+        _purl_component("other_cargo_crate", "0.3.0", "pkg:cargo/unrelated@999"),
+        _purl_component("one_npm_package", "1.0.0", "pkg:npm/unrelated@999"),
+        _purl_component("other_npm_package", "4.2.0", "pkg:npm/unrelated@999"),
+    )
+
+    findings = scope_coverage_findings(sbom, str(repository / "pyproject.toml"), str(repository))
+
+    assert any("purl" in finding for finding in findings)
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository)]) == 1

@@ -37,6 +37,7 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 # GPL/LGPL/AGPL in any spelling, including ``GPLv3``. No trailing separator is
 # required: free-text spellings run the version straight onto the family name.
@@ -194,15 +195,36 @@ def _lock_packages_from_npm(path: Path) -> set[tuple[str, str]]:
     return packages
 
 
-def _sbom_packages(components: list[dict[str, Any]], purl_prefix: str) -> set[tuple[str, str]]:
-    """Name/version pairs the SBOM actually carries for one ecosystem."""
+def _parse_purl(purl: str, purl_prefix: str) -> tuple[str, str]:
+    """Read the name and version the purl itself asserts, ignoring the fields."""
+    remainder = purl[len(purl_prefix):].split("?", 1)[0].split("#", 1)[0]
+    name, separator, version = remainder.rpartition("@")
+    if not separator:  # no version segment at all
+        name, version = remainder, ""
+    return _normalize(unquote(name)), unquote(version)
+
+
+def _sbom_packages(components: list[dict[str, Any]], purl_prefix: str) -> tuple[set[tuple[str, str]], list[str]]:
+    """Return one ecosystem's purl-asserted pairs, plus any identity mismatches.
+
+    Coverage is decided from the purl, since that is the package coordinate.
+    A purl that disagrees with its own component's ``name``/``version`` fields
+    makes the component's identity unreliable, so the disagreement is reported
+    rather than quietly resolved in favour of whichever side matches the lock.
+    """
     packages: set[tuple[str, str]] = set()
+    mismatches: list[str] = []
     for component in components:
         purl = str(component.get("purl") or "")
         if not purl.startswith(purl_prefix):
             continue
-        packages.add((_normalize(str(component.get("name") or "")), str(component.get("version") or "")))
-    return packages
+        purl_name, purl_version = _parse_purl(purl, purl_prefix)
+        field_name = _normalize(str(component.get("name") or ""))
+        field_version = str(component.get("version") or "")
+        packages.add((purl_name, purl_version))
+        if (purl_name, purl_version) != (field_name, field_version):
+            mismatches.append(f"{field_name}=={field_version} carries purl {purl}")
+    return packages, mismatches
 
 
 def _missing_report(ecosystem: str, lock: Path, missing: set[tuple[str, str]], expected: int) -> str:
@@ -266,9 +288,21 @@ def scope_coverage_findings(
             findings.append(f"{ecosystem}: lockfile {lock} could not be read ({error})")
             continue
         expected = {pair for pair in expected if pair[0] and pair[0] != project_name}
+        present, mismatches = _sbom_packages(components, purl_prefix)
+        if mismatches:
+            findings.append(
+                f"{ecosystem}: {len(mismatches)} component(s) whose purl identity contradicts their own "
+                f"name/version fields ({'; '.join(sorted(mismatches)[:5])})"
+            )
         if not expected:
+            # A shipped manifest whose lockfile resolves nothing proves nothing
+            # either: the structure parsed, but it carries no dependency set to
+            # compare against, which is silence rather than a clean bill.
+            findings.append(
+                f"{ecosystem}: {lock} resolves no packages for shipped manifest {manifest}, so its "
+                "dependency set is unprovable rather than empty"
+            )
             continue
-        present = _sbom_packages(components, purl_prefix)
         missing = {pair for pair in expected if pair not in present}
         if missing:
             findings.append(_missing_report(ecosystem, lock, missing, len(expected)))
