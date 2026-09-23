@@ -278,6 +278,8 @@ def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dic
     return {"permitted": permitted, "copyleft": copyleft, "undecidable": undecidable}
 
 
+
+
 _LICENCE_FAMILY_TOKENS = {
     "MIT": ("mit", "permission is hereby granted"),
     "BSD": ("bsd", "redistribution and use in source and binary forms"),
@@ -293,21 +295,31 @@ _LICENCE_FAMILY_TOKENS = {
 
 
 def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> bool:
-    """Whether some bundled licence text evidences one declared term."""
-    heads = [
-        str(entry.get("text_head") or "").lower()
+    """Whether the bundled licence text evidences a declared, non-copyleft term.
+
+    The whole text is read, not a prefix: a permissive opening followed by a
+    copyleft clause or an extra condition is exactly what a prefix check would
+    miss. Text carrying GPL-family language is never evidence for a permissive
+    declaration, and a text no known family matches is refused rather than
+    assumed. A record that carries no text at all is refused too -- there is no
+    legacy shape here that passes on a filename alone.
+    """
+    texts = [
+        str(entry.get("text") or "")
         for entry in license_files
-        if isinstance(entry, dict)
+        if isinstance(entry, dict) and str(entry.get("text") or "").strip()
     ]
-    if not heads:
-        # Older inventories recorded only filenames; absence of text is not a
-        # contradiction, so the filename evidence stands as before.
-        return True
-    for term in terms:
-        upper = term.upper()
-        for family, tokens in _LICENCE_FAMILY_TOKENS.items():
-            if family in upper and any(token in head for head in heads for token in tokens):
-                return True
+    if not texts:
+        return False
+    for text in texts:
+        if _COPYLEFT_PATTERN.search(text):
+            continue
+        lowered = " ".join(text.split()).lower()
+        for term in terms:
+            upper = term.upper()
+            for family, tokens in _LICENCE_FAMILY_TOKENS.items():
+                if family in upper and any(token in lowered for token in tokens):
+                    return True
     return False
 
 
@@ -489,8 +501,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fail-closed release licence and SBOM-coverage gate.")
     parser.add_argument("--sbom", help="path to cyclonedx-sbom.json for the exact commit")
     parser.add_argument(
-        "--sbom-optional", action="store_true",
-        help="adjudicate the inventory alone, before the environment an SBOM would describe exists",
+        "--mode", choices=("preinstall", "release"), default="release",
+        help=(
+            "preinstall: adjudicate the inventory alone, before the environment an SBOM would "
+            "describe exists, and before anything is installed. release: the full gate -- SBOM "
+            "licences, inventory licences, binding and scope coverage together."
+        ),
     )
     parser.add_argument("--pyproject", help="pyproject.toml whose declared scopes the SBOM must cover")
     parser.add_argument("--repository-root", help="repository root, to check non-Python manifests")
@@ -521,8 +537,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     try:
         groups = classify_sbom_components(sbom)
-        coverage = scope_coverage_findings(
-            sbom, arguments.pyproject, arguments.repository_root, inventory
+        coverage = (
+            scope_coverage_findings(sbom, arguments.pyproject, arguments.repository_root, inventory)
+            if arguments.mode == "release"
+            # Before install there is no environment SBOM to compare against,
+            # so coverage is the release gate's question, not this one's.
+            else []
         )
         if inventory is not None:
             coverage = inventory_binding_findings(inventory, arguments.source_sha) + coverage

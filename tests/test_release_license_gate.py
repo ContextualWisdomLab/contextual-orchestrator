@@ -413,7 +413,9 @@ def test_self_contradicting_inventory_is_refused(inventory, expected_fragment) -
 def test_inventory_entries_are_adjudicated_not_exempted() -> None:
     """Scopes outside the shipped artefact are judged by the same rules."""
     inventory = _inventory(packages=[
-        {"name": "permitted_library", "version": "1.0", "licenses": ["MIT"]},
+        {"name": "permitted_library", "version": "1.0", "licenses": ["MIT"],
+         "license_files": [{"name": "LICENSE", "sha256": "a" * 64,
+                            "text": "MIT License\n\nPermission is hereby granted"}]},
         {"name": "copyleft_library", "version": "2.0", "licenses": ["LGPL-3.0-only"]},
         {"name": "unresolved_library", "version": "3.0", "licenses": [],
          "license_source": "unresolved: absent from this environment"},
@@ -448,11 +450,16 @@ def test_inventory_copyleft_blocks_even_when_the_sbom_is_clean(tmp_path) -> None
     "package, expected_group",
     [
         pytest.param({"name": "with_text", "version": "1", "licenses": ["MIT"],
-                      "license_files": ["LICENSE"]}, "permitted", id="declaration_with_text"),
+                      "license_files": [{"name": "LICENSE", "sha256": "a" * 64,
+                                         "text": "MIT License\n\nPermission is hereby granted"}]},
+                     "permitted", id="declaration_with_text"),
+        pytest.param({"name": "filename_only", "version": "1", "licenses": ["MIT"],
+                      "license_files": ["LICENSE"]}, "undecidable", id="filename_without_text"),
         pytest.param({"name": "declaration_only", "version": "1", "licenses": ["MIT"],
                       "license_files": []}, "undecidable", id="declaration_without_text"),
         pytest.param({"name": "conflicting", "version": "1", "licenses": ["MIT", "GPL-3.0-only"],
-                      "license_files": ["LICENSE"]}, "copyleft", id="conflicting_terms"),
+                      "license_files": [{"name": "LICENSE", "sha256": "a" * 64, "text": "MIT"}]},
+                     "copyleft", id="conflicting_terms"),
         pytest.param({"name": "no_wheel", "version": "1", "licenses": [],
                       "license_source": "unresolved: no wheel"}, "undecidable", id="unresolved"),
     ],
@@ -488,15 +495,19 @@ def test_licence_text_must_evidence_the_declaration() -> None:
     """A GPL text under an MIT declaration is a contradiction, not a pass."""
     def package(name, text):
         return {"name": name, "version": "1", "licenses": ["MIT"],
-                "license_files": [{"name": "LICENSE", "sha256": "x" * 64, "text_head": text}]}
+                "license_files": [{"name": "LICENSE", "sha256": "x" * 64, "text": text}]}
 
     groups = classify_inventory_licenses(_inventory(packages=[
         package("matching_library", "MIT License Permission is hereby granted, free of charge"),
         package("contradicted_library", "GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007"),
         {"name": "empty_text_library", "version": "1", "licenses": ["MIT"],
-         "license_files": [{"name": "LICENSE", "sha256": "y" * 64, "text_head": ""}]},
+         "license_files": [{"name": "LICENSE", "sha256": "y" * 64, "text": ""}]},
+        package("trailing_copyleft_library",
+                "MIT License Permission is hereby granted. Module X is under the "
+                "GNU General Public License version 3."),
     ]))
 
     assert [row["name"] for row in groups["permitted"]] == ["python:matching_library"]
     assert {row["name"] for row in groups["undecidable"]} == {
-        "python:contradicted_library", "python:empty_text_library"}
+        "python:contradicted_library", "python:empty_text_library",
+        "python:trailing_copyleft_library"}

@@ -233,6 +233,11 @@ jobs:
           # Scoping the SBOM down does not discharge licence adjudication, so the
           # excluded classes are enumerated here from the lockfiles and published
           # beside it, bound to the same commit.
+          # The source check runs before any download: a direct URL or VCS
+          # requirement is fetched and built outside the hash-pinned wheel set,
+          # so it must be refused before pip is asked to fetch anything at all.
+          python -m scripts.ci.dependency_inventory --repository-root . \
+            --output /dev/null --check-sources-only
           # Licence evidence is gathered BEFORE anything is installed: an
           # unreviewed package must be adjudicated before it reaches an
           # environment, not after. Wheels only (--only-binary=:all:), because
@@ -247,7 +252,7 @@ jobs:
           python -m scripts.ci.release_license_gate \
             --inventory dependency-inventory.json \
             --source-sha "${GITHUB_SHA}" \
-            --sbom-optional
+            --mode preinstall
 
       - name: Install audit and project dependencies
         run: |

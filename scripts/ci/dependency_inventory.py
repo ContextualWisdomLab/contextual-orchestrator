@@ -189,11 +189,13 @@ def _artifact_license_terms(
             elif ".dist-info/" in member and Path(member).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE")
             ):
-                text = archive.read(member).decode("utf-8", "replace")
+                raw = archive.read(member)
                 license_files.append({
                     "name": Path(member).name,
-                    "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                    "text_head": " ".join(text.split())[:200],
+                    # Hash the bytes as shipped: decoding and re-encoding would
+                    # hash a normalised copy, not the instrument itself.
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "text": raw.decode("utf-8", "replace"),
                 })
     if not terms:
         return [], f"{artifact.name} (sha256 {digest[:12]}) declares no licence metadata", license_files
@@ -396,11 +398,27 @@ def main(argv: list[str] | None = None) -> int:
         help="attach licence terms read from distribution metadata already installed in this job",
     )
     parser.add_argument(
+        "--check-sources-only", action="store_true",
+        help="report requirements that reach outside the hash-pinned wheel set, and stop",
+    )
+    parser.add_argument(
         "--artifact-dir",
         help="read licences from downloaded distribution artefacts here instead of installed metadata",
     )
     arguments = parser.parse_args(argv)
     root = Path(arguments.repository_root).resolve()
+    if arguments.check_sources_only:
+        findings: list[str] = []
+        for candidate in sorted(root.glob("requirements*.txt")) + sorted(
+            (root / "fuzz").glob("requirements*.txt")
+        ) + [root / "requirements.lock"]:
+            if candidate.exists():
+                findings += external_source_findings(candidate, candidate.read_bytes())
+        for finding in findings:
+            print(f"::error::Requirement reaches outside the hash-pinned wheel set: {finding}",
+                  file=sys.stderr)
+        print(f"source check: {len(findings)} external requirement(s)")
+        return 1 if findings else 0
     try:
         inventory = build_inventory(
             root,
