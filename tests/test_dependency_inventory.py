@@ -37,6 +37,11 @@ def test_inventory_covers_every_lockfile_resolved_scope(tmp_path) -> None:
     cargo_names = {package["name"] for package in by_ecosystem["cargo"]["packages"]}
     assert {"pytest", "hypothesis"} <= python_names
     assert "contextual-token-packer" in cargo_names
+    # Both npm lockfiles are read: package-lock.json alone omits the pnpm
+    # workspace tree, which a single-lockfile reading silently loses.
+    npm_names = {package["name"] for package in by_ecosystem["npm"]["packages"]}
+    assert {"opencode-ai", "react"} <= npm_names
+    assert "pnpm-lock.yaml" in by_ecosystem["npm"]["lockfile"]
 
 
 def test_absent_lockfile_is_reported_as_unprovable(tmp_path) -> None:

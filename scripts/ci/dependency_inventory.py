@@ -8,7 +8,8 @@ to the shipped artefact does not discharge the licence policy -- the excluded
 classes still have to be adjudicated -- so this emits them as a separate,
 explicitly scoped inventory bound to the same commit.
 
-Input is the lockfiles alone: `uv.lock`, `rust/Cargo.lock`, `package-lock.json`.
+Input is the lockfiles alone: `uv.lock`, `rust/Cargo.lock`, and both npm lockfiles
+(`package-lock.json` and `pnpm-lock.yaml`, whose trees differ).
 Nothing is installed, resolved or fetched, so this runs anywhere the repository
 is checked out, and the inventory is the resolved transitive closure rather than
 a sample of it.
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -44,6 +46,34 @@ def _npm_packages(path: Path) -> list[dict[str, str]]:
             continue  # the "" key is the project itself
         name = entry.get("name") or location.split("node_modules/", 1)[-1]
         packages.append({"name": str(name), "version": str(entry.get("version", ""))})
+    return packages
+
+
+def _pnpm_packages(path: Path) -> list[dict[str, str]]:
+    """Read the `packages:` block of a pnpm lockfile.
+
+    pnpm keys each resolved package as ``name@version`` (quoted when it carries
+    a scope), which is all this inventory needs. Reading those keys directly
+    avoids adding a YAML dependency for one bounded block, and a scoped name
+    splits on its last ``@`` so ``@scope/name@1.2.3`` stays intact.
+    """
+    packages: list[dict[str, str]] = []
+    inside = False
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            if not line.startswith(" "):
+                inside = line.startswith("packages:")
+                continue
+            if not inside:
+                continue
+            match = re.match(r"^  '?([^:']+?)'?:\s*$", line.rstrip("\n"))
+            if not match:
+                continue
+            name, separator, version = match.group(1).rpartition("@")
+            if separator and name:
+                packages.append({"name": name, "version": version})
     return packages
 
 
@@ -74,6 +104,16 @@ def build_inventory(repository_root: Path) -> dict[str, Any]:
             ecosystems.append(entry)
             continue
         packages = reader(lock)
+        if ecosystem == "npm":
+            pnpm_lock = repository_root / "pnpm-lock.yaml"
+            if pnpm_lock.exists():
+                entry["lockfile"] = f"{entry['lockfile']}, {pnpm_lock.relative_to(repository_root)}"
+                seen = {(package["name"], package["version"]) for package in packages}
+                packages += [
+                    package
+                    for package in _pnpm_packages(pnpm_lock)
+                    if (package["name"], package["version"]) not in seen
+                ]
         for package in packages:
             package["purl"] = f"{purl_prefix}{package['name']}@{package['version']}"
         entry["packages"] = sorted(packages, key=lambda package: (package["name"], package["version"]))
