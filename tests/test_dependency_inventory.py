@@ -16,7 +16,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.ci.dependency_inventory import build_inventory, main  # noqa: E402
+import pytest  # noqa: E402
+
+from scripts.ci.dependency_inventory import (  # noqa: E402
+    InventoryError,
+    _pnpm_packages,
+    build_inventory,
+    main,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -127,3 +134,47 @@ def test_unresolvable_source_commit_is_refused(tmp_path) -> None:
                                                 encoding="utf-8")
 
     assert main(["--repository-root", str(tmp_path), "--output", str(tmp_path / "out.json")]) == 1
+
+
+def test_double_quoted_pnpm_keys_are_parsed(tmp_path) -> None:
+    lock = tmp_path / "pnpm-lock.yaml"
+    lock.write_text(
+        "lockfileVersion: '9.0'\n\npackages:\n\n"
+        '  "@scope/quoted@1.2.3":\n    resolution: {integrity: sha512-x}\n'
+        "  'single@4.5.6':\n    resolution: {integrity: sha512-y}\n",
+        encoding="utf-8",
+    )
+
+    packages = _pnpm_packages(lock)
+
+    assert {(p["name"], p["version"]) for p in packages} == {("@scope/quoted", "1.2.3"), ("single", "4.5.6")}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param("lockfileVersion: 999\n\npackages:\n\n  'x@1.0.0':\n", id="unsupported_version"),
+        pytest.param("packages:\n\n  'x@1.0.0':\n", id="no_version_declared"),
+        pytest.param("lockfileVersion: '6.0'\n\npackages:\n\n  /x@1.0.0(peer@2.0.0):\n", id="v6_peer_suffix"),
+        pytest.param("this is not: [a, lockfile\n", id="malformed"),
+    ],
+)
+def test_unsupported_or_malformed_pnpm_lock_fails_closed(tmp_path, content) -> None:
+    lock = tmp_path / "pnpm-lock.yaml"
+    lock.write_text(content, encoding="utf-8")
+
+    with pytest.raises(InventoryError):
+        _pnpm_packages(lock)
+
+
+def test_python_scope_includes_the_pinned_ci_and_fuzz_toolchains() -> None:
+    """uv.lock alone is not the declared Python scope: the CI locks install too."""
+    inventory = build_inventory(REPOSITORY_ROOT)
+    python = next(entry for entry in inventory["ecosystems"] if entry["ecosystem"] == "python")
+    names = {package["name"] for package in python["packages"]}
+
+    for source in ("uv.lock", "requirements.lock", "requirements-security-ci.txt",
+                   "fuzz/requirements-property.txt"):
+        assert source in python["lockfile"]
+    assert {"cyclonedx-bom", "chardet"} <= names  # security CI toolchain
+    assert len(python["provenance"]) == len(python["lockfile"].split(", "))
