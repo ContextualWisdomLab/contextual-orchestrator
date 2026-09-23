@@ -250,11 +250,15 @@ def test_absent_or_silent_artifact_resolves_to_nothing(tmp_path) -> None:
 def test_security_workflow_adjudicates_before_installing_and_installs_what_it_read() -> None:
     """Collection must precede installation, and installation must not re-download."""
     workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
-    collect = workflow.index("scripts.ci.dependency_inventory")
+    sources = workflow.index("--check-sources-only")
     download = workflow.index("pip download")
+    collect = workflow.index("--artifact-dir license-artifacts")
+    adjudicate = workflow.index("scripts.ci.release_license_gate")
     install = workflow.index("pip install --require-hashes --no-index")
 
-    assert download < collect < install, "licence evidence must be gathered before any install"
+    # Refuse external sources before fetching, then gather, then judge, then
+    # install: each step's evidence has to exist before the next one acts.
+    assert sources < download < collect < adjudicate < install
     assert "--only-binary=:all:" in workflow[download:collect], "sdist build backends must not run"
     install_block = workflow[install:install + 200]
     assert "--find-links license-artifacts" in install_block
