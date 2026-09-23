@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import re
 import subprocess
@@ -131,6 +132,37 @@ def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     return packages
 
 
+def _installed_license_terms(name: str, version: str) -> tuple[list[str], str]:
+    """Read one distribution's licence terms from metadata already on disk.
+
+    The job that runs this has already installed the shipped set, so its
+    `.dist-info/METADATA` files are preserved evidence that can be read without
+    installing anything further. Reading them is a file read: no package code
+    is imported or executed. A distribution that is not present, or is present
+    at another version, yields nothing rather than a guess.
+    """
+    try:
+        distribution = importlib.metadata.distribution(name)
+    except importlib.metadata.PackageNotFoundError:
+        return [], "absent from this environment"
+    metadata = distribution.metadata
+    if str(metadata.get("Version") or "") != version:
+        return [], f"environment holds {metadata.get('Version')!r}, not the locked version"
+    terms: list[str] = []
+    expression = (metadata.get("License-Expression") or "").strip()
+    if expression:
+        terms.append(expression)
+    declared = (metadata.get("License") or "").strip()
+    if declared and len(declared) <= 120:
+        terms.append(declared.splitlines()[0])
+    terms += [
+        classifier.split("::")[-1].strip()
+        for classifier in metadata.get_all("Classifier") or []
+        if classifier.startswith("License ::")
+    ]
+    return terms, "installed distribution metadata"
+
+
 def _git(repository_root: Path, *arguments: str) -> str:
     completed = subprocess.run(
         ["git", "-C", str(repository_root), *arguments],
@@ -174,7 +206,7 @@ def _read_locked_source(repository_root: Path, lock: Path, commit: str) -> tuple
     return data, provenance
 
 
-def build_inventory(repository_root: Path) -> dict[str, Any]:
+def build_inventory(repository_root: Path, resolve_licenses: bool = False) -> dict[str, Any]:
     """Collect every lockfile-resolved dependency, grouped by ecosystem."""
     # One commit is captured up front and every blob comparison uses it, so a
     # branch moving mid-run cannot bind half the inventory to another tree.
@@ -229,6 +261,11 @@ def build_inventory(repository_root: Path) -> dict[str, Any]:
                 ]
         for package in packages:
             package["purl"] = f"{purl_prefix}{package['name']}@{package['version']}"
+        if ecosystem == "python" and resolve_licenses:
+            for package in packages:
+                terms, source = _installed_license_terms(package["name"], package["version"])
+                package["licenses"] = terms
+                package["license_source"] = source if terms else f"unresolved: {source}"
         entry["packages"] = sorted(packages, key=lambda package: (package["name"], package["version"]))
         ecosystems.append(entry)
     return {
@@ -249,10 +286,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Emit the lockfile-resolved dependency inventory.")
     parser.add_argument("--repository-root", default=".")
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--resolve-licenses", action="store_true",
+        help="attach licence terms read from distribution metadata already installed in this job",
+    )
     arguments = parser.parse_args(argv)
     root = Path(arguments.repository_root).resolve()
     try:
-        inventory = build_inventory(root)
+        inventory = build_inventory(root, resolve_licenses=arguments.resolve_licenses)
     except (InventoryError, OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         print(f"::error::Dependency inventory could not be built ({error}).", file=sys.stderr)
         return 1

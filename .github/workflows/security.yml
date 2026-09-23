@@ -245,7 +245,8 @@ jobs:
           # Scoping the SBOM down does not discharge licence adjudication, so the
           # excluded classes are enumerated here from the lockfiles and published
           # beside it, bound to the same commit.
-          python -m scripts.ci.dependency_inventory --repository-root . --output dependency-inventory.json
+          python -m scripts.ci.dependency_inventory --repository-root . \
+            --output dependency-inventory.json --resolve-licenses
 
       - name: Upload CycloneDX SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1

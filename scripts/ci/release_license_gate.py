@@ -236,6 +236,39 @@ def _missing_report(ecosystem: str, lock: Path, missing: set[tuple[str, str]], e
     )
 
 
+def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    """Adjudicate the inventory's own entries, which the SBOM never covers.
+
+    The inventory carries licence terms read from distribution metadata that the
+    job already had on disk, so the classes outside the shipped artefact are
+    judged by the same rules rather than exempted. An entry with no resolved
+    terms is undecidable, which blocks: unknown is never read as permission.
+    """
+    copyleft: list[dict[str, str]] = []
+    undecidable: list[dict[str, str]] = []
+    permitted: list[dict[str, str]] = []
+    for entry in inventory.get("ecosystems") or []:
+        ecosystem = str(entry.get("ecosystem") or "")
+        for package in entry.get("packages") or []:
+            terms = [str(term) for term in package.get("licenses") or [] if str(term).strip()]
+            row = {
+                "name": f"{ecosystem}:{package.get('name')}",
+                "version": str(package.get("version") or ""),
+                "license": "; ".join(terms) or str(package.get("license_source") or "<none resolved>"),
+            }
+            if not terms:
+                undecidable.append(row)
+                continue
+            verdicts = [classify_license_term(term) for term in terms]
+            if any(verdict == "copyleft" for verdict, _ in verdicts):
+                copyleft.append(row)
+            elif all(verdict == "undecidable" for verdict, _ in verdicts):
+                undecidable.append(row)
+            else:
+                permitted.append(row)
+    return {"permitted": permitted, "copyleft": copyleft, "undecidable": undecidable}
+
+
 def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
     """Expected name/version pairs per ecosystem, as the inventory recorded them."""
     expectations: dict[str, set[tuple[str, str]]] = {}
@@ -444,6 +477,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         if inventory is not None:
             coverage = inventory_binding_findings(inventory, arguments.source_sha) + coverage
+            inventory_groups = classify_inventory_licenses(inventory)
+            groups = {
+                key: groups[key] + inventory_groups[key]
+                for key in ("permitted", "copyleft", "undecidable")
+            }
     except SbomSchemaError as error:
         print(f"::error::CycloneDX SBOM is malformed and cannot be adjudicated ({error}); refusing to release.",
               file=sys.stderr)

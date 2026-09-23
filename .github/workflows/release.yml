@@ -301,7 +301,7 @@ jobs:
           # source this release publishes rather than against whatever the
           # security run happened to hold.
           python -m scripts.ci.dependency_inventory \
-            --repository-root . --output dependency-inventory.json
+            --repository-root . --output dependency-inventory.json --resolve-licenses
           python -m scripts.ci.release_license_gate \
             --sbom sbom-download/cyclonedx-sbom.json \
             --pyproject pyproject.toml \

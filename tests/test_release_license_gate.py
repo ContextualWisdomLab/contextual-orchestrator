@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.ci.release_license_gate import (  # noqa: E402
+    classify_inventory_licenses,
     classify_sbom_components,
     inventory_binding_findings,
     main,
@@ -407,3 +408,37 @@ def test_self_contradicting_inventory_is_refused(inventory, expected_fragment) -
     findings = inventory_binding_findings(inventory, "a" * 40)
 
     assert any(expected_fragment in finding for finding in findings), findings
+
+
+def test_inventory_entries_are_adjudicated_not_exempted() -> None:
+    """Scopes outside the shipped artefact are judged by the same rules."""
+    inventory = _inventory(packages=[
+        {"name": "permitted_library", "version": "1.0", "licenses": ["MIT"]},
+        {"name": "copyleft_library", "version": "2.0", "licenses": ["LGPL-3.0-only"]},
+        {"name": "unresolved_library", "version": "3.0", "licenses": [],
+         "license_source": "unresolved: absent from this environment"},
+    ])
+
+    groups = classify_inventory_licenses(inventory)
+
+    assert [row["name"] for row in groups["copyleft"]] == ["python:copyleft_library"]
+    assert [row["name"] for row in groups["undecidable"]] == ["python:unresolved_library"]
+    assert [row["name"] for row in groups["permitted"]] == ["python:permitted_library"]
+
+
+def test_inventory_copyleft_blocks_even_when_the_sbom_is_clean(tmp_path) -> None:
+    repository = _repository(tmp_path)
+    inventory_path = tmp_path / "dependency-inventory.json"
+    inventory_path.write_text(json.dumps(_inventory(packages=[
+        {"name": "direct_library", "version": "1.0", "licenses": ["GPL-3.0-only"]},
+    ])), encoding="utf-8")
+    sbom = _sbom(_purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"),
+                 _purl_component("transitive_library", "2.0", "pkg:pypi/transitive_library@2.0"),
+                 _purl_component("one_cargo_crate", "1.1.5", "pkg:cargo/one_cargo_crate@1.1.5"),
+                 _purl_component("other_cargo_crate", "0.3.0", "pkg:cargo/other_cargo_crate@0.3.0"),
+                 _purl_component("one_npm_package", "1.0.0", "pkg:npm/one_npm_package@1.0.0"),
+                 _purl_component("other_npm_package", "4.2.0", "pkg:npm/other_npm_package@4.2.0"))
+
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository), "--inventory", str(inventory_path),
+                 "--source-sha", "a" * 40]) == 1
