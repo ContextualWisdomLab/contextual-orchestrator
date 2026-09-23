@@ -116,6 +116,53 @@ def test_url_timeout_uses_pg8000_timeout(monkeypatch) -> None:
     assert captured["timeout"] == 2.0
 
 
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "postgresql://alice@db.example/catalog?connect_timeout=0",
+        "postgresql://alice@db.example/catalog?connect_timeout=-1",
+        "user=alice dbname=catalog connect_timeout=0",
+        "user=alice dbname=catalog connect_timeout=-1",
+    ],
+)
+def test_nonpositive_connect_timeout_preserves_libpq_indefinite_wait(
+    monkeypatch, dsn: str
+) -> None:
+    """Map libpq's zero/negative indefinite wait to pg8000's ``None``."""
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("pg8000.dbapi.connect", lambda **kwargs: captured.update(kwargs))
+
+    connect_pg8000(dsn)
+
+    assert captured["timeout"] is None
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "template",
+    [
+        "postgresql://alice@db.example/catalog?connect_timeout={}",
+        "user=alice dbname=catalog connect_timeout={}",
+    ],
+)
+def test_nonfinite_connect_timeout_fails_before_driver(
+    monkeypatch, template: str, value: str
+) -> None:
+    """Reject non-finite timeout values before the DB-API connection boundary."""
+    called = False
+
+    def fake_connect(**_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("pg8000.dbapi.connect", fake_connect)
+
+    with pytest.raises(ValueError, match="connect_timeout must be finite"):
+        connect_pg8000(template.format(value))
+
+    assert called is False
+
+
 def test_require_with_root_certificate_verifies_ca(monkeypatch) -> None:
     """Honor libpq's require-plus-root-certificate compatibility behavior."""
     captured: dict[str, object] = {}

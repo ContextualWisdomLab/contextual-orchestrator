@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import ssl
 from typing import Any
@@ -114,7 +115,10 @@ def _connect_options(dsn: str) -> dict[str, Any]:
             options["unix_sock"] = f"{socket_directory}/.s.PGSQL.{socket_port}"
 
     if "connect_timeout" in options:
-        options["timeout"] = float(options.pop("connect_timeout"))
+        timeout = float(options.pop("connect_timeout"))
+        if not math.isfinite(timeout):
+            raise ValueError("connect_timeout must be finite")
+        options["timeout"] = None if timeout <= 0 else timeout
     options["ssl_context"] = _ssl_context(options)
     allowed = {
         "application_name",
