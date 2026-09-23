@@ -9,6 +9,13 @@ permission. These tests pin the metadata rather than the gate's reaction to it.
 Metadata is generated through the declared build backend's
 `prepare_metadata_for_build_wheel` hook, which writes a `.dist-info` directory
 without compiling anything, so this stays a metadata check and not a build.
+
+Two limits are deliberate and recorded rather than papered over. The backend
+check fails instead of skipping when setuptools predates PEP 639, because a
+skipped licence check reported as a pass is exactly the hole this file exists
+to close. And the `LICENSE` assertion matches the MIT header, not the full
+text: it catches a file replaced by a different licence, not a doctored clause
+inside an otherwise MIT-looking file.
 """
 
 from __future__ import annotations
@@ -17,8 +24,6 @@ import email
 import sys
 import tomllib
 from pathlib import Path
-
-import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,10 +51,15 @@ def test_build_backend_floor_supports_the_license_expression() -> None:
 
 
 def test_generated_metadata_declares_the_license(tmp_path) -> None:
-    setuptools = pytest.importorskip("setuptools")
-    if tuple(int(part) for part in setuptools.__version__.split(".")[:1]) < (77,):
-        pytest.skip(f"setuptools {setuptools.__version__} predates PEP 639 support")
+    import setuptools  # a build backend this project declares, never optional here
     from setuptools import build_meta
+
+    major = int(setuptools.__version__.split(".")[0])
+    assert major >= 77, (
+        f"setuptools {setuptools.__version__} predates PEP 639, so this environment cannot emit the "
+        "licence expression. Failing rather than skipping: a skipped licence check must never be "
+        "counted as a passing one."
+    )
 
     previous = Path.cwd()
     sys.path.insert(0, str(REPOSITORY_ROOT))
