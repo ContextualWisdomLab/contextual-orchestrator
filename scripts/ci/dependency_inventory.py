@@ -148,22 +148,33 @@ def _artifact_license_terms(artifact_dir: Path, name: str, version: str) -> tupl
     """
     normalized = _NAME_SEPARATORS.sub("_", name.strip().lower())
     candidates = sorted(artifact_dir.glob(f"{normalized}-{version}*.whl"))
-    candidates += sorted(artifact_dir.glob(f"{normalized}-{version}.tar.gz"))
     if not candidates:
-        return [], f"no artefact for {name}=={version} in {artifact_dir}"
+        # sdists are excluded on purpose: reading one usefully means running its
+        # build backend, and an unreviewed package must not execute here.
+        return [], f"no wheel for {name}=={version} in {artifact_dir}"
     artifact = candidates[0]
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     terms: list[str] = []
-    if artifact.suffix == ".whl":
-        with zipfile.ZipFile(artifact) as archive:
-            for member in archive.namelist():
-                if member.endswith(".dist-info/METADATA"):
-                    metadata = email.message_from_string(archive.read(member).decode("utf-8", "replace"))
-                    terms = _metadata_license_terms(metadata)
-                    break
+    license_files: list[str] = []
+    with zipfile.ZipFile(artifact) as archive:
+        for member in archive.namelist():
+            if member.endswith(".dist-info/METADATA") and not terms:
+                metadata = email.message_from_string(archive.read(member).decode("utf-8", "replace"))
+                terms = _metadata_license_terms(metadata)
+            elif ".dist-info/" in member and Path(member).name.upper().startswith(
+                ("LICENSE", "LICENCE", "COPYING", "NOTICE")
+            ):
+                license_files.append(Path(member).name)
     if not terms:
         return [], f"{artifact.name} (sha256 {digest[:12]}) declares no licence metadata"
-    return terms, f"artefact {artifact.name} sha256 {digest}"
+    # The declaration is what the publisher stated; the bundled licence text is
+    # the instrument itself. Absence of the text is recorded, never resolved by
+    # the declaration alone.
+    evidence = (
+        f"licence files: {', '.join(sorted(license_files))}" if license_files
+        else "declaration only: the wheel bundles no licence text"
+    )
+    return terms, f"artefact {artifact.name} sha256 {digest}; {evidence}"
 
 
 def _metadata_license_terms(metadata: Any) -> list[str]:

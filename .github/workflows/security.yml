@@ -224,6 +224,25 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Enumerate every declared dependency scope from the lockfiles
+        run: |
+          set -euo pipefail
+          # The SBOM above describes one installed environment, so it cannot see
+          # the dev, fuzz and native-build groups, the Rust workspace or the npm
+          # tree, while it does see whatever CI tooling happens to be installed.
+          # Scoping the SBOM down does not discharge licence adjudication, so the
+          # excluded classes are enumerated here from the lockfiles and published
+          # beside it, bound to the same commit.
+          # Licence evidence is gathered BEFORE anything is installed: an
+          # unreviewed package must be adjudicated before it reaches an
+          # environment, not after. Wheels only (--only-binary=:all:), because
+          # resolving an sdist can execute its build backend, which would defeat
+          # the point; a package with no wheel simply stays unresolved.
+          python -m pip download --require-hashes -r requirements.lock \
+            --no-deps --only-binary=:all: --dest license-artifacts
+          python -m scripts.ci.dependency_inventory --repository-root . \
+            --output dependency-inventory.json --artifact-dir license-artifacts
+
       - name: Install audit and project dependencies
         run: |
           python -m pip install --require-hashes -r requirements-security-ci.txt
@@ -235,23 +254,6 @@ jobs:
           set -euo pipefail
           python -m pip_audit -r requirements.lock
           cyclonedx-py environment --output-format json --output-file cyclonedx-sbom.json
-
-      - name: Enumerate every declared dependency scope from the lockfiles
-        run: |
-          set -euo pipefail
-          # The SBOM above describes one installed environment, so it cannot see
-          # the dev, fuzz and native-build groups, the Rust workspace or the npm
-          # tree, while it does see whatever CI tooling happens to be installed.
-          # Scoping the SBOM down does not discharge licence adjudication, so the
-          # excluded classes are enumerated here from the lockfiles and published
-          # beside it, bound to the same commit.
-          # Licences are read from the distribution artefacts themselves, which
-          # pip downloads with the lockfile's own hashes and never installs, so
-          # nothing unreviewed is executed to learn what it is licensed under.
-          python -m pip download --require-hashes -r requirements.lock \
-            --no-deps --dest license-artifacts
-          python -m scripts.ci.dependency_inventory --repository-root . \
-            --output dependency-inventory.json --artifact-dir license-artifacts
 
       - name: Upload CycloneDX SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1

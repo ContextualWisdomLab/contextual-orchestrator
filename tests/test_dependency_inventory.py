@@ -206,6 +206,30 @@ def test_licences_are_read_from_the_artifact_not_from_an_install(tmp_path) -> No
     assert hashlib.sha256(wheel.read_bytes()).hexdigest() in source
 
 
+def test_declaration_without_bundled_text_is_recorded_as_such(tmp_path) -> None:
+    """A METADATA line is the publisher's statement, not the licence instrument."""
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    _wheel(artifacts, "declared_only_library", "1.0", ["License-Expression: MIT"])
+
+    terms, source = _artifact_license_terms(artifacts, "declared_only_library", "1.0")
+
+    assert terms == ["MIT"]
+    assert "declaration only" in source
+
+
+def test_sdist_is_not_read_for_licences(tmp_path) -> None:
+    """Reading an sdist usefully means running its build backend, so it is skipped."""
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "sdist_only_library-1.0.tar.gz").write_bytes(b"not read")
+
+    terms, source = _artifact_license_terms(artifacts, "sdist_only_library", "1.0")
+
+    assert terms == []
+    assert "no wheel" in source
+
+
 def test_absent_or_silent_artifact_resolves_to_nothing(tmp_path) -> None:
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
@@ -213,4 +237,4 @@ def test_absent_or_silent_artifact_resolves_to_nothing(tmp_path) -> None:
 
     assert _artifact_license_terms(artifacts, "silent_library", "1.0")[0] == []
     assert _artifact_license_terms(artifacts, "missing_library", "1.0")[0] == []
-    assert "no artefact" in _artifact_license_terms(artifacts, "missing_library", "1.0")[1]
+    assert "no wheel" in _artifact_license_terms(artifacts, "missing_library", "1.0")[1]
