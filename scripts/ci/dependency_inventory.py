@@ -127,6 +127,29 @@ def _pnpm_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     return packages
 
 
+_EXTERNAL_SOURCE = re.compile(
+    r"^\s*(?:--(?:find-links|index-url|extra-index-url)\b|-[fi]\s)|@\s*(?:git\+|https?://|file://)",
+)
+
+
+def external_source_findings(path: Path, data: bytes) -> list[str]:
+    """Requirements that reach outside the hash-pinned index set.
+
+    `--no-index` only stops pip consulting an index. A direct URL, a VCS
+    requirement or an extra find-links line in the file itself is still
+    fetched, and a VCS requirement is built from source, which executes the
+    package's own build code. Those cannot be adjudicated from a downloaded
+    wheel, so they are reported rather than silently trusted.
+    """
+    findings: list[str] = []
+    for number, line in enumerate(data.decode("utf-8").splitlines(), start=1):
+        if line.lstrip().startswith("#") or not line.strip():
+            continue
+        if _EXTERNAL_SOURCE.search(line):
+            findings.append(f"{path.name}:{number}: {line.strip()[:120]}")
+    return findings
+
+
 def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     """Read pinned ``name==version`` lines from a hash-locked requirements file."""
     packages: list[dict[str, str]] = []
@@ -166,14 +189,20 @@ def _artifact_license_terms(
             elif ".dist-info/" in member and Path(member).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE")
             ):
-                license_files.append(Path(member).name)
+                text = archive.read(member).decode("utf-8", "replace")
+                license_files.append({
+                    "name": Path(member).name,
+                    "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    "text_head": " ".join(text.split())[:200],
+                })
     if not terms:
         return [], f"{artifact.name} (sha256 {digest[:12]}) declares no licence metadata", license_files
     # The declaration is what the publisher stated; the bundled licence text is
     # the instrument itself. Absence of the text is recorded, never resolved by
     # the declaration alone.
     evidence = (
-        f"licence files: {', '.join(sorted(license_files))}" if license_files
+        "licence files: " + ", ".join(sorted(entry["name"] for entry in license_files))
+        if license_files
         else "declaration only: the wheel bundles no licence text"
     )
     return terms, f"artefact {artifact.name} sha256 {digest}; {evidence}", license_files
@@ -298,6 +327,9 @@ def build_inventory(
                 )
                 entry["provenance"].append(requirements_provenance)
                 index = {(package["name"], package["version"]): package for package in packages}
+                entry.setdefault("external_sources", []).extend(
+                    external_source_findings(requirements, requirements_data)
+                )
                 for package in _requirements_packages(requirements, requirements_data):
                     key = (package["name"], package["version"])
                     known = index.get(key)
@@ -393,6 +425,11 @@ def main(argv: list[str] | None = None) -> int:
         if entry.get("error"):
             problems.append(f"{ecosystem}: {entry['error']}")
             continue
+        for external in entry.get("external_sources") or []:
+            problems.append(
+                f"{ecosystem}: {external} reaches outside the hash-pinned wheel set, so its licence "
+                "cannot be adjudicated from a downloaded artefact"
+            )
         if not entry["packages"]:
             # An empty set is silence about the scope, never a clean one.
             problems.append(f"{ecosystem}: {entry['lockfile']} resolved no packages")

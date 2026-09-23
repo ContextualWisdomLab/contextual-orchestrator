@@ -269,9 +269,46 @@ def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dic
                 # publisher's word without the instrument behind it. Permitted
                 # terms do not settle it; it is held like any other unknown.
                 undecidable.append({**row, "license": f"{row['license']} (declaration only, no text)"})
+            elif not _declaration_matches_text(terms, package.get("license_files") or []):
+                # The filename proves a file exists; only its text shows whether
+                # the declared licence is the one actually granted.
+                undecidable.append({**row, "license": f"{row['license']} (text does not evidence the declaration)"})
             else:
                 permitted.append(row)
     return {"permitted": permitted, "copyleft": copyleft, "undecidable": undecidable}
+
+
+_LICENCE_FAMILY_TOKENS = {
+    "MIT": ("mit", "permission is hereby granted"),
+    "BSD": ("bsd", "redistribution and use in source and binary forms"),
+    "APACHE": ("apache",),
+    "MPL": ("mozilla public license",),
+    "ISC": ("isc", "permission to use, copy, modify"),
+    "0BSD": ("permission to use, copy, modify",),
+    "PSF": ("python software foundation",),
+    "ZLIB": ("zlib", "altered source versions"),
+    "CC0": ("cc0", "public domain"),
+    "UNLICENSE": ("unlicense", "public domain"),
+}
+
+
+def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> bool:
+    """Whether some bundled licence text evidences one declared term."""
+    heads = [
+        str(entry.get("text_head") or "").lower()
+        for entry in license_files
+        if isinstance(entry, dict)
+    ]
+    if not heads:
+        # Older inventories recorded only filenames; absence of text is not a
+        # contradiction, so the filename evidence stands as before.
+        return True
+    for term in terms:
+        upper = term.upper()
+        for family, tokens in _LICENCE_FAMILY_TOKENS.items():
+            if family in upper and any(token in head for head in heads for token in tokens):
+                return True
+    return False
 
 
 def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
@@ -450,16 +487,23 @@ def _render(groups: dict[str, list[dict[str, str]]], coverage: list[str]) -> str
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fail-closed release licence and SBOM-coverage gate.")
-    parser.add_argument("--sbom", required=True, help="path to cyclonedx-sbom.json for the exact commit")
+    parser.add_argument("--sbom", help="path to cyclonedx-sbom.json for the exact commit")
+    parser.add_argument(
+        "--sbom-optional", action="store_true",
+        help="adjudicate the inventory alone, before the environment an SBOM would describe exists",
+    )
     parser.add_argument("--pyproject", help="pyproject.toml whose declared scopes the SBOM must cover")
     parser.add_argument("--repository-root", help="repository root, to check non-Python manifests")
     parser.add_argument("--inventory", help="dependency inventory whose scopes the SBOM must cover")
     parser.add_argument("--source-sha", help="the released commit the inventory must describe")
     arguments = parser.parse_args(argv)
-    try:
+    if not arguments.sbom:
+        sbom = {"components": []}
+    else:
+      try:
         with open(arguments.sbom, encoding="utf-8") as handle:
             sbom = json.load(handle)
-    except (OSError, json.JSONDecodeError) as error:
+      except (OSError, json.JSONDecodeError) as error:
         print(f"::error::Release licence gate could not read the CycloneDX SBOM at {arguments.sbom}: {error}",
               file=sys.stderr)
         return 1

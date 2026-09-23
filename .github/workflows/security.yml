@@ -242,6 +242,12 @@ jobs:
             --no-deps --only-binary=:all: --dest license-artifacts
           python -m scripts.ci.dependency_inventory --repository-root . \
             --output dependency-inventory.json --artifact-dir license-artifacts
+          # Adjudicate here, not merely collect: a hold fails this step, and a
+          # failed step stops the job, so the install below is never reached.
+          python -m scripts.ci.release_license_gate \
+            --inventory dependency-inventory.json \
+            --source-sha "${GITHUB_SHA}" \
+            --sbom-optional
 
       - name: Install audit and project dependencies
         run: |

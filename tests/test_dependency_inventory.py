@@ -23,6 +23,7 @@ import pytest  # noqa: E402
 from scripts.ci.dependency_inventory import (  # noqa: E402
     InventoryError,
     _artifact_license_terms,
+    external_source_findings,
     _pnpm_packages,
     build_inventory,
     main,
@@ -34,7 +35,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 def test_inventory_covers_every_lockfile_resolved_scope(tmp_path) -> None:
     output = tmp_path / "dependency-inventory.json"
 
-    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 0
+    # This repository currently refuses: requirements.lock still carries a
+    # `fast-mlsirm @ git+https://...` requirement, which --no-index does not
+    # stop and which is built from source. The gap stays visible rather than
+    # being closed by repinning it elsewhere; the enumeration below is still
+    # written, so the sets can be checked while the refusal stands.
+    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 1
 
     inventory = json.loads(output.read_text(encoding="utf-8"))
     by_ecosystem = {entry["ecosystem"]: entry for entry in inventory["ecosystems"]}
@@ -253,3 +259,20 @@ def test_security_workflow_adjudicates_before_installing_and_installs_what_it_re
     install_block = workflow[install:install + 200]
     assert "--find-links license-artifacts" in install_block
     assert workflow.count("pip download") == 1, "the adjudicated wheels are not downloaded twice"
+
+
+def test_external_source_requirements_are_refused(tmp_path) -> None:
+    """A direct URL or VCS requirement is fetched and built despite --no-index."""
+    lock = tmp_path / "requirements.lock"
+    lock.write_text(
+        "normal-library==1.0 \\\n    --hash=sha256:aa\n"
+        "vcs-library @ git+https://example.invalid/pkg.git@deadbeef\n"
+        "--find-links https://example.invalid/wheels\n",
+        encoding="utf-8",
+    )
+
+    findings = external_source_findings(lock, lock.read_bytes())
+
+    assert len(findings) == 2
+    assert any("git+https" in finding for finding in findings)
+    assert any("--find-links" in finding for finding in findings)

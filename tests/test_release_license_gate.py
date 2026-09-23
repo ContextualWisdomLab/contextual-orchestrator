@@ -482,3 +482,21 @@ def test_declaration_only_entry_blocks_the_gate(tmp_path) -> None:
     assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
                  "--repository-root", str(repository), "--inventory", str(inventory_path),
                  "--source-sha", "a" * 40]) == 1
+
+
+def test_licence_text_must_evidence_the_declaration() -> None:
+    """A GPL text under an MIT declaration is a contradiction, not a pass."""
+    def package(name, text):
+        return {"name": name, "version": "1", "licenses": ["MIT"],
+                "license_files": [{"name": "LICENSE", "sha256": "x" * 64, "text_head": text}]}
+
+    groups = classify_inventory_licenses(_inventory(packages=[
+        package("matching_library", "MIT License Permission is hereby granted, free of charge"),
+        package("contradicted_library", "GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007"),
+        {"name": "empty_text_library", "version": "1", "licenses": ["MIT"],
+         "license_files": [{"name": "LICENSE", "sha256": "y" * 64, "text_head": ""}]},
+    ]))
+
+    assert [row["name"] for row in groups["permitted"]] == ["python:matching_library"]
+    assert {row["name"] for row in groups["undecidable"]} == {
+        "python:contradicted_library", "python:empty_text_library"}
