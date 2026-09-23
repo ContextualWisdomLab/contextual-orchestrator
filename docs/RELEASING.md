@@ -62,11 +62,17 @@ LifeOS and other consumers must verify their specific owner contracts too.
    and nested components are adjudicated like any other. A malformed SBOM, or
    one with no components, is refused rather than read as clean.
 
-   The same gate also proves *coverage*: every distribution declared in
-   `pyproject.toml` -- runtime, every optional extra and every dependency group
-   -- must appear in the SBOM, and a shipped non-Python manifest (`rust/Cargo.toml`,
-   `package.json`) must have matching `pkg:cargo/` or `pkg:npm/` components. A
-   partial SBOM is silence about the scopes it never collected, not evidence.
+   The same gate also proves *coverage*, by set comparison rather than by
+   spot-checking. For each shipped ecosystem it reads that ecosystem's own
+   lockfile -- `uv.lock`, `rust/Cargo.lock`, `package-lock.json` -- which is the
+   resolved transitive closure, and requires every `name==version` pair in it to
+   be present in the SBOM under the matching `pkg:pypi/`, `pkg:cargo/` or
+   `pkg:npm/` purl. Every distribution declared in `pyproject.toml` (runtime,
+   each optional extra, each dependency group) must appear as well. One
+   component per ecosystem proves nothing and no longer passes. A manifest whose
+   lockfile is missing or unreadable is also a finding: an unprovable scope is
+   not a covered one. A partial SBOM is silence about the scopes it never
+   collected, not evidence.
 
    Known gap, which keeps releases blocked until it is closed: `security.yml`
    builds the SBOM with `cyclonedx-py environment` in an Ubuntu/Python 3.12

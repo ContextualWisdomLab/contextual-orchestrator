@@ -17,7 +17,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.ci.release_license_gate import classify_sbom_components, main  # noqa: E402
+from scripts.ci.release_license_gate import (  # noqa: E402
+    classify_sbom_components,
+    main,
+    scope_coverage_findings,
+)
 
 
 def _sbom(*components: dict) -> dict:
@@ -180,13 +184,97 @@ def test_full_declared_coverage_passes(tmp_path) -> None:
     assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(pyproject)]) == 0
 
 
+def _repository(tmp_path: Path) -> Path:
+    """A miniature repository carrying one lockfile per shipped ecosystem."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "gate_fixture_project"\nversion = "0.0.1"\ndependencies = ["direct_library>=1"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "direct_library"\nversion = "1.0"\n\n'
+        '[[package]]\nname = "transitive_library"\nversion = "2.0"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "rust").mkdir(exist_ok=True)
+    (tmp_path / "rust" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    (tmp_path / "rust" / "Cargo.lock").write_text(
+        '[[package]]\nname = "one_cargo_crate"\nversion = "1.1.5"\n\n'
+        '[[package]]\nname = "other_cargo_crate"\nversion = "0.3.0"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "package.json").write_text('{"name": "gate_fixture_project"}', encoding="utf-8")
+    (tmp_path / "package-lock.json").write_text(
+        json.dumps({"lockfileVersion": 3, "packages": {
+            "": {"name": "gate_fixture_project"},
+            "node_modules/one_npm_package": {"version": "1.0.0"},
+            "node_modules/other_npm_package": {"version": "4.2.0"},
+        }}),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def _purl_component(name: str, version: str, purl: str) -> dict:
+    component = _component(name, version, license_id="MIT")
+    component["purl"] = purl
+    return component
+
+
 def test_native_manifest_without_sbom_coverage_fails_closed(tmp_path) -> None:
     """Rust and npm manifests ship in the image, so the SBOM must cover them."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text('[project]\nname = "x"\nversion = "0.0.1"\ndependencies = []\n', encoding="utf-8")
-    (tmp_path / "rust").mkdir()
-    (tmp_path / "rust" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
-    sbom = _sbom(_component("python_only_library", "1.0", license_id="MIT"))
+    repository = _repository(tmp_path)
+    sbom = _sbom(_purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"),
+                 _purl_component("transitive_library", "2.0", "pkg:pypi/transitive_library@2.0"))
 
-    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(pyproject),
-                 "--repository-root", str(tmp_path)]) == 1
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository)]) == 1
+
+
+def test_one_component_per_ecosystem_does_not_prove_coverage(tmp_path) -> None:
+    """The reviewer's repro: every direct name plus one purl per ecosystem passed before."""
+    repository = _repository(tmp_path)
+    sbom = _sbom(
+        _purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"),
+        _purl_component("transitive_library", "2.0", "pkg:pypi/transitive_library@2.0"),
+        _purl_component("one_cargo_crate", "1.1.5", "pkg:cargo/one_cargo_crate@1.1.5"),
+        _purl_component("one_npm_package", "1.0.0", "pkg:npm/one_npm_package@1.0.0"),
+    )
+
+    findings = scope_coverage_findings(json.loads(json.dumps(sbom)),
+                                       str(repository / "pyproject.toml"), str(repository))
+
+    assert [finding.split(":")[0] for finding in findings] == ["cargo", "npm"]
+    assert "other-cargo-crate==0.3.0" in findings[0]
+    assert "other-npm-package==4.2.0" in findings[1]
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository)]) == 1
+
+
+def test_complete_ecosystem_sets_pass(tmp_path) -> None:
+    repository = _repository(tmp_path)
+    sbom = _sbom(
+        _purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"),
+        _purl_component("transitive_library", "2.0", "pkg:pypi/transitive_library@2.0"),
+        _purl_component("one_cargo_crate", "1.1.5", "pkg:cargo/one_cargo_crate@1.1.5"),
+        _purl_component("other_cargo_crate", "0.3.0", "pkg:cargo/other_cargo_crate@0.3.0"),
+        _purl_component("one_npm_package", "1.0.0", "pkg:npm/one_npm_package@1.0.0"),
+        _purl_component("other_npm_package", "4.2.0", "pkg:npm/other_npm_package@4.2.0"),
+    )
+
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository)]) == 0
+
+
+def test_missing_lockfile_is_an_unprovable_scope(tmp_path) -> None:
+    repository = _repository(tmp_path)
+    (repository / "rust" / "Cargo.lock").unlink()
+    sbom = _sbom(_purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"),
+                 _purl_component("transitive_library", "2.0", "pkg:pypi/transitive_library@2.0"),
+                 _purl_component("one_npm_package", "1.0.0", "pkg:npm/one_npm_package@1.0.0"),
+                 _purl_component("other_npm_package", "4.2.0", "pkg:npm/other_npm_package@4.2.0"))
+
+    findings = scope_coverage_findings(sbom, str(repository / "pyproject.toml"), str(repository))
+
+    assert any("cannot be proven" in finding for finding in findings)
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository)]) == 1

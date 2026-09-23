@@ -169,33 +169,109 @@ def _declared_requirements(pyproject: dict[str, Any]) -> set[str]:
     return declared
 
 
+def _lock_packages_from_toml(path: Path, key: str) -> set[tuple[str, str]]:
+    """Read ``[[package]]`` name/version pairs from a Cargo or uv lockfile."""
+    with open(path, "rb") as handle:
+        document = tomllib.load(handle)
+    entries = document.get(key) or []
+    return {
+        (_normalize(str(entry.get("name", ""))), str(entry.get("version", "")))
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("name")
+    }
+
+
+def _lock_packages_from_npm(path: Path) -> set[tuple[str, str]]:
+    """Read installed package name/version pairs from an npm lockfile."""
+    with open(path, encoding="utf-8") as handle:
+        document = json.load(handle)
+    packages: set[tuple[str, str]] = set()
+    for location, entry in (document.get("packages") or {}).items():
+        if not location or not isinstance(entry, dict):
+            continue  # the "" entry is the project itself, not a dependency
+        name = entry.get("name") or location.split("node_modules/", 1)[-1]
+        packages.add((_normalize(str(name)), str(entry.get("version", ""))))
+    return packages
+
+
+def _sbom_packages(components: list[dict[str, Any]], purl_prefix: str) -> set[tuple[str, str]]:
+    """Name/version pairs the SBOM actually carries for one ecosystem."""
+    packages: set[tuple[str, str]] = set()
+    for component in components:
+        purl = str(component.get("purl") or "")
+        if not purl.startswith(purl_prefix):
+            continue
+        packages.add((_normalize(str(component.get("name") or "")), str(component.get("version") or "")))
+    return packages
+
+
+def _missing_report(ecosystem: str, lock: Path, missing: set[tuple[str, str]], expected: int) -> str:
+    sample = ", ".join(f"{name}=={version}" for name, version in sorted(missing)[:10])
+    suffix = ", ..." if len(missing) > 10 else ""
+    return (
+        f"{ecosystem}: {len(missing)} of {expected} package(s) resolved in {lock} are absent from the "
+        f"SBOM ({sample}{suffix})"
+    )
+
+
 def scope_coverage_findings(
     sbom: dict[str, Any], pyproject_path: str | None, repository_root: str | None
 ) -> list[str]:
-    """Report declared dependency scopes the SBOM does not demonstrably cover."""
+    """Prove the SBOM covers each ecosystem's whole resolved dependency set.
+
+    Existence of one component per ecosystem proves nothing, so every finding
+    here is a set comparison against that ecosystem's own lockfile, which is
+    the resolved transitive closure. A manifest with no readable lockfile is a
+    finding too: an unprovable scope is not a covered one.
+    """
     findings: list[str] = []
     components = _walk_components(sbom, "sbom")
-    present = {_normalize(str(component.get("name") or "")) for component in components}
+    present_names = {_normalize(str(component.get("name") or "")) for component in components}
+    project_name = ""
     if pyproject_path:
         with open(pyproject_path, "rb") as handle:
             pyproject = tomllib.load(handle)
-        missing = sorted(_declared_requirements(pyproject) - present)
-        if missing:
+        project_name = _normalize(str((pyproject.get("project") or {}).get("name") or ""))
+        missing_declared = sorted(_declared_requirements(pyproject) - present_names)
+        if missing_declared:
             findings.append(
-                f"declared Python distributions absent from the SBOM ({len(missing)}): {', '.join(missing)}"
+                "declared Python distributions absent from the SBOM "
+                f"({len(missing_declared)}): {', '.join(missing_declared)}"
             )
-    if repository_root:
-        root = Path(repository_root)
-        purls = " ".join(str(component.get("purl") or "") for component in components)
-        for ecosystem, manifest, purl_prefix in (
-            ("cargo", root / "rust" / "Cargo.toml", "pkg:cargo/"),
-            ("npm", root / "package.json", "pkg:npm/"),
-        ):
-            if manifest.exists() and purl_prefix not in purls:
-                findings.append(
-                    f"{manifest} declares {ecosystem} dependencies that ship with the artifact, but the "
-                    f"SBOM contains no {purl_prefix} component"
-                )
+    if not repository_root:
+        return findings
+    root = Path(repository_root)
+    ecosystems: tuple[tuple[str, Path, tuple[Path, ...], str, str], ...] = (
+        ("python", root / "pyproject.toml", (root / "uv.lock",), "pkg:pypi/", "package"),
+        ("cargo", root / "rust" / "Cargo.toml", (root / "rust" / "Cargo.lock",), "pkg:cargo/", "package"),
+        ("npm", root / "package.json", (root / "package-lock.json",), "pkg:npm/", ""),
+    )
+    for ecosystem, manifest, lock_candidates, purl_prefix, toml_key in ecosystems:
+        if not manifest.exists():
+            continue
+        lock = next((candidate for candidate in lock_candidates if candidate.exists()), None)
+        if lock is None:
+            findings.append(
+                f"{manifest} ships with the artifact but no lockfile "
+                f"({', '.join(str(candidate) for candidate in lock_candidates)}) is available, so its "
+                "resolved dependency set cannot be proven"
+            )
+            continue
+        try:
+            expected = (
+                _lock_packages_from_npm(lock) if ecosystem == "npm"
+                else _lock_packages_from_toml(lock, toml_key)
+            )
+        except (OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
+            findings.append(f"{ecosystem}: lockfile {lock} could not be read ({error})")
+            continue
+        expected = {pair for pair in expected if pair[0] and pair[0] != project_name}
+        if not expected:
+            continue
+        present = _sbom_packages(components, purl_prefix)
+        missing = {pair for pair in expected if pair not in present}
+        if missing:
+            findings.append(_missing_report(ecosystem, lock, missing, len(expected)))
     return findings
 
 
