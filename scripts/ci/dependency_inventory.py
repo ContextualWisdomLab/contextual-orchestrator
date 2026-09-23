@@ -137,7 +137,9 @@ def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     return packages
 
 
-def _artifact_license_terms(artifact_dir: Path, name: str, version: str) -> tuple[list[str], str]:
+def _artifact_license_terms(
+    artifact_dir: Path, name: str, version: str
+) -> tuple[list[str], str, list[str]]:
     """Read a package's licence from its own distribution artefact, unopened.
 
     The artefact is the evidence: its `.dist-info/METADATA` and bundled licence
@@ -151,7 +153,7 @@ def _artifact_license_terms(artifact_dir: Path, name: str, version: str) -> tupl
     if not candidates:
         # sdists are excluded on purpose: reading one usefully means running its
         # build backend, and an unreviewed package must not execute here.
-        return [], f"no wheel for {name}=={version} in {artifact_dir}"
+        return [], f"no wheel for {name}=={version} in {artifact_dir}", []
     artifact = candidates[0]
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     terms: list[str] = []
@@ -166,7 +168,7 @@ def _artifact_license_terms(artifact_dir: Path, name: str, version: str) -> tupl
             ):
                 license_files.append(Path(member).name)
     if not terms:
-        return [], f"{artifact.name} (sha256 {digest[:12]}) declares no licence metadata"
+        return [], f"{artifact.name} (sha256 {digest[:12]}) declares no licence metadata", license_files
     # The declaration is what the publisher stated; the bundled licence text is
     # the instrument itself. Absence of the text is recorded, never resolved by
     # the declaration alone.
@@ -174,7 +176,7 @@ def _artifact_license_terms(artifact_dir: Path, name: str, version: str) -> tupl
         f"licence files: {', '.join(sorted(license_files))}" if license_files
         else "declaration only: the wheel bundles no licence text"
     )
-    return terms, f"artefact {artifact.name} sha256 {digest}; {evidence}"
+    return terms, f"artefact {artifact.name} sha256 {digest}; {evidence}", license_files
 
 
 def _metadata_license_terms(metadata: Any) -> list[str]:
@@ -328,12 +330,14 @@ def build_inventory(
         if ecosystem == "python" and resolve_licenses:
             for package in packages:
                 if artifact_dir is not None:
-                    terms, source = _artifact_license_terms(
+                    terms, source, license_files = _artifact_license_terms(
                         artifact_dir, package["name"], package["version"]
                     )
                 else:
                     terms, source = _installed_license_terms(package["name"], package["version"])
+                    license_files = []
                 package["licenses"] = terms
+                package["license_files"] = license_files
                 package["license_source"] = source if terms else f"unresolved: {source}"
         entry["packages"] = sorted(packages, key=lambda package: (package["name"], package["version"]))
         ecosystems.append(entry)

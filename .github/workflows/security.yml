@@ -246,7 +246,11 @@ jobs:
       - name: Install audit and project dependencies
         run: |
           python -m pip install --require-hashes -r requirements-security-ci.txt
-          python -m pip install --require-hashes -r requirements.lock
+          # The shipped set installs from the very wheels whose licences were
+          # read above: --no-index --find-links forbids reaching the network
+          # again, so the bytes adjudicated are the bytes installed.
+          python -m pip install --require-hashes --no-index \
+            --find-links license-artifacts -r requirements.lock
           python -m pip install --no-deps -e .
 
       - name: Audit pinned dependencies and generate SBOM

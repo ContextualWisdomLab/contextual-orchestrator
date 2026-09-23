@@ -442,3 +442,43 @@ def test_inventory_copyleft_blocks_even_when_the_sbom_is_clean(tmp_path) -> None
     assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
                  "--repository-root", str(repository), "--inventory", str(inventory_path),
                  "--source-sha", "a" * 40]) == 1
+
+
+@pytest.mark.parametrize(
+    "package, expected_group",
+    [
+        pytest.param({"name": "with_text", "version": "1", "licenses": ["MIT"],
+                      "license_files": ["LICENSE"]}, "permitted", id="declaration_with_text"),
+        pytest.param({"name": "declaration_only", "version": "1", "licenses": ["MIT"],
+                      "license_files": []}, "undecidable", id="declaration_without_text"),
+        pytest.param({"name": "conflicting", "version": "1", "licenses": ["MIT", "GPL-3.0-only"],
+                      "license_files": ["LICENSE"]}, "copyleft", id="conflicting_terms"),
+        pytest.param({"name": "no_wheel", "version": "1", "licenses": [],
+                      "license_source": "unresolved: no wheel"}, "undecidable", id="unresolved"),
+    ],
+)
+def test_permitted_terms_alone_never_settle_an_entry(package, expected_group) -> None:
+    """A permitted licence line without the artefact's own text is still held."""
+    groups = classify_inventory_licenses(_inventory(packages=[package]))
+
+    assert [row["name"] for row in groups[expected_group]] == [f"python:{package['name']}"]
+    for other in set(groups) - {expected_group}:
+        assert groups[other] == []
+
+
+def test_declaration_only_entry_blocks_the_gate(tmp_path) -> None:
+    repository = _repository(tmp_path)
+    inventory_path = tmp_path / "dependency-inventory.json"
+    inventory_path.write_text(json.dumps(_inventory(packages=[
+        {"name": "direct_library", "version": "1.0", "licenses": ["MIT"], "license_files": []},
+    ])), encoding="utf-8")
+    sbom = _sbom(_purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"),
+                 _purl_component("transitive_library", "2.0", "pkg:pypi/transitive_library@2.0"),
+                 _purl_component("one_cargo_crate", "1.1.5", "pkg:cargo/one_cargo_crate@1.1.5"),
+                 _purl_component("other_cargo_crate", "0.3.0", "pkg:cargo/other_cargo_crate@0.3.0"),
+                 _purl_component("one_npm_package", "1.0.0", "pkg:npm/one_npm_package@1.0.0"),
+                 _purl_component("other_npm_package", "4.2.0", "pkg:npm/other_npm_package@4.2.0"))
+
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository), "--inventory", str(inventory_path),
+                 "--source-sha", "a" * 40]) == 1

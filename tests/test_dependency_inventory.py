@@ -199,9 +199,10 @@ def test_licences_are_read_from_the_artifact_not_from_an_install(tmp_path) -> No
     artifacts.mkdir()
     wheel = _wheel(artifacts, "example_library", "1.2.3", ["License-Expression: 0BSD"])
 
-    terms, source = _artifact_license_terms(artifacts, "Example.Library", "1.2.3")
+    terms, source, license_files = _artifact_license_terms(artifacts, "Example.Library", "1.2.3")
 
     assert terms == ["0BSD"]
+    assert license_files == []
     # The evidence is tied to the exact bytes, not to a registry's claim.
     assert hashlib.sha256(wheel.read_bytes()).hexdigest() in source
 
@@ -212,7 +213,7 @@ def test_declaration_without_bundled_text_is_recorded_as_such(tmp_path) -> None:
     artifacts.mkdir()
     _wheel(artifacts, "declared_only_library", "1.0", ["License-Expression: MIT"])
 
-    terms, source = _artifact_license_terms(artifacts, "declared_only_library", "1.0")
+    terms, source, _ = _artifact_license_terms(artifacts, "declared_only_library", "1.0")
 
     assert terms == ["MIT"]
     assert "declaration only" in source
@@ -224,7 +225,7 @@ def test_sdist_is_not_read_for_licences(tmp_path) -> None:
     artifacts.mkdir()
     (artifacts / "sdist_only_library-1.0.tar.gz").write_bytes(b"not read")
 
-    terms, source = _artifact_license_terms(artifacts, "sdist_only_library", "1.0")
+    terms, source, _ = _artifact_license_terms(artifacts, "sdist_only_library", "1.0")
 
     assert terms == []
     assert "no wheel" in source
@@ -238,3 +239,17 @@ def test_absent_or_silent_artifact_resolves_to_nothing(tmp_path) -> None:
     assert _artifact_license_terms(artifacts, "silent_library", "1.0")[0] == []
     assert _artifact_license_terms(artifacts, "missing_library", "1.0")[0] == []
     assert "no wheel" in _artifact_license_terms(artifacts, "missing_library", "1.0")[1]
+
+
+def test_security_workflow_adjudicates_before_installing_and_installs_what_it_read() -> None:
+    """Collection must precede installation, and installation must not re-download."""
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
+    collect = workflow.index("scripts.ci.dependency_inventory")
+    download = workflow.index("pip download")
+    install = workflow.index("pip install --require-hashes --no-index")
+
+    assert download < collect < install, "licence evidence must be gathered before any install"
+    assert "--only-binary=:all:" in workflow[download:collect], "sdist build backends must not run"
+    install_block = workflow[install:install + 200]
+    assert "--find-links license-artifacts" in install_block
+    assert workflow.count("pip download") == 1, "the adjudicated wheels are not downloaded twice"

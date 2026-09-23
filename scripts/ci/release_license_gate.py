@@ -264,6 +264,11 @@ def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dic
                 copyleft.append(row)
             elif all(verdict == "undecidable" for verdict, _ in verdicts):
                 undecidable.append(row)
+            elif "license_files" in package and not package.get("license_files"):
+                # A declaration with no licence text in the artefact is the
+                # publisher's word without the instrument behind it. Permitted
+                # terms do not settle it; it is held like any other unknown.
+                undecidable.append({**row, "license": f"{row['license']} (declaration only, no text)"})
             else:
                 permitted.append(row)
     return {"permitted": permitted, "copyleft": copyleft, "undecidable": undecidable}
