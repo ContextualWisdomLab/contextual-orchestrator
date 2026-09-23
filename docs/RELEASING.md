@@ -50,7 +50,16 @@ LifeOS and other consumers must verify their specific owner contracts too.
 5. A successful `security.yml` run for that exact commit exposes a non-empty
    `cyclonedx-sbom/cyclonedx-sbom.json` artifact. Lookup, download, upload,
    empty-file or content-verification failure is fatal, not best effort.
-6. A repository administrator has enabled GitHub release immutability before
+6. That same SBOM passes the fail-closed licence gate
+   (`scripts/ci/release_license_gate.py`): no component may carry a GPL-family
+   licence (GPL, LGPL or AGPL in any spelling) and none may have an absent,
+   placeholder or unknown licence. The SBOM is the scope, so transitive,
+   optional and build-only components count; being unexecuted is not an
+   exemption. A dual-licensed component passes only when its SPDX expression
+   really offers a permissive alternative with `OR` -- `AND` imposes both. The
+   gate runs inside `verify`, which `publish` depends on, so a failure stops
+   the run before any tag exists. It is never waived to get a release out.
+7. A repository administrator has enabled GitHub release immutability before
    publication. The normal workflow token has no Administration permission;
    do not add an administrative secret or expand the publisher's authority
    merely to read or change this setting. The publisher validates the actual
@@ -58,7 +67,7 @@ LifeOS and other consumers must verify their specific owner contracts too.
    reporting success. A setting that was disabled or changed during publication
    can leave a complete but mutable public release; that is a **failed** run
    and is ineligible for consumption, not an automatic deletion/retagging case.
-7. The runner's GitHub CLI supports `gh release verify` and
+8. The runner's GitHub CLI supports `gh release verify` and
    `gh release verify-asset`. Missing verification capability fails closed;
    do not replace it with a filename or hash-only success claim.
 
