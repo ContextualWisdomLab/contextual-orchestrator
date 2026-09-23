@@ -226,6 +226,8 @@ def build_inventory(repository_root: Path, resolve_licenses: bool = False) -> di
         data, provenance = _read_locked_source(repository_root, lock, commit)
         entry["provenance"] = [provenance]
         packages = reader(lock, data)
+        for package in packages:
+            package["sources"] = [provenance["path"]]
         if ecosystem == "python":
             # uv.lock resolves the project's own scopes; the CI and fuzz
             # toolchains are pinned in their own hash-locked requirements
@@ -241,24 +243,34 @@ def build_inventory(repository_root: Path, resolve_licenses: bool = False) -> di
                     repository_root, requirements, commit
                 )
                 entry["provenance"].append(requirements_provenance)
-                seen = {(package["name"], package["version"]) for package in packages}
-                packages += [
-                    package
-                    for package in _requirements_packages(requirements, requirements_data)
-                    if (package["name"], package["version"]) not in seen
-                ]
+                index = {(package["name"], package["version"]): package for package in packages}
+                for package in _requirements_packages(requirements, requirements_data):
+                    key = (package["name"], package["version"])
+                    known = index.get(key)
+                    if known is not None:
+                        # The same pin in two consumed files is one package with
+                        # two consumers, not a duplicate to drop.
+                        known["sources"].append(requirements_provenance["path"])
+                        continue
+                    package["sources"] = [requirements_provenance["path"]]
+                    index[key] = package
+                    packages.append(package)
         if ecosystem == "npm":
             pnpm_lock = repository_root / "pnpm-lock.yaml"
             if pnpm_lock.exists():
                 entry["lockfile"] = f"{entry['lockfile']}, {pnpm_lock.relative_to(repository_root)}"
                 pnpm_data, pnpm_provenance = _read_locked_source(repository_root, pnpm_lock, commit)
                 entry["provenance"].append(pnpm_provenance)
-                seen = {(package["name"], package["version"]) for package in packages}
-                packages += [
-                    package
-                    for package in _pnpm_packages(pnpm_lock, pnpm_data)
-                    if (package["name"], package["version"]) not in seen
-                ]
+                index = {(package["name"], package["version"]): package for package in packages}
+                for package in _pnpm_packages(pnpm_lock, pnpm_data):
+                    key = (package["name"], package["version"])
+                    known = index.get(key)
+                    if known is not None:
+                        known["sources"].append(pnpm_provenance["path"])
+                        continue
+                    package["sources"] = [pnpm_provenance["path"]]
+                    index[key] = package
+                    packages.append(package)
         for package in packages:
             package["purl"] = f"{purl_prefix}{package['name']}@{package['version']}"
         if ecosystem == "python" and resolve_licenses:
