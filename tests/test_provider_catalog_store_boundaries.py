@@ -4,14 +4,12 @@ Every test here exercises an error path, degenerate input, or concurrency
 branch that the ordinary success-path tests cannot reach: incomplete account
 identities, non-finite/unparseable prices, unknown currencies, malformed
 error codes, invalid serving tags, empty refresh payloads, DSN validation,
-the packaging-boundary psycopg import, and the double-checked schema lock.
+the packaging-boundary pg8000 import, and the double-checked schema lock.
 """
 
 from __future__ import annotations
 
-import sys
 import threading
-import types
 
 import pytest
 
@@ -161,19 +159,18 @@ def test_postgres_store_validates_dsn_and_reports_backend() -> None:
     )
 
 
-def test_connect_without_factory_uses_packaged_psycopg(monkeypatch) -> None:
-    """The default transport imports psycopg lazily and passes through the DSN."""
+def test_connect_without_factory_uses_packaged_pg8000(monkeypatch) -> None:
+    """The default transport passes the DSN to the shared pg8000 factory."""
     sentinel_connection = object()
     calls: list[str] = []
-
-    fake_psycopg = types.ModuleType("psycopg")
 
     def fake_connect(dsn: str):
         calls.append(dsn)
         return sentinel_connection
 
-    fake_psycopg.connect = fake_connect  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    monkeypatch.setattr(
+        "contextual_orchestrator.provider_catalog_store.connect_pg8000", fake_connect
+    )
 
     store = PostgresProviderCatalogStore("postgresql://lazy.example/db")
     assert store._connect() is sentinel_connection
