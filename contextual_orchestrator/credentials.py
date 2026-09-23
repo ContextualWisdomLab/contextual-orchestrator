@@ -29,6 +29,8 @@ import os
 import threading
 from typing import Protocol
 
+from .postgres_connection import PostgresDriverUnavailable, connect_pg8000
+
 
 class NotConfigured(RuntimeError):
     """Raised when a required credential cannot be resolved from the KV.
@@ -145,13 +147,12 @@ class PostgresCredentialBackend:
 
     def _connect(self):
         try:
-            import psycopg
-        except ImportError as exc:
+            return connect_pg8000(self._dsn)
+        except PostgresDriverUnavailable as exc:
             raise NotConfigured(
-                "PostgresCredentialBackend needs the 'db' extra (psycopg); "
+                "PostgresCredentialBackend needs the 'db' extra (pg8000); "
                 "install contextual-orchestrator[db]"
             ) from exc
-        return psycopg.connect(self._dsn)
 
     def _ensure_schema(self, conn) -> None:
         if self._ensured:

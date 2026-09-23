@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
-import sys
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
@@ -20,6 +17,7 @@ from contextual_orchestrator.credentials import (
     NotConfigured,
     PostgresCredentialBackend,
 )
+from contextual_orchestrator.postgres_connection import PostgresDriverUnavailable
 
 
 class _Cursor:
@@ -138,13 +136,13 @@ def test_get_backend_handles_another_thread_winning_initialization(
     assert credentials.get_backend() is winner
 
 
-def test_psycopg_connection_uses_only_the_bootstrap_dsn(
+def test_pg8000_connection_uses_only_the_bootstrap_dsn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pass the configured DSN to psycopg without reconstructing a connection URL."""
+    """Pass the configured DSN to the shared pg8000 connection factory."""
     connection = object()
     connect = Mock(return_value=connection)
-    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=connect))
+    monkeypatch.setattr("contextual_orchestrator.credentials.connect_pg8000", connect)
     backend = PostgresCredentialBackend(
         "postgresql://db.example/credential_store",
         "bootstrap-passphrase",
@@ -154,21 +152,35 @@ def test_psycopg_connection_uses_only_the_bootstrap_dsn(
     connect.assert_called_once_with("postgresql://db.example/credential_store")
 
 
-def test_missing_psycopg_extra_fails_with_install_guidance(
+def test_missing_pg8000_extra_fails_with_install_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Explain the optional database dependency instead of leaking ImportError."""
-    real_import = builtins.__import__
+    def missing_driver(_dsn: str) -> object:
+        raise PostgresDriverUnavailable("synthetic missing optional dependency")
 
-    def import_without_psycopg(name: str, *args: object, **kwargs: object):
-        if name == "psycopg":
-            raise ImportError("synthetic missing optional dependency")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", import_without_psycopg)
+    monkeypatch.setattr(
+        "contextual_orchestrator.credentials.connect_pg8000", missing_driver
+    )
     backend = PostgresCredentialBackend("postgresql://db.example/store", "passphrase")
 
-    with pytest.raises(NotConfigured, match="db.*psycopg"):
+    with pytest.raises(NotConfigured, match="db.*pg8000"):
+        backend._connect()
+
+
+def test_connection_runtime_error_is_not_relabelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve driver connection failures for operational diagnosis."""
+    def connection_failure(_dsn: str) -> object:
+        raise RuntimeError("synthetic connection failure")
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.credentials.connect_pg8000", connection_failure
+    )
+    backend = PostgresCredentialBackend("postgresql://db.example/store", "passphrase")
+
+    with pytest.raises(RuntimeError, match="synthetic connection failure"):
         backend._connect()
 
 

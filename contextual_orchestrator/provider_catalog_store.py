@@ -24,6 +24,7 @@ from .model_discovery import (
     ModelUnitPrice,
     ProviderModelSource,
 )
+from .postgres_connection import PostgresDriverUnavailable, connect_pg8000
 
 if TYPE_CHECKING:
     from .privacy_policy_analysis import PrivacyPolicyAssessment
@@ -692,16 +693,15 @@ class PostgresProviderCatalogStore:
         return "postgres"
 
     def _connect(self):
-        """Open one catalog connection through the injected or psycopg factory."""
+        """Open one catalog connection through the injected or pg8000 factory."""
         if self._connection_factory is not None:
             return self._connection_factory()
         try:
-            import psycopg
-        except ImportError as exc:  # pragma: no cover - packaging boundary
+            return connect_pg8000(self._dsn)
+        except PostgresDriverUnavailable as exc:  # pragma: no cover - packaging boundary
             raise ProviderCatalogError(
                 "provider catalog requires contextual-orchestrator[db]"
             ) from exc
-        return psycopg.connect(self._dsn)  # pragma: no cover - live database
 
     def _ensure_schema(self, connection: object) -> None:
         """Create normalized catalog objects once per store instance."""
