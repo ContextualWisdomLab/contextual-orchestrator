@@ -236,8 +236,46 @@ def _missing_report(ecosystem: str, lock: Path, missing: set[tuple[str, str]], e
     )
 
 
+def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
+    """Expected name/version pairs per ecosystem, as the inventory recorded them."""
+    expectations: dict[str, set[tuple[str, str]]] = {}
+    for entry in inventory.get("ecosystems") or []:
+        ecosystem = str(entry.get("ecosystem") or "")
+        expectations[ecosystem] = {
+            (_normalize(str(package.get("name") or "")), str(package.get("version") or ""))
+            for package in entry.get("packages") or []
+        }
+    return expectations
+
+
+def inventory_binding_findings(inventory: dict[str, Any], expected_sha: str | None) -> list[str]:
+    """Refuse an inventory that describes another tree than the one being released."""
+    findings: list[str] = []
+    source_sha = str(inventory.get("source_sha") or "")
+    if not source_sha:
+        findings.append("inventory: no source_sha, so it cannot be bound to the released commit")
+    elif expected_sha and source_sha != expected_sha:
+        findings.append(
+            f"inventory: source_sha {source_sha[:12]} does not match the released commit "
+            f"{expected_sha[:12]}"
+        )
+    for entry in inventory.get("ecosystems") or []:
+        ecosystem = entry.get("ecosystem")
+        if entry.get("error"):
+            findings.append(f"inventory {ecosystem}: {entry['error']}")
+        for provenance in entry.get("provenance") or []:
+            if provenance.get("error") or not provenance.get("matches_commit"):
+                findings.append(
+                    f"inventory {ecosystem}: {provenance.get('path')} does not match its committed blob"
+                )
+    return findings
+
+
 def scope_coverage_findings(
-    sbom: dict[str, Any], pyproject_path: str | None, repository_root: str | None
+    sbom: dict[str, Any],
+    pyproject_path: str | None,
+    repository_root: str | None,
+    inventory: dict[str, Any] | None = None,
 ) -> list[str]:
     """Prove the SBOM covers each ecosystem's whole resolved dependency set.
 
@@ -280,9 +318,14 @@ def scope_coverage_findings(
             )
             continue
         try:
+            inventory_expected = (_inventory_expectations(inventory) if inventory else {}).get(ecosystem)
             expected = (
-                _lock_packages_from_npm(lock) if ecosystem == "npm"
-                else _lock_packages_from_toml(lock, toml_key)
+                inventory_expected
+                if inventory_expected is not None
+                else (
+                    _lock_packages_from_npm(lock) if ecosystem == "npm"
+                    else _lock_packages_from_toml(lock, toml_key)
+                )
             )
         except (OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
             findings.append(f"{ecosystem}: lockfile {lock} could not be read ({error})")
@@ -326,6 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sbom", required=True, help="path to cyclonedx-sbom.json for the exact commit")
     parser.add_argument("--pyproject", help="pyproject.toml whose declared scopes the SBOM must cover")
     parser.add_argument("--repository-root", help="repository root, to check non-Python manifests")
+    parser.add_argument("--inventory", help="dependency inventory whose scopes the SBOM must cover")
+    parser.add_argument("--source-sha", help="the released commit the inventory must describe")
     arguments = parser.parse_args(argv)
     try:
         with open(arguments.sbom, encoding="utf-8") as handle:
@@ -337,9 +382,22 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(sbom, dict):
         print("::error::CycloneDX SBOM is not a JSON object; refusing to release.", file=sys.stderr)
         return 1
+    inventory: dict[str, Any] | None = None
+    if arguments.inventory:
+        try:
+            with open(arguments.inventory, encoding="utf-8") as handle:
+                inventory = json.load(handle)
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"::error::Release licence gate could not read the dependency inventory: {error}",
+                  file=sys.stderr)
+            return 1
     try:
         groups = classify_sbom_components(sbom)
-        coverage = scope_coverage_findings(sbom, arguments.pyproject, arguments.repository_root)
+        coverage = scope_coverage_findings(
+            sbom, arguments.pyproject, arguments.repository_root, inventory
+        )
+        if inventory is not None:
+            coverage = inventory_binding_findings(inventory, arguments.source_sha) + coverage
     except SbomSchemaError as error:
         print(f"::error::CycloneDX SBOM is malformed and cannot be adjudicated ({error}); refusing to release.",
               file=sys.stderr)

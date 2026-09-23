@@ -305,7 +305,9 @@ jobs:
           python -m scripts.ci.release_license_gate \
             --sbom sbom-download/cyclonedx-sbom.json \
             --pyproject pyproject.toml \
-            --repository-root .
+            --repository-root . \
+            --inventory dependency-inventory.json \
+            --source-sha "${TARGET_SHA}"
 
       - name: Upload rendered notes and SBOM for the publish job
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
@@ -313,6 +315,7 @@ jobs:
           name: release-publish-inputs
           path: |
             release-notes.md
+            dependency-inventory.json
             sbom-download/**
           if-no-files-found: error
           retention-days: 1

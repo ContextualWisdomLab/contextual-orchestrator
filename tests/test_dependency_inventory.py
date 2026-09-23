@@ -145,7 +145,7 @@ def test_double_quoted_pnpm_keys_are_parsed(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    packages = _pnpm_packages(lock)
+    packages = _pnpm_packages(lock, lock.read_bytes())
 
     assert {(p["name"], p["version"]) for p in packages} == {("@scope/quoted", "1.2.3"), ("single", "4.5.6")}
 
@@ -164,7 +164,7 @@ def test_unsupported_or_malformed_pnpm_lock_fails_closed(tmp_path, content) -> N
     lock.write_text(content, encoding="utf-8")
 
     with pytest.raises(InventoryError):
-        _pnpm_packages(lock)
+        _pnpm_packages(lock, lock.read_bytes())
 
 
 def test_python_scope_includes_the_pinned_ci_and_fuzz_toolchains() -> None:

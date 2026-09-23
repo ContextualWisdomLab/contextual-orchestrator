@@ -35,14 +35,13 @@ class InventoryError(Exception):
     """A lockfile could not be read as a complete dependency set."""
 
 
-def _toml_packages(path: Path) -> list[dict[str, str]]:
+def _toml_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     """Read ``[[package]]`` entries, refusing to drop any of them quietly.
 
     Skipping a malformed or nameless entry would shrink the inventory without
     saying so, which is the failure this file exists to prevent.
     """
-    with open(path, "rb") as handle:
-        document = tomllib.load(handle)
+    document = tomllib.loads(data.decode("utf-8"))
     packages: list[dict[str, str]] = []
     for index, entry in enumerate(document.get("package") or []):
         if not isinstance(entry, dict) or not entry.get("name") or not entry.get("version"):
@@ -51,13 +50,16 @@ def _toml_packages(path: Path) -> list[dict[str, str]]:
     return packages
 
 
-def _npm_packages(path: Path) -> list[dict[str, str]]:
-    with open(path, encoding="utf-8") as handle:
-        document = json.load(handle)
+def _npm_packages(path: Path, data: bytes) -> list[dict[str, str]]:
+    document = json.loads(data.decode("utf-8"))
     packages: list[dict[str, str]] = []
     for location, entry in (document.get("packages") or {}).items():
-        if not location or not isinstance(entry, dict):
-            continue  # the "" key is the project itself
+        if not location:
+            continue  # the "" key is the project itself, not a dependency
+        if not isinstance(entry, dict):
+            # Skipping it would let a file with one good and one broken entry
+            # report only the good one, which is the silence this refuses.
+            raise InventoryError(f"{path}: entry {location!r} is not an object")
         # A nested path is "node_modules/a/node_modules/b": the package is the
         # segment after the LAST marker, not everything after the first one.
         name = entry.get("name") or location.rsplit("node_modules/", 1)[-1]
@@ -71,7 +73,7 @@ def _npm_packages(path: Path) -> list[dict[str, str]]:
 _PNPM_SUPPORTED_VERSIONS = frozenset({"9", "9.0"})
 
 
-def _pnpm_packages(path: Path) -> list[dict[str, str]]:
+def _pnpm_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     """Read the `packages:` block of a pnpm v9 lockfile.
 
     Each key is ``name@version``, quoted when it carries a scope, which is all
@@ -85,7 +87,7 @@ def _pnpm_packages(path: Path) -> list[dict[str, str]]:
     anything else fails closed rather than producing plausible nonsense.
     """
     declared_version = ""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = data.decode("utf-8").splitlines()
     for line in lines:
         match = re.match(r"^lockfileVersion:\s*'?\"?([0-9.]+)'?\"?\s*$", line)
         if match:
@@ -119,10 +121,10 @@ def _pnpm_packages(path: Path) -> list[dict[str, str]]:
     return packages
 
 
-def _requirements_packages(path: Path) -> list[dict[str, str]]:
+def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     """Read pinned ``name==version`` lines from a hash-locked requirements file."""
     packages: list[dict[str, str]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in data.decode("utf-8").splitlines():
         match = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\\;]+)", line)
         if match:
             packages.append({"name": match.group(1), "version": match.group(2)})
@@ -145,7 +147,7 @@ def _source_sha(repository_root: Path) -> str:
         return ""
 
 
-def _lock_provenance(repository_root: Path, lock: Path) -> dict[str, Any]:
+def _read_locked_source(repository_root: Path, lock: Path, commit: str) -> tuple[bytes, dict[str, Any]]:
     """Bind the inventory to the exact bytes read, not merely to a commit name.
 
     A commit id describes what is committed; the reader may have read something
@@ -154,21 +156,29 @@ def _lock_provenance(repository_root: Path, lock: Path) -> dict[str, Any]:
     no release can reproduce.
     """
     data = lock.read_bytes()
-    read_hash = hashlib.sha256(data).hexdigest()
     relative = str(lock.relative_to(repository_root))
-    provenance: dict[str, Any] = {"path": relative, "read_sha256": read_hash}
+    provenance: dict[str, Any] = {"path": relative, "read_sha256": hashlib.sha256(data).hexdigest()}
     try:
-        provenance["blob_id"] = _git(repository_root, "hash-object", str(lock))
-        provenance["committed_blob_id"] = _git(repository_root, "rev-parse", f"HEAD:{relative}")
+        # Hash the bytes already in hand rather than letting git re-read the
+        # path: three separate reads could bind three different files.
+        completed = subprocess.run(
+            ["git", "-C", str(repository_root), "hash-object", "--stdin"],
+            input=data, capture_output=True, check=True,
+        )
+        provenance["blob_id"] = completed.stdout.decode().strip()
+        provenance["committed_blob_id"] = _git(repository_root, "rev-parse", f"{commit}:{relative}")
     except (OSError, subprocess.CalledProcessError):
-        provenance["error"] = "git could not resolve the committed blob for this lockfile"
-        return provenance
+        provenance["error"] = "git could not resolve the committed blob for this file"
+        return data, provenance
     provenance["matches_commit"] = provenance["blob_id"] == provenance["committed_blob_id"]
-    return provenance
+    return data, provenance
 
 
 def build_inventory(repository_root: Path) -> dict[str, Any]:
     """Collect every lockfile-resolved dependency, grouped by ecosystem."""
+    # One commit is captured up front and every blob comparison uses it, so a
+    # branch moving mid-run cannot bind half the inventory to another tree.
+    commit = _source_sha(repository_root)
     ecosystems: list[dict[str, Any]] = []
     for ecosystem, lock, reader, purl_prefix in (
         ("python", repository_root / "uv.lock", _toml_packages, "pkg:pypi/"),
@@ -181,8 +191,9 @@ def build_inventory(repository_root: Path) -> dict[str, Any]:
             entry["packages"] = []
             ecosystems.append(entry)
             continue
-        entry["provenance"] = [_lock_provenance(repository_root, lock)]
-        packages = reader(lock)
+        data, provenance = _read_locked_source(repository_root, lock, commit)
+        entry["provenance"] = [provenance]
+        packages = reader(lock, data)
         if ecosystem == "python":
             # uv.lock resolves the project's own scopes; the CI and fuzz
             # toolchains are pinned in their own hash-locked requirements
@@ -194,22 +205,26 @@ def build_inventory(repository_root: Path) -> dict[str, Any]:
                 pinned_files.insert(0, repository_root / "requirements.lock")
             for requirements in pinned_files:
                 entry["lockfile"] = f"{entry['lockfile']}, {requirements.relative_to(repository_root)}"
-                entry["provenance"].append(_lock_provenance(repository_root, requirements))
+                requirements_data, requirements_provenance = _read_locked_source(
+                    repository_root, requirements, commit
+                )
+                entry["provenance"].append(requirements_provenance)
                 seen = {(package["name"], package["version"]) for package in packages}
                 packages += [
                     package
-                    for package in _requirements_packages(requirements)
+                    for package in _requirements_packages(requirements, requirements_data)
                     if (package["name"], package["version"]) not in seen
                 ]
         if ecosystem == "npm":
             pnpm_lock = repository_root / "pnpm-lock.yaml"
             if pnpm_lock.exists():
                 entry["lockfile"] = f"{entry['lockfile']}, {pnpm_lock.relative_to(repository_root)}"
-                entry["provenance"].append(_lock_provenance(repository_root, pnpm_lock))
+                pnpm_data, pnpm_provenance = _read_locked_source(repository_root, pnpm_lock, commit)
+                entry["provenance"].append(pnpm_provenance)
                 seen = {(package["name"], package["version"]) for package in packages}
                 packages += [
                     package
-                    for package in _pnpm_packages(pnpm_lock)
+                    for package in _pnpm_packages(pnpm_lock, pnpm_data)
                     if (package["name"], package["version"]) not in seen
                 ]
         for package in packages:
@@ -218,7 +233,7 @@ def build_inventory(repository_root: Path) -> dict[str, Any]:
         ecosystems.append(entry)
     return {
         "schema": "contextual-orchestrator/dependency-inventory/v1",
-        "source_sha": _source_sha(repository_root),
+        "source_sha": commit,
         "scope_note": (
             "Union of the lockfiles and pinned requirement files enumerated in each ecosystem's "
             "'lockfile' field, which is what this inventory can prove -- not an assertion that the "

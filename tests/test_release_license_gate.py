@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.ci.release_license_gate import (  # noqa: E402
     classify_sbom_components,
+    inventory_binding_findings,
     main,
     scope_coverage_findings,
 )
@@ -313,3 +314,59 @@ def test_purl_identity_must_match_the_component_fields(tmp_path) -> None:
     assert any("purl" in finding for finding in findings)
     assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
                  "--repository-root", str(repository)]) == 1
+
+
+# --- the gate must actually consume the inventory it asks for ---
+
+
+def _inventory(source_sha: str = "a" * 40, *, matches: bool = True, packages=None) -> dict:
+    return {
+        "schema": "contextual-orchestrator/dependency-inventory/v1",
+        "source_sha": source_sha,
+        "ecosystems": [
+            {
+                "ecosystem": "python",
+                "lockfile": "uv.lock",
+                "provenance": [{"path": "uv.lock", "read_sha256": "x", "matches_commit": matches}],
+                "packages": packages if packages is not None else [{"name": "inventory_only_library", "version": "3.0"}],
+            }
+        ],
+    }
+
+
+def test_inventory_expectations_replace_the_lockfile_reading(tmp_path) -> None:
+    """A package the inventory carries and the SBOM lacks blocks the release."""
+    repository = _repository(tmp_path)
+    inventory_path = tmp_path / "dependency-inventory.json"
+    inventory_path.write_text(json.dumps(_inventory()), encoding="utf-8")
+    sbom = _sbom(_purl_component("direct_library", "1.0", "pkg:pypi/direct_library@1.0"),
+                 _purl_component("transitive_library", "2.0", "pkg:pypi/transitive_library@2.0"),
+                 _purl_component("one_cargo_crate", "1.1.5", "pkg:cargo/one_cargo_crate@1.1.5"),
+                 _purl_component("other_cargo_crate", "0.3.0", "pkg:cargo/other_cargo_crate@0.3.0"),
+                 _purl_component("one_npm_package", "1.0.0", "pkg:npm/one_npm_package@1.0.0"),
+                 _purl_component("other_npm_package", "4.2.0", "pkg:npm/other_npm_package@4.2.0"))
+
+    findings = scope_coverage_findings(sbom, str(repository / "pyproject.toml"), str(repository),
+                                       json.loads(inventory_path.read_text(encoding="utf-8")))
+
+    assert any("inventory-only-library==3.0" in finding for finding in findings)
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(repository / "pyproject.toml"),
+                 "--repository-root", str(repository), "--inventory", str(inventory_path)]) == 1
+
+
+def test_inventory_bound_to_another_commit_is_refused() -> None:
+    findings = inventory_binding_findings(_inventory("b" * 40), "c" * 40)
+
+    assert any("does not match the released commit" in finding for finding in findings)
+
+
+def test_inventory_with_modified_lock_bytes_is_refused() -> None:
+    findings = inventory_binding_findings(_inventory(matches=False), "a" * 40)
+
+    assert any("does not match its committed blob" in finding for finding in findings)
+
+
+def test_inventory_without_source_sha_is_refused() -> None:
+    findings = inventory_binding_findings(_inventory(""), None)
+
+    assert any("no source_sha" in finding for finding in findings)
