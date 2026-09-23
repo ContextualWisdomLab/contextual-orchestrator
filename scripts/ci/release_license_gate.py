@@ -248,26 +248,72 @@ def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[st
     return expectations
 
 
+_HEX40 = re.compile(r"^[0-9a-f]{40}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
 def inventory_binding_findings(inventory: dict[str, Any], expected_sha: str | None) -> list[str]:
-    """Refuse an inventory that describes another tree than the one being released."""
+    """Refuse an inventory that does not evidence the tree being released.
+
+    Scope of this check, stated plainly: the only supported producer is
+    `scripts/ci/dependency_inventory.py` run in the same job, on the same
+    checkout, immediately before this gate -- which is what
+    `.github/workflows/release.yml` does, and the only caller there is. These
+    checks reject a malformed, unbound or self-contradicting document from that
+    trusted producer; they are **not** independent verification of an inventory
+    obtained from anywhere else. Verifying a foreign inventory would mean
+    re-reading each lockfile at the released commit and re-deriving its blob id
+    here, which this does not do.
+    """
     findings: list[str] = []
+    if str(inventory.get("schema") or "") != "contextual-orchestrator/dependency-inventory/v1":
+        findings.append(f"inventory: unrecognised schema {inventory.get('schema')!r}")
     source_sha = str(inventory.get("source_sha") or "")
-    if not source_sha:
-        findings.append("inventory: no source_sha, so it cannot be bound to the released commit")
+    if not _HEX40.match(source_sha):
+        findings.append("inventory: source_sha is missing or not a commit id, so it binds to nothing")
     elif expected_sha and source_sha != expected_sha:
         findings.append(
             f"inventory: source_sha {source_sha[:12]} does not match the released commit "
             f"{expected_sha[:12]}"
         )
-    for entry in inventory.get("ecosystems") or []:
+    ecosystems = inventory.get("ecosystems")
+    if not isinstance(ecosystems, list) or not ecosystems:
+        findings.append("inventory: no ecosystems recorded")
+        return findings
+    for entry in ecosystems:
+        if not isinstance(entry, dict):
+            findings.append("inventory: an ecosystem entry is not an object")
+            continue
         ecosystem = entry.get("ecosystem")
         if entry.get("error"):
             findings.append(f"inventory {ecosystem}: {entry['error']}")
-        for provenance in entry.get("provenance") or []:
-            if provenance.get("error") or not provenance.get("matches_commit"):
+        provenance_entries = entry.get("provenance")
+        if not isinstance(provenance_entries, list) or not provenance_entries:
+            # Absent provenance is not a passing scope; it is an unevidenced one.
+            findings.append(f"inventory {ecosystem}: no provenance recorded for its sources")
+            continue
+        for provenance in provenance_entries:
+            if not isinstance(provenance, dict):
+                findings.append(f"inventory {ecosystem}: a provenance entry is not an object")
+                continue
+            path = provenance.get("path") or "<unnamed source>"
+            if provenance.get("error"):
+                findings.append(f"inventory {ecosystem}: {path}: {provenance['error']}")
+                continue
+            blob_id = str(provenance.get("blob_id") or "")
+            committed = str(provenance.get("committed_blob_id") or "")
+            if not _HEX64.match(str(provenance.get("read_sha256") or "")):
+                findings.append(f"inventory {ecosystem}: {path} has no usable read_sha256")
+            if not _HEX40.match(blob_id) or not _HEX40.match(committed):
+                findings.append(f"inventory {ecosystem}: {path} has no usable blob ids")
+            elif blob_id != committed:
+                # Recompute the verdict rather than trusting the recorded one.
                 findings.append(
-                    f"inventory {ecosystem}: {provenance.get('path')} does not match its committed blob"
+                    f"inventory {ecosystem}: {path} blob {blob_id[:12]} differs from the committed "
+                    f"{committed[:12]}"
                 )
+            if provenance.get("matches_commit") is not True:
+                findings.append(f"inventory {ecosystem}: {path} is not marked as matching its commit")
     return findings
 
 

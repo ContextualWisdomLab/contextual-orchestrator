@@ -81,6 +81,16 @@ LifeOS and other consumers must verify their specific owner contracts too.
    and the container image layers are not collected. Extending that collection is
    the prerequisite for any release, not a reason to relax this gate.
 
+   The inventory the gate reads is produced by `scripts/ci/dependency_inventory.py`
+   in the same job, on the same checkout, immediately before the gate runs; that
+   is the only supported producer. The gate rejects a malformed, unbound or
+   self-contradicting document from it -- wrong schema, no commit id, a commit
+   other than the released one, absent provenance, unusable hashes, blob ids that
+   disagree, or a `matches_commit` that is anything but boolean true. Those checks
+   are not independent verification of an inventory from elsewhere: that would
+   require re-reading each lockfile at the released commit and re-deriving its
+   blob id inside the gate, which it does not do.
+
    The gate runs inside `verify`, which `publish` depends on, so a failure stops
    the run before any tag exists. It is never waived to get a release out.
 7. A repository administrator has enabled GitHub release immutability before

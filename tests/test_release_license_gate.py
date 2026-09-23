@@ -319,19 +319,34 @@ def test_purl_identity_must_match_the_component_fields(tmp_path) -> None:
 # --- the gate must actually consume the inventory it asks for ---
 
 
-def _inventory(source_sha: str = "a" * 40, *, matches: bool = True, packages=None) -> dict:
-    return {
+def _provenance(**overrides) -> dict:
+    provenance = {
+        "path": "uv.lock",
+        "read_sha256": "b" * 64,
+        "blob_id": "c" * 40,
+        "committed_blob_id": "c" * 40,
+        "matches_commit": True,
+    }
+    provenance.update(overrides)
+    return provenance
+
+
+def _inventory(source_sha: str = "a" * 40, *, provenance=None, packages=None, **overrides) -> dict:
+    inventory = {
         "schema": "contextual-orchestrator/dependency-inventory/v1",
         "source_sha": source_sha,
         "ecosystems": [
             {
                 "ecosystem": "python",
                 "lockfile": "uv.lock",
-                "provenance": [{"path": "uv.lock", "read_sha256": "x", "matches_commit": matches}],
-                "packages": packages if packages is not None else [{"name": "inventory_only_library", "version": "3.0"}],
+                "provenance": [_provenance()] if provenance is None else provenance,
+                "packages": packages if packages is not None
+                else [{"name": "inventory_only_library", "version": "3.0"}],
             }
         ],
     }
+    inventory.update(overrides)
+    return inventory
 
 
 def test_inventory_expectations_replace_the_lockfile_reading(tmp_path) -> None:
@@ -361,12 +376,34 @@ def test_inventory_bound_to_another_commit_is_refused() -> None:
 
 
 def test_inventory_with_modified_lock_bytes_is_refused() -> None:
-    findings = inventory_binding_findings(_inventory(matches=False), "a" * 40)
+    findings = inventory_binding_findings(
+        _inventory(provenance=[_provenance(matches_commit=False)]), "a" * 40)
 
-    assert any("does not match its committed blob" in finding for finding in findings)
+    assert any("not marked as matching its commit" in finding for finding in findings)
 
 
 def test_inventory_without_source_sha_is_refused() -> None:
     findings = inventory_binding_findings(_inventory(""), None)
 
-    assert any("no source_sha" in finding for finding in findings)
+    assert any("binds to nothing" in finding for finding in findings)
+
+
+@pytest.mark.parametrize(
+    "inventory, expected_fragment",
+    [
+        pytest.param(_inventory(provenance=[_provenance(blob_id="d" * 40)]),
+                     "differs from the committed", id="blob_ids_disagree_despite_true_flag"),
+        pytest.param(_inventory(provenance=[_provenance(read_sha256="not-a-hash")]),
+                     "no usable read_sha256", id="unusable_read_hash"),
+        pytest.param(_inventory(provenance=[_provenance(matches_commit="false")]),
+                     "not marked as matching", id="string_false_is_not_true"),
+        pytest.param(_inventory(provenance=[]), "no provenance recorded", id="provenance_absent"),
+        pytest.param(_inventory(schema="something-else"), "unrecognised schema", id="wrong_schema"),
+        pytest.param(_inventory("not-a-commit"), "binds to nothing", id="malformed_source_sha"),
+    ],
+)
+def test_self_contradicting_inventory_is_refused(inventory, expected_fragment) -> None:
+    """A recorded verdict is not evidence: the ids and flags are checked here."""
+    findings = inventory_binding_findings(inventory, "a" * 40)
+
+    assert any(expected_fragment in finding for finding in findings), findings
