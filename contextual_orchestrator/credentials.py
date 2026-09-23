@@ -29,7 +29,7 @@ import os
 import threading
 from typing import Protocol
 
-from .postgres_connection import connect_pg8000
+from .postgres_connection import PostgresDriverUnavailable, connect_pg8000
 
 
 class NotConfigured(RuntimeError):
@@ -148,7 +148,7 @@ class PostgresCredentialBackend:
     def _connect(self):
         try:
             return connect_pg8000(self._dsn)
-        except RuntimeError as exc:
+        except PostgresDriverUnavailable as exc:
             raise NotConfigured(
                 "PostgresCredentialBackend needs the 'db' extra (pg8000); "
                 "install contextual-orchestrator[db]"

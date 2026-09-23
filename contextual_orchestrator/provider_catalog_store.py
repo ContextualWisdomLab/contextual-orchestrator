@@ -24,7 +24,7 @@ from .model_discovery import (
     ModelUnitPrice,
     ProviderModelSource,
 )
-from .postgres_connection import connect_pg8000
+from .postgres_connection import PostgresDriverUnavailable, connect_pg8000
 
 if TYPE_CHECKING:
     from .privacy_policy_analysis import PrivacyPolicyAssessment
@@ -698,7 +698,7 @@ class PostgresProviderCatalogStore:
             return self._connection_factory()
         try:
             return connect_pg8000(self._dsn)
-        except RuntimeError as exc:  # pragma: no cover - packaging boundary
+        except PostgresDriverUnavailable as exc:  # pragma: no cover - packaging boundary
             raise ProviderCatalogError(
                 "provider catalog requires contextual-orchestrator[db]"
             ) from exc

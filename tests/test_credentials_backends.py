@@ -17,6 +17,7 @@ from contextual_orchestrator.credentials import (
     NotConfigured,
     PostgresCredentialBackend,
 )
+from contextual_orchestrator.postgres_connection import PostgresDriverUnavailable
 
 
 class _Cursor:
@@ -156,7 +157,7 @@ def test_missing_pg8000_extra_fails_with_install_guidance(
 ) -> None:
     """Explain the optional database dependency instead of leaking ImportError."""
     def missing_driver(_dsn: str) -> object:
-        raise RuntimeError("synthetic missing optional dependency")
+        raise PostgresDriverUnavailable("synthetic missing optional dependency")
 
     monkeypatch.setattr(
         "contextual_orchestrator.credentials.connect_pg8000", missing_driver
@@ -164,6 +165,22 @@ def test_missing_pg8000_extra_fails_with_install_guidance(
     backend = PostgresCredentialBackend("postgresql://db.example/store", "passphrase")
 
     with pytest.raises(NotConfigured, match="db.*pg8000"):
+        backend._connect()
+
+
+def test_connection_runtime_error_is_not_relabelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve driver connection failures for operational diagnosis."""
+    def connection_failure(_dsn: str) -> object:
+        raise RuntimeError("synthetic connection failure")
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.credentials.connect_pg8000", connection_failure
+    )
+    backend = PostgresCredentialBackend("postgresql://db.example/store", "passphrase")
+
+    with pytest.raises(RuntimeError, match="synthetic connection failure"):
         backend._connect()
 
 
