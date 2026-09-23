@@ -21,6 +21,7 @@ a sample of it.
 from __future__ import annotations
 
 import argparse
+import email
 import hashlib
 import importlib.metadata
 import json
@@ -28,8 +29,12 @@ import re
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 from typing import Any
+
+
+_NAME_SEPARATORS = re.compile(r"[-_.]+")
 
 
 class InventoryError(Exception):
@@ -132,6 +137,52 @@ def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     return packages
 
 
+def _artifact_license_terms(artifact_dir: Path, name: str, version: str) -> tuple[list[str], str]:
+    """Read a package's licence from its own distribution artefact, unopened.
+
+    The artefact is the evidence: its `.dist-info/METADATA` and bundled licence
+    files state the terms the publisher shipped. Reading them from the archive
+    is a file read -- the package is never installed, imported or executed --
+    and the artefact's sha256 is recorded so the licence is tied to the exact
+    bytes, not to a registry's separate claim about them.
+    """
+    normalized = _NAME_SEPARATORS.sub("_", name.strip().lower())
+    candidates = sorted(artifact_dir.glob(f"{normalized}-{version}*.whl"))
+    candidates += sorted(artifact_dir.glob(f"{normalized}-{version}.tar.gz"))
+    if not candidates:
+        return [], f"no artefact for {name}=={version} in {artifact_dir}"
+    artifact = candidates[0]
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    terms: list[str] = []
+    if artifact.suffix == ".whl":
+        with zipfile.ZipFile(artifact) as archive:
+            for member in archive.namelist():
+                if member.endswith(".dist-info/METADATA"):
+                    metadata = email.message_from_string(archive.read(member).decode("utf-8", "replace"))
+                    terms = _metadata_license_terms(metadata)
+                    break
+    if not terms:
+        return [], f"{artifact.name} (sha256 {digest[:12]}) declares no licence metadata"
+    return terms, f"artefact {artifact.name} sha256 {digest}"
+
+
+def _metadata_license_terms(metadata: Any) -> list[str]:
+    """Licence terms declared by one distribution's METADATA, in SPDX-first order."""
+    terms: list[str] = []
+    expression = (metadata.get("License-Expression") or "").strip()
+    if expression:
+        terms.append(expression)
+    declared = (metadata.get("License") or "").strip()
+    if declared and len(declared) <= 120:
+        terms.append(declared.splitlines()[0])
+    terms += [
+        classifier.split("::")[-1].strip()
+        for classifier in metadata.get_all("Classifier") or []
+        if classifier.startswith("License ::")
+    ]
+    return terms
+
+
 def _installed_license_terms(name: str, version: str) -> tuple[list[str], str]:
     """Read one distribution's licence terms from metadata already on disk.
 
@@ -148,19 +199,7 @@ def _installed_license_terms(name: str, version: str) -> tuple[list[str], str]:
     metadata = distribution.metadata
     if str(metadata.get("Version") or "") != version:
         return [], f"environment holds {metadata.get('Version')!r}, not the locked version"
-    terms: list[str] = []
-    expression = (metadata.get("License-Expression") or "").strip()
-    if expression:
-        terms.append(expression)
-    declared = (metadata.get("License") or "").strip()
-    if declared and len(declared) <= 120:
-        terms.append(declared.splitlines()[0])
-    terms += [
-        classifier.split("::")[-1].strip()
-        for classifier in metadata.get_all("Classifier") or []
-        if classifier.startswith("License ::")
-    ]
-    return terms, "installed distribution metadata"
+    return _metadata_license_terms(metadata), "installed distribution metadata"
 
 
 def _git(repository_root: Path, *arguments: str) -> str:
@@ -206,7 +245,9 @@ def _read_locked_source(repository_root: Path, lock: Path, commit: str) -> tuple
     return data, provenance
 
 
-def build_inventory(repository_root: Path, resolve_licenses: bool = False) -> dict[str, Any]:
+def build_inventory(
+    repository_root: Path, resolve_licenses: bool = False, artifact_dir: Path | None = None
+) -> dict[str, Any]:
     """Collect every lockfile-resolved dependency, grouped by ecosystem."""
     # One commit is captured up front and every blob comparison uses it, so a
     # branch moving mid-run cannot bind half the inventory to another tree.
@@ -275,7 +316,12 @@ def build_inventory(repository_root: Path, resolve_licenses: bool = False) -> di
             package["purl"] = f"{purl_prefix}{package['name']}@{package['version']}"
         if ecosystem == "python" and resolve_licenses:
             for package in packages:
-                terms, source = _installed_license_terms(package["name"], package["version"])
+                if artifact_dir is not None:
+                    terms, source = _artifact_license_terms(
+                        artifact_dir, package["name"], package["version"]
+                    )
+                else:
+                    terms, source = _installed_license_terms(package["name"], package["version"])
                 package["licenses"] = terms
                 package["license_source"] = source if terms else f"unresolved: {source}"
         entry["packages"] = sorted(packages, key=lambda package: (package["name"], package["version"]))
@@ -302,10 +348,18 @@ def main(argv: list[str] | None = None) -> int:
         "--resolve-licenses", action="store_true",
         help="attach licence terms read from distribution metadata already installed in this job",
     )
+    parser.add_argument(
+        "--artifact-dir",
+        help="read licences from downloaded distribution artefacts here instead of installed metadata",
+    )
     arguments = parser.parse_args(argv)
     root = Path(arguments.repository_root).resolve()
     try:
-        inventory = build_inventory(root, resolve_licenses=arguments.resolve_licenses)
+        inventory = build_inventory(
+            root,
+            resolve_licenses=arguments.resolve_licenses or bool(arguments.artifact_dir),
+            artifact_dir=Path(arguments.artifact_dir).resolve() if arguments.artifact_dir else None,
+        )
     except (InventoryError, OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         print(f"::error::Dependency inventory could not be built ({error}).", file=sys.stderr)
         return 1

@@ -9,9 +9,11 @@ rather than disappearing.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,6 +22,7 @@ import pytest  # noqa: E402
 
 from scripts.ci.dependency_inventory import (  # noqa: E402
     InventoryError,
+    _artifact_license_terms,
     _pnpm_packages,
     build_inventory,
     main,
@@ -178,3 +181,36 @@ def test_python_scope_includes_the_pinned_ci_and_fuzz_toolchains() -> None:
         assert source in python["lockfile"]
     assert {"cyclonedx-bom", "chardet"} <= names  # security CI toolchain
     assert len(python["provenance"]) == len(python["lockfile"].split(", "))
+
+
+def _wheel(directory: Path, name: str, version: str, metadata_lines: list[str]) -> Path:
+    """A minimal wheel: the licence evidence lives in its own dist-info METADATA."""
+    path = directory / f"{name}-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            f"{name}-{version}.dist-info/METADATA",
+            "\n".join([f"Name: {name}", f"Version: {version}", *metadata_lines]) + "\n",
+        )
+    return path
+
+
+def test_licences_are_read_from_the_artifact_not_from_an_install(tmp_path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    wheel = _wheel(artifacts, "example_library", "1.2.3", ["License-Expression: 0BSD"])
+
+    terms, source = _artifact_license_terms(artifacts, "Example.Library", "1.2.3")
+
+    assert terms == ["0BSD"]
+    # The evidence is tied to the exact bytes, not to a registry's claim.
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() in source
+
+
+def test_absent_or_silent_artifact_resolves_to_nothing(tmp_path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    _wheel(artifacts, "silent_library", "1.0", [])
+
+    assert _artifact_license_terms(artifacts, "silent_library", "1.0")[0] == []
+    assert _artifact_license_terms(artifacts, "missing_library", "1.0")[0] == []
+    assert "no artefact" in _artifact_license_terms(artifacts, "missing_library", "1.0")[1]

@@ -245,8 +245,13 @@ jobs:
           # Scoping the SBOM down does not discharge licence adjudication, so the
           # excluded classes are enumerated here from the lockfiles and published
           # beside it, bound to the same commit.
+          # Licences are read from the distribution artefacts themselves, which
+          # pip downloads with the lockfile's own hashes and never installs, so
+          # nothing unreviewed is executed to learn what it is licensed under.
+          python -m pip download --require-hashes -r requirements.lock \
+            --no-deps --dest license-artifacts
           python -m scripts.ci.dependency_inventory --repository-root . \
-            --output dependency-inventory.json --resolve-licenses
+            --output dependency-inventory.json --artifact-dir license-artifacts
 
       - name: Upload CycloneDX SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1
