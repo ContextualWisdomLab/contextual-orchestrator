@@ -56,8 +56,26 @@ LifeOS and other consumers must verify their specific owner contracts too.
    placeholder or unknown licence. The SBOM is the scope, so transitive,
    optional and build-only components count; being unexecuted is not an
    exemption. A dual-licensed component passes only when its SPDX expression
-   really offers a permissive alternative with `OR` -- `AND` imposes both. The
-   gate runs inside `verify`, which `publish` depends on, so a failure stops
+   really offers a permissive alternative with `OR`: `AND` imposes both, and an
+   undecidable operand (`GPL-3.0-only OR UNKNOWN`) offers no reviewable choice.
+   Separate `licenses[]` entries are conjunctive, so each must pass on its own,
+   and nested components are adjudicated like any other. A malformed SBOM, or
+   one with no components, is refused rather than read as clean.
+
+   The same gate also proves *coverage*: every distribution declared in
+   `pyproject.toml` -- runtime, every optional extra and every dependency group
+   -- must appear in the SBOM, and a shipped non-Python manifest (`rust/Cargo.toml`,
+   `package.json`) must have matching `pkg:cargo/` or `pkg:npm/` components. A
+   partial SBOM is silence about the scopes it never collected, not evidence.
+
+   Known gap, which keeps releases blocked until it is closed: `security.yml`
+   builds the SBOM with `cyclonedx-py environment` in an Ubuntu/Python 3.12
+   environment installed from `requirements.lock` (`api`, `db`, `queue`), so the
+   `dev`, `fuzz` and `native-build` groups, the Rust workspace, the npm packages
+   and the container image layers are not collected. Extending that collection is
+   the prerequisite for any release, not a reason to relax this gate.
+
+   The gate runs inside `verify`, which `publish` depends on, so a failure stops
    the run before any tag exists. It is never waived to get a release out.
 7. A repository administrator has enabled GitHub release immutability before
    publication. The normal workflow token has no Administration permission;

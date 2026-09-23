@@ -289,12 +289,16 @@ jobs:
       - name: Refuse to release a GPL-family or unknown-licence artifact
         run: |
           set -euo pipefail
-          # The SBOM downloaded above is the artifact's own component list, so
-          # it covers transitive, optional and build components that a
-          # pyproject-only reading would miss. A failure here stops the run
-          # before `publish` exists, so no tag is created and nothing is
-          # published; it is never waived to get a release out.
-          python -m scripts.ci.release_license_gate --sbom sbom-download/cyclonedx-sbom.json
+          # The SBOM downloaded above is the artifact's own component list.
+          # It is also checked for coverage: every scope pyproject.toml
+          # declares, and every non-Python manifest that ships, must actually
+          # appear, because a partial SBOM is silence rather than evidence.
+          # A failure here stops the run before `publish` exists, so no tag is
+          # created and nothing is published; it is never waived.
+          python -m scripts.ci.release_license_gate \
+            --sbom sbom-download/cyclonedx-sbom.json \
+            --pyproject pyproject.toml \
+            --repository-root .
 
       - name: Upload rendered notes and SBOM for the publish job
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5

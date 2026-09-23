@@ -63,7 +63,7 @@ def test_unknown_license_blocks_the_release(tmp_path) -> None:
 
     groups = classify_sbom_components(sbom)
 
-    assert {row["name"] for row in groups["unknown"]} == {"undeclared_library", "placeholder_library"}
+    assert {row["name"] for row in groups["undecidable"]} == {"undeclared_library", "placeholder_library"}
     assert main(["--sbom", _write(tmp_path, sbom)]) == 1
 
 
@@ -103,3 +103,90 @@ def test_release_workflow_runs_the_gate_before_publishing() -> None:
     )
     publish_block = text[text.index("\n  publish:") :]
     assert "needs: verify" in publish_block
+
+
+# --- negative regressions for the fail-open cases found in independent review ---
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        pytest.param(_component("licenseref_library", "1.0", license_id="LicenseRef-Unreviewed"), id="license_ref"),
+        pytest.param(_component("free_text_library", "1.0", license_id="GPLv3"), id="free_text_gplv3"),
+        pytest.param(_component("or_unknown_library", "1.0", expression="GPL-3.0-only OR UNKNOWN"), id="or_unknown"),
+        pytest.param(
+            _component(
+                "conjunctive_entries_library",
+                "1.0",
+                licenses=[{"expression": "MIT OR GPL-2.0-only"}, {"license": {"id": "AGPL-3.0-only"}}],
+            ),
+            id="separate_entries_are_conjunctive",
+        ),
+    ],
+)
+def test_fail_open_cases_are_refused(tmp_path, component) -> None:
+    """Each of these passed an earlier gate revision; none may pass again."""
+    assert main(["--sbom", _write(tmp_path, _sbom(component))]) == 1
+
+
+def test_malformed_component_entry_fails_closed(tmp_path) -> None:
+    """A null component means the SBOM cannot be read, which is not a pass."""
+    sbom = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [None]}
+
+    assert main(["--sbom", _write(tmp_path, sbom)]) == 1
+
+
+def test_nested_component_is_classified(tmp_path) -> None:
+    """A GPL dependency nested under a permitted parent still blocks."""
+    parent = _component("permitted_parent_library", "1.0", license_id="MIT")
+    parent["components"] = [_component("nested_copyleft_library", "2.0", license_id="GPL-3.0-only")]
+
+    groups = classify_sbom_components(_sbom(parent))
+
+    assert [row["name"] for row in groups["copyleft"]] == ["nested_copyleft_library"]
+    assert main(["--sbom", _write(tmp_path, _sbom(parent))]) == 1
+
+
+def test_permissive_zero_clause_licence_still_passes(tmp_path) -> None:
+    """MIT-0 must not be mistaken for a copyleft identifier by the matcher."""
+    sbom = _sbom(_component("zero_clause_library", "1.0", license_id="MIT-0"))
+
+    assert main(["--sbom", _write(tmp_path, sbom)]) == 0
+
+
+def test_declared_dependency_absent_from_the_sbom_fails_closed(tmp_path) -> None:
+    """A partial SBOM is not evidence about the scopes it never collected."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\nversion = "0.0.1"\ndependencies = ["collected_library>=1"]\n'
+        '[project.optional-dependencies]\ndb = ["absent_library>=2"]\n',
+        encoding="utf-8",
+    )
+    sbom = _sbom(_component("collected_library", "1.0", license_id="MIT"))
+
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(pyproject)]) == 1
+
+
+def test_full_declared_coverage_passes(tmp_path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "x"\nversion = "0.0.1"\ndependencies = ["Collected.Library>=1"]\n'
+        '[dependency-groups]\ndev = ["grouped_library"]\n',
+        encoding="utf-8",
+    )
+    sbom = _sbom(_component("collected-library", "1.0", license_id="MIT"),
+                 _component("grouped_library", "2.0", license_id="BSD-3-Clause"))
+
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(pyproject)]) == 0
+
+
+def test_native_manifest_without_sbom_coverage_fails_closed(tmp_path) -> None:
+    """Rust and npm manifests ship in the image, so the SBOM must cover them."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "x"\nversion = "0.0.1"\ndependencies = []\n', encoding="utf-8")
+    (tmp_path / "rust").mkdir()
+    (tmp_path / "rust" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    sbom = _sbom(_component("python_only_library", "1.0", license_id="MIT"))
+
+    assert main(["--sbom", _write(tmp_path, sbom), "--pyproject", str(pyproject),
+                 "--repository-root", str(tmp_path)]) == 1

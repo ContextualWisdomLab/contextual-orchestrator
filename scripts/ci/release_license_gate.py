@@ -1,23 +1,31 @@
 """Fail-closed licence gate for the canonical release, read from the CycloneDX SBOM.
 
 The release workflow already downloads the mandatory `cyclonedx-sbom.json` for
-the exact commit being released. That SBOM enumerates every component that ends
-up in the distributed artifact -- direct, transitive, build and optional alike
--- so it is the honest input for a licence decision: a check driven by
-`pyproject.toml` alone would miss transitive components, and one driven by the
-locally installed environment would miss whatever that environment happens not
-to install.
+the exact commit being released. That SBOM is the input here: it names the
+components that actually ship, including transitive ones a `pyproject.toml`
+reading would miss.
 
-Two outcomes block a release, and neither is waivable here:
+Three outcomes block a release, none of them waivable:
 
-* a copyleft licence in the GPL family (GPL, LGPL, AGPL, in any SPDX spelling);
-* a component whose licence is absent, empty or literally unknown.
+* a copyleft licence in the GPL family (GPL, LGPL, AGPL, in SPDX or free-text
+  spelling, including forms like ``GPLv3`` that carry no separator);
+* a licence that cannot be adjudicated -- absent, empty, a placeholder such as
+  ``NOASSERTION``, or a ``LicenseRef-`` pointer to a text this gate has not
+  reviewed. Undecidable is refused, never read as permission;
+* an SBOM that does not demonstrably cover the dependency scopes this
+  repository declares, because a partial SBOM says nothing about the scopes it
+  never collected.
 
-A dual-licensed component passes only when its expression really does offer a
-permissive alternative (`Apache-2.0 OR GPL-2.0-only` passes and records
-`Apache-2.0` as the taken option; `Apache-2.0 AND GPL-2.0-only` does not, since
-`AND` imposes both). Being unused at runtime, optional or test-only is never an
-exemption: if it is in the artifact's SBOM, it is in scope.
+Composite licence semantics follow SPDX rather than convenience. Separate
+``licenses[]`` entries are conjunctive, so every entry must pass on its own. A
+single expression passes only when its operands really offer a permissive
+choice: ``Apache-2.0 OR GPL-2.0-only`` passes and records the option taken,
+``Apache-2.0 AND GPL-2.0-only`` does not because ``AND`` imposes both, and
+``GPL-3.0-only OR UNKNOWN`` does not either, because an undecidable operand
+cannot be the permissive one. SPDX operators are matched case-sensitively, so
+``GPL-2.0-or-later`` stays a single operand.
+
+Being optional, unexecuted or test-only is never an exemption.
 """
 
 from __future__ import annotations
@@ -26,125 +34,226 @@ import argparse
 import json
 import re
 import sys
+import tomllib
+from pathlib import Path
 from typing import Any
 
-# SPDX identifiers and the older free-text spellings that mean the same family.
+# GPL/LGPL/AGPL in any spelling, including ``GPLv3``. No trailing separator is
+# required: free-text spellings run the version straight onto the family name.
 _COPYLEFT_PATTERN = re.compile(
-    r"(?:^|[^A-Za-z])(?:A?GPL|LGPL|GPL)(?:[-_ ]|$)"
+    r"(?:^|[^A-Za-z0-9])(?:A?GPL|LGPL)"
     r"|GNU\s+(?:Affero\s+|Lesser\s+)?General\s+Public",
     re.IGNORECASE,
 )
-_UNKNOWN_VALUES = frozenset({"", "unknown", "none", "null", "noassertion", "other", "proprietary"})
+_UNDECIDABLE_VALUES = frozenset({"", "unknown", "none", "null", "noassertion", "other", "proprietary"})
+_UNDECIDABLE_PREFIXES = ("licenseref-", "documentref-")
+_NAME_SEPARATORS = re.compile(r"[-_.]+")
+_REQUIREMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+class SbomSchemaError(Exception):
+    """The SBOM could not be read as a component inventory."""
+
+
+def _is_undecidable(term: str) -> bool:
+    lowered = term.strip().lower()
+    return lowered in _UNDECIDABLE_VALUES or lowered.startswith(_UNDECIDABLE_PREFIXES)
 
 
 def _license_terms(component: dict[str, Any]) -> list[str]:
-    """Collect every licence string CycloneDX offers for one component."""
+    """Return one string per ``licenses[]`` entry; entries are conjunctive."""
+    licenses = component.get("licenses")
+    if licenses is None:
+        return []
+    if not isinstance(licenses, list):
+        raise SbomSchemaError(f"component {component.get('name')!r} has a non-list licenses field")
     terms: list[str] = []
-    for entry in component.get("licenses") or []:
+    for entry in licenses:
         if not isinstance(entry, dict):
-            continue
+            raise SbomSchemaError(f"component {component.get('name')!r} has a malformed licenses entry")
         expression = entry.get("expression")
         if isinstance(expression, str) and expression.strip():
             terms.append(expression.strip())
+            continue
         license_object = entry.get("license")
         if isinstance(license_object, dict):
-            for key in ("id", "name"):
-                value = license_object.get(key)
-                if isinstance(value, str) and value.strip():
-                    terms.append(value.strip())
+            value = license_object.get("id") or license_object.get("name")
+            terms.append(value.strip() if isinstance(value, str) else "")
+            continue
+        terms.append("")
     return terms
 
 
-def _permissive_choice(expression: str) -> str | None:
-    """Return one non-copyleft operand of an SPDX ``OR`` expression, if any.
+def classify_license_term(term: str) -> tuple[str, str]:
+    """Classify one ``licenses[]`` entry as permitted, copyleft or undecidable.
 
-    ``AND`` imposes every operand at once, so an expression containing a
-    top-level ``AND`` never yields a choice here even when one operand is
-    permissive. Operators are matched case-sensitively, as SPDX defines them,
-    so a name such as ``GPL-2.0-or-later`` is one operand rather than two.
+    The second element carries the reason; for a permitted dual licence it is
+    the permissive operand actually relied upon.
     """
-    # SPDX operators are upper-case standalone tokens. Matching them
-    # case-insensitively would split "GPL-2.0-or-later" on its own name and
-    # invent a permissive operand that the licence never offered.
-    cleaned = expression.replace("(", " ").replace(")", " ")
+    if _is_undecidable(term):
+        return "undecidable", term.strip() or "<none>"
+    cleaned = term.replace("(", " ").replace(")", " ")
     if re.search(r"\sAND\s", cleaned):
-        return None
-    operands = [part.strip() for part in re.split(r"\sOR\s", cleaned)]
-    if len(operands) < 2:
-        return None
-    for operand in operands:
-        if operand and not _COPYLEFT_PATTERN.search(operand):
-            return operand
-    return None
+        operands = [part.strip() for part in re.split(r"\sAND\s", cleaned) if part.strip()]
+        if any(_is_undecidable(operand) for operand in operands):
+            return "undecidable", term
+        if any(_COPYLEFT_PATTERN.search(operand) for operand in operands):
+            return "copyleft", term
+        return "permitted", term
+    operands = [part.strip() for part in re.split(r"\sOR\s", cleaned) if part.strip()]
+    if len(operands) > 1:
+        if any(_is_undecidable(operand) for operand in operands):
+            return "undecidable", term
+        choice = next((operand for operand in operands if not _COPYLEFT_PATTERN.search(operand)), None)
+        return ("permitted", choice) if choice is not None else ("copyleft", term)
+    return ("copyleft", term) if _COPYLEFT_PATTERN.search(term) else ("permitted", term)
+
+
+def _walk_components(container: Any, path: str) -> list[dict[str, Any]]:
+    """Flatten the component tree; a nested dependency ships just as much."""
+    components = container.get("components")
+    if components is None:
+        return []
+    if not isinstance(components, list):
+        raise SbomSchemaError(f"{path} has a non-list components field")
+    flattened: list[dict[str, Any]] = []
+    for index, component in enumerate(components):
+        if not isinstance(component, dict):
+            raise SbomSchemaError(f"{path}.components[{index}] is not an object")
+        flattened.append(component)
+        flattened.extend(_walk_components(component, f"{path}.components[{index}]"))
+    return flattened
 
 
 def classify_sbom_components(sbom: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
-    """Split every SBOM component into permitted, copyleft and unknown groups."""
+    """Split every component, nested ones included, into the three groups."""
     permitted: list[dict[str, str]] = []
     copyleft: list[dict[str, str]] = []
-    unknown: list[dict[str, str]] = []
-    for component in sbom.get("components") or []:
-        if not isinstance(component, dict):
-            continue
+    undecidable: list[dict[str, str]] = []
+    for component in _walk_components(sbom, "sbom"):
         name = str(component.get("name") or "<unnamed component>")
         version = str(component.get("version") or "")
         terms = _license_terms(component)
-        usable = [term for term in terms if term.strip().lower() not in _UNKNOWN_VALUES]
-        row = {"name": name, "version": version, "license": "; ".join(usable)}
-        if not usable:
-            unknown.append(row)
+        if not terms:
+            undecidable.append({"name": name, "version": version, "license": "<none declared>"})
             continue
-        copyleft_terms = [term for term in usable if _COPYLEFT_PATTERN.search(term)]
-        if not copyleft_terms:
-            permitted.append(row)
-            continue
-        choice = next(
-            (taken for term in copyleft_terms for taken in (_permissive_choice(term),) if taken),
-            None,
-        )
-        if choice is not None:
-            permitted.append({**row, "license": f"{row['license']} (permissive option taken: {choice})"})
-            continue
-        copyleft.append(row)
-    return {"permitted": permitted, "copyleft": copyleft, "unknown": unknown}
+        verdicts = [classify_license_term(term) for term in terms]
+        row = {"name": name, "version": version, "license": "; ".join(terms)}
+        if any(verdict == "undecidable" for verdict, _ in verdicts):
+            undecidable.append(row)
+        elif any(verdict == "copyleft" for verdict, _ in verdicts):
+            copyleft.append(row)
+        else:
+            permitted.append({**row, "license": "; ".join(reason for _, reason in verdicts)})
+    return {"permitted": permitted, "copyleft": copyleft, "undecidable": undecidable}
 
 
-def _render(groups: dict[str, list[dict[str, str]]]) -> str:
+def _normalize(name: str) -> str:
+    return _NAME_SEPARATORS.sub("-", name.strip().lower())
+
+
+def _declared_requirements(pyproject: dict[str, Any]) -> set[str]:
+    """Every distribution this project declares, across all scopes."""
+    project = pyproject.get("project") or {}
+    sources: list[Any] = [project.get("dependencies") or []]
+    sources.extend((project.get("optional-dependencies") or {}).values())
+    sources.extend((pyproject.get("dependency-groups") or {}).values())
+    declared: set[str] = set()
+    for requirements in sources:
+        for requirement in requirements or []:
+            if not isinstance(requirement, str):
+                continue
+            match = _REQUIREMENT_NAME.match(requirement)
+            if match:
+                declared.add(_normalize(match.group(0)))
+    return declared
+
+
+def scope_coverage_findings(
+    sbom: dict[str, Any], pyproject_path: str | None, repository_root: str | None
+) -> list[str]:
+    """Report declared dependency scopes the SBOM does not demonstrably cover."""
+    findings: list[str] = []
+    components = _walk_components(sbom, "sbom")
+    present = {_normalize(str(component.get("name") or "")) for component in components}
+    if pyproject_path:
+        with open(pyproject_path, "rb") as handle:
+            pyproject = tomllib.load(handle)
+        missing = sorted(_declared_requirements(pyproject) - present)
+        if missing:
+            findings.append(
+                f"declared Python distributions absent from the SBOM ({len(missing)}): {', '.join(missing)}"
+            )
+    if repository_root:
+        root = Path(repository_root)
+        purls = " ".join(str(component.get("purl") or "") for component in components)
+        for ecosystem, manifest, purl_prefix in (
+            ("cargo", root / "rust" / "Cargo.toml", "pkg:cargo/"),
+            ("npm", root / "package.json", "pkg:npm/"),
+        ):
+            if manifest.exists() and purl_prefix not in purls:
+                findings.append(
+                    f"{manifest} declares {ecosystem} dependencies that ship with the artifact, but the "
+                    f"SBOM contains no {purl_prefix} component"
+                )
+    return findings
+
+
+def _render(groups: dict[str, list[dict[str, str]]], coverage: list[str]) -> str:
     lines = [
-        f"permitted={len(groups['permitted'])} "
-        f"copyleft={len(groups['copyleft'])} unknown={len(groups['unknown'])}"
+        f"permitted={len(groups['permitted'])} copyleft={len(groups['copyleft'])} "
+        f"undecidable={len(groups['undecidable'])} coverage_findings={len(coverage)}"
     ]
-    for label in ("copyleft", "unknown"):
+    for label in ("copyleft", "undecidable"):
         for row in groups[label]:
-            lines.append(f"{label.upper()} {row['name']}=={row['version']} license={row['license'] or '<none>'}")
+            lines.append(f"{label.upper()} {row['name']}=={row['version']} license={row['license']}")
+    lines.extend(f"COVERAGE {finding}" for finding in coverage)
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Fail-closed release licence and SBOM-coverage gate.")
     parser.add_argument("--sbom", required=True, help="path to cyclonedx-sbom.json for the exact commit")
+    parser.add_argument("--pyproject", help="pyproject.toml whose declared scopes the SBOM must cover")
+    parser.add_argument("--repository-root", help="repository root, to check non-Python manifests")
     arguments = parser.parse_args(argv)
     try:
         with open(arguments.sbom, encoding="utf-8") as handle:
             sbom = json.load(handle)
     except (OSError, json.JSONDecodeError) as error:
-        print(f"::error::Release licence gate could not read the CycloneDX SBOM at {arguments.sbom}: {error}", file=sys.stderr)
+        print(f"::error::Release licence gate could not read the CycloneDX SBOM at {arguments.sbom}: {error}",
+              file=sys.stderr)
         return 1
-    if not isinstance(sbom, dict) or not sbom.get("components"):
+    if not isinstance(sbom, dict):
+        print("::error::CycloneDX SBOM is not a JSON object; refusing to release.", file=sys.stderr)
+        return 1
+    try:
+        groups = classify_sbom_components(sbom)
+        coverage = scope_coverage_findings(sbom, arguments.pyproject, arguments.repository_root)
+    except SbomSchemaError as error:
+        print(f"::error::CycloneDX SBOM is malformed and cannot be adjudicated ({error}); refusing to release.",
+              file=sys.stderr)
+        return 1
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        print(f"::error::Release licence gate could not read the declared dependency scopes ({error}).",
+              file=sys.stderr)
+        return 1
+    if not any(groups.values()):
         print(
             "::error::CycloneDX SBOM lists no components; an empty component set is not evidence that the "
             "artifact is licence-clean. Refusing to release.",
             file=sys.stderr,
         )
         return 1
-    groups = classify_sbom_components(sbom)
-    print(_render(groups))
-    if groups["copyleft"] or groups["unknown"]:
+    print(_render(groups, coverage))
+    if groups["copyleft"] or groups["undecidable"] or coverage:
         print(
             "::error::Release licence gate failed: "
-            f"{len(groups['copyleft'])} GPL-family and {len(groups['unknown'])} unknown-licence component(s) "
-            "are present in the artifact SBOM. Replace them with permissively licensed alternatives; being "
-            "optional or unexecuted is not an exemption, and this gate is never waived to publish.",
+            f"{len(groups['copyleft'])} GPL-family, {len(groups['undecidable'])} undecidable-licence "
+            f"component(s) and {len(coverage)} dependency-scope coverage gap(s). Replace copyleft components "
+            "with permissively licensed alternatives and extend SBOM collection until every declared scope is "
+            "covered; optional or unexecuted scope is not an exemption, an undecidable licence is never read "
+            "as permission, and this gate is not waived to publish.",
             file=sys.stderr,
         )
         return 1
