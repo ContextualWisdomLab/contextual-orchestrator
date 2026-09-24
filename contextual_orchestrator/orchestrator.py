@@ -11147,6 +11147,29 @@ class TaskOrchestrator:
                         )
                     else:
                         decision = classify_tool_failure(exc)
+                        if review_no_replay and "review" in agent.tags and decision.kind in {
+                            ToolFailureKind.UNKNOWN, ToolFailureKind.RATE_LIMITED,
+                        }:
+                            rate_limit_signal = self._rate_limited_provider_signal(exc)
+                            if rate_limit_signal is not None:
+                                signal_status, signal_http_error = rate_limit_signal
+                                self._record_rate_limit(
+                                    agent.id,
+                                    resolve_retry_after_seconds(signal_http_error)
+                                    if signal_http_error is not None else None,
+                                    status=signal_status,
+                                )
+                            if decision.kind is ToolFailureKind.UNKNOWN:
+                                self._record_failure(agent.id)
+                            raise ProviderUpstreamError(
+                                agent_id=agent.id,
+                                model=agent.model,
+                                error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                                message="the provider request outcome is unknown; automatic replay is unsafe",
+                                client_status=502,
+                                retryable=False,
+                                transport="chat",
+                            ) from None
                     action = decision.action
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.

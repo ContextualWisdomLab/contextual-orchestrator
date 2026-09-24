@@ -818,6 +818,52 @@ def test_review_free_conduct_does_not_replay_upstream_failure(status: int) -> No
     assert client.calls == [first.id]
 
 
+@pytest.mark.parametrize("case", ["plain", "wrapped", "raw_429"])
+def test_review_free_invoke_unknown_failure_does_not_replay(case: str) -> None:
+    """An unclassified review chat failure cannot authorize another send."""
+    first = ModelAgent("first_agent", "first-model", priority=10,
+                       tags=("cost:free", "review"))
+    second = ModelAgent("second_agent", "second-model", priority=1,
+                        tags=("cost:free", "review"))
+    orchestrator = TaskOrchestrator([first, second], tool_retry_attempts=0)
+    responses: list[urllib.error.HTTPError] = []
+    if case == "raw_429":
+        response = _http_error(429)
+        failure: BaseException = response
+        responses.append(response)
+    else:
+        failure = RuntimeError("synthetic current send outcome unknown")
+        if case == "wrapped":
+            cause = _http_error(404, {"error": {"code": "model_not_found"}})
+            responses.append(cause)
+            failure.__cause__ = cause
+    calls: list[str] = []
+
+    def chat(agent: ModelAgent, _messages: list[dict[str, Any]]) -> str:
+        calls.append(agent.id)
+        if agent.id == first.id:
+            raise failure
+        return "synthetic fallback"
+
+    orchestrator.client.chat = chat
+    try:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator._invoke_with_rate_limit_recovery(
+                first, [{"role": "user", "content": "synthetic"}],
+                text="synthetic", role="worker",
+                allowed_agent_ids={first.id, second.id},
+                review_no_replay=True, virtual_selector=True,
+            )
+        assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+            502, "provider_outcome_unknown", False,
+        )
+        assert calls == [first.id]
+    finally:
+        for response in responses:
+            response.close()
+        orchestrator.close()
+
+
 def test_explicit_structured_synthesis_normalizes_413() -> None:
     """A sticky explicit model still exposes request-size rejection as 413 authority."""
     client = SequencedProxyClient({"primary_agent": _http_error(413)})
