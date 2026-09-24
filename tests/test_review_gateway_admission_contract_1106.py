@@ -15,6 +15,9 @@ from typing import get_type_hints
 import urllib.error
 import urllib.request
 
+from jsonschema import validate
+
+from contextual_orchestrator.api_contract import OPENAPI_SPEC
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
@@ -297,6 +300,9 @@ def test_review_allocation_failure_is_typed_at_http_boundary(monkeypatch):
                 assert response.code == 503
                 payload = json.load(response)
             assert payload["error"]["code"] == "allocation_evidence_unavailable"
+            assert payload["error"]["detail"]["retryable"] is False
+            response_schema = OPENAPI_SPEC["paths"][path]["post"]["responses"]["503"]["content"]["application/json"]["schema"]
+            validate(payload, {**response_schema, "components": OPENAPI_SPEC["components"]})
         assert sends == []
     finally:
         server.shutdown()

@@ -40,9 +40,11 @@ calibration authorizing model and test-time-compute allocation. Its supported
 send or cache read. Route, conduct, passthrough, and stream entrypoints share
 this boundary. The HTTP model gate now applies it before Chat or Responses
 streaming writes a 200/SSE header; the earlier post-header error is covered
-by a four-shape HTTP regression. This intentionally pauses live review serving
-until an owner release supplies and validates the missing allocation contract; catalog
-admission and diagnostic ranking are not substitutes for that release.
+by a four-shape HTTP regression. Both Chat and Responses OpenAPI operations
+now declare the typed 503 error envelope used by that boundary. Live review
+serving stays paused until an owner release supplies and validates the missing
+allocation contract. Catalog admission and diagnostic ranking alone cannot
+authorize selection.
 The inspected [fast-mlsirm v0.11.4 release](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
 exposes [personnel selection utility](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/utility.py),
 [item-exposure routing](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/exposure.py),

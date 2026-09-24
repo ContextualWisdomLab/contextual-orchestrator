@@ -43,6 +43,27 @@ OPENAPI_SPEC = {
                     },
                 },
             },
+            "InferenceError": {
+                "type": "object",
+                "required": ["error", "error_code", "error_message", "error_detail"],
+                "properties": {
+                    "error": {
+                        "type": "object",
+                        "required": ["code", "message", "detail"],
+                        "properties": {
+                            "code": {"type": "string"},
+                            "message": {"type": "string"},
+                            "detail": {
+                                "type": "object",
+                                "properties": {"retryable": {"type": "boolean"}},
+                            },
+                        },
+                    },
+                    "error_code": {"type": "string"},
+                    "error_message": {"type": "string"},
+                    "error_detail": {"type": "object"},
+                },
+            },
             "ChatCompletionResponse": {
                 "type": "object",
                 "required": ["id", "object", "created", "model", "choices", "usage", "usage_measurement_status"],
@@ -394,6 +415,10 @@ OPENAPI_SPEC = {
                         },
                     },
                     "400": {"description": "Invalid request"},
+                    "503": {
+                        "description": "Gateway service unavailable; review-free allocation without calibrated evidence returns allocation_evidence_unavailable",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InferenceError"}}},
+                    },
                 },
             }
         },
@@ -620,6 +645,10 @@ OPENAPI_SPEC = {
                 "responses": {
                     "200": {"description": "Responses API result"},
                     "400": {"description": "Invalid request"},
+                    "503": {
+                        "description": "Gateway service unavailable; review-free allocation without calibrated evidence returns allocation_evidence_unavailable",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InferenceError"}}},
+                    },
                 },
             }
         },
