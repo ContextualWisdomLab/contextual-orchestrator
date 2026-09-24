@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -279,21 +280,8 @@ def test_review_gateway_cli_has_no_decision_affecting_model_cap():
     assert "--max-agents" not in review_gateway._build_parser().format_help()
 
 
-def test_build_review_orchestrator_sizes_failover_budget_to_the_admitted_pool(monkeypatch):
-    """A large free pool must not give up after the generic 2-attempt default.
-
-    ``TaskOrchestrator`` defaults ``tool_retry_attempts`` to 1 (route_once tries
-    at most 2 candidates) for every caller. The org's opencode-review-dispatch
-    workflow calls ``orchestrator/free`` exactly once per PR review
-    (``OPENCODE_MODEL_ATTEMPTS=1``, ``OPENCODE_POOL_MAX_CYCLES=1``) and falls
-    back to a model-unavailable evidence-only review on any rejected/failed
-    answer. With a dozen-plus discovered free candidates, capping our own
-    internal failover at 2 wastes the rest of the catalog and manufactures
-    exactly the "gives up after a few shallow attempts" fallback the workflow
-    then has to absorb. The failover budget must scale with the admitted pool,
-    bounded by the documented hard ceiling.
-    """
-    from contextual_orchestrator.tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
+def test_build_review_orchestrator_does_not_derive_retry_budget_from_pool_size(monkeypatch):
+    """Catalog size supplies no evidence for extra review compute or replay."""
 
     discovered = [
         _discovered(
@@ -309,11 +297,27 @@ def test_build_review_orchestrator_sizes_failover_budget_to_the_admitted_pool(mo
         {"OPENROUTER_API_KEY": "router-secret"}
     )
 
-    assert orchestrator.tool_retry_attempts == MAX_TOOL_RETRY_ATTEMPTS
+    assert orchestrator.tool_retry_attempts == 0
+    def send(candidate, *_args, **_kwargs):
+        return "answer", candidate.id, candidate.model, None
+
+    with (
+        patch.object(orchestrator, "_invoke_with_rate_limit_recovery", side_effect=send) as invoke,
+        patch.object(orchestrator, "_realtime_route_judge", return_value={
+            "accepted": False, "reason": "unverified", "verifier_output": "answer"
+        }),
+    ):
+        result = orchestrator.route_once(
+            [{"role": "user", "content": "review"}],
+            model_name=orchestrator.FREE_MODEL,
+        )
+
+    assert result["verification"]["accepted"] is False
+    assert invoke.call_count == 1
 
 
-def test_build_review_orchestrator_never_exceeds_a_small_pool(monkeypatch):
-    """The failover budget cannot exceed the number of candidates actually admitted."""
+def test_build_review_orchestrator_single_candidate_has_no_retry_budget(monkeypatch):
+    """The no-retry boundary also holds for a single admitted candidate."""
     discovered = [_discovered("openrouter", "solo-review", "OPENROUTER_API_KEY")]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
