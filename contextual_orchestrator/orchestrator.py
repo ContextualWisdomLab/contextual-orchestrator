@@ -9507,6 +9507,10 @@ class TaskOrchestrator:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
             answer, served_id = attempt_answer, attempt_served_id
+            served = next(
+                (item for item in ranked_pool if item.id == attempt_served_id),
+                candidate,
+            )
             if isinstance(extras, dict) and extras.get("tool_calls"):
                 verification = {
                     "accepted": True,
@@ -9519,6 +9523,7 @@ class TaskOrchestrator:
                     text=text,
                     answer=answer,
                     served_id=served_id,
+                    served_candidate_id=self._psychometric_candidate_id(served),
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
@@ -9528,10 +9533,6 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
-            served = next(
-                (item for item in ranked_pool if item.id == attempt_served_id),
-                candidate,
-            )
             row["selection_design"] = self._selection_design_receipt(
                 ranked_pool, attempted, served
             )
@@ -9583,6 +9584,7 @@ class TaskOrchestrator:
         text: str,
         answer: str,
         served_id: str,
+        served_candidate_id: str | None = None,
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
@@ -9612,6 +9614,7 @@ class TaskOrchestrator:
                 self._observe_contextual_quality(
                     prompt_context,
                     served_id,
+                    expected_candidate_id=served_candidate_id,
                     accepted=accepted,
                     latency_seconds=latency_seconds,
                     output_tokens=output_tokens,
@@ -10429,6 +10432,7 @@ class TaskOrchestrator:
         prompt_context: str,
         served_id: str,
         *,
+        expected_candidate_id: str | None = None,
         accepted: bool,
         latency_seconds: float | None,
         output_tokens: int | None,
@@ -10443,7 +10447,10 @@ class TaskOrchestrator:
             # The pool was refreshed while judging; retention would discard
             # this deployment's evidence, and the answer is already served.
             return
-        candidate_id = self._psychometric_candidate_id(served)
+        current_candidate_id = self._psychometric_candidate_id(served)
+        if expected_candidate_id is not None and current_candidate_id != expected_candidate_id:
+            return
+        candidate_id = current_candidate_id
         # Embedding is provider-latency work that depends only on the prompt
         # context, never on the served agent, so it runs before the
         # persistence lock is taken: holding the lock across it would

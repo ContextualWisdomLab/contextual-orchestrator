@@ -87,3 +87,24 @@ def test_contextual_quality_revalidates_candidate_after_embedding(monkeypatch) -
         assert orchestrator._psychometric_router.records() == []
     finally:
         orchestrator.close()
+
+
+def test_contextual_quality_rejects_deployment_edited_during_judging(monkeypatch) -> None:
+    """An old answer must not become evidence for a newly edited deployment."""
+    orchestrator = TaskOrchestrator([ModelAgent("model_a", "model-a", priority=1)])
+    monkeypatch.setattr(
+        orchestrator, "_invoke",
+        lambda *_args, **_kwargs: ("answer", "model_a", "model-a", None),
+    )
+
+    def judge(*_args, **_kwargs):
+        orchestrator.patch_agent("default", "model_a", {"priority": 2})
+        return {"accepted": True, "reason": "accepted", "verifier_output": "answer", "judge": "model"}
+
+    monkeypatch.setattr(orchestrator, "_model_judge_verification", judge)
+    monkeypatch.setattr(orchestrator, "_embed_cached", lambda _prompt: [0.1, 0.2])
+    try:
+        orchestrator.route_once([{"role": "user", "content": "task"}])
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
