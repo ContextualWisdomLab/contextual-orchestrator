@@ -88,6 +88,25 @@ No new routing heuristic is introduced by this change.
 
 ## Executable provenance
 
+### Request-shaped tool admission (2026-09-25, proposed)
+
+For a review-pool `orchestrator/free` Chat Completions request with tools, the
+gateway now uses its existing discovery evidence before sending to a provider.
+`tool_call:multi` admits either one or several tools; `tool_call:single` admits
+a request that does not require parallel calls. A review candidate without
+either positive signal can still serve plain chat, but cannot serve a tool
+request. If no free candidate proves the requested tool shape, the gateway
+returns `503 request_capability_unavailable` with `capability=tool_call` and
+does not send a completion. This addresses the plain-chat-ready/tool-404
+counterexample in issue #1106 without a provider-name branch in the consumer.
+
+The signal proves only the probed tool-call contract. It does not prove live
+availability, output quality, a provider idempotency guarantee, or completion
+of a long review. The catalog admission result remains distinct from an
+execution receipt. Calibrated allocation, a released request-scoped contract,
+immutable owner release, and the consumer's deletion of its own preflight
+remain open acceptance conditions for issue #1106.
+
 The PR implementing this contract must prove at least the following cases:
 
 - all five required provider credentials may be supplied and registered together;

@@ -6235,6 +6235,16 @@ class TaskOrchestrator:
                 if allowed_agent_ids is None
                 else allowed_agent_ids & replica_agent_ids
             )
+        if requested_model == self.FREE_MODEL and body.get("tools") and not allowed_agent_ids:
+            raise ProviderUpstreamError(
+                agent_id=self.FREE_MODEL,
+                model=self.FREE_MODEL,
+                error_code="request_capability_unavailable",
+                message="no free review model has evidence for this request's tool calls",
+                client_status=503,
+                transport="passthrough",
+                extra_detail={"capability": "tool_call"},
+            )
         # Cross-provider failover lives ONLY on this plain virtual passthrough
         # path (and the virtual tools path reached with single_agent=True).
         # Conducted structured synthesis never replays across providers — see
@@ -10127,13 +10137,10 @@ class TaskOrchestrator:
     ) -> bool:
         """Return true only for zero-priced models fit for *blind* free serving.
 
-        When the caller passes the inbound ``chat_body``, an agent carrying the
-        positive ``tool_call:single`` discovery evidence is also withheld from
-        a request whose shape that evidence proved rejected (see
-        :func:`_request_requires_parallel_tool_calls`, issue #940). The
-        passthrough 400 failover in :func:`_is_single_tool_call_limit_error`
-        stays as the safety net for shapes no evidence covers; this check only
-        avoids a provider round-trip the catalog already knows will fail.
+        For review-pool tool requests, the discovery probe must establish tool
+        support for the request shape. ``tool_call:single`` admits one call;
+        ``tool_call:multi`` admits either shape. An unproven review candidate
+        stays available for plain chat but cannot be selected for tools.
 
         Zero price alone does not certify fitness for the general-purpose
         ``orchestrator/free`` chat pool: that pool serves every role and
@@ -10152,12 +10159,15 @@ class TaskOrchestrator:
         """
         if not (self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)):
             return False
-        if (
-            chat_body is not None
-            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
-            and _request_requires_parallel_tool_calls(chat_body)
-        ):
-            return False
+        if chat_body is not None and chat_body.get("tools"):
+            parallel = _request_requires_parallel_tool_calls(chat_body)
+            if parallel and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags:
+                return False
+            if "review" in agent.tags and not (
+                "tool_call:multi" in agent.tags
+                or (not parallel and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags)
+            ):
+                return False
         return True
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---

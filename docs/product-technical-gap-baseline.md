@@ -1,5 +1,19 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-25 review tool-request admission (#1106, proposed)
+
+The #940 baseline below intentionally allowed a free model with unknown tool
+support to receive a tool request. Issue #1106's later Strix tool-call 404
+shows why plain-chat readiness cannot authorize that request shape. The owner
+now requires positive discovery evidence for review-pool tool calls: the
+existing `tool_call:single|multi` tags determine admission for the actual
+request, and an empty eligible set returns typed 503 before provider send.
+Focused RED reproduced both unknown-evidence admission and missing fail-closed
+behavior; the locked local test environment passed 251 neighboring tests.
+This is local contract evidence, not live provider readiness, judged review
+quality, protected delivery, or issue #1106 completion. Calibrated allocation,
+immutable release, and the central consumer's preflight removal remain open.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`

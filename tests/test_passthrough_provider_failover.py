@@ -929,6 +929,7 @@ def _free_pool_with_tool_call_evidence(
             tags=(
                 *agent.tags,
                 "cost:free",
+                "review",
                 *(primary_tags if agent.id == "primary_agent" else ("tool_call:multi",)),
             ),
         )
@@ -1049,8 +1050,8 @@ def test_free_pool_keeps_single_tool_call_agent_for_requests_without_tools(tools
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
-def test_free_pool_keeps_agent_without_tool_call_evidence() -> None:
-    """Absent evidence never excludes: ADR-0035 capability tags are positive declarations."""
+def test_free_pool_requires_tool_call_evidence_for_tool_request() -> None:
+    """A plain-chat candidate cannot be admitted for an unproven tool shape."""
     client = SequencedProxyClient(
         {
             "primary_agent": {"model": "primary-model"},
@@ -1061,8 +1062,25 @@ def test_free_pool_keeps_agent_without_tool_call_evidence() -> None:
 
     result = orchestrator.proxy_completion(_two_tool_request())
 
-    assert result["model"] == "primary-model"
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "chat"}]}
+    )["model"] == "primary-model"
+
+
+def test_free_pool_without_tool_evidence_fails_before_provider_send() -> None:
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = _free_pool_with_tool_call_evidence(client, ())
+    orchestrator.agents = [orchestrator.agents[0]]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(_one_tool_request())
+
+    assert caught.value.error_code == "request_capability_unavailable"
+    assert caught.value.client_status == 503
+    assert caught.value.detail["capability"] == "tool_call"
+    assert client.calls == []
 
 
 @pytest.mark.parametrize(
