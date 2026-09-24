@@ -51,6 +51,10 @@ gate. The owner now rejects it with typed, nonretryable
 it before opening SSE. Both Chat and Responses OpenAPI operations declare its
 typed 400 envelope. The RED direct-call test reached the provider path; the
 focused HTTP and direct-call regressions cover the corrected boundary.
+The [same-host synthetic request-path receipt](doctoring/review_gateway_failclosed_benchmark.md)
+records predecessor and repaired HEADs, direct/HTTP error counts, provider
+sends, latency, throughput, and measurement uncertainty. It is local evidence,
+not a hosted review or production-capacity result.
 The inspected [fast-mlsirm v0.11.4 release](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
 exposes [personnel selection utility](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/utility.py),
 [item-exposure routing](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/exposure.py),
