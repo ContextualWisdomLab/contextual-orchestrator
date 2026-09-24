@@ -43,6 +43,7 @@ def test_release_builds_wheel_without_system_setuptools() -> None:
     build = workflow.split("      - name: Build the installable package for this exact commit\n", 1)[1]
     build = build.split("\n      - name:", 1)[0]
     assert "uv build --wheel --python 3.12 --out-dir dist" in build
+    assert "uv pip install --no-deps --python 3.12 --target" in build
     assert "--no-build-isolation" not in build
     assert "importlib.metadata.distributions(path=[str(site)])" in build
 

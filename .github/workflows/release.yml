@@ -294,7 +294,7 @@ jobs:
           test -s "${wheel}"
           (cd dist && sha256sum "${wheel##*/}" > SHA256SUMS)
           release_site="${RUNNER_TEMP}/release-package"
-          python -m pip install --no-deps --target "${release_site}" "${wheel}"
+          uv pip install --no-deps --python 3.12 --target "${release_site}" "${wheel}"
           RELEASE_SITE="${release_site}" python - <<'PY'
           import importlib.metadata
           import os
