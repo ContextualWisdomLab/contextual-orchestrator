@@ -818,8 +818,15 @@ def test_review_free_conduct_does_not_replay_upstream_failure(status: int) -> No
     assert client.calls == [first.id]
 
 
-@pytest.mark.parametrize("case", ["plain", "wrapped", "raw_429"])
-def test_review_free_invoke_unknown_failure_does_not_replay(case: str) -> None:
+@pytest.mark.parametrize("case, expected", [
+    ("plain", (502, "provider_outcome_unknown", False)),
+    ("wrapped", (502, "provider_outcome_unknown", False)),
+    ("raw_404", (404, "model_not_found", False)),
+    ("raw_429", (429, "rate_limit_exceeded", True)),
+])
+def test_review_free_invoke_unknown_failure_does_not_replay(
+    case: str, expected: tuple[int, str, bool]
+) -> None:
     """An unclassified review chat failure cannot authorize another send."""
     first = ModelAgent("first_agent", "first-model", priority=10,
                        tags=("cost:free", "review"))
@@ -827,8 +834,8 @@ def test_review_free_invoke_unknown_failure_does_not_replay(case: str) -> None:
                         tags=("cost:free", "review"))
     orchestrator = TaskOrchestrator([first, second], tool_retry_attempts=0)
     responses: list[urllib.error.HTTPError] = []
-    if case == "raw_429":
-        response = _http_error(429)
+    if case.startswith("raw_"):
+        response = _http_error(int(case[4:]))
         failure: BaseException = response
         responses.append(response)
     else:
@@ -854,10 +861,10 @@ def test_review_free_invoke_unknown_failure_does_not_replay(case: str) -> None:
                 allowed_agent_ids={first.id, second.id},
                 review_no_replay=True, virtual_selector=True,
             )
-        assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
-            502, "provider_outcome_unknown", False,
-        )
+        assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == expected
         assert calls == [first.id]
+        if case.startswith("raw_"):
+            assert responses[0].closed
     finally:
         for response in responses:
             response.close()

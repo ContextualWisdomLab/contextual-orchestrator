@@ -11067,6 +11067,18 @@ class TaskOrchestrator:
                             else self.client.chat(agent, messages)
                         )
                 except Exception as exc:
+                    if review_no_replay and "review" in agent.tags and isinstance(exc, urllib.error.HTTPError):
+                        response_error = exc
+                        try:
+                            exc = classify_provider_failure(
+                                response_error, agent_id=agent.id,
+                                model=agent.model, transport="chat",
+                            )
+                        finally:
+                            try:
+                                response_error.close()
+                            except Exception:  # noqa: BLE001 - preserve the classified failure
+                                pass
                     if _is_request_too_large_error(exc):
                         break
                     every_failure_was_request_too_large = False
@@ -11122,7 +11134,7 @@ class TaskOrchestrator:
                             # exception below proves no send took place.
                             if exc.provider_status != 429:
                                 self._record_failure(agent.id)
-                            raise
+                            raise exc from None
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
                         # the provider's own already-computed retryability
