@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 
 import pytest
@@ -210,6 +211,39 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     assert security.auth_token == "local-review-token"
     assert security.allow_public_bind is False
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
+
+
+def test_main_configures_redacted_logging_before_discovery(monkeypatch, capsys):
+    """INFO sends discovery and request summaries to redacted stderr."""
+    discovered = [
+        _discovered("openrouter", "review-model", "OPENROUTER_API_KEY")
+    ]
+
+    def fake_discover():
+        """Emit a discovery record before the server starts."""
+        logging.getLogger("contextual_orchestrator.model_discovery").info(
+            "discovery_complete token=non-credential-fixture"
+        )
+        return discovered, []
+
+    monkeypatch.setattr(review_gateway, "discover_all_models", fake_discover)
+    monkeypatch.setattr(
+        review_gateway,
+        "serve",
+        lambda orchestrator, **kwargs: logging.getLogger(
+            "contextual_orchestrator.server"
+        ).info("http_request status=200 latency_ms=1 request_id=test-request"),
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--log-level", "info"])
+
+    review_gateway.main()
+
+    stderr = capsys.readouterr().err
+    assert "discovery_complete token=[REDACTED]" in stderr
+    assert "http_request status=200 latency_ms=1 request_id=test-request" in stderr
+    assert "non-credential-fixture" not in stderr
 
 
 def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch):
