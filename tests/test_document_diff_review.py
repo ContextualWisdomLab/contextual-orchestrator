@@ -255,6 +255,7 @@ def _mutated(**changes) -> dict:
     ("envelope", "status", "code"),
     [
         (_mutated(**{"objects.0.head_text": "data:image/png;base64,iVBORw0KGgo="}), 422, "inline_binary_content"),
+        (_mutated(**{"objects.0.head_text": "data:image/png;name=" + "x" * 101 + ";base64,AAAA"}), 422, "inline_binary_content"),
         (_mutated(**{"objects.0.head_text": base64.b64encode(HEAD_DOCX).decode()[:4000]}), 422, "inline_binary_content"),
         (
             _mutated(**{"objects.0.head_text": base64.urlsafe_b64encode(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8).decode()}),
@@ -272,6 +273,7 @@ def _mutated(**changes) -> dict:
     ],
     ids=[
         "data_uri",
+        "long_data_uri_header",
         "base64_docx",
         "urlsafe_base64_image",
         "secret",
