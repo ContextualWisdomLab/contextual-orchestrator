@@ -24,6 +24,7 @@ import argparse
 import email
 import hashlib
 import importlib.metadata
+import io
 import json
 import re
 import subprocess
@@ -128,7 +129,12 @@ def _pnpm_packages(path: Path, data: bytes) -> list[dict[str, str]]:
 
 
 _EXTERNAL_SOURCE = re.compile(
-    r"^\s*(?:--(?:find-links|index-url|extra-index-url)\b|-[fi]\s)|@\s*(?:git\+|https?://|file://)",
+    # option lines that widen the source set, an include of another file whose
+    # contents this check would not see, and any URL or VCS reference at all --
+    # with or without the "name @ " prefix.
+    r"^\s*(?:--(?:find-links|index-url|extra-index-url|editable|requirement)\b|-[fier]\s)"
+    r"|(?:^|[\s@=])(?:git|hg|bzr|svn)\+"
+    r"|(?:^|[\s@=])(?:https?|ftp|file)://",
 )
 
 
@@ -178,10 +184,13 @@ def _artifact_license_terms(
         # build backend, and an unreviewed package must not execute here.
         return [], f"no wheel for {name}=={version} in {artifact_dir}", []
     artifact = candidates[0]
-    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    # One read: hashing the path and then reopening it would bind a digest to
+    # bytes that need not be the bytes parsed.
+    raw_artifact = artifact.read_bytes()
+    digest = hashlib.sha256(raw_artifact).hexdigest()
     terms: list[str] = []
-    license_files: list[str] = []
-    with zipfile.ZipFile(artifact) as archive:
+    license_files: list[Any] = []
+    with zipfile.ZipFile(io.BytesIO(raw_artifact)) as archive:
         for member in archive.namelist():
             if member.endswith(".dist-info/METADATA") and not terms:
                 metadata = email.message_from_string(archive.read(member).decode("utf-8", "replace"))

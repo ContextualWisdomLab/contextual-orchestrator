@@ -103,10 +103,14 @@ def test_release_workflow_runs_the_gate_before_publishing() -> None:
     text = workflow.read_text(encoding="utf-8")
 
     verify_block = text[text.index("\n  verify:") : text.index("\n  publish:")]
-    assert "scripts.ci.release_license_gate" in verify_block
-    assert verify_block.index("Fetch the required CycloneDX SBOM") < verify_block.index(
-        "scripts.ci.release_license_gate"
-    )
+    # Two adjudications, in this order: the inventory before any environment is
+    # built, and the full gate once the SBOM for this commit is in hand.
+    preinstall = verify_block.index("--mode preinstall")
+    environment = verify_block.index("run: uv run --locked")
+    sbom_fetch = verify_block.index("Fetch the required CycloneDX SBOM")
+    release_gate = verify_block.index("--sbom sbom-download/cyclonedx-sbom.json")
+    assert preinstall < environment < sbom_fetch < release_gate
+    assert verify_block.index("--check-sources-only") < preinstall
     publish_block = text[text.index("\n  publish:") :]
     assert "needs: verify" in publish_block
 
@@ -511,3 +515,36 @@ def test_licence_text_must_evidence_the_declaration() -> None:
     assert {row["name"] for row in groups["undecidable"]} == {
         "python:contradicted_library", "python:empty_text_library",
         "python:trailing_copyleft_library"}
+
+
+@pytest.mark.parametrize(
+    "package, expected",
+    [
+        pytest.param({"name": "mixed_unknown", "version": "1", "licenses": ["MIT", "LicenseRef-Private"],
+                      "license_files": [{"name": "LICENSE", "sha256": "a" * 64,
+                                         "text": "MIT License Permission is hereby granted"}]},
+                     "undecidable", id="permitted_beside_unknown"),
+        pytest.param({"name": "two_texts", "version": "1", "licenses": ["MIT"],
+                      "license_files": [
+                          {"name": "LICENSE", "sha256": "a" * 64,
+                           "text": "MIT License Permission is hereby granted"},
+                          {"name": "LICENSE.gpl", "sha256": "b" * 64,
+                           "text": "GNU GENERAL PUBLIC LICENSE Version 2, June 1991"}]},
+                     "undecidable", id="permissive_text_beside_a_copyleft_one"),
+        pytest.param({"name": "restricted", "version": "1", "licenses": ["MIT"],
+                      "license_files": [{"name": "LICENSE", "sha256": "a" * 64,
+                                         "text": "MIT License Permission is hereby granted. "
+                                                 "Commercial use is prohibited."}]},
+                     "undecidable", id="restriction_clause"),
+        pytest.param({"name": "submit_restricted", "version": "1", "licenses": ["MIT"],
+                      "license_files": [{"name": "LICENSE", "sha256": "a" * 64,
+                                         "text": "MIT License Permission is hereby granted. "
+                                                 "SUBMIT-RESTRICTED: internal use only."}]},
+                     "undecidable", id="submit_restricted"),
+    ],
+)
+def test_one_unmet_condition_holds_the_entry(package, expected) -> None:
+    """Any single unresolved or restricting condition holds, whatever else passes."""
+    groups = classify_inventory_licenses(_inventory(packages=[package]))
+
+    assert [row["name"] for row in groups[expected]] == [f"python:{package['name']}"]

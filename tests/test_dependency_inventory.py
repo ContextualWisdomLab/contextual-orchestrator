@@ -280,3 +280,35 @@ def test_external_source_requirements_are_refused(tmp_path) -> None:
     assert len(findings) == 2
     assert any("git+https" in finding for finding in findings)
     assert any("--find-links" in finding for finding in findings)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("https://example.invalid/pkg-1.0-py3-none-any.whl", id="bare_wheel_url"),
+        pytest.param("git+https://example.invalid/pkg.git@deadbeef", id="bare_vcs_url"),
+        pytest.param("-r other.lock", id="include_of_another_file"),
+        pytest.param("-e .", id="editable"),
+    ],
+)
+def test_every_external_source_shape_is_refused(tmp_path, line) -> None:
+    """A URL, a VCS reference or an include reaches outside the pinned wheel set."""
+    lock = tmp_path / "requirements.lock"
+    lock.write_text(f"{line}\n", encoding="utf-8")
+
+    assert external_source_findings(lock, lock.read_bytes())
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("normal-library==1.0 \\", id="pinned_requirement"),
+        pytest.param("    --hash=sha256:aa", id="hash_line"),
+        pytest.param("# via https://example.invalid/docs", id="comment_mentioning_a_url"),
+    ],
+)
+def test_ordinary_lock_lines_are_not_refused(tmp_path, line) -> None:
+    lock = tmp_path / "requirements.lock"
+    lock.write_text(f"{line}\n", encoding="utf-8")
+
+    assert external_source_findings(lock, lock.read_bytes()) == []

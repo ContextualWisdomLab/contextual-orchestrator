@@ -254,6 +254,22 @@ jobs:
             exit 1
           fi
 
+      - name: Refuse external requirement sources before any environment is built
+        run: |
+          set -euo pipefail
+          # `uv run --locked` below materialises an environment, so the source
+          # allowlist and the licence adjudication have to happen first: an
+          # unreviewed requirement must never be fetched or installed to get
+          # this far.
+          python -m scripts.ci.dependency_inventory --repository-root . \
+            --output /dev/null --check-sources-only
+          python -m scripts.ci.dependency_inventory --repository-root . \
+            --output dependency-inventory.json --resolve-licenses
+          python -m scripts.ci.release_license_gate \
+            --inventory dependency-inventory.json \
+            --source-sha "${TARGET_SHA}" \
+            --mode preinstall
+
       - name: Run the full required test suite fresh on this exact commit
         run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
 

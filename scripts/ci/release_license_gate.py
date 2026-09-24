@@ -262,7 +262,7 @@ def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dic
             verdicts = [classify_license_term(term) for term in terms]
             if any(verdict == "copyleft" for verdict, _ in verdicts):
                 copyleft.append(row)
-            elif all(verdict == "undecidable" for verdict, _ in verdicts):
+            elif any(verdict == "undecidable" for verdict, _ in verdicts):
                 undecidable.append(row)
             elif "license_files" in package and not package.get("license_files"):
                 # A declaration with no licence text in the artefact is the
@@ -279,6 +279,15 @@ def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dic
 
 
 
+
+# Wording that withholds a right a permissive licence grants. Any of these
+# makes the text something other than the permissive licence it claims.
+_RESTRICTION_PATTERN = re.compile(
+    r"non[- ]?commercial|not for commercial|commercial use (?:is )?(?:prohibited|forbidden)"
+    r"|submit[- ]restricted|evaluation (?:use )?only|internal use only|may not (?:be )?redistribut"
+    r"|no redistribution|research (?:use )?only|written (?:consent|permission) (?:is )?required",
+    re.IGNORECASE,
+)
 
 _LICENCE_FAMILY_TOKENS = {
     "MIT": ("mit", "permission is hereby granted"),
@@ -309,18 +318,22 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
         for entry in license_files
         if isinstance(entry, dict) and str(entry.get("text") or "").strip()
     ]
-    if not texts:
+    if not texts or len(texts) != len([entry for entry in license_files if isinstance(entry, dict)]):
+        # A record with an empty or non-dict licence entry is incomplete.
         return False
+    evidenced = False
     for text in texts:
-        if _COPYLEFT_PATTERN.search(text):
-            continue
+        # Every bundled text has to be acceptable: a permissive LICENSE next to
+        # a separate GPL one is a package under both, not under the first.
+        if _COPYLEFT_PATTERN.search(text) or _RESTRICTION_PATTERN.search(text):
+            return False
         lowered = " ".join(text.split()).lower()
         for term in terms:
             upper = term.upper()
             for family, tokens in _LICENCE_FAMILY_TOKENS.items():
                 if family in upper and any(token in lowered for token in tokens):
-                    return True
-    return False
+                    evidenced = True
+    return evidenced
 
 
 def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
