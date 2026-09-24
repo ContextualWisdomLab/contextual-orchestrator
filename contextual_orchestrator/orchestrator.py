@@ -10932,7 +10932,7 @@ class TaskOrchestrator:
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
         # A later non-retryable failure (e.g. one model's 400) must not hide an
-        # earlier transient one: the exhausted pool's surface is order-independent.
+        # earlier transient one: the exhaustion's retryability is order-independent.
         last_retryable_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0

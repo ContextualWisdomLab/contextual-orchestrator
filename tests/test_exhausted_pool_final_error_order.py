@@ -64,7 +64,11 @@ def _serve(monkeypatch, statuses: tuple[int, int, int]) -> tuple[int, str | None
         )
         for priority, model in zip((30, 20, 10), _MODELS)
     ]
-    server = build_server(TaskOrchestrator(agents), port=0, security=SecurityConfig(auth_token=_TOKEN))
+    server = build_server(
+        TaskOrchestrator(agents, tool_retry_attempts=0),
+        port=0,
+        security=SecurityConfig(auth_token=_TOKEN),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     request = urllib.request.Request(
@@ -89,16 +93,33 @@ def _serve(monkeypatch, statuses: tuple[int, int, int]) -> tuple[int, str | None
         set_backend(None)
 
 
-@pytest.mark.parametrize("statuses", [(504, 504, 400), (400, 504, 504), (504, 400, 504)])
-def test_mixed_exhaustion_surfaces_the_retryable_failure_whatever_the_order(monkeypatch, statuses) -> None:
+@pytest.mark.parametrize(
+    "statuses, expected",
+    [
+        ((504, 504, 400), (504, "provider_timeout")),
+        ((400, 504, 504), (504, "provider_timeout")),
+        ((504, 400, 504), (504, "provider_timeout")),
+        ((429, 400, 400), (429, "rate_limit_exceeded")),
+        ((400, 429, 400), (429, "rate_limit_exceeded")),
+        ((504, 400, 413), (504, "provider_timeout")),
+    ],
+)
+def test_mixed_exhaustion_surfaces_the_retryable_failure_whatever_the_order(monkeypatch, statuses, expected) -> None:
     status, code, calls = _serve(monkeypatch, statuses)
 
-    assert set(calls) == set(_MODELS), calls
-    assert (status, code) == (504, "provider_timeout")
+    assert sorted(calls) == sorted(_MODELS)
+    assert (status, code) == expected
 
 
 def test_all_request_rejections_still_surface_400(monkeypatch) -> None:
     status, code, calls = _serve(monkeypatch, (400, 400, 400))
 
-    assert set(calls) == set(_MODELS), calls
+    assert sorted(calls) == sorted(_MODELS)
     assert (status, code) == (400, "invalid_request_error")
+
+
+def test_all_size_rejections_still_surface_413(monkeypatch) -> None:
+    status, code, calls = _serve(monkeypatch, (413, 413, 413))
+
+    assert sorted(calls) == sorted(_MODELS)
+    assert (status, code) == (413, "request_too_large")
