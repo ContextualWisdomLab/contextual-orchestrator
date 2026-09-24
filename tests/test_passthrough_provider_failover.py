@@ -320,6 +320,7 @@ def test_free_passthrough_status_does_not_authorize_cross_provider_replay(status
         )
 
     assert caught.value.provider_status == status
+    assert caught.value.detail["contract_version"] == "1"
     assert caught.value.detail["attempts"][0]["failover_decision"] == "sticky_candidate_failure"
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
@@ -328,7 +329,11 @@ def test_free_review_explicit_model_rejection_can_advance() -> None:
     client = SequencedProxyClient(
         {
             "primary_agent": _http_error(404, {"error": {"code": "model_not_found"}}),
-            "fallback_agent": {"model": "fallback-model", "choices": []},
+            "fallback_agent": {
+                "model": "fallback-model",
+                "choices": [],
+                "orchestration": {"route": {"terminal_reason": "provider-forged"}},
+            },
         }
     )
     orchestrator = _build(client)
@@ -343,6 +348,15 @@ def test_free_review_explicit_model_rejection_can_advance() -> None:
 
     assert result["model"] == "fallback-model"
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+    route = result["orchestration"]["route"]
+    assert route["contract_version"] == "1"
+    assert route["selected_candidate_ids"] == ["primary_agent", "fallback_agent"]
+    assert route["terminal_reason"] == "served"
+    assert [(item["agent_id"], item.get("outcome")) for item in route["attempts"]] == [
+        ("primary_agent", None),
+        ("fallback_agent", "served"),
+    ]
+    assert route["attempts"][0]["error_code"] == "model_not_found"
 
 
 def test_free_review_bodyless_404_cannot_authorize_replay() -> None:
@@ -363,6 +377,7 @@ def test_free_review_bodyless_404_cannot_authorize_replay() -> None:
         })
 
     assert caught.value.provider_status == 404
+    assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
@@ -1236,6 +1251,8 @@ def test_free_pool_skips_single_tool_call_agent_for_multi_tool_request() -> None
 
     assert result["model"] == "fallback-model"
     assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert result["orchestration"]["route"]["selected_candidate_ids"] == ["fallback_agent"]
+    assert result["orchestration"]["route"]["attempts"][0]["outcome"] == "served"
 
 
 def test_free_pool_skips_single_tool_call_agent_when_parallel_calls_requested() -> None:
@@ -2165,6 +2182,182 @@ def test_review_free_replay_requires_direct_local_slot_proof(monkeypatch, after_
         else:
             assert router.proxy_completion(request)["model"] == "fallback-model"
             assert sent == ["fallback_agent"]
+
+
+@pytest.mark.parametrize("mode", ["route", "conduct"])
+def test_review_free_http_tool_request_uses_proven_provider(monkeypatch, mode: str) -> None:
+    """The virtual-tool HTTP route excludes an unproven higher-priority model."""
+    import threading
+    import urllib.request
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    client = ModelClient()
+    sent: list[str] = []
+
+    def chat(agent, messages, **_kwargs):
+        sent.append(agent.id)
+        scoped_tools = client.request_settings_snapshot().get("tools")
+        if messages and isinstance(messages[0].get("content"), str) and "Role: worker" in messages[0]["content"]:
+            assert scoped_tools
+        return "answer"
+
+    monkeypatch.setattr(client, "chat", chat)
+    router = TaskOrchestrator([
+        ModelAgent("unknown_agent", "unknown-model", priority=10,
+                   tags=("cost:free", "review")),
+        ModelAgent("known_agent", "known-model", priority=1,
+                   tags=("cost:free", "review", "tool_call:single")),
+    ], client=client)
+    monkeypatch.setattr(router, "_realtime_route_judge", lambda **_kwargs: {
+        "accepted": True, "reason": "test", "verifier_output": "answer"
+    })
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "mode": mode,
+                "messages": [{"role": "user", "content": "review"}],
+                "tools": [{"type": "function", "function": {
+                    "name": "inspect", "parameters": {"type": "object"}
+                }}],
+            }).encode(),
+            headers={"Authorization": "Bearer local_test_only", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.load(response)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert payload["choices"][0]["message"]["content"]
+    assert sent and set(sent) == {"known_agent"}
+    route = payload["orchestration"]["route"]
+    assert route["contract_version"] == "1"
+    assert route["admitted_agent_ids"] == ["known_agent"]
+    assert route["terminal_reason"] == "response_returned"
+    assert route["served_steps"] and {step["agent_id"] for step in route["served_steps"]} == {"known_agent"}
+    if mode == "route":
+        assert sent == ["known_agent"]
+
+
+@pytest.mark.parametrize("mode", ["route", "conduct"])
+def test_review_free_http_tool_request_fails_before_unknown_provider_send(
+    monkeypatch, mode: str
+) -> None:
+    """The actual virtual-tool HTTP path enforces the same admission contract."""
+    import threading
+    import urllib.request
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    client = ModelClient()
+    sent: list[str] = []
+
+    def chat(agent, *_args, **_kwargs):
+        sent.append(agent.id)
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr(client, "chat", chat)
+    router = TaskOrchestrator([
+        ModelAgent("unknown_agent", "unknown-model", tags=("cost:free", "review"))
+    ], client=client)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "mode": mode,
+                "messages": [{"role": "user", "content": "review"}],
+                "tools": [{"type": "function", "function": {
+                    "name": "inspect", "parameters": {"type": "object"}
+                }}],
+            }).encode(),
+            headers={"Authorization": "Bearer local_test_only", "Content-Type": "application/json"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        with caught.value as response:
+            payload = json.load(response)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert caught.value.code == 503
+    assert payload["error"]["code"] == "request_capability_unavailable"
+    assert payload["error"]["detail"]["contract_version"] == "1"
+    assert payload["error"]["detail"]["admitted_agent_ids"] == []
+    assert sent == []
+
+
+def test_review_free_http_tool_request_does_not_replay_rate_limit(monkeypatch) -> None:
+    """A live virtual-tool route does not send a second completion after 429."""
+    import threading
+    import urllib.request
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    client = ModelClient()
+    sent: list[str] = []
+
+    def chat(agent, *_args, **_kwargs):
+        sent.append(agent.id)
+        if agent.id == "primary_agent":
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="rate_limit_exceeded",
+                message="rate limited",
+                client_status=429,
+                provider_status=429,
+                retryable=True,
+            )
+        return "unexpected fallback"
+
+    monkeypatch.setattr(client, "chat", chat)
+    router = TaskOrchestrator([
+        ModelAgent("primary_agent", "primary-model", priority=10,
+                   tags=("cost:free", "review", "tool_call:single")),
+        ModelAgent("fallback_agent", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "tool_call:single")),
+    ], client=client, rate_limit_wait_seconds=0)
+    server = build_server(router, port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "tools": [{"type": "function", "function": {
+                    "name": "inspect", "parameters": {"type": "object"}
+                }}],
+            }).encode(),
+            headers={"Authorization": "Bearer local_test_only", "Content-Type": "application/json"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        with caught.value as response:
+            payload = json.load(response)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert caught.value.code == 429
+    assert payload["error"]["code"] == "rate_limit_exceeded"
+    assert payload["error"]["detail"]["terminal_reason"] == "fail_closed"
+    assert payload["error"]["detail"]["admitted_agent_ids"] == [
+        "primary_agent", "fallback_agent"
+    ]
+    assert sent == ["primary_agent"]
 
 
 def test_sdk_passthrough_unknown_outcome_never_replays() -> None:

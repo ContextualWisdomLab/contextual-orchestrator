@@ -228,7 +228,7 @@ def test_classification_maps_every_upstream_status_to_openai_surface() -> None:
         assert classified.model == "m"
 
 
-def test_404_requires_explicit_model_refusal_before_review_failover() -> None:
+def test_404_requires_explicit_model_refusal_before_authorizing_review_failover() -> None:
     with _http_error(404) as response_error:
         bodyless = classify_provider_failure(response_error, agent_id="a", model="m")
     with _body_http_error(404, {"error": {"code": "model_not_found"}}) as response_error:
@@ -508,9 +508,11 @@ def test_invoke_preserves_final_classified_failure_across_candidates() -> None:
         ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
     ]
     orchestrator = TaskOrchestrator(agents, client=RateLimited())
-    orchestrator._triage_fn = lambda text: False  # single-step route accounting
     try:
-        orchestrator.route_once([{"role": "user", "content": "route this"}])
+        orchestrator._invoke(
+            agents[0], [{"role": "user", "content": "route this"}],
+            text="route this", role="worker",
+        )
     except ProviderUpstreamError as exc:
         assert exc.error_code == "rate_limit_exceeded"
         assert exc.client_status == 429

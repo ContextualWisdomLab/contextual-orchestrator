@@ -2259,6 +2259,9 @@ def _passthrough_attempt_record(
     }
 
 
+PASSTHROUGH_ROUTE_RECEIPT_VERSION = "1"
+
+
 def _set_passthrough_attempt_evidence(
     exc: ProviderUpstreamError,
     *,
@@ -2270,6 +2273,7 @@ def _set_passthrough_attempt_evidence(
     exc.selected_candidate_ids = tuple(selected_candidate_ids)
     exc.attempts = tuple(dict(item) for item in attempts)
     exc.terminal_reason = terminal_reason
+    exc.extra_detail["contract_version"] = PASSTHROUGH_ROUTE_RECEIPT_VERSION
     return exc
 
 
@@ -6263,8 +6267,8 @@ class TaskOrchestrator:
             )
         # Cross-provider failover lives ONLY on this plain virtual passthrough
         # path (and the virtual tools path reached with single_agent=True).
-        # Conducted structured synthesis never replays across providers — see
-        # _orchestrated_provider_completion.
+        # Conducted structured synthesis owns its separate candidate loop;
+        # see _orchestrated_provider_completion.
         # Only this virtual-selector branch reaches here at all -- an
         # explicitly requested concrete model returns earlier in this
         # function -- so context-window filtering below never applies to a
@@ -6499,6 +6503,30 @@ class TaskOrchestrator:
                 self._record_tool_loop_agents(
                     self._served_tool_calls(result, api_surface), candidate.id
                 )
+                if (
+                    requested_model == self.FREE_MODEL
+                    and "review" in candidate.tags
+                    and isinstance(result, dict)
+                ):
+                    orchestration = result.get("orchestration")
+                    if not isinstance(orchestration, dict):
+                        orchestration = {}
+                        result["orchestration"] = orchestration
+                    orchestration["route"] = {
+                        "contract_version": PASSTHROUGH_ROUTE_RECEIPT_VERSION,
+                        "selected_candidate_ids": list(selected_candidate_ids),
+                        "attempts": [
+                            *attempt_receipts,
+                            {
+                                "agent_id": candidate.id,
+                                "model": candidate.model,
+                                "provider_name": candidate.provider_name.strip() or "unreported",
+                                "attempt_number": len(attempt_receipts) + 1,
+                                "outcome": "served",
+                            },
+                        ],
+                        "terminal_reason": "served",
+                    }
                 if tool_loop_evidence is not None and isinstance(result, dict):
                     orchestration_extension = result.get("orchestration")
                     if not isinstance(orchestration_extension, dict):
@@ -7688,6 +7716,35 @@ class TaskOrchestrator:
             raise ValueError("model_name must be a non-empty string")
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
+        request_settings = getattr(self.client, "request_settings_snapshot", None)
+        scoped_request = request_settings() if callable(request_settings) else None
+        if (
+            model_name == self.FREE_MODEL
+            and isinstance(scoped_request, Mapping)
+            and scoped_request.get("tools")
+            and any("review" in agent.tags for agent in self.agents)
+            and not any(
+                not agent.disabled
+                and self._is_general_free_agent(agent, chat_body=scoped_request)
+                and self._zdr_agent_allowed(agent)
+                for agent in self.agents
+            )
+        ):
+            raise ProviderUpstreamError(
+                agent_id=self.FREE_MODEL,
+                model=self.FREE_MODEL,
+                error_code="request_capability_unavailable",
+                message="no eligible free provider supports the requested tools",
+                client_status=503,
+                retryable=False,
+                transport="orchestration",
+                extra_detail={
+                    "capability": "tool_call",
+                    "contract_version": PASSTHROUGH_ROUTE_RECEIPT_VERSION,
+                    "admitted_agent_ids": [],
+                    "terminal_reason": "request_capability_unavailable",
+                },
+            )
         # Only resolve route-vs-conduct now when it is free: mode="route"/"conduct"
         # and an explicitly-named model (e.g. FREE_MODEL) settle without a live
         # triage call. The remaining case -- mode="auto" against the gateway
@@ -8104,6 +8161,14 @@ class TaskOrchestrator:
             record["tool_calls"] = result["tool_calls"]
         if result.get("finish_reason"):
             record["finish_reason"] = result["finish_reason"]
+        admitted = result.get("request_admitted_ids")
+        if isinstance(admitted, list) and result.get("cache_status") != "hit":
+            record["review_route"] = {
+                "contract_version": PASSTHROUGH_ROUTE_RECEIPT_VERSION,
+                "admitted_agent_ids": admitted,
+                "served_steps": result.get("review_served_steps", []),
+                "terminal_reason": "response_returned",
+            }
         if owner_id is not None:
             record["owner_id"] = owner_id
         self._replace_workflow_run(record)
@@ -9230,6 +9295,10 @@ class TaskOrchestrator:
         if requested is None:
             ranked_pool, tool_loop_evidence = self._apply_tool_loop_route(ranked_pool, messages)
 
+        review_free_request = bool(
+            free_only and ranked_pool
+            and all("review" in candidate.tags for candidate in ranked_pool)
+        )
         max_attempts = 1 + min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         trace_rows: list[dict[str, Any]] = []
         answer = ""
@@ -9330,6 +9399,14 @@ class TaskOrchestrator:
             "verification": {**verification, "verifier_output": answer},
             "trace": [final_row],
         }
+        if review_free_request:
+            result["request_admitted_ids"] = [
+                agent.id for agent in self.agents if agent.id in free_ids
+            ]
+            result["review_served_steps"] = [
+                {"role": row["role"], "agent_id": row.get("served_agent_id", row["agent_id"])}
+                for row in trace_rows
+            ]
         if "output_budget_clamped" in final_row:
             result["requested_output_tokens"] = final_row["requested_output_tokens"]
             result["effective_output_tokens"] = final_row["effective_output_tokens"]
@@ -9495,6 +9572,9 @@ class TaskOrchestrator:
         if model_name == self.FREE_MODEL and _allowed_agent_ids is not None:
             free_ids.intersection_update(_allowed_agent_ids)
         review_no_replay = _review_no_replay or model_name == self.FREE_MODEL
+        review_free_pool = bool(
+            free_ids and all("review" in self._agent(agent_id).tags for agent_id in free_ids)
+        )
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
             _allowed_agent_ids
@@ -9684,6 +9764,14 @@ class TaskOrchestrator:
             "verification": verification,
             "plan_source": plan_source,
         }
+        if review_free_pool and model_name == self.FREE_MODEL:
+            result["request_admitted_ids"] = [
+                agent.id for agent in self.agents if agent.id in free_ids
+            ]
+            result["review_served_steps"] = [
+                {"role": step["role"], "agent_id": step.get("served_agent_id", step["agent_id"])}
+                for step in trace
+            ]
         if trace and "output_budget_clamped" in trace[-1]:
             result["requested_output_tokens"] = trace[-1]["requested_output_tokens"]
             result["effective_output_tokens"] = trace[-1]["effective_output_tokens"]
@@ -10229,6 +10317,9 @@ class TaskOrchestrator:
         """
         if not (self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)):
             return False
+        if chat_body is None:
+            request_settings = getattr(self.client, "request_settings_snapshot", None)
+            chat_body = request_settings() if callable(request_settings) else None
         if chat_body is not None and chat_body.get("tools"):
             parallel = _request_requires_parallel_tool_calls(chat_body)
             if parallel and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags:
@@ -11867,12 +11958,20 @@ class TaskOrchestrator:
                     prompt_token_lower_bound=prompt_token_lower_bound,
                 )
             except ProviderUpstreamError as exc:
-                if exc.provider_status not in (429, 503):
-                    raise
                 if review_no_replay and any(
                     agent.id == exc.agent_id and "review" in agent.tags
                     for agent in self.agents
                 ):
+                    exc.extra_detail.update({
+                        "contract_version": PASSTHROUGH_ROUTE_RECEIPT_VERSION,
+                        "admitted_agent_ids": [
+                            agent.id for agent in self.agents
+                            if allowed_agent_ids is not None and agent.id in allowed_agent_ids
+                        ],
+                        "terminal_reason": "fail_closed",
+                    })
+                    raise
+                if exc.provider_status not in (429, 503):
                     raise
                 required_tags = ("vision",) if self._source_image_parts(messages) else ()
                 prompt_context = self._prompt_interaction(messages)
@@ -19783,6 +19882,7 @@ def chat_completion_response(
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
         "tool_loop_route": result.get("tool_loop_route"),
+        "route": result.get("review_route"),
         "tool_loop_agent_id": result.get("tool_loop_agent_id"),
         "requested_output_tokens": result.get("requested_output_tokens"),
         "effective_output_tokens": result.get("effective_output_tokens"),
