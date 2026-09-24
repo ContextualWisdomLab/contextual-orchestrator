@@ -7,6 +7,7 @@ wire (local server), and /v1/chat/completions route+stream pipes live deltas out
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -530,6 +531,10 @@ class _StreamFailThenServeClient:
     def take_usage(self) -> None:
         return None
 
+    @contextmanager
+    def request_settings(self, **_kwargs):
+        yield
+
 
 def _stream_failover_agents() -> list[ModelAgent]:
     return [
@@ -579,6 +584,90 @@ def test_stream_route_records_typed_retryable_attempt_before_serving() -> None:
     assert trace[0]["transport"] == "stream"
     assert trace[0]["reason"]
     assert trace[1]["agent_id"] == "fallback_worker"
+
+
+def test_http_stream_fallback_returns_bounded_route_receipt() -> None:
+    """The successful SSE frame identifies every tried route and the served worker."""
+    client = _StreamFailThenServeClient(
+        ProviderUpstreamError(
+            agent_id="primary_worker",
+            model="primary-model",
+            error_code="service_unavailable",
+            message="private provider response",
+            client_status=503,
+            provider_status=503,
+            retryable=True,
+            transport="stream",
+        )
+    )
+    free_agents = [
+        ModelAgent(agent.id, agent.model, priority=agent.priority, tags=(*agent.tags, "cost:free"))
+        for agent in _stream_failover_agents()
+    ]
+    orchestrator = TaskOrchestrator(free_agents, client=client)
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token="route-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "continue the session"}],
+                "mode": "route",
+                "stream": True,
+            }).encode(),
+            headers={"content-type": "application/json", "authorization": "Bearer route-token"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.headers["x-request-id"]
+            body = response.read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    frames = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: {")]
+    route = frames[-1]["orchestration"]["route"]
+    assert [entry["outcome"] for entry in route["attempted"]] == ["retryable_transport", "served"]
+    assert route["attempted"][-1]["agent_id"] == "fallback_worker"
+    assert route["terminal_reason"] == "served"
+    assert "private provider response" not in body
+
+
+def test_stream_exhaustion_retains_typed_attempts_without_provider_prose() -> None:
+    """A failed streamed route carries the attempted order in its error detail."""
+    class AlwaysUnavailable:
+        def stream_chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+            del messages, kwargs
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="service_unavailable",
+                message="private provider response",
+                client_status=503,
+                provider_status=503,
+                retryable=True,
+                transport="stream",
+            )
+            yield ""  # pragma: no cover - keep the test double a generator
+
+        def take_usage(self) -> None:
+            return None
+
+    orchestrator = TaskOrchestrator(
+        _stream_failover_agents(), client=AlwaysUnavailable()
+    )
+    with pytest.raises(ProviderUpstreamError) as caught:
+        list(orchestrator.stream_route([{"role": "user", "content": "continue"}]))
+    route = caught.value.detail["route"]
+    assert route["terminal_reason"] == "eligible_set_exhausted"
+    assert [row["agent_id"] for row in route["attempted"]] == [
+        "primary_worker", "fallback_worker",
+    ]
+    assert all(row["outcome"] == "retryable_transport" for row in route["attempted"])
+    assert "private provider response" not in json.dumps(caught.value.detail)
 
 
 def test_stream_route_records_typed_deadline_exceeded_attempt() -> None:

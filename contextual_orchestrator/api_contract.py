@@ -8,7 +8,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -178,7 +178,8 @@ OPENAPI_SPEC = {
                     "Route evidence for one completion: every eligible agent, "
                     "every attempt made (including the served one), and why the "
                     "route terminated. Stable across the structured-synthesis "
-                    "and single-worker streaming fallback paths."
+                    "and single-worker streaming fallback paths. A successful "
+                    "stream places this object in the final completion chunk."
                 ),
                 "required": ["eligible_agent_ids", "attempted"],
                 "properties": {

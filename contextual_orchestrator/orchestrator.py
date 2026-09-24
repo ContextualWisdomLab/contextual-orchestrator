@@ -7738,6 +7738,7 @@ class TaskOrchestrator:
         usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
         shared_context_budget_callback: Callable[[dict[str, Any] | None], None] | None = None,
         output_budget_callback: Callable[[dict[str, Any] | None], None] | None = None,
+        route_evidence_callback: Callable[[dict[str, Any]], None] | None = None,
     ):
         """Stream Fugu-route content deltas, then persist the run.
 
@@ -7784,6 +7785,15 @@ class TaskOrchestrator:
         agent = primary
         parts: list[str] = []
         failed_trace_steps: list[dict[str, Any]] = []
+        route_attempts: list[dict[str, Any]] = []
+
+        def route_evidence(terminal_reason: str) -> dict[str, Any]:
+            return {
+                "eligible_agent_ids": [candidate.id for candidate in candidates],
+                "attempted": list(route_attempts),
+                "terminal_reason": terminal_reason,
+            }
+
         started_at = time.perf_counter()
         for agent in candidates:
             parts = []
@@ -7815,11 +7825,15 @@ class TaskOrchestrator:
                 )
                 if not isinstance(upstream, ProviderUpstreamError):
                     raise
+                route_attempts.append(_typed_attempt_entry(
+                    agent.id, agent.model, upstream, request_too_large=request_too_large
+                ))
                 last_error = upstream
                 decision = classify_provider_transport_failure(upstream.retryable)
                 if decision.circuit_failure:
                     self._record_failure(agent.id)
                 if decision.action is ToolFallbackAction.FAIL_CLOSED:
+                    upstream.extra_detail["route"] = route_evidence("fail_closed")
                     raise upstream from None
                 if not request_too_large:
                     failed_usage = (
@@ -7860,6 +7874,8 @@ class TaskOrchestrator:
             break
         else:
             if last_error is not None:
+                if isinstance(last_error, ProviderUpstreamError):
+                    last_error.extra_detail["route"] = route_evidence("eligible_set_exhausted")
                 raise last_error
             raise RuntimeError("stream route has no eligible worker")
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
@@ -7887,6 +7903,9 @@ class TaskOrchestrator:
         )
         if output_budget_callback is not None:
             output_budget_callback(output_budget)
+        if route_evidence_callback is not None:
+            route_attempts.append({"agent_id": agent.id, "model": agent.model, "outcome": "served"})
+            route_evidence_callback(route_evidence("served"))
         if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         self._record_success(agent.id)

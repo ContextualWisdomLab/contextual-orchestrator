@@ -9041,6 +9041,7 @@ def build_server(
             stream_usage: dict[str, Any] | None = None
             stream_shared_context_budget: dict[str, Any] | None = None
             stream_output_budget: dict[str, Any] | None = None
+            stream_route_evidence: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
                 nonlocal stream_usage
@@ -9055,6 +9056,10 @@ def build_server(
             def capture_output_budget(output_budget: dict[str, Any] | None) -> None:
                 nonlocal stream_output_budget
                 stream_output_budget = output_budget
+
+            def capture_route_evidence(route: dict[str, Any]) -> None:
+                nonlocal stream_route_evidence
+                stream_route_evidence = route
 
             def frame(
                 delta: dict[str, Any],
@@ -9130,6 +9135,8 @@ def build_server(
                     )
                     if "output_budget_callback" in stream_route_params:
                         stream_kwargs["output_budget_callback"] = capture_output_budget
+                    if "route_evidence_callback" in stream_route_params:
+                        stream_kwargs["route_evidence_callback"] = capture_route_evidence
                     if include_usage:
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
@@ -9167,6 +9174,11 @@ def build_server(
                         if isinstance(stream_output_budget, dict)
                         else None
                     )
+                    if stream_route_evidence is not None:
+                        final_orchestration = {
+                            **(final_orchestration or {}),
+                            "route": stream_route_evidence,
+                        }
                     if not self._write_sse(
                         frame(
                             {},
