@@ -342,16 +342,17 @@ def test_tool_call_probe_caps_single_call_rejection_body_read() -> None:
 def test_tool_call_probe_still_maps_in_budget_single_call_rejection_to_false() -> None:
     """The new read bound must not swallow a normal explicit rejection body."""
     register_credential("OPENROUTER_API_KEY", "sk-router")
+    error_body = io.BytesIO(
+        json.dumps(
+            {"error": {"message": "this model only supports a single tool call"}}
+        ).encode()
+    )
     error = urllib.error.HTTPError(
         "https://openrouter.example/v1/chat/completions",
         400,
         "bad request",
         None,
-        io.BytesIO(
-            json.dumps(
-                {"error": {"message": "this model only supports a single tool call"}}
-            ).encode()
-        ),
+        error_body,
     )
     with (
         patch(
@@ -364,6 +365,32 @@ def test_tool_call_probe_still_maps_in_budget_single_call_rejection_to_false() -
         ),
     ):
         assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is False
+    assert error_body.closed
+
+
+def test_tool_call_probe_closes_unhandled_http_error_response() -> None:
+    """A non-400 diagnostic still belongs to this completed probe."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    error_body = io.BytesIO(b"upstream unavailable")
+    error = urllib.error.HTTPError(
+        "https://openrouter.example/v1/chat/completions",
+        503,
+        "unavailable",
+        None,
+        error_body,
+    )
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            side_effect=error,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is None
+    assert error_body.closed
 
 
 def test_malformed_json_maps_to_invalid_response_code() -> None:
