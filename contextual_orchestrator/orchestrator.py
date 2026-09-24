@@ -11145,6 +11145,17 @@ class TaskOrchestrator:
                         # 400 that happens to mention "invalid arguments").
                         decision = classify_provider_transport_failure(exc.retryable)
                     elif isinstance(exc, ProviderResponseError):
+                        if review_no_replay and "review" in agent.tags:
+                            self._record_failure(agent.id)
+                            raise ProviderUpstreamError(
+                                agent_id=agent.id,
+                                model=agent.model,
+                                error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                                message="the provider request outcome is unknown; automatic replay is unsafe",
+                                client_status=502,
+                                retryable=False,
+                                transport="chat",
+                            ) from None
                         if allowed_agent_ids is None:
                             raise
                         bounded_provider_response_failures += 1
