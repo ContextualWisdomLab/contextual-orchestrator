@@ -63,8 +63,12 @@ class _FakeConnection:
 
     def __init__(self, response: _RecordingErrorResponse) -> None:
         self._response = response
+        self.sock = None
         self.closed = False
         _FakeConnection.last = self
+
+    def connect(self) -> None:
+        pass
 
     def request(self, *args: object, **kwargs: object) -> None:
         pass
