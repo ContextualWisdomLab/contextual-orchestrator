@@ -72,6 +72,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Release publication now builds the installable Python wheel at the exact
+  source commit and requires its SHA-256 manifest and signed release asset
+  verification alongside the existing SBOM. A resumed Draft must preserve
+  matching asset bytes; an incomplete published release fails closed.
 - A canonical, immutable release mechanism: `.github/workflows/release.yml`
   (`workflow_dispatch` only, explicit `version` input, never triggered by
   push/schedule/merge), split into a read-only, credential-less `verify` job
