@@ -655,6 +655,171 @@ def test_review_free_structured_synthesis_timeout_has_unknown_outcome() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+def test_review_free_structured_request_requires_format_evidence_before_conduct() -> None:
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_agent", "primary-model", tags=("cost:free", "review"))],
+        client=client,
+    )
+    with patch.object(orchestrator, "conduct") as conduct:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.proxy_completion({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "response_format": {"type": "json_object"},
+            }, single_agent=False)
+
+    assert caught.value.client_status == 503
+    assert caught.value.detail["capability"] == "response_format"
+    conduct.assert_not_called()
+    assert client.calls == []
+
+
+def test_review_free_http_structured_request_rejects_unproven_pool() -> None:
+    import threading
+    import urllib.request
+    from contextual_orchestrator.server import SecurityConfig, build_server
+
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_agent", "primary-model", tags=("cost:free", "review"))],
+        client=client,
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token="local_test_only"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "response_format": {"type": "json_object"},
+            }).encode(),
+            headers={"Authorization": "Bearer local_test_only", "Content-Type": "application/json"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        with caught.value as response:
+            payload = json.load(response)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert caught.value.code == 503
+    assert payload["error"]["code"] == "request_capability_unavailable"
+    assert payload["error"]["detail"]["capability"] == "response_format"
+    assert client.calls == []
+
+
+def test_review_free_direct_passthrough_rejects_unproven_format() -> None:
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_agent", "primary-model", tags=("cost:free", "review"))],
+        client=client,
+    )
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "review"}],
+            "response_format": {"type": "json_schema", "json_schema": {
+                "name": "review", "schema": {"type": "object"},
+            }},
+        })
+
+    assert caught.value.client_status == 503
+    assert caught.value.detail["capability"] == "response_format"
+    assert client.calls == []
+
+
+def test_review_free_responses_passthrough_rejects_unproven_format() -> None:
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_agent", "primary-model", tags=("cost:free", "review"))],
+        client=client,
+    )
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "input": "review",
+            "text": {"format": {
+                "type": "json_schema", "name": "review",
+                "schema": {"type": "object"},
+            }},
+        }, endpoint="responses")
+
+    assert caught.value.client_status == 503
+    assert caught.value.detail["capability"] == "response_format"
+    assert client.calls == []
+
+
+def test_review_free_structured_synthesis_skips_unproven_preferred() -> None:
+    client = SequencedProxyClient({
+        "primary_agent": {"model": "primary-model"},
+        "fallback_agent": {
+            "model": "fallback-model",
+            "choices": [{"message": {"content": "{}"}}],
+        },
+    })
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("primary_agent", "primary-model", priority=10,
+                       tags=("cost:free", "review")),
+            ModelAgent("fallback_agent", "fallback-model", priority=1,
+                       tags=("cost:free", "review", "response_format")),
+        ], client=client,
+    )
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
+        result = orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "review"}],
+            "response_format": {"type": "json_object"},
+        }, single_agent=False)
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+
+
+@pytest.mark.parametrize("explicit_refusal", [True, False])
+def test_review_free_structured_404_requires_explicit_model_refusal(
+    explicit_refusal: bool,
+) -> None:
+    client = SequencedProxyClient({
+        "primary_agent": _http_error(
+            404, {"error": {"code": "model_not_found"}} if explicit_refusal else None
+        ),
+        "fallback_agent": {
+            "model": "fallback-model",
+            "choices": [{"message": {"content": "{}"}}],
+        },
+    })
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("primary_agent", "primary-model", priority=10,
+                       tags=("cost:free", "review", "response_format")),
+            ModelAgent("fallback_agent", "fallback-model", priority=1,
+                       tags=("cost:free", "review", "response_format")),
+        ], client=client,
+    )
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
+        request = {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "review"}],
+            "response_format": {"type": "json_object"},
+        }
+        if explicit_refusal:
+            assert orchestrator.proxy_completion(request, single_agent=False)["model"] == "fallback-model"
+            assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+        else:
+            with pytest.raises(ProviderUpstreamError) as caught:
+                orchestrator.proxy_completion(request, single_agent=False)
+            assert caught.value.provider_status == 404
+            assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 def test_review_free_conduct_requires_tool_evidence_before_any_send() -> None:
     """Conduct must receive the same request-shaped pool as synthesis."""
     client = SequencedProxyClient({"unknown_agent": {"model": "unknown-model"}})

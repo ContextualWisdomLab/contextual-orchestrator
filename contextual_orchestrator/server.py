@@ -9141,6 +9141,31 @@ def build_server(
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
+                    get_run = getattr(orchestrator, "get_workflow_run", None)
+                    if callable(get_run):
+                        try:
+                            completed_run = get_run(run_id)
+                        except KeyError:
+                            completed_run = None
+                        if isinstance(completed_run, dict):
+                            try:
+                                coordinator.record_stream_usage(
+                                    result=completed_run,
+                                    attribution=None,
+                                    model_name=model_name,
+                                )
+                            except Exception:  # noqa: BLE001 - headers were already sent
+                                self._decision_failure_reason = "usage_recording_failed"
+                                failure = _error_payload(
+                                    "usage_recording_failed",
+                                    "Usage evidence could not be recorded for this response.",
+                                )
+                                self._write_sse(
+                                    f"data: {json.dumps(failure, ensure_ascii=False)}\n\n"
+                                )
+                                self._write_sse(frame({}, finish="error"))
+                                self._write_sse("data: [DONE]\n\n")
+                                return
                     # The served request's evidence is captured above, inside
                     # stream_route, before its post-stream real-time judge
                     # call re-enters ModelClient and can overwrite the
@@ -9201,6 +9226,20 @@ def build_server(
                         return
                 except ProviderUpstreamError as exc:
                     self._decision_failure_reason = "selection_failed"
+                    failed_run_id = exc.extra_detail.get("workflow_run_id")
+                    if isinstance(failed_run_id, str) and exc.transport == "stream":
+                        try:
+                            usage_evidence = coordinator.record_stream_usage(
+                                result=orchestrator.get_workflow_run(failed_run_id),
+                                attribution=None,
+                                model_name=model_name,
+                            )
+                            exc.extra_detail["usage_record_ids"] = usage_evidence["usage_record_ids"]
+                            exc.extra_detail["usage_measurement_status"] = (
+                                usage_evidence["cost"]["measurement_status"]
+                            )
+                        except Exception:  # noqa: BLE001 - preserve the primary provider failure
+                            pass
                     payload = _error_payload(
                         exc.error_code,
                         _provider_upstream_message(exc),

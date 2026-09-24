@@ -6071,6 +6071,8 @@ class TaskOrchestrator:
             response_messages = _responses_to_chat_payload(body).get("messages", [])
             prompt_context = self._prompt_interaction(response_messages)
         requested_model = body.get("model")
+        request_messages = messages if isinstance(messages, list) else response_messages
+        required_tags = self._review_image_required_tags(request_messages, requested_model)
         # Selector nature for the rate-limit-storm admission decision below
         # (see _await_rate_limit_recovery): a virtual/gateway-selected model
         # name may wait out a storm even with a single eligible candidate;
@@ -6117,6 +6119,7 @@ class TaskOrchestrator:
                 text,
                 "worker",
                 free_only=requested_model == self.FREE_MODEL,
+                required_tags=required_tags,
                 prompt_context=prompt_context,
                 effort_profile=effort_profile,
             )
@@ -6231,12 +6234,17 @@ class TaskOrchestrator:
             )
             return result
 
+        admission_body = (
+            _responses_to_chat_payload(body)
+            if normalized_endpoint == "responses" else body
+        )
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
             {
                 candidate.id
                 for candidate in self.agents
-                if self._is_general_free_agent(candidate, chat_body=body)
+                if self._is_general_free_agent(candidate, chat_body=admission_body)
                 and self._zdr_agent_allowed(candidate)
+                and all(tag in candidate.tags for tag in required_tags)
             }
             if requested_model == self.FREE_MODEL
             else (
@@ -6255,15 +6263,18 @@ class TaskOrchestrator:
                 if allowed_agent_ids is None
                 else allowed_agent_ids & replica_agent_ids
             )
-        if requested_model == self.FREE_MODEL and body.get("tools") and not allowed_agent_ids:
+        if requested_model == self.FREE_MODEL and (
+            admission_body.get("tools") or admission_body.get("response_format")
+        ) and not allowed_agent_ids:
+            capability = "tool_call" if admission_body.get("tools") else "response_format"
             raise ProviderUpstreamError(
                 agent_id=self.FREE_MODEL,
                 model=self.FREE_MODEL,
                 error_code="request_capability_unavailable",
-                message="no free review model has evidence for this request's tool calls",
+                message="no free review model has evidence for the requested capability",
                 client_status=503,
                 transport="passthrough",
-                extra_detail={"capability": "tool_call"},
+                extra_detail={"capability": capability},
             )
         # Cross-provider failover lives ONLY on this plain virtual passthrough
         # path (and the virtual tools path reached with single_agent=True).
@@ -6279,6 +6290,7 @@ class TaskOrchestrator:
             agent,
             text,
             "worker",
+            required_tags=required_tags,
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
             effort_profile=effort_profile,
@@ -6623,6 +6635,7 @@ class TaskOrchestrator:
                 "response_format.json_schema is missing a schema"
             )
         task = self._latest_user_text(messages)
+        self._review_image_required_tags(messages, body.get("model"))
         # Vision is a hard entitling capability the request payload cannot
         # grant, so it stays a required tag. ``response_format`` is a gateway
         # contract that any general chat synthesizer can honor because the
@@ -6742,16 +6755,17 @@ class TaskOrchestrator:
             if free_only
             else None
         )
-        if free_only and chat_body.get("tools") and not free_request_ids:
+        if free_only and (chat_body.get("tools") or response_format_requested) and not free_request_ids:
+            capability = "tool_call" if chat_body.get("tools") else "response_format"
             raise ProviderUpstreamError(
                 agent_id="orchestrator/free",
                 model=self.FREE_MODEL,
                 error_code="request_capability_unavailable",
-                message="no eligible free provider supports the requested tools",
+                message="no eligible free provider supports the requested capability",
                 client_status=503,
                 retryable=False,
                 transport="structured_synthesis",
-                extra_detail={"capability": "tool_call"},
+                extra_detail={"capability": capability},
             )
         workflow = self.conduct(
             messages,
@@ -7201,6 +7215,14 @@ class TaskOrchestrator:
                                 virtual_model
                                 and classified.error_code == "model_not_found"
                             ):
+                                if (
+                                    free_only
+                                    and "review" in candidate.tags
+                                    and classified.extra_detail.get("model_refusal_proven") is not True
+                                ):
+                                    raise attach_route(
+                                        classified, terminal_reason="fail_closed"
+                                    ) from None
                                 last_model_not_found = classified
                                 request_exclusions.add(candidate.id)
                                 continue
@@ -7716,6 +7738,7 @@ class TaskOrchestrator:
             raise ValueError("model_name must be a non-empty string")
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
+        self._review_image_required_tags(messages, model_name)
         request_settings = getattr(self.client, "request_settings_snapshot", None)
         scoped_request = request_settings() if callable(request_settings) else None
         if (
@@ -7881,6 +7904,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
+        required_tags = self._review_image_required_tags(messages, model_name)
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
         if effort_profile is not None:
@@ -7889,7 +7913,8 @@ class TaskOrchestrator:
             stream_kwargs["include_usage"] = True
         pinned = self._requested_agent(model_name)
         primary = pinned or self._select_agent(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
+            text, "worker", free_only=free_only, required_tags=required_tags,
+            prompt_context=prompt_context
         )
         if pinned is not None:
             candidates = [primary]
@@ -7903,6 +7928,7 @@ class TaskOrchestrator:
                 primary,
                 text,
                 "worker",
+                required_tags=required_tags,
                 allowed_agent_ids=free_ids if free_only else None,
                 prompt_context=prompt_context,
                 effort_profile=effort_profile,
@@ -7910,6 +7936,21 @@ class TaskOrchestrator:
             candidates = _eligible_role_effort_candidates(candidates, effort_profile)
         if not candidates:
             candidates = [primary]
+        if pinned is None:
+            eligible: list[ModelAgent] = []
+            for candidate in candidates:
+                # Exact token counts are model-specific; check each candidate
+                # against its own tokenizer before excluding it.
+                prompt_bound, _ = self._prompt_token_lower_bound(text, candidate.model)
+                kept, _ = _context_window_exclusions([candidate], prompt_bound)
+                eligible.extend(kept)
+            if not eligible:
+                raise ProviderRequestTooLargeError(
+                    "every eligible candidate's known context window is smaller "
+                    "than the prompt's lower-bound token count"
+                )
+            candidates = eligible
+            primary = candidates[0]
 
         last_error: BaseException | None = None
         agent = primary
@@ -7946,12 +7987,21 @@ class TaskOrchestrator:
                 )
                 if not isinstance(upstream, ProviderUpstreamError):
                     raise
+                if isinstance(exc, urllib.error.HTTPError):
+                    try:
+                        exc.close()
+                    except Exception:
+                        pass  # Cleanup must not replace the classified failure.
                 last_error = upstream
+                if upstream.provider_status in (429, 503):
+                    self._record_rate_limit(
+                        agent.id,
+                        upstream.extra_detail.get("retry_after_seconds"),
+                        status=upstream.provider_status,
+                    )
                 decision = classify_provider_transport_failure(upstream.retryable)
-                if decision.circuit_failure:
+                if decision.circuit_failure and upstream.provider_status != 429:
                     self._record_failure(agent.id)
-                if decision.action is ToolFallbackAction.FAIL_CLOSED:
-                    raise upstream from None
                 if not request_too_large:
                     failed_usage = (
                         self.client.take_usage()
@@ -7986,6 +8036,76 @@ class TaskOrchestrator:
                     if isinstance(failed_usage, dict):
                         failed_step["usage"] = failed_usage
                     failed_trace_steps.append(failed_step)
+                review_candidate = free_only and "review" in agent.tags
+                explicit_refusal = (
+                    upstream.error_code == "model_not_found"
+                    and upstream.extra_detail.get("model_refusal_proven") is True
+                )
+                if review_candidate and not (
+                    request_too_large
+                    or isinstance(exc, _LocalProviderAdmissionTimeout)
+                    or explicit_refusal
+                ):
+                    ambiguous = (
+                        _is_ambiguous_passthrough_transport_failure(exc)
+                        or upstream.error_code in {
+                            "provider_connection_error", "provider_timeout"
+                        }
+                    )
+                    terminal = ProviderUpstreamError(
+                        agent_id=agent.id,
+                        model=agent.model,
+                        error_code=(
+                            PROVIDER_OUTCOME_UNKNOWN_CODE if ambiguous else upstream.error_code
+                        ),
+                        message=(
+                            "the provider request outcome is unknown; automatic replay is unsafe"
+                            if ambiguous else str(upstream)
+                        ),
+                        client_status=502 if ambiguous else upstream.client_status,
+                        provider_status=upstream.provider_status,
+                        retryable=False,
+                        transport="stream",
+                        extra_detail=dict(upstream.extra_detail),
+                    )
+                    run_id = workflow_run_id or f"run_{uuid.uuid4().hex}"
+                    record = self._with_effort_snapshot({
+                        "workflow_run_id": run_id,
+                        "created_at": int(time.time()),
+                        "mode": "route",
+                        "policy_mode": "route",
+                        "prompt_text": text,
+                        "answer": "",
+                        "trace": failed_trace_steps,
+                        "policy_snapshot": self.policy.as_dict(),
+                        "failure": {"code": terminal.error_code},
+                    })
+                    if owner_id is not None:
+                        record["owner_id"] = owner_id
+                    self._replace_workflow_run(record)
+                    if self._store is not None:
+                        self._store.save("workflow_run", run_id, self.get_workflow_run(run_id))
+                    self._append_audit_event("workflow_run_failed", {
+                        "workflow_run_id": run_id, "mode": "route",
+                        "failure_code": terminal.error_code,
+                    })
+                    terminal.extra_detail.update({
+                        "workflow_run_id": run_id,
+                        "terminal_reason": "fail_closed",
+                        "route": {
+                            "eligible_agent_ids": [candidate.id for candidate in candidates],
+                            "attempted": [
+                                _typed_attempt_entry(
+                                    agent.id, agent.model, upstream,
+                                    request_too_large=False,
+                                )
+                            ],
+                            "terminal_reason": "fail_closed",
+                        },
+                    })
+                    raise terminal from None
+                if decision.action is ToolFallbackAction.FAIL_CLOSED:
+                    raise upstream from None
                 continue
             last_error = None
             break
@@ -9252,6 +9372,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
+        required_tags = self._review_image_required_tags(messages, model_name)
         # Selector nature threaded to _invoke_with_rate_limit_recovery: a
         # virtual/gateway-selected model name may wait out a rate-limit
         # storm even with a single eligible candidate; an explicit concrete
@@ -9265,7 +9386,8 @@ class TaskOrchestrator:
         ranked_pool: list[ModelAgent] = (
             [requested] if requested is not None else []
         ) or self._ranked_agents(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
+            text, "worker", free_only=free_only, required_tags=required_tags,
+            prompt_context=prompt_context
         )
         # Context-window candidate filtering only applies to virtual/role-based
         # selection: an explicitly requested concrete model (``requested`` is
@@ -9521,6 +9643,7 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
+        self._review_image_required_tags(messages, model_name)
         # Selector nature threaded to _invoke_with_rate_limit_recovery for
         # every step: a virtual/gateway-selected model name may wait out a
         # rate-limit storm even with a single eligible candidate; an
@@ -10329,7 +10452,52 @@ class TaskOrchestrator:
                 or (not parallel and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags)
             ):
                 return False
+        if (
+            chat_body is not None
+            and isinstance(chat_body.get("response_format"), Mapping)
+            and chat_body["response_format"].get("type") in {"json_object", "json_schema"}
+            and "review" in agent.tags
+            and "response_format" not in agent.tags
+            and "capability:response_format" not in agent.tags
+        ):
+            return False
         return True
+
+    def _review_image_required_tags(
+        self, messages: list[ChatMessage], model_name: str | None
+    ) -> tuple[str, ...]:
+        """Require positive image evidence before a free review request can send."""
+        if not self._source_image_parts(messages):
+            return ()
+        required_tags = ("vision",)
+        if model_name != self.FREE_MODEL or not any(
+            "review" in agent.tags for agent in self.agents
+        ):
+            return required_tags
+        if any(
+            not agent.disabled
+            and "vision" in agent.tags
+            and _agent_matches_request_endpoint(agent)
+            and self._zdr_agent_allowed(agent)
+            and self._is_general_free_agent(agent)
+            for agent in self.agents
+        ):
+            return required_tags
+        raise ProviderUpstreamError(
+            agent_id=self.FREE_MODEL,
+            model=self.FREE_MODEL,
+            error_code="request_capability_unavailable",
+            message="no free review model has evidence for image input",
+            client_status=503,
+            retryable=False,
+            transport="orchestration",
+            extra_detail={
+                "capability": "input:image",
+                "contract_version": PASSTHROUGH_ROUTE_RECEIPT_VERSION,
+                "admitted_agent_ids": [],
+                "terminal_reason": "request_capability_unavailable",
+            },
+        )
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 

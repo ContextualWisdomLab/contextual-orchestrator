@@ -113,6 +113,24 @@ execution receipt. Calibrated allocation, a released request-scoped contract,
 immutable owner release, and the consumer's deletion of its own preflight
 remain open acceptance conditions for issue #1106.
 
+For a review-pool request asking for JSON object or JSON schema output, the
+serving candidate must also carry positive catalog evidence that its endpoint
+accepts `response_format`. An empty eligible set returns typed HTTP 503 before
+conduct or provider send; an unproven higher-priority candidate cannot become
+the final synthesizer. A catalog parameter declaration does not prove that the
+model will satisfy a particular schema. The gateway still validates returned
+content, and the caller must treat a failed or incomplete review as failure.
+The same admission rule applies to the Responses API's `text.format` request
+when it is converted to the chat-shaped provider contract.
+
+An image-bearing `orchestrator/free` review request also needs positive
+`vision` evidence on a currently eligible free candidate. Route, stream,
+passthrough, and conducted synthesis use that condition before provider send;
+an empty eligible set returns `503 request_capability_unavailable` with
+`capability=input:image`. A text-only candidate cannot receive the image even
+when its static priority is higher. This is catalog capability evidence, not a
+claim that the image was interpreted correctly or that the review passed.
+
 ### Completion replay boundary
 
 For a review-tagged `orchestrator/free` candidate, a read timeout or connection
@@ -134,6 +152,16 @@ without an explicit model refusal is not proof of safe replay. No provider
 idempotency agreement has been established here. The HTTP route and conduct
 paths stop after a review candidate's 429 without a second send or a storm
 wait for that request.
+The structured-synthesis path uses the same explicit-refusal boundary: a bare
+404 is terminal, while an HTTP error body naming `model_not_found` permits
+advancing to another already eligible candidate.
+The live chat stream applies it before any content delta as well. A review
+candidate's 429/503 or uncertain transport failure stops that request, even
+when the gateway has not yet emitted a content byte. The failed attempt is
+retained as a workflow trace step, and the chat-stream usage ledger records an
+`unavailable` measurement when the provider supplied no usage. A direct local
+slot refusal, explicit model refusal, or request-size rejection can still
+advance; a streamed response that already emitted content never replays.
 This matches the non-idempotent retry boundary in
 [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
 

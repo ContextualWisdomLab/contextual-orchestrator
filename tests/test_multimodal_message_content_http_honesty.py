@@ -42,15 +42,42 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def _server():
+def _server(orchestrator: TaskOrchestrator | None = None):
     server = build_server(
-        build(),
+        orchestrator or build(),
         port=0,
         security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN, rate_limit_requests=10_000),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]
+
+
+def test_http_free_review_image_requires_vision_evidence() -> None:
+    """HTTP cannot route an image to a text-only free review candidate."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent(
+            "text_review", "text-review", tags=("review", "cost:free", "chat"),
+        )
+    ])
+    server, thread, port = _server(orchestrator)
+    try:
+        status, body = _post(port, {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "Review this image"},
+                {"type": "image_url", "image_url": {
+                    "url": "data:image/png;base64,iVBORw0KGgo=",
+                }},
+            ]}],
+        })
+        assert status == 503, body
+        assert body["error"]["code"] == "request_capability_unavailable"
+        assert body["error"]["detail"]["capability"] == "input:image"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_text_and_image_url_parts() -> None:
