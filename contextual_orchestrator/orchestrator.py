@@ -6255,15 +6255,18 @@ class TaskOrchestrator:
                 if allowed_agent_ids is None
                 else allowed_agent_ids & replica_agent_ids
             )
-        if requested_model == self.FREE_MODEL and body.get("tools") and not allowed_agent_ids:
+        if requested_model == self.FREE_MODEL and (
+            body.get("tools") or body.get("response_format")
+        ) and not allowed_agent_ids:
+            capability = "tool_call" if body.get("tools") else "response_format"
             raise ProviderUpstreamError(
                 agent_id=self.FREE_MODEL,
                 model=self.FREE_MODEL,
                 error_code="request_capability_unavailable",
-                message="no free review model has evidence for this request's tool calls",
+                message="no free review model has evidence for the requested capability",
                 client_status=503,
                 transport="passthrough",
-                extra_detail={"capability": "tool_call"},
+                extra_detail={"capability": capability},
             )
         # Cross-provider failover lives ONLY on this plain virtual passthrough
         # path (and the virtual tools path reached with single_agent=True).
@@ -6742,16 +6745,17 @@ class TaskOrchestrator:
             if free_only
             else None
         )
-        if free_only and chat_body.get("tools") and not free_request_ids:
+        if free_only and (chat_body.get("tools") or response_format_requested) and not free_request_ids:
+            capability = "tool_call" if chat_body.get("tools") else "response_format"
             raise ProviderUpstreamError(
                 agent_id="orchestrator/free",
                 model=self.FREE_MODEL,
                 error_code="request_capability_unavailable",
-                message="no eligible free provider supports the requested tools",
+                message="no eligible free provider supports the requested capability",
                 client_status=503,
                 retryable=False,
                 transport="structured_synthesis",
-                extra_detail={"capability": "tool_call"},
+                extra_detail={"capability": capability},
             )
         workflow = self.conduct(
             messages,
@@ -7201,6 +7205,14 @@ class TaskOrchestrator:
                                 virtual_model
                                 and classified.error_code == "model_not_found"
                             ):
+                                if (
+                                    free_only
+                                    and "review" in candidate.tags
+                                    and classified.extra_detail.get("model_refusal_proven") is not True
+                                ):
+                                    raise attach_route(
+                                        classified, terminal_reason="fail_closed"
+                                    ) from None
                                 last_model_not_found = classified
                                 request_exclusions.add(candidate.id)
                                 continue
@@ -10329,6 +10341,15 @@ class TaskOrchestrator:
                 or (not parallel and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags)
             ):
                 return False
+        if (
+            chat_body is not None
+            and isinstance(chat_body.get("response_format"), Mapping)
+            and chat_body["response_format"].get("type") in {"json_object", "json_schema"}
+            and "review" in agent.tags
+            and "response_format" not in agent.tags
+            and "capability:response_format" not in agent.tags
+        ):
+            return False
         return True
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---

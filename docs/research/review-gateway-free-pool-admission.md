@@ -113,6 +113,14 @@ execution receipt. Calibrated allocation, a released request-scoped contract,
 immutable owner release, and the consumer's deletion of its own preflight
 remain open acceptance conditions for issue #1106.
 
+For a review-pool request asking for JSON object or JSON schema output, the
+serving candidate must also carry positive catalog evidence that its endpoint
+accepts `response_format`. An empty eligible set returns typed HTTP 503 before
+conduct or provider send; an unproven higher-priority candidate cannot become
+the final synthesizer. A catalog parameter declaration does not prove that the
+model will satisfy a particular schema. The gateway still validates returned
+content, and the caller must treat a failed or incomplete review as failure.
+
 ### Completion replay boundary
 
 For a review-tagged `orchestrator/free` candidate, a read timeout or connection
@@ -134,6 +142,9 @@ without an explicit model refusal is not proof of safe replay. No provider
 idempotency agreement has been established here. The HTTP route and conduct
 paths stop after a review candidate's 429 without a second send or a storm
 wait for that request.
+The structured-synthesis path uses the same explicit-refusal boundary: a bare
+404 is terminal, while an HTTP error body naming `model_not_found` permits
+advancing to another already eligible candidate.
 This matches the non-idempotent retry boundary in
 [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
 
