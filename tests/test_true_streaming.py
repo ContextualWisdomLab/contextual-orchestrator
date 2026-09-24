@@ -151,6 +151,68 @@ def test_stream_send_parses_real_provider_sse() -> None:
     assert "".join(deltas) == "Hello streamed world"
 
 
+def test_stream_send_rejects_eof_without_provider_end() -> None:
+    """A truncated provider stream cannot become a successful served receipt."""
+    with _FakeSSEProvider([_delta("partial")]) as provider:
+        client = ModelClient()
+        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url)
+        with pytest.raises(ProviderUpstreamError) as caught:
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.retryable is False
+    assert caught.value.transport == "stream"
+
+
+def test_stream_send_accepts_explicit_finish_reason_without_done() -> None:
+    """A provider finish signal remains sufficient when the socket then closes."""
+    terminal = 'data: {"choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}]}\n\n'
+    with _FakeSSEProvider([terminal]) as provider:
+        client = ModelClient()
+        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url)
+        assert list(client._stream_send(agent, {"model": "gpt-x", "stream": True})) == ["complete"]
+
+
+def test_http_stream_without_provider_end_returns_failure_receipt() -> None:
+    """Partial provider output ends in a typed error, never a served receipt."""
+    with _CapturingSSEProvider([[_delta("partial")]]) as provider:
+        orchestrator = TaskOrchestrator([
+            ModelAgent(
+                "worker_agent", "gpt-x",
+                base_url=provider.base_url.replace("http://", "local://"),
+                tags=("reasoning", "writing"),
+            )
+        ])
+        server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token="stream-token"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                data=json.dumps({
+                    "model": "gpt-x",
+                    "messages": [{"role": "user", "content": "continue"}],
+                    "mode": "route",
+                    "stream": True,
+                }).encode(),
+                headers={"content-type": "application/json", "authorization": "Bearer stream-token"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.headers["x-request-id"]
+                body = response.read().decode()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    frames = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: {")]
+    assert any(frame.get("choices", [{}])[0].get("delta", {}).get("content") == "partial" for frame in frames if frame.get("choices"))
+    assert not any(frame.get("choices", [{}])[0].get("finish_reason") == "stop" for frame in frames if frame.get("choices"))
+    error = next(frame["error"] for frame in frames if "error" in frame)
+    assert error["code"] == "provider_outcome_unknown"
+    assert error["detail"]["route"]["terminal_reason"] == "stream_interrupted"
+
+
 def test_stream_send_rejects_response_body_above_configured_limit() -> None:
     frames = [_delta("x" * ((8 * 1024 * 1024) + 1))]
     with _FakeSSEProvider(frames) as provider:
