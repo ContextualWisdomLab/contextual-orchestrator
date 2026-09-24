@@ -33,6 +33,7 @@ from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import (
     PROVIDER_RATE_LIMITED_CODE,
     ProviderUpstreamError,
+    classify_provider_failure,
     parse_retry_after,
     resolve_retry_after_seconds,
 )
@@ -403,7 +404,9 @@ def test_429_does_not_trip_circuit_breaker_but_503_still_does() -> None:
 # --------------------------------------------------------------------------
 
 
-def _rate_limited_upstream_error(retry_after_seconds: float | None) -> ProviderUpstreamError:
+def _rate_limited_upstream_error(
+    retry_after_seconds: float | None, *, agent_id: str = "unit"
+) -> ProviderUpstreamError:
     """Build the classified 429 ``_invoke`` sees from ``ModelClient.chat``.
 
     ``retry_after_seconds=None`` models a provider that stated no
@@ -413,7 +416,7 @@ def _rate_limited_upstream_error(retry_after_seconds: float | None) -> ProviderU
     """
     extra_detail = {} if retry_after_seconds is None else {"retry_after_seconds": retry_after_seconds}
     return ProviderUpstreamError(
-        agent_id="unit",
+        agent_id=agent_id,
         model="unit-model",
         error_code="rate_limit_exceeded",
         message="rate limited",
@@ -680,7 +683,7 @@ def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:
             tags=(
                 "cost:free",
                 "planning", "reasoning", "research",
-                "verification", "security", "review", "debugging",
+                "verification", "security", "debugging",
                 "writing",
                 "coding", "implementation",
             ),
@@ -728,6 +731,80 @@ def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:
     assert chat_outcomes.calls.count("primary_agent") == 5
     assert chat_outcomes.calls.count("fallback_agent") == 1
     orchestrator.close()
+
+
+@pytest.mark.parametrize("primary_review", [True, False])
+def test_mixed_free_pool_replay_boundary_follows_failed_candidate(primary_review: bool) -> None:
+    """A review send stops; an ordinary free candidate can still fail over."""
+    primary = ModelAgent(
+        "primary_agent", "primary-model", priority=10,
+        tags=("cost:free", "reasoning", "review") if primary_review
+        else ("cost:free", "reasoning"),
+    )
+    fallback = ModelAgent(
+        "fallback_agent", "fallback-model", priority=1,
+        tags=("cost:free", "reasoning") if primary_review
+        else ("cost:free", "reasoning", "review"),
+    )
+    orchestrator = TaskOrchestrator([primary, fallback], tool_retry_attempts=0)
+    outcomes = QueuedChatOutcomes({
+        primary.id: [_rate_limited_upstream_error(1.0, agent_id=primary.id)],
+        fallback.id: ["served"],
+    })
+    orchestrator.client.chat = outcomes
+    call = lambda: orchestrator._invoke_with_rate_limit_recovery(
+        primary, [{"role": "user", "content": "review"}],
+        text="review", role="worker", allowed_agent_ids={primary.id, fallback.id},
+        review_no_replay=True, virtual_selector=True,
+    )
+
+    try:
+        if primary_review:
+            with pytest.raises(ProviderUpstreamError) as caught:
+                call()
+            assert caught.value.detail["terminal_reason"] == "fail_closed"
+            assert outcomes.calls == [primary.id]
+        else:
+            assert call()[0] == "served"
+            assert outcomes.calls == [primary.id, fallback.id]
+    finally:
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("explicit_refusal", [True, False])
+def test_review_worker_bodyless_404_does_not_advance(explicit_refusal: bool) -> None:
+    primary = ModelAgent(
+        "primary_agent", "primary-model", priority=10,
+        tags=("cost:free", "reasoning", "review"),
+    )
+    fallback = ModelAgent(
+        "fallback_agent", "fallback-model", priority=1,
+        tags=("cost:free", "reasoning", "review"),
+    )
+    body = (
+        io.BytesIO(b'{"error":{"code":"model_not_found"}}')
+        if explicit_refusal else None
+    )
+    with urllib.error.HTTPError("https://provider.example", 404, "missing", None, body) as error:
+        failure = classify_provider_failure(error, agent_id=primary.id, model=primary.model)
+    orchestrator = TaskOrchestrator([primary, fallback], tool_retry_attempts=0)
+    outcomes = QueuedChatOutcomes({primary.id: [failure], fallback.id: ["served"]})
+    orchestrator.client.chat = outcomes
+    try:
+        call = lambda: orchestrator._invoke_with_rate_limit_recovery(
+            primary, [{"role": "user", "content": "review"}],
+            text="review", role="worker", allowed_agent_ids={primary.id, fallback.id},
+            review_no_replay=True, excluded_agent_ids=set(), virtual_selector=True,
+        )
+        if explicit_refusal:
+            assert call()[0] == "served"
+            assert outcomes.calls == [primary.id, fallback.id]
+        else:
+            with pytest.raises(ProviderUpstreamError):
+                call()
+            assert outcomes.calls == [primary.id]
+    finally:
+        orchestrator.close()
 
 
 # --------------------------------------------------------------------------

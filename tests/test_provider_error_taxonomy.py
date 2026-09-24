@@ -228,6 +228,16 @@ def test_classification_maps_every_upstream_status_to_openai_surface() -> None:
         assert classified.model == "m"
 
 
+def test_404_requires_explicit_model_refusal_before_authorizing_review_failover() -> None:
+    with _http_error(404) as response_error:
+        bodyless = classify_provider_failure(response_error, agent_id="a", model="m")
+    with _body_http_error(404, {"error": {"code": "model_not_found"}}) as response_error:
+        explicit = classify_provider_failure(response_error, agent_id="a", model="m")
+    assert bodyless.error_code == explicit.error_code == "model_not_found"
+    assert bodyless.extra_detail.get("model_refusal_proven") is None
+    assert explicit.extra_detail["model_refusal_proven"] is True
+
+
 def test_classification_handles_network_tls_and_unknown_causes() -> None:
     """Network, TLS, unmapped-status, and generic failures each classify distinctly."""
     network = classify_provider_failure(urllib.error.URLError("dns"), agent_id="a", model="m")

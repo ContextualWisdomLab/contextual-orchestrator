@@ -328,7 +328,7 @@ def test_free_passthrough_status_does_not_authorize_cross_provider_replay(status
 def test_free_review_explicit_model_rejection_can_advance() -> None:
     client = SequencedProxyClient(
         {
-            "primary_agent": _http_error(404),
+            "primary_agent": _http_error(404, {"error": {"code": "model_not_found"}}),
             "fallback_agent": {
                 "model": "fallback-model",
                 "choices": [],
@@ -357,6 +357,28 @@ def test_free_review_explicit_model_rejection_can_advance() -> None:
         ("fallback_agent", "served"),
     ]
     assert route["attempts"][0]["error_code"] == "model_not_found"
+
+
+def test_free_review_bodyless_404_cannot_authorize_replay() -> None:
+    client = SequencedProxyClient({
+        "primary_agent": _http_error(404),
+        "fallback_agent": {"model": "fallback-model"},
+    })
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free", "review"))
+        for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "review"}],
+        })
+
+    assert caught.value.provider_status == 404
+    assert caught.value.detail["terminal_reason"] == "terminal_provider_failure"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
