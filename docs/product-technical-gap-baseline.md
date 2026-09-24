@@ -45,6 +45,11 @@ now declare the typed 503 error envelope used by that boundary. Live review
 serving stays paused until an owner release supplies and validates the missing
 allocation contract. Catalog admission and diagnostic ranking alone cannot
 authorize selection.
+An explicit member-model request previously bypassed the review allocation
+gate. The owner now rejects it with typed, nonretryable
+`review_model_not_allowed` (400) before provider send; Chat streaming rejects
+it before opening SSE. The RED direct-call test reached the provider path;
+the focused HTTP and direct-call regressions cover the corrected boundary.
 The inspected [fast-mlsirm v0.11.4 release](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
 exposes [personnel selection utility](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/utility.py),
 [item-exposure routing](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/exposure.py),

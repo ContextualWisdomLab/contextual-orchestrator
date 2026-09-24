@@ -303,11 +303,81 @@ def test_review_allocation_failure_is_typed_at_http_boundary(monkeypatch):
             assert payload["error"]["detail"]["retryable"] is False
             response_schema = OPENAPI_SPEC["paths"][path]["post"]["responses"]["503"]["content"]["application/json"]["schema"]
             validate(payload, {**response_schema, "components": OPENAPI_SPEC["components"]})
+        for path, body in (
+            ("/v1/chat/completions", {
+                "model": "router-review",
+                "messages": [{"role": "user", "content": "review"}],
+            }),
+            ("/v1/responses", {"model": "router-review", "input": "review"}),
+            ("/v1/chat/completions", {
+                "model": "router-review",
+                "messages": [{"role": "user", "content": "review"}],
+                "stream": True,
+            }),
+        ):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}{path}",
+                data=json.dumps(body).encode(),
+                headers={"content-type": "application/json", "authorization": "Bearer review-test-token"},
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(request, timeout=5)
+            with caught.value as response:
+                assert response.code == 400
+                payload = json.load(response)
+            assert payload["error"]["code"] == "review_model_not_allowed"
+            assert payload["error"]["detail"]["retryable"] is False
         assert sends == []
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_review_gateway_rejects_explicit_model_before_provider_send(monkeypatch):
+    """A caller cannot bypass the free-pool allocation gate by naming a member."""
+    discovered = [_discovered("openrouter", "router-review", "OPENROUTER_API_KEY")]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret",
+    })
+    sends: list[str] = []
+
+    def forbid_send(*args, **kwargs):
+        del args, kwargs
+        sends.append("sent")
+        raise AssertionError("provider transport must not be reached")
+
+    monkeypatch.setattr(orchestrator.client, "chat", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "proxy_send", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "proxy_send_once", forbid_send)
+    for call in (
+        lambda: orchestrator.complete(
+            [{"role": "user", "content": "review"}],
+            mode="route",
+            model_name="router-review",
+        ),
+        lambda: orchestrator.proxy_completion({
+            "model": "router-review",
+            "messages": [{"role": "user", "content": "review"}],
+        }),
+        lambda: orchestrator.route_once(
+            [{"role": "user", "content": "review"}], model_name="router-review",
+        ),
+        lambda: orchestrator.conduct(
+            [{"role": "user", "content": "review"}], model_name="router-review",
+        ),
+        lambda: list(orchestrator.stream_route(
+            [{"role": "user", "content": "review"}], model_name="router-review",
+        )),
+    ):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            call()
+        assert caught.value.error_code == "review_model_not_allowed"
+        assert caught.value.client_status == 400
+        assert caught.value.retryable is False
+    assert sends == []
 
 
 def test_image_review_request_without_vision_evidence_stops_before_send(monkeypatch):

@@ -7687,9 +7687,19 @@ class TaskOrchestrator:
         return True
 
     def _require_review_allocation_evidence(self, model_name: Any) -> None:
-        """Reject review-pool allocation until a calibrated owner release exists."""
-        if model_name != self.FREE_MODEL or not self._review_allocation_evidence_required:
+        """Require the fixed review selector and calibrated allocation evidence."""
+        if not self._review_allocation_evidence_required:
             return
+        if model_name != self.FREE_MODEL:
+            raise ProviderUpstreamError(
+                agent_id=self.FREE_MODEL,
+                model=self.FREE_MODEL,
+                error_code="review_model_not_allowed",
+                message="review gateway requires orchestrator/free",
+                client_status=400,
+                retryable=False,
+                transport="orchestration",
+            )
         raise ProviderUpstreamError(
             agent_id=self.FREE_MODEL,
             model=self.FREE_MODEL,
@@ -7919,6 +7929,7 @@ class TaskOrchestrator:
         Bytes already sent cannot be recalled, so a mid-stream failure
         surfaces to the caller.
         """
+        self._require_review_allocation_evidence(model_name)
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
@@ -9387,6 +9398,7 @@ class TaskOrchestrator:
         measured accuracy steers future routing. Speed is explicitly not a
         design constraint at this layer -- correctness is.
         """
+        self._require_review_allocation_evidence(model_name)
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
@@ -9660,6 +9672,7 @@ class TaskOrchestrator:
         _review_no_replay: bool = False,
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
+        self._require_review_allocation_evidence(model_name)
         self._raise_if_spend_budget_exceeded()
         self._review_image_required_tags(messages, model_name)
         # Selector nature threaded to _invoke_with_rate_limit_recovery for
