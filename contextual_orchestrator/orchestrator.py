@@ -6074,6 +6074,8 @@ class TaskOrchestrator:
             response_messages = _responses_to_chat_payload(body).get("messages", [])
             prompt_context = self._prompt_interaction(response_messages)
         requested_model = body.get("model")
+        request_messages = messages if isinstance(messages, list) else response_messages
+        required_tags = self._review_image_required_tags(request_messages, requested_model)
         # Selector nature for the rate-limit-storm admission decision below
         # (see _await_rate_limit_recovery): a virtual/gateway-selected model
         # name may wait out a storm even with a single eligible candidate;
@@ -6120,6 +6122,7 @@ class TaskOrchestrator:
                 text,
                 "worker",
                 free_only=requested_model == self.FREE_MODEL,
+                required_tags=required_tags,
                 prompt_context=prompt_context,
                 effort_profile=effort_profile,
             )
@@ -6244,6 +6247,7 @@ class TaskOrchestrator:
                 for candidate in self.agents
                 if self._is_general_free_agent(candidate, chat_body=admission_body)
                 and self._zdr_agent_allowed(candidate)
+                and all(tag in candidate.tags for tag in required_tags)
             }
             if requested_model == self.FREE_MODEL
             else (
@@ -6289,6 +6293,7 @@ class TaskOrchestrator:
             agent,
             text,
             "worker",
+            required_tags=required_tags,
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
             effort_profile=effort_profile,
@@ -6633,6 +6638,7 @@ class TaskOrchestrator:
                 "response_format.json_schema is missing a schema"
             )
         task = self._latest_user_text(messages)
+        self._review_image_required_tags(messages, body.get("model"))
         # Vision is a hard entitling capability the request payload cannot
         # grant, so it stays a required tag. ``response_format`` is a gateway
         # contract that any general chat synthesizer can honor because the
@@ -7750,6 +7756,7 @@ class TaskOrchestrator:
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
         self._require_review_allocation_evidence(model_name)
+        self._review_image_required_tags(messages, model_name)
         request_settings = getattr(self.client, "request_settings_snapshot", None)
         scoped_request = request_settings() if callable(request_settings) else None
         if (
@@ -7915,6 +7922,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
+        required_tags = self._review_image_required_tags(messages, model_name)
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
         if effort_profile is not None:
@@ -7923,7 +7931,8 @@ class TaskOrchestrator:
             stream_kwargs["include_usage"] = True
         pinned = self._requested_agent(model_name)
         primary = pinned or self._select_agent(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
+            text, "worker", free_only=free_only, required_tags=required_tags,
+            prompt_context=prompt_context
         )
         if pinned is not None:
             candidates = [primary]
@@ -7937,6 +7946,7 @@ class TaskOrchestrator:
                 primary,
                 text,
                 "worker",
+                required_tags=required_tags,
                 allowed_agent_ids=free_ids if free_only else None,
                 prompt_context=prompt_context,
                 effort_profile=effort_profile,
@@ -9380,6 +9390,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
+        required_tags = self._review_image_required_tags(messages, model_name)
         # Selector nature threaded to _invoke_with_rate_limit_recovery: a
         # virtual/gateway-selected model name may wait out a rate-limit
         # storm even with a single eligible candidate; an explicit concrete
@@ -9393,7 +9404,8 @@ class TaskOrchestrator:
         ranked_pool: list[ModelAgent] = (
             [requested] if requested is not None else []
         ) or self._ranked_agents(
-            text, "worker", free_only=free_only, prompt_context=prompt_context
+            text, "worker", free_only=free_only, required_tags=required_tags,
+            prompt_context=prompt_context
         )
         # Context-window candidate filtering only applies to virtual/role-based
         # selection: an explicitly requested concrete model (``requested`` is
@@ -9649,6 +9661,7 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
+        self._review_image_required_tags(messages, model_name)
         # Selector nature threaded to _invoke_with_rate_limit_recovery for
         # every step: a virtual/gateway-selected model name may wait out a
         # rate-limit storm even with a single eligible candidate; an
@@ -10469,6 +10482,42 @@ class TaskOrchestrator:
         ):
             return False
         return True
+
+    def _review_image_required_tags(
+        self, messages: list[ChatMessage], model_name: str | None
+    ) -> tuple[str, ...]:
+        """Require positive image evidence before a free review request can send."""
+        if not self._source_image_parts(messages):
+            return ()
+        required_tags = ("vision",)
+        if model_name != self.FREE_MODEL or not any(
+            "review" in agent.tags for agent in self.agents
+        ):
+            return required_tags
+        if any(
+            not agent.disabled
+            and "vision" in agent.tags
+            and _agent_matches_request_endpoint(agent)
+            and self._zdr_agent_allowed(agent)
+            and self._is_general_free_agent(agent)
+            for agent in self.agents
+        ):
+            return required_tags
+        raise ProviderUpstreamError(
+            agent_id=self.FREE_MODEL,
+            model=self.FREE_MODEL,
+            error_code="request_capability_unavailable",
+            message="no free review model has evidence for image input",
+            client_status=503,
+            retryable=False,
+            transport="orchestration",
+            extra_detail={
+                "capability": "input:image",
+                "contract_version": PASSTHROUGH_ROUTE_RECEIPT_VERSION,
+                "admitted_agent_ids": [],
+                "terminal_reason": "request_capability_unavailable",
+            },
+        )
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 
