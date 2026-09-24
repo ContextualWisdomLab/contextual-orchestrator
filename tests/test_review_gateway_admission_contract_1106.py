@@ -538,6 +538,11 @@ def test_review_gateway_text_batch_rejects_before_backend_submission(monkeypatch
         assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
             status, code, False,
         )
+    with pytest.raises(ProviderUpstreamError) as caught:
+        coordinator.submit_batch([])
+    assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+        503, "allocation_evidence_unavailable", False,
+    )
     server = build_server(
         orchestrator, port=0, coordinator=coordinator,
         security=SecurityConfig(auth_token="review-test-token"),
