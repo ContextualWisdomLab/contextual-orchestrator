@@ -43,6 +43,13 @@ streaming writes a 200/SSE header; the earlier post-header error is covered
 by a four-shape HTTP regression. This intentionally pauses live review serving
 until an owner release supplies and validates the missing allocation contract; catalog
 admission and diagnostic ranking are not substitutes for that release.
+The inspected [fast-mlsirm v0.11.4 release](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
+exposes [personnel selection utility](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/utility.py),
+[item-exposure routing](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/exposure.py),
+and [survey-stratum allocation](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/crates/mlsirm-core/src/sampling_design.rs).
+Those inspected APIs do not define the estimand, utility, or provider contract
+for allocating a review request among LLMs; their names alone cannot authorize
+reuse for this path. A later owner release still needs an exact contract audit.
 
 ## 2026-09-25 review retry-count authority (#1106, proposed)
 
