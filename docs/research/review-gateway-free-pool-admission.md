@@ -97,7 +97,9 @@ a request that does not require parallel calls. A review candidate without
 either positive signal can still serve plain chat, but cannot serve a tool
 request. If no free candidate proves the requested tool shape, the gateway
 returns `503 request_capability_unavailable` with `capability=tool_call` and
-does not send a completion. This addresses the plain-chat-ready/tool-404
+does not send a completion. The same eligible set reaches every conduct role
+and final synthesis when the caller requests an orchestrated response. This
+addresses the plain-chat-ready/tool-404
 counterexample in issue #1106 without a provider-name branch in the consumer.
 
 The signal proves only the probed tool-call contract. It does not prove live
@@ -106,6 +108,26 @@ of a long review. The catalog admission result remains distinct from an
 execution receipt. Calibrated allocation, a released request-scoped contract,
 immutable owner release, and the consumer's deletion of its own preflight
 remain open acceptance conditions for issue #1106.
+
+### Completion replay boundary
+
+For a review-tagged `orchestrator/free` candidate, a read timeout or connection
+reset after the transport began has unknown outcome and stops the request with
+`provider_outcome_unknown`; a second provider is not called. HTTP 429, 503,
+408, 409, and 425 alone likewise do not prove the completion was never
+applied, so these responses terminate this request. Provider-declared cooldown
+is still recorded for later requests. Direct local-slot admission failure
+before the transport call, or an explicit stale-model/request-size rejection,
+can advance to another eligible candidate. The test counts transport calls
+on each side of the local slot and asserts that an unknown outcome never
+causes a second send. This narrows the earlier virtual-selector failover
+behavior for the review pool; other virtual selectors retain their prior
+contract. The same no-replay rule covers the conduct role calls and final
+structured synthesis when entered through a review-free completion request;
+direct `conduct` calls retain their existing policy. No provider idempotency
+agreement has been established here.
+This matches the non-idempotent retry boundary in
+[RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
 
 The PR implementing this contract must prove at least the following cases:
 
