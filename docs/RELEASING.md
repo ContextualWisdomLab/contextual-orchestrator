@@ -48,10 +48,10 @@ check those contracts separately before replacing a source pin.
 4. The exact commit has passing required checks. The workflow rechecks
    registered push-triggered jobs and the reported check rollup through
    `scripts/ci/release_checks_gate.sh`, and runs the full test suite fresh.
-   Its existing check policy accepts terminal success, skipped or neutral
-   conclusions; this is not permission to treat a skipped required semantic
-   security action as actual review evidence. Protected integration still
-   requires all applicable organization gates and reviews.
+   Each named release-critical push check must conclude `success`;
+   additional checks may conclude `success`, `skipped`, or `neutral`.
+   Protected integration still requires all applicable organization gates
+   and reviews.
    A newly merged commit whose expected push checks have not yet registered
    is not ready. Re-dispatch after the genuine required evidence exists;
    do not weaken the expected check inventory.
