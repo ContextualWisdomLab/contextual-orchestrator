@@ -44,6 +44,18 @@ by a four-shape HTTP regression. This intentionally pauses live review serving
 until an owner release supplies and validates the missing allocation contract; catalog
 admission and diagnostic ranking are not substitutes for that release.
 
+## 2026-09-25 review retry-count authority (#1106, proposed)
+
+The review gateway used the number of admitted free models to set
+`tool_retry_attempts`, which controls extra `route_once` judged-answer attempts
+and same-candidate retries. Catalog size is not calibration evidence for either
+decision. A RED regression with 13 admitted candidates observed a budget of
+four; the owner bootstrap now sets zero and the route test observes one call
+after a rejected answer. This does not remove eligible catalog rows or change
+the provider-shaped proxy candidate loop. It also does not supply a calibrated
+allocation policy or prove a live review. Issue #1106's research, immutable
+release, and consumer migration gates remain open.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
