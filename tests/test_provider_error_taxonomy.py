@@ -508,9 +508,11 @@ def test_invoke_preserves_final_classified_failure_across_candidates() -> None:
         ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
     ]
     orchestrator = TaskOrchestrator(agents, client=RateLimited())
-    orchestrator._triage_fn = lambda text: False  # single-step route accounting
     try:
-        orchestrator.route_once([{"role": "user", "content": "route this"}])
+        orchestrator._invoke(
+            agents[0], [{"role": "user", "content": "route this"}],
+            text="route this", role="worker",
+        )
     except ProviderUpstreamError as exc:
         assert exc.error_code == "rate_limit_exceeded"
         assert exc.client_status == 429
