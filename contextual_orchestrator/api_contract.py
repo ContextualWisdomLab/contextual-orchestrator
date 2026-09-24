@@ -8,7 +8,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.3.1",
+        "version": "0.3.2",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -190,7 +190,11 @@ OPENAPI_SPEC = {
                     },
                     "terminal_reason": {
                         "type": "string",
-                        "description": "Why the route stopped, e.g. served, fail_closed, eligible_set_exhausted.",
+                        "description": (
+                            "Why the route stopped, e.g. served, fail_closed, "
+                            "eligible_set_exhausted, pinned_candidate_failed, "
+                            "or stream_interrupted."
+                        ),
                     },
                 },
             },
