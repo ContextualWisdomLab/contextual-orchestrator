@@ -8,11 +8,14 @@ and live readiness require separate evidence.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import get_type_hints
 
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
+from contextual_orchestrator.orchestrator import TaskOrchestrator
+from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 import pytest
 
@@ -194,3 +197,95 @@ def test_public_review_pool_admissions_type_hints_resolve():
     hints = get_type_hints(review_gateway.review_pool_admissions)
     assert hints["agents"]
     assert hints["return"]
+
+
+def test_image_review_request_without_vision_evidence_stops_before_send(monkeypatch):
+    """Text chat readiness cannot authorize an image-bearing review request."""
+    discovered = [_discovered("openrouter", "text-review", "OPENROUTER_API_KEY")]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret",
+    })
+    sends: list[str] = []
+
+    def forbid_send(*args, **kwargs):
+        del args, kwargs
+        sends.append("sent")
+        raise AssertionError("provider send must not occur")
+
+    monkeypatch.setattr(orchestrator.client, "chat", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "stream_chat", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "proxy_send_once", forbid_send)
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "Review this image"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+    ]}]
+    calls = (
+        lambda: orchestrator.complete(messages, mode="route", model_name=TaskOrchestrator.FREE_MODEL),
+        lambda: orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL, "messages": messages,
+        }),
+        lambda: list(orchestrator.stream_route(
+            messages, model_name=TaskOrchestrator.FREE_MODEL,
+        )),
+    )
+    for call in calls:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            call()
+        assert caught.value.error_code == "request_capability_unavailable"
+        assert caught.value.client_status == 503
+        assert caught.value.detail["capability"] == "input:image"
+    assert sends == []
+
+
+def test_image_review_stream_selects_only_proven_vision_candidate(monkeypatch):
+    """A higher-priority text model cannot receive a review image."""
+    discovered = [
+        _discovered("openrouter", "text-review", "OPENROUTER_API_KEY"),
+        replace(
+            _discovered("nvidia_nim", "vision-review", "NVIDIA_NIM_API_KEY"),
+            capabilities=("chat", "vision"),
+            input_modalities=(),
+        ),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret", "NVIDIA_NIM_API_KEY": "nim-secret",
+    })
+    orchestrator.agents = [
+        replace(agent, priority=10) if agent.model == "text-review" else agent
+        for agent in orchestrator.agents
+    ]
+    calls: list[str] = []
+
+    def stream_chat(agent, messages, **kwargs):
+        del messages, kwargs
+        calls.append(agent.model)
+        yield "served"
+
+    monkeypatch.setattr(orchestrator.client, "stream_chat", stream_chat)
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "Review this image"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+    ]}]
+
+    assert "".join(orchestrator.stream_route(
+        messages, model_name=TaskOrchestrator.FREE_MODEL,
+    )) == "served"
+    assert calls == ["vision-review"]
+
+    def proxy_send_once(agent, endpoint, payload):
+        del endpoint, payload
+        calls.append(agent.model)
+        return {
+            "id": "image-review", "object": "chat.completion", "model": agent.model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "served"},
+                         "finish_reason": "stop"}],
+        }
+
+    monkeypatch.setattr(orchestrator.client, "proxy_send_once", proxy_send_once)
+    result = orchestrator.proxy_completion({
+        "model": TaskOrchestrator.FREE_MODEL, "messages": messages,
+    })
+    assert result["model"] == "vision-review"
+    assert calls == ["vision-review", "vision-review"]

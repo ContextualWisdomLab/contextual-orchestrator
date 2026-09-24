@@ -123,6 +123,14 @@ content, and the caller must treat a failed or incomplete review as failure.
 The same admission rule applies to the Responses API's `text.format` request
 when it is converted to the chat-shaped provider contract.
 
+An image-bearing `orchestrator/free` review request also needs positive
+`vision` evidence on a currently eligible free candidate. Route, stream,
+passthrough, and conducted synthesis use that condition before provider send;
+an empty eligible set returns `503 request_capability_unavailable` with
+`capability=input:image`. A text-only candidate cannot receive the image even
+when its static priority is higher. This is catalog capability evidence, not a
+claim that the image was interpreted correctly or that the review passed.
+
 ### Completion replay boundary
 
 For a review-tagged `orchestrator/free` candidate, a read timeout or connection
