@@ -19,6 +19,7 @@ from jsonschema import validate
 
 from contextual_orchestrator.api_contract import OPENAPI_SPEC
 from contextual_orchestrator import CostRoutingCoordinator, InMemoryConfigStore
+from contextual_orchestrator.batch_routing import BatchRequest
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
@@ -507,6 +508,66 @@ def test_review_gateway_embedding_batch_rejects_before_backend_submission(monkey
         assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
             status, code, False,
         )
+    assert submissions == []
+
+
+def test_review_gateway_text_batch_rejects_before_backend_submission(monkeypatch):
+    """A direct deferred text batch cannot submit without review allocation."""
+    discovered = [_discovered("openrouter", "router-review", "OPENROUTER_API_KEY")]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "synthetic",
+    })
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+    submissions: list[str] = []
+
+    def submit(*args, **kwargs):
+        del args, kwargs
+        submissions.append("sent")
+        raise AssertionError("batch backend must not be reached")
+
+    monkeypatch.setattr(coordinator.batch_backend, "submit", submit)
+    for model, status, code in (
+        ("router-review", 400, "review_model_not_allowed"),
+        (TaskOrchestrator.FREE_MODEL, 503, "allocation_evidence_unavailable"),
+    ):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            coordinator.submit_batch([BatchRequest(
+                messages=[{"role": "user", "content": "synthetic"}], model=model,
+            )])
+        assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+            status, code, False,
+        )
+    server = build_server(
+        orchestrator, port=0, coordinator=coordinator,
+        security=SecurityConfig(auth_token="review-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for model, status, code in (
+            ("router-review", 400, "review_model_not_allowed"),
+            (TaskOrchestrator.FREE_MODEL, 503, "allocation_evidence_unavailable"),
+        ):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}/api/v1/batch_routing_jobs",
+                data=json.dumps({"requests": [{"model": model, "messages": [
+                    {"role": "user", "content": "synthetic"},
+                ]}]}).encode(),
+                headers={"content-type": "application/json", "authorization": "Bearer review-test-token"},
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as rejected:
+                urllib.request.urlopen(request, timeout=5)
+            with rejected.value as response:
+                assert response.code == status
+                payload = json.load(response)
+            assert payload["error"]["code"] == code
+            assert payload["error"]["detail"]["retryable"] is False
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
     assert submissions == []
 
 
