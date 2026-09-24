@@ -239,10 +239,19 @@ def test_gate_reruns_the_full_test_suite_fresh_before_tagging() -> None:
     """No release ships on a merely-trusted, potentially stale prior test run."""
     workflow = _workflow_text()
     fresh_run_index = workflow.index(
-        "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q"
+        "uv run --no-sync python -m pytest -q"
     )
     tag_step_index = workflow.index("Create the annotated release tag")
     assert fresh_run_index < tag_step_index
+
+
+def test_gate_builds_native_measurement_before_full_suite() -> None:
+    """The fresh suite must have the native extension required by receipt tests."""
+    verify = _job_block(_workflow_text(), "verify")
+    sync = verify.index("uv sync --locked --extra api --extra db --extra queue --group dev --group native-build")
+    build = verify.index("uv run --no-sync maturin develop --locked --release --features pyo3/extension-module")
+    suite = verify.index("uv run --no-sync python -m pytest -q")
+    assert sync < build < suite
 
 
 def test_release_notes_are_rendered_from_the_changelog_via_the_tested_helper() -> None:
@@ -312,7 +321,7 @@ def test_final_main_tip_check_happens_after_testing_and_note_rendering_but_befor
     note rendering) and before the tag is created -- not only at the start."""
     workflow = _workflow_text()
     test_run_index = workflow.index(
-        "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q"
+        "uv run --no-sync python -m pytest -q"
     )
     notes_render_index = workflow.index("Render release notes from CHANGELOG.md")
     final_tip_check_index = workflow.index(
