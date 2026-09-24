@@ -1055,6 +1055,8 @@ class CostRoutingCoordinator:
         request_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a batch, resolve its targets, and bind its authenticated owner."""
+        if not requests:
+            self.orchestrator._require_review_allocation_evidence(self.orchestrator.FREE_MODEL)
         for request in requests:
             self.orchestrator._require_review_allocation_evidence(request.model)
         try:
