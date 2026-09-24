@@ -60,7 +60,9 @@ check those contracts separately before replacing a source pin.
    empty-file or content-verification failure is fatal, not best effort.
    The read-only release job builds the Python wheel from that same checkout,
    installs it into an isolated directory to verify its declared version and
-   package contents, records its SHA-256 digest, and passes both files to publication. This wheel
+   package contents, records its SHA-256 digest, and passes both files to publication.
+   The build uses `uv build --wheel` with Python 3.12 so it does not rely on
+   runner-global `setuptools`. This wheel
    is the installable Python package; the separately built Rust decision
    measurement wheel remains a distinct dependency and is not bundled here.
 6. A repository administrator has enabled GitHub release immutability before
