@@ -32,7 +32,6 @@ from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TOKEN = "image_request_storm_wait_token"  # noqa: S105
-_STORM_SECONDS = 1.5
 _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 _TEXT_TAGS = ("cost:free", "verification", "review", "reasoning", "writing", "planning", "coding", "input:text", "output:text")
 _VISION_TAGS = ("cost:free", "reasoning", "writing", "planning", "coding", "vision", "input:image", "input:text", "output:text")
@@ -73,19 +72,31 @@ class _Response:
         return False
 
 
-def _conduct(monkeypatch, *, with_image: bool) -> tuple[int, float]:
+def _conduct(
+    monkeypatch, *, with_image: bool, retry_after: str | None,
+    wait_seconds: float = 3.0,
+) -> tuple[int, list[tuple[str, float, bool]]]:
     """Run one conduct request while the text-only models are in a 429 storm."""
     set_backend(InMemoryCredentialBackend())
     register_credential("NVIDIA_NIM_API_KEY", "synthetic-not-a-key")
-    started = time.monotonic()
+    attempts: list[tuple[str, float, bool]] = []
 
     def storm_open(self, request, destination=None, *, timeout=None):
         payload = json.loads(request.data)
-        if payload["model"].startswith("vendor/text-") and time.monotonic() - started < _STORM_SECONDS:
-            raise urllib.error.HTTPError(
-                request.full_url, 429, "Too Many Requests", {"Retry-After": "2"}, io.BytesIO(b'{"error":{"message":"rate limited"}}')
-            )
+        now = time.monotonic()
         system = (payload.get("messages") or [{}])[0].get("content", "")
+        conduct_step = system != TaskOrchestrator.TRIAGE_SYSTEM_PROMPT
+        limited = conduct_step and payload["model"].startswith("vendor/text-") and not any(
+            candidate == payload["model"] for candidate, _, _ in attempts
+        )
+        if conduct_step and payload["model"].startswith("vendor/text-"):
+            attempts.append((payload["model"], now, limited))
+        if limited:
+            raise urllib.error.HTTPError(
+                request.full_url, 429, "Too Many Requests",
+                {"Retry-After": retry_after} if retry_after is not None else {},
+                io.BytesIO(b'{"error":{"message":"rate limited"}}'),
+            )
         if system == TaskOrchestrator.TRIAGE_SYSTEM_PROMPT:
             return _Response('{"workflow_required": true}')
         return _Response("PASS: evidence reviewed; the change is consistent.")
@@ -103,7 +114,13 @@ def _conduct(monkeypatch, *, with_image: bool) -> tuple[int, float]:
     content: list[dict] = [{"type": "text", "text": "Review this change set in depth: plan, implement, verify."}]
     if with_image:
         content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + _PNG}})
-    server = build_server(TaskOrchestrator(agents), port=0, security=SecurityConfig(auth_token=_TOKEN))
+    server = build_server(
+        TaskOrchestrator(
+            agents, tool_retry_attempts=0, rate_limit_wait_seconds=wait_seconds,
+            rate_limit_unknown_cooldown_seconds=0.5,
+        ),
+        port=0, security=SecurityConfig(auth_token=_TOKEN),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     request = urllib.request.Request(
@@ -125,13 +142,29 @@ def _conduct(monkeypatch, *, with_image: bool) -> tuple[int, float]:
         thread.join(timeout=5)
         server.server_close()
         set_backend(None)
-    return status, time.monotonic() - started
+    return status, attempts
 
 
 @pytest.mark.parametrize("with_image", [False, True], ids=["text", "image"])
-def test_rate_limit_storm_on_the_used_candidates_is_waited_out(monkeypatch, with_image) -> None:
-    """Both request shapes wait for the provider cooldown and then succeed."""
-    status, elapsed = _conduct(monkeypatch, with_image=with_image)
+@pytest.mark.parametrize("retry_after", ["1", None], ids=["provider-cooldown", "assumed-cooldown"])
+def test_rate_limit_storm_on_the_used_candidates_is_waited_out(monkeypatch, with_image, retry_after) -> None:
+    """Both request shapes honor each candidate's cooldown before retrying."""
+    status, attempts = _conduct(monkeypatch, with_image=with_image, retry_after=retry_after)
 
     assert status == 200
-    assert elapsed >= _STORM_SECONDS
+    limited = [(model, at) for model, at, failed in attempts if failed]
+    assert {model for model, _ in limited} == {"vendor/text-a", "vendor/text-b"}
+    assert len(limited) == 2
+    assert any(not failed for _, _, failed in attempts)
+    for model, at in limited:
+        subsequent = [later for candidate, later, _ in attempts if candidate == model and later > at]
+        if subsequent:
+            assert subsequent[0] - at >= (1.0 if retry_after else 0.5) - 0.02
+
+
+def test_cooldown_beyond_wait_budget_fails_without_replay(monkeypatch) -> None:
+    """A virtual request with insufficient wait budget returns 429 once per candidate."""
+    status, attempts = _conduct(monkeypatch, with_image=True, retry_after="1", wait_seconds=0.0)
+
+    assert status == 429
+    assert [model for model, _, _ in attempts] == ["vendor/text-a", "vendor/text-b"]
