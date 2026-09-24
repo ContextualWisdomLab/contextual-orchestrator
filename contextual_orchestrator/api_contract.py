@@ -175,17 +175,47 @@ OPENAPI_SPEC = {
             "OrchestrationRoute": {
                 "type": "object",
                 "description": (
-                    "Route evidence for one completion: every eligible agent, "
-                    "every attempt made (including the served one), and why the "
-                    "route terminated. Stable across the structured-synthesis "
-                    "and single-worker streaming fallback paths."
+                    "Typed candidate attempts and review-pool admission for one completion. "
+                    "A review route may carry both shapes when failover attempts occurred."
                 ),
-                "required": ["eligible_agent_ids", "attempted"],
+                "anyOf": [
+                    {"required": ["eligible_agent_ids", "attempted"]},
+                    {"required": ["contract_version", "admitted_agent_ids", "served_steps"]},
+                    {"required": ["contract_version", "selected_candidate_ids", "attempts"]},
+                ],
                 "properties": {
                     "eligible_agent_ids": {"type": "array", "items": {"type": "string"}},
                     "attempted": {
                         "type": "array",
                         "items": {"$ref": "#/components/schemas/OrchestrationRouteAttempt"},
+                    },
+                    "contract_version": {"type": "string"},
+                    "admitted_agent_ids": {"type": "array", "items": {"type": "string"}},
+                    "served_steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["role", "agent_id"],
+                            "properties": {
+                                "role": {"type": "string"},
+                                "agent_id": {"type": "string"},
+                            },
+                        },
+                    },
+                    "selected_candidate_ids": {"type": "array", "items": {"type": "string"}},
+                    "attempts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["agent_id"],
+                            "properties": {
+                                "agent_id": {"type": "string"},
+                                "model": {"type": "string"},
+                                "provider_name": {"type": "string"},
+                                "attempt_number": {"type": "integer", "minimum": 1},
+                                "outcome": {"type": "string"},
+                            },
+                        },
                     },
                     "terminal_reason": {
                         "type": "string",

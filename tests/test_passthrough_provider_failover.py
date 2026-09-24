@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from jsonschema import validate
 
 from contextual_orchestrator import (
     ModelAgent,
@@ -21,6 +22,7 @@ from contextual_orchestrator import (
     TaskOrchestrator,
     default_role_effort_catalog,
 )
+from contextual_orchestrator.api_contract import OPENAPI_SPEC
 from contextual_orchestrator.orchestrator import (
     ModelClient,
     ProviderRequestTooLargeError,
@@ -349,6 +351,8 @@ def test_free_review_explicit_model_rejection_can_advance() -> None:
     assert result["model"] == "fallback-model"
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
     route = result["orchestration"]["route"]
+    route_schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
+    validate(route, {**route_schema, "components": OPENAPI_SPEC["components"]})
     assert route["contract_version"] == "1"
     assert route["selected_candidate_ids"] == ["primary_agent", "fallback_agent"]
     assert route["terminal_reason"] == "served"
@@ -2402,12 +2406,42 @@ def test_review_free_http_tool_request_uses_proven_provider(monkeypatch, mode: s
     assert payload["choices"][0]["message"]["content"]
     assert sent and set(sent) == {"known_agent"}
     route = payload["orchestration"]["route"]
+    route_schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
+    validate(route, {**route_schema, "components": OPENAPI_SPEC["components"]})
     assert route["contract_version"] == "1"
     assert route["admitted_agent_ids"] == ["known_agent"]
     assert route["terminal_reason"] == "response_returned"
     assert route["served_steps"] and {step["agent_id"] for step in route["served_steps"]} == {"known_agent"}
     if mode == "route":
         assert sent == ["known_agent"]
+
+
+def test_review_chat_response_keeps_admission_and_attempt_receipts() -> None:
+    """Review admission must not erase the worker's recorded failover attempt."""
+    from contextual_orchestrator.orchestrator import chat_completion_response
+
+    result = {
+        "mode": "route",
+        "answer": "answer",
+        "route": {
+            "eligible_agent_ids": ["known_agent"],
+            "attempted": [{"agent_id": "known_agent", "model": "known-model", "outcome": "served"}],
+            "terminal_reason": "served",
+        },
+        "review_route": {
+            "contract_version": "1",
+            "admitted_agent_ids": ["known_agent"],
+            "served_steps": [{"role": "worker", "agent_id": "known_agent"}],
+            "terminal_reason": "response_returned",
+        },
+    }
+
+    route = chat_completion_response(result)["orchestration"]["route"]
+    route_schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
+    validate(route, {**route_schema, "components": OPENAPI_SPEC["components"]})
+    assert route["attempted"] == [{"agent_id": "known_agent", "model": "known-model", "outcome": "served"}]
+    assert route["admitted_agent_ids"] == ["known_agent"]
+    assert route["terminal_reason"] == "response_returned"
 
 
 @pytest.mark.parametrize("mode", ["route", "conduct"])

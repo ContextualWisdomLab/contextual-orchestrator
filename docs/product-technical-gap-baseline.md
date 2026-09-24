@@ -51,6 +51,18 @@ Those inspected APIs do not define the estimand, utility, or provider contract
 for allocating a review request among LLMs; their names alone cannot authorize
 reuse for this path. A later owner release still needs an exact contract audit.
 
+An isolated integration of existing #1209 (`d00cf413`), this review stack
+(`#1235` at `5ae59fbe`), and #1236 (`9135e789`) exposed two HTTP review
+regressions: a duplicate response key dropped review admission provenance when
+the ordinary attempt receipt was also present. The owner now retains both in
+one versioned route response, and its API schema accepts the ordinary,
+review-conduct, and review-proxy receipt shapes. After resolving three local
+merge conflicts, the immutable local probe commit `df31a814` passed the full
+Python 3.12/native decision-measurement suite: 5,120 passed, five tokenizer
+extension skips, and three warnings. This is synthetic merge evidence only;
+none of the source PRs has current-head protected approval, required hosted
+GREEN, an immutable owner release, or consumer acceptance.
+
 ## 2026-09-25 review retry-count authority (#1106, proposed)
 
 The review gateway used the number of admitted free models to set

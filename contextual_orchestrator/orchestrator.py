@@ -20061,6 +20061,10 @@ def chat_completion_response(
     the agent that actually served this request, next to
     ``prompt_count_source``; it is omitted when no such decision was made.
     """
+    route = result.get("route")
+    review_route = result.get("review_route")
+    if isinstance(review_route, dict):
+        route = {**(route if isinstance(route, dict) else {}), **review_route}
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result["mode"],
@@ -20070,7 +20074,7 @@ def chat_completion_response(
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
         "tool_loop_route": result.get("tool_loop_route"),
-        "route": result.get("review_route"),
+        "route": route,
         "tool_loop_agent_id": result.get("tool_loop_agent_id"),
         "requested_output_tokens": result.get("requested_output_tokens"),
         "effective_output_tokens": result.get("effective_output_tokens"),
