@@ -393,6 +393,35 @@ def test_tool_call_probe_closes_unhandled_http_error_response() -> None:
     assert error_body.closed
 
 
+def test_tool_call_probe_cleanup_error_preserves_the_classified_rejection() -> None:
+    """A failed close cannot replace a completed 400 capability verdict."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    error_body = io.BytesIO(
+        b'{"error":{"message":"this model only supports a single tool call"}}'
+    )
+
+    class CloseFails(urllib.error.HTTPError):
+        def close(self):
+            super().close()
+            raise OSError("close failed")
+
+    error = CloseFails(
+        "https://openrouter.example/v1/chat/completions", 400, "bad request", None, error_body
+    )
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=object(),
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            side_effect=error,
+        ),
+    ):
+        assert probe_discovered_model_tool_call_capability(_tool_call_probe_model()) is False
+    assert error_body.closed
+
+
 def test_malformed_json_maps_to_invalid_response_code() -> None:
     """A non-JSON provider body is invalid_response, not a crash."""
     register_credential("OPENAI_API_KEY", "sk-openai")
