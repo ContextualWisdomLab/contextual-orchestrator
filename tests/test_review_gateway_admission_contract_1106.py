@@ -436,8 +436,11 @@ def test_review_gateway_rerank_allocation_is_typed_and_never_sends(monkeypatch):
         for model, status, code in (
             ("router-review", 400, "review_model_not_allowed"),
             (TaskOrchestrator.FREE_MODEL, 503, "allocation_evidence_unavailable"),
+            (None, 400, "review_model_not_allowed"),
         ):
-            body = {"model": model, "query": "synthetic", "documents": ["synthetic"]}
+            body = {"query": "synthetic", "documents": ["synthetic"]}
+            if model is not None:
+                body["model"] = model
             with pytest.raises(ProviderUpstreamError) as caught:
                 orchestrator.proxy_capability(body, capability="rerank", endpoint="rerank")
             assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
