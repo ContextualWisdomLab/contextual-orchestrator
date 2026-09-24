@@ -6899,6 +6899,8 @@ def build_server(
                         raise RequestError(400, "invalid_model", str(exc)) from exc
                     except ProviderRequestTooLargeError as exc:
                         raise RequestError(413, "request_too_large", str(exc)) from exc
+                    except ProviderUpstreamError:
+                        raise
                     except RuntimeError as exc:
                         raise RequestError(
                             503,

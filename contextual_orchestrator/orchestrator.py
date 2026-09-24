@@ -10994,6 +10994,7 @@ class TaskOrchestrator:
     ) -> dict[str, Any] | tuple[bytes, str]:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
+        self._require_review_allocation_evidence(requested_model)
         candidates = self._capability_agents(capability, requested_model)
         every_failure_was_request_too_large = True
         saw_failure = False
