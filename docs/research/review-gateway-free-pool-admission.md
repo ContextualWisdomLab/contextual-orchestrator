@@ -101,6 +101,10 @@ does not send a completion. The same eligible set reaches every conduct role
 and final synthesis when the caller requests an orchestrated response. This
 addresses the plain-chat-ready/tool-404
 counterexample in issue #1106 without a provider-name branch in the consumer.
+The actual `/v1/chat/completions` virtual-selector path enters route or conduct,
+so its request-scoped tool settings now feed the same free-agent predicate before
+planning, cache lookup, or provider send. HTTP regressions cover both modes,
+including an empty eligible set.
 
 The signal proves only the probed tool-call contract. It does not prove live
 availability, output quality, a provider idempotency guarantee, or completion
@@ -122,12 +126,33 @@ can advance to another eligible candidate. The test counts transport calls
 on each side of the local slot and asserts that an unknown outcome never
 causes a second send. This narrows the earlier virtual-selector failover
 behavior for the review pool; other virtual selectors retain their prior
-contract. The same no-replay rule covers the conduct role calls and final
-structured synthesis when entered through a review-free completion request;
-direct `conduct` calls retain their existing policy. No provider idempotency
-agreement has been established here.
+contract. The same no-replay rule covers all-review free-pool conduct role
+calls and final structured synthesis. Mixed and non-review pools retain their
+existing policy. No provider idempotency agreement has been established here.
+The HTTP route and conduct paths apply this rule when their admitted free pool
+is wholly review-tagged; a 429 from the first candidate cannot trigger a
+second send or a storm wait for that request.
 This matches the non-idempotent retry boundary in
 [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
+
+### Request route receipt (proposed)
+
+A served review-free passthrough response now carries
+`orchestration.route.contract_version=1`, the request-filtered candidate IDs,
+the actual failed and served attempts in order, and `terminal_reason=served`.
+The gateway overwrites a provider-supplied `route` field. Classified failures
+carry the same receipt version and the existing attempt evidence in their
+error detail. A selected ID is an admitted candidate, not a live-readiness or
+quality finding; an attempt row records only what the gateway observed. The
+receipt does not authorize the consumer to build its own fallback list.
+The virtual-selector HTTP route/conduct response carries a corresponding
+`orchestration.route` with `admitted_agent_ids` and `served_steps`. Those fields
+record the request's pre-send eligibility and the returned workflow steps;
+they are not a complete wire-attempt log and do not certify answer quality.
+The matching HTTP error detail carries the contract version, admitted IDs,
+and a terminal reason, including the zero-candidate admission rejection.
+Cache hits omit this receipt because their earlier candidate set cannot be
+presented as current request admission.
 
 The PR implementing this contract must prove at least the following cases:
 
