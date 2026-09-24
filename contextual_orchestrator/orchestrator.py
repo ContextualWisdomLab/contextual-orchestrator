@@ -5555,7 +5555,9 @@ class TaskOrchestrator:
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
         rate_limit_unknown_cooldown_seconds: float = 5.0,
+        review_allocation_evidence_required: bool = False,
     ) -> None:
+        self._review_allocation_evidence_required = review_allocation_evidence_required
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
         self._context_window_local = threading.local()
@@ -6035,6 +6037,7 @@ class TaskOrchestrator:
         ``role_effort_catalog`` is configured (``_role_effort_profile``
         returns ``None`` and behavior is unchanged).
         """
+        self._require_review_allocation_evidence(body.get("model"))
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
@@ -7677,6 +7680,20 @@ class TaskOrchestrator:
             return False
         return True
 
+    def _require_review_allocation_evidence(self, model_name: Any) -> None:
+        """Reject review-pool allocation until a calibrated owner release exists."""
+        if model_name != self.FREE_MODEL or not self._review_allocation_evidence_required:
+            return
+        raise ProviderUpstreamError(
+            agent_id=self.FREE_MODEL,
+            model=self.FREE_MODEL,
+            error_code="allocation_evidence_unavailable",
+            message="review routing evidence is unavailable",
+            client_status=503,
+            retryable=False,
+            transport="orchestration",
+        )
+
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
@@ -7732,6 +7749,7 @@ class TaskOrchestrator:
             raise ValueError("model_name must be a non-empty string")
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
+        self._require_review_allocation_evidence(model_name)
         request_settings = getattr(self.client, "request_settings_snapshot", None)
         scoped_request = request_settings() if callable(request_settings) else None
         if (
@@ -10184,6 +10202,8 @@ class TaskOrchestrator:
         ``_capability_agents``) is a distinct, non-role capability lookup and
         is deliberately left out of this filter.
         """
+        if free_only:
+            self._require_review_allocation_evidence(self.FREE_MODEL)
         source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
             agent

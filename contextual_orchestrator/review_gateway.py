@@ -203,8 +203,9 @@ def build_review_orchestrator(
     Every candidate satisfying those evidence-backed admission predicates is
     retained. This boundary does not impose a candidate-count cap, provider
     quota, price-derived ordering, hand-assigned priority, or fallback ranking.
-    Any subsequent model choice remains the routing layer's responsibility and
-    must be supported by its own executable evidence contract.
+    Catalog admission does not authorize a model choice. Until a released
+    calibrated allocation contract exists, the review free selector fails
+    closed before cache or provider transport.
     """
     requested_names = _validated_credential_names(credential_names)
     source_environment = os.environ if environment is None else environment
@@ -256,6 +257,7 @@ def build_review_orchestrator(
         agents,
         client=ModelClient(),
         tool_retry_attempts=tool_retry_attempts,
+        review_allocation_evidence_required=True,
     )
 
 

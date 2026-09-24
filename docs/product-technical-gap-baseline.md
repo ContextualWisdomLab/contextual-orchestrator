@@ -33,6 +33,15 @@ windows are too small, the request fails before send. Unknown windows remain
 unknown rather than being treated as sufficient capacity. This is local
 request-admission evidence, not full-message context proof or live readiness.
 
+The review gateway has no released estimand, utility rule, or held-out
+calibration authorizing model and test-time-compute allocation. Its supported
+`orchestrator/free` entrypoint therefore returns typed
+`allocation_evidence_unavailable` (503, no automatic retry) before a provider
+send or cache read. Route, conduct, passthrough, and stream entrypoints share
+this boundary. This intentionally pauses live review serving until an owner
+release supplies and validates the missing allocation contract; catalog
+admission and diagnostic ranking are not substitutes for that release.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
