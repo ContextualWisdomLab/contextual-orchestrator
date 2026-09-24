@@ -2108,7 +2108,11 @@ def _is_passthrough_failover_error(
             and _is_single_tool_call_limit_error(current)
         ):
             return True
-        if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
+        if (
+            not review_free_request
+            and isinstance(current, socket.gaierror)
+            and current.errno == socket.EAI_AGAIN
+        ):
             return True
         if current.__cause__ is not None:
             current = current.__cause__
@@ -6386,7 +6390,11 @@ class TaskOrchestrator:
                                     else None,
                                     status=signal_status,
                                 )
-                        if _is_ambiguous_passthrough_transport_failure(exc):
+                        if _is_ambiguous_passthrough_transport_failure(exc) or (
+                            review_free_request
+                            and classified.provider_status is None
+                            and classified.retryable
+                        ):
                             # The candidate may already have applied the request.
                             # Review-free completions have no idempotency proof,
                             # so their request stops even with another candidate.

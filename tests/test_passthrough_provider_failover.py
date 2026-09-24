@@ -366,6 +366,35 @@ def test_free_review_bodyless_404_cannot_authorize_replay() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_free_review_dns_failure_does_not_authorize_replay(wrapped: bool) -> None:
+    """A DNS failure may follow an earlier send within the candidate transport."""
+    dns = socket.gaierror(socket.EAI_AGAIN, "synthetic resolver failure")
+    failure = RuntimeError("synthetic unknown send boundary") if wrapped else dns
+    if wrapped:
+        failure.__cause__ = dns
+    client = SequencedProxyClient({
+        "primary_agent": failure,
+        "fallback_agent": {"model": "fallback-model", "choices": []},
+    })
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free", "review"))
+        for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "synthetic"}],
+        })
+
+    assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+        502, "provider_outcome_unknown", False,
+    )
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
     """A generic provider invalid_tools response must not hide a bad request."""
     failure = _invalid_tools_error()
