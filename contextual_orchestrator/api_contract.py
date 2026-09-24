@@ -414,7 +414,10 @@ OPENAPI_SPEC = {
                             "text/event-stream": {"schema": {"type": "string"}},
                         },
                     },
-                    "400": {"description": "Invalid request"},
+                    "400": {
+                        "description": "Invalid request",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InferenceError"}}},
+                    },
                     "503": {
                         "description": "Gateway service unavailable; review-free allocation without calibrated evidence returns allocation_evidence_unavailable",
                         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InferenceError"}}},
@@ -644,7 +647,10 @@ OPENAPI_SPEC = {
                 },
                 "responses": {
                     "200": {"description": "Responses API result"},
-                    "400": {"description": "Invalid request"},
+                    "400": {
+                        "description": "Invalid request",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InferenceError"}}},
+                    },
                     "503": {
                         "description": "Gateway service unavailable; review-free allocation without calibrated evidence returns allocation_evidence_unavailable",
                         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InferenceError"}}},

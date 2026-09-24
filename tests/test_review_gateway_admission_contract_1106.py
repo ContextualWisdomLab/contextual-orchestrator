@@ -328,6 +328,8 @@ def test_review_allocation_failure_is_typed_at_http_boundary(monkeypatch):
                 payload = json.load(response)
             assert payload["error"]["code"] == "review_model_not_allowed"
             assert payload["error"]["detail"]["retryable"] is False
+            response_schema = OPENAPI_SPEC["paths"][path]["post"]["responses"]["400"]["content"]["application/json"]["schema"]
+            validate(payload, {**response_schema, "components": OPENAPI_SPEC["components"]})
         assert sends == []
     finally:
         server.shutdown()
