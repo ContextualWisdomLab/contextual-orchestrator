@@ -18,6 +18,7 @@ import urllib.request
 from jsonschema import validate
 
 from contextual_orchestrator.api_contract import OPENAPI_SPEC
+from contextual_orchestrator import CostRoutingCoordinator, InMemoryConfigStore
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
@@ -464,6 +465,49 @@ def test_review_gateway_rerank_allocation_is_typed_and_never_sends(monkeypatch):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_review_gateway_embedding_batch_rejects_before_backend_submission(monkeypatch):
+    """The direct batch coordinator cannot bypass review allocation."""
+    discovered = [replace(
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+        capabilities=("chat", "embedding"),
+    )]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "synthetic",
+    })
+    submissions: list[str] = []
+
+    class Backend:
+        name = "synthetic"
+
+        def submit(self, requests, metadata=None):
+            del requests, metadata
+            submissions.append("sent")
+            raise AssertionError("embedding backend must not be reached")
+
+    class Counter:
+        def count_text(self, text, model=""):
+            del model
+            return len(text.split())
+
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_batch_backend=Backend(),
+        embedding_token_counter=Counter(),
+    )
+    for model, status, code in (
+        ("router-review", 400, "review_model_not_allowed"),
+        (TaskOrchestrator.FREE_MODEL, 503, "allocation_evidence_unavailable"),
+    ):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            coordinator.submit_embeddings_batch(["synthetic"], model=model)
+        assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+            status, code, False,
+        )
+    assert submissions == []
 
 
 def test_image_review_request_without_vision_evidence_stops_before_send(monkeypatch):

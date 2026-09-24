@@ -1479,6 +1479,7 @@ class CostRoutingCoordinator:
             raise TypeError("zdr_only must be a boolean")
         if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
             raise TypeError("agent_id must be a non-empty string when provided")
+        self.orchestrator._require_review_allocation_evidence(model)
         self._refresh_embedding_backend()
         resolved_model, resolved_agent_id, resolved_provider = self._resolve_embedding_target(
             model, zdr_only, agent_id
