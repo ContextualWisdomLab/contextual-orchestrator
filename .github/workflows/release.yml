@@ -254,6 +254,22 @@ jobs:
             exit 1
           fi
 
+      - name: Refuse external requirement sources before any environment is built
+        run: |
+          set -euo pipefail
+          # `uv run --locked` below materialises an environment, so the source
+          # allowlist and the licence adjudication have to happen first: an
+          # unreviewed requirement must never be fetched or installed to get
+          # this far.
+          python -m scripts.ci.dependency_inventory --repository-root . \
+            --output /dev/null --check-sources-only
+          python -m scripts.ci.dependency_inventory --repository-root . \
+            --output dependency-inventory.json --resolve-licenses
+          python -m scripts.ci.release_license_gate \
+            --inventory dependency-inventory.json \
+            --source-sha "${TARGET_SHA}" \
+            --mode preinstall
+
       - name: Run the full required test suite fresh on this exact commit
         run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
 
@@ -286,12 +302,36 @@ jobs:
             exit 1
           fi
 
+      - name: Refuse to release a GPL-family or unknown-licence artifact
+        run: |
+          set -euo pipefail
+          # The SBOM downloaded above is the artifact's own component list.
+          # It is also checked for coverage: every scope pyproject.toml
+          # declares, and every non-Python manifest that ships, must actually
+          # appear, because a partial SBOM is silence rather than evidence.
+          # A failure here stops the run before `publish` exists, so no tag is
+          # created and nothing is published; it is never waived.
+          # The inventory is regenerated here from the released commit's own
+          # lockfiles and refuses to run against modified bytes, so the scopes
+          # the environment SBOM cannot see are enumerated against the exact
+          # source this release publishes rather than against whatever the
+          # security run happened to hold.
+          python -m scripts.ci.dependency_inventory \
+            --repository-root . --output dependency-inventory.json --resolve-licenses
+          python -m scripts.ci.release_license_gate \
+            --sbom sbom-download/cyclonedx-sbom.json \
+            --pyproject pyproject.toml \
+            --repository-root . \
+            --inventory dependency-inventory.json \
+            --source-sha "${TARGET_SHA}"
+
       - name: Upload rendered notes and SBOM for the publish job
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
         with:
           name: release-publish-inputs
           path: |
             release-notes.md
+            dependency-inventory.json
             sbom-download/**
           if-no-files-found: error
           retention-days: 1
