@@ -117,15 +117,16 @@ reset after the transport began has unknown outcome and stops the request with
 408, 409, and 425 alone likewise do not prove the completion was never
 applied, so these responses terminate this request. Provider-declared cooldown
 is still recorded for later requests. Direct local-slot admission failure
-before the transport call, or an explicit stale-model/request-size rejection,
+before the transport call, or a provider response explicitly identifying
+`model_not_found` or a request-size rejection,
 can advance to another eligible candidate. The test counts transport calls
 on each side of the local slot and asserts that an unknown outcome never
 causes a second send. This narrows the earlier virtual-selector failover
 behavior for the review pool; other virtual selectors retain their prior
-contract. The same no-replay rule covers the conduct role calls and final
-structured synthesis when entered through a review-free completion request;
-direct `conduct` calls retain their existing policy. No provider idempotency
-agreement has been established here.
+contract. The same no-replay rule follows each actual review-tagged candidate
+through route and conduct calls, including a mixed free pool. A non-review
+candidate retains its prior retry policy. A bodyless HTTP 404 cannot authorize
+another review send. No provider idempotency agreement has been established.
 This matches the non-idempotent retry boundary in
 [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
 

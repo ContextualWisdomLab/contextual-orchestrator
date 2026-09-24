@@ -2062,7 +2062,9 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
     return False
 
 
-def _is_passthrough_failover_error(exc: BaseException) -> bool:
+def _is_passthrough_failover_error(
+    exc: BaseException, *, review_free_request: bool = False
+) -> bool:
     """Recognize failures proving that a passthrough request was not accepted."""
     if isinstance(exc, _LocalProviderAdmissionTimeout):
         return True
@@ -2076,12 +2078,26 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, ProviderUpstreamError):
             if current.provider_status in _PASSTHROUGH_REJECTED_STATUS:
-                return True
+                if not review_free_request or current.provider_status not in (404, 410):
+                    return True
+                if current.extra_detail.get("model_refusal_proven") is True:
+                    return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and current.code in _PASSTHROUGH_REJECTED_STATUS
         ):
-            return True
+            if not review_free_request or current.code not in (404, 410):
+                return True
+            try:
+                body = json.loads(provider_error_body(current))
+            except Exception:  # noqa: BLE001 - provider error bodies are untrusted streams
+                body = None
+            if (
+                isinstance(body, dict)
+                and isinstance(body.get("error"), dict)
+                and body["error"].get("code") == "model_not_found"
+            ):
+                return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and _is_provider_tool_description_limit_error(current)
@@ -6344,7 +6360,9 @@ class TaskOrchestrator:
                         requested_model == self.FREE_MODEL and "review" in candidate.tags
                     )
                     can_advance_ambiguous = virtual_selector and not review_free_request
-                    failover_eligible = _is_passthrough_failover_error(exc)
+                    failover_eligible = _is_passthrough_failover_error(
+                        exc, review_free_request=review_free_request
+                    )
                     if review_free_request and classified.provider_status in {
                         408, 409, 425, 429, 503
                     }:
@@ -6720,7 +6738,7 @@ class TaskOrchestrator:
             _allowed_agent_ids=(
                 free_request_ids if free_only else None if virtual_model else {final_agent.id}
             ),
-            _review_no_replay=free_only and "review" in final_agent.tags,
+            _review_no_replay=free_only,
         )
         in_flight_tokens, in_flight_cost = self._trace_budget_spend(workflow["trace"])
         self._raise_if_spend_budget_exceeded(
@@ -9236,6 +9254,7 @@ class TaskOrchestrator:
                     text=text,
                     role="worker",
                     allowed_agent_ids=allowed_agent_ids,
+                    review_no_replay=free_only,
                     virtual_selector=virtual_selector,
                     prompt_token_lower_bound=prompt_bound,
                 )
@@ -9475,6 +9494,7 @@ class TaskOrchestrator:
         }
         if model_name == self.FREE_MODEL and _allowed_agent_ids is not None:
             free_ids.intersection_update(_allowed_agent_ids)
+        review_no_replay = _review_no_replay or model_name == self.FREE_MODEL
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
             _allowed_agent_ids
@@ -9577,7 +9597,7 @@ class TaskOrchestrator:
                 allowed_agent_ids=(
                     free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
                 ),
-                review_no_replay=_review_no_replay,
+                review_no_replay=review_no_replay,
                 excluded_agent_ids=_excluded_agent_ids,
                 virtual_selector=virtual_selector,
                 prompt_token_lower_bound=step_prompt_bound,
@@ -11061,14 +11081,19 @@ class TaskOrchestrator:
                                 exc.extra_detail.get("retry_after_seconds"),
                                 status=exc.provider_status,
                             )
-                        if (
+                        if exc.error_code == "model_not_found" and (
                             excluded_agent_ids is not None
-                            and exc.error_code == "model_not_found"
+                            or (review_no_replay and "review" in agent.tags)
+                        ) and (
+                            not review_no_replay
+                            or "review" not in agent.tags
+                            or exc.extra_detail.get("model_refusal_proven") is True
                         ):
-                            excluded_agent_ids.add(agent.id)
+                            if excluded_agent_ids is not None:
+                                excluded_agent_ids.add(agent.id)
                             self._record_failure(agent.id)
                             break
-                        if review_no_replay:
+                        if review_no_replay and "review" in agent.tags:
                             # A review completion may have been accepted before
                             # this transport failure. Only the direct local-slot
                             # exception below proves no send took place.
@@ -11844,7 +11869,10 @@ class TaskOrchestrator:
             except ProviderUpstreamError as exc:
                 if exc.provider_status not in (429, 503):
                     raise
-                if review_no_replay:
+                if review_no_replay and any(
+                    agent.id == exc.agent_id and "review" in agent.tags
+                    for agent in self.agents
+                ):
                     raise
                 required_tags = ("vision",) if self._source_image_parts(messages) else ()
                 prompt_context = self._prompt_interaction(messages)
