@@ -91,8 +91,8 @@ check those contracts separately before replacing a source pin.
    - checks out `TARGET_SHA`; a fresh publication must match the current
      protected-main tip, while a resume may use its verified ancestor;
    - checks the exact-head rollup and project version;
-   - runs `uv run --locked --extra api --extra db --extra queue --group dev
-     python -m pytest -q`;
+   - installs locked test dependencies, builds the Rust decision measurement
+     with `maturin develop`, then runs `uv run --no-sync python -m pytest -q`;
    - renders notes from the exact commit's CHANGELOG section;
    - downloads the exact-commit mandatory CycloneDX SBOM, builds the Python
      wheel, records its SHA-256 digest, and passes these with the notes to the

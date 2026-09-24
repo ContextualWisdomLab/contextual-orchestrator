@@ -254,8 +254,15 @@ jobs:
             exit 1
           fi
 
+      - name: Build locked native decision measurement for the full test suite
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          uv sync --locked --extra api --extra db --extra queue --group dev --group native-build
+          uv run --no-sync maturin develop --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml
+
       - name: Run the full required test suite fresh on this exact commit
-        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+        run: uv run --no-sync python -m pytest -q
 
       - name: Render release notes from CHANGELOG.md
         run: |
