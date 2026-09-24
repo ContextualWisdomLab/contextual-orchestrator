@@ -2036,8 +2036,10 @@ def _is_omit_equivalent_control(key: str, value: Any) -> bool:
     return False
 
 
-def _is_request_too_large_error(exc: BaseException) -> bool:
-    """Recognize request-size rejection through a bounded exception chain."""
+def _is_request_too_large_error(
+    exc: BaseException, *, follow_chain: bool = True
+) -> bool:
+    """Recognize a request-size rejection, optionally following its cause chain."""
     current: BaseException | None = exc
     seen: set[int] = set()
     for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
@@ -2053,6 +2055,8 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
             )
         ):
             return True
+        if not follow_chain:
+            return False
         if current.__cause__ is not None:
             current = current.__cause__
         elif current.__suppress_context__:
@@ -2068,7 +2072,11 @@ def _is_passthrough_failover_error(
     """Recognize failures proving that a passthrough request was not accepted."""
     if isinstance(exc, _LocalProviderAdmissionTimeout):
         return True
-    if _is_request_too_large_error(exc):
+    if review_free_request and not isinstance(
+        exc, (ProviderUpstreamError, urllib.error.HTTPError)
+    ):
+        return False
+    if _is_request_too_large_error(exc, follow_chain=not review_free_request):
         return True
     current: BaseException | None = exc
     seen: set[int] = set()
@@ -2114,6 +2122,8 @@ def _is_passthrough_failover_error(
             and current.errno == socket.EAI_AGAIN
         ):
             return True
+        if review_free_request:
+            return False
         if current.__cause__ is not None:
             current = current.__cause__
         elif current.__suppress_context__:
@@ -6392,8 +6402,13 @@ class TaskOrchestrator:
                                 )
                         if _is_ambiguous_passthrough_transport_failure(exc) or (
                             review_free_request
-                            and classified.provider_status is None
-                            and classified.retryable
+                            and (
+                                (classified.provider_status is None and classified.retryable)
+                                or (
+                                    not isinstance(exc, (ProviderUpstreamError, urllib.error.HTTPError))
+                                    and (exc.__cause__ is not None or exc.__context__ is not None)
+                                )
+                            )
                         ):
                             # The candidate may already have applied the request.
                             # Review-free completions have no idempotency proof,

@@ -395,6 +395,35 @@ def test_free_review_dns_failure_does_not_authorize_replay(wrapped: bool) -> Non
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+@pytest.mark.parametrize("status", [404, 413])
+def test_free_review_wrapped_rejection_does_not_authorize_replay(status: int) -> None:
+    """A prior rejection in an exception chain cannot prove this send was rejected."""
+    body = {"error": {"code": "model_not_found"}} if status == 404 else None
+    with _http_error(status, body) as prior:
+        failure = RuntimeError("synthetic current send outcome unknown")
+        failure.__cause__ = prior
+        client = SequencedProxyClient({
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        })
+        orchestrator = _build(client)
+        orchestrator.agents = [
+            replace(agent, tags=(*agent.tags, "cost:free", "review"))
+            for agent in orchestrator.agents
+        ]
+
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.proxy_completion({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "synthetic"}],
+            })
+
+    assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+        502, "provider_outcome_unknown", False,
+    )
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
     """A generic provider invalid_tools response must not hide a bad request."""
     failure = _invalid_tools_error()
