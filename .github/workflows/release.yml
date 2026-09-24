@@ -296,9 +296,16 @@ jobs:
       - name: Build the installable package for this exact commit
         run: |
           set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${TARGET_SHA}")"
+          export SOURCE_DATE_EPOCH
           uv build --wheel --python 3.12 --out-dir dist
           wheel="dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
           test -s "${wheel}"
+          uv build --wheel --python 3.12 --out-dir "${RUNNER_TEMP}/release-rebuild"
+          if ! cmp "${wheel}" "${RUNNER_TEMP}/release-rebuild/${wheel##*/}"; then
+            echo "::error::The exact-commit wheel changed between isolated builds." >&2
+            exit 1
+          fi
           (cd dist && sha256sum "${wheel##*/}" > SHA256SUMS)
           release_site="${RUNNER_TEMP}/release-package"
           uv pip install --no-deps --python 3.12 --target "${release_site}" "${wheel}"
