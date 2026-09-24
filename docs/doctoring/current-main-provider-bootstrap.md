@@ -56,9 +56,13 @@ retained as a structured-output capability tag. The structured auto route uses
 only a synthesizer carrying that evidence and fails closed when none exists;
 model names are never used to infer support.
 
-The bootstrap pool is provider-diverse before it is cost-ordered. Missing price is
-`unknown`, not zero. This avoids treating a provider such as Bytez, whose public
-catalog may use a non-token billing unit, as a fabricated free route.
+The bootstrap proposes provider/model-group spread while retaining cost order.
+Every diversity proposal is admitted only when it preserves the
+price-evidenced candidate sequence; otherwise it fails closed until an explicit
+allocation model supplies the missing utility evidence. Missing price is `unknown`, not zero.
+This avoids both treating a provider such as Bytez, whose public catalog may use a
+non-token billing unit, as a fabricated free route and treating provider labels as
+undocumented outage weights.
 
 Candidate selection and durable serving activation are separate claims:
 
@@ -104,7 +108,8 @@ the emitted report.
 The automatic pool remains a routing input rather than an unsupported claim that a
 single cheapest model is universally best. Quality/performance selection remains in
 the orchestrator's paper-grounded routing and orchestration layer; this bootstrap
-only establishes a compatible candidate set and failure isolation.
+only establishes a compatible candidate set. It does not claim failure isolation
+from provider labels alone.
 
 National Institute of Standards and Technology. (2020). *Security and privacy
 controls for information systems and organizations* (NIST Special Publication
@@ -123,3 +128,53 @@ https://doi.org/10.48550/arXiv.2512.04695
 Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
 *Learning to orchestrate agents in natural language with the Conductor*
 (arXiv:2512.04388). https://doi.org/10.48550/arXiv.2512.04388
+
+## Experiential Labs
+
+`experiential_labs` is an optional provider. Bootstrap accepts the organization
+Secret name `EXPERIENTAL_LABS_API_KEY` exactly as registered; the spelling is
+intentional. The catalog-sync workflow transports it into the existing encrypted
+KV. Runtime discovery reads that KV name and sends Bearer authentication to
+`https://api.experientiallabs.ai/v1/models`; chat uses the same `/v1` base.
+Existing deployments do not need this additional credential.
+
+The integration does not infer free pricing or ZDR from a key or model slug.
+Unknown pricing stays unknown. Experiential's public catalog retention verdict
+is evidence about routed lanes, not enforcement: its organization require-ZDR
+setting controls actual routing. This adapter does not invent a request header
+or promote catalog retention to a guaranteed ZDR route. Private-review admission
+requires verified privacy evidence for the exact model, deployment and account.
+Experiential models can be ZDR-capable, non-ZDR or unknown within the same
+provider. `/v1/models` does not declare retention. The management catalog
+verdicts `zdr_all_rungs`, `zdr_enforceable` and `not_zdr` describe platform-funded
+lanes; they do not prove the organization policy or cover arbitrary BYOK and
+waterfall overrides. A Secret or one model attestation cannot authorize another
+model. The local require-ZDR policy excludes non-ZDR and unknown model evidence;
+its regression test does not verify remote organization enforcement.
+Explicit non-ZDR evidence vetoes a legacy positive ZDR marker. Persisted
+conflicting tags restore as non-ZDR and cannot enter a require-ZDR request;
+a policy-disabled request retains its normal eligibility rules. OpenRouter discovery
+attestation now applies only to OpenRouter rows; matching model identifiers at
+other providers cannot grant ZDR status. Independently supplied provider privacy
+evidence is preserved. This repairs the cross-provider finding from PR #971,
+but does not verify Experiential organization settings or free-route entitlement.
+Provider support alone does not establish that a consumer's hosted review now passes.
+
+Pinned producer source: [experientiallabs/experiential discovery.py](https://github.com/experientiallabs/experiential/blob/ff8d0eb8e499edaec574b96d08528504e9e0e548/exp/runtime/gateway/discovery.py) at `ff8d0eb8e499edaec574b96d08528504e9e0e548`.
+
+References (retrieved September 12–13, 2026): Experiential Labs, [Authentication](https://platform.experientiallabs.ai/docs/authentication),
+[API reference](https://platform.experientiallabs.ai/docs/reference), and
+[Models](https://platform.experientiallabs.ai/docs/models).
+
+The review gateway recognizes this credential during bootstrap and ordinary
+routing may use its discovered models. Experiential rows remain excluded from
+the free pool until an enforceable provider-specific free-route contract exists;
+paid and unknown-price models remain excluded, as do credentials absent from the
+current bootstrap. This source authorization is not live pricing evidence.
+
+The public documentation describes an optional nano-USD pricing extension, but
+the pinned public producer route currently serializes a strict ID-only
+`/v1/models` envelope and its extension helper has no served-route caller in
+that source snapshot. The hosted deployment revision has not been verified
+against this public snapshot. Prices therefore remain unknown until a verified
+served contract is available; this repository does not claim hosted pricing support.

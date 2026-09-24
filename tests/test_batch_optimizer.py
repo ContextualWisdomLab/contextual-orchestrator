@@ -22,6 +22,14 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.orchestrator import ModelClient, optimize_orchestration
 
 
+@pytest.fixture(autouse=True)
+def _exercise_unreleased_optimizer_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep legacy arithmetic tests internal while the public API fails closed."""
+    monkeypatch.setattr(
+        orchestrator_module, "_require_released_optimizer_selection_contract", lambda: None
+    )
+
+
 class _CountingClient(ModelClient):
     """Counts chat vs batch calls; batch reports usage so spend sees reported tokens."""
 

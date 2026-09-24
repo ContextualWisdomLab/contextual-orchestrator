@@ -1,6 +1,6 @@
 # Review gateway free-pool admission evidence
 
-Date: 2026-09-01
+Date: 2026-09-08
 
 ## Scope
 
@@ -25,10 +25,12 @@ Let:
   explicit zero-cost evidence and the repository's existing blind-serving
   capability/modality constraints;
 - `P` be models whose credential source is one of
-  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, or
-  `OPENROUTER_API_KEY`;
+  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+  `OPENROUTER_API_KEY`, or `OPENCODE_ZEN_API_KEY`;
 - `R` be models whose credential source was actually registered from the
   caller-declared credential array for the current sidecar bootstrap.
+  Default bootstrap uses every accepted provider credential name, so a
+  CI-seeded `OPENCODE_ZEN_API_KEY` is registered when present.
 
 The review candidate set is exactly `G ∩ P ∩ R`.
 
@@ -48,6 +50,20 @@ not manufacture a fallback preference for it.
 `OPENAI_API_KEY` may therefore be present, registered, and globally discoverable,
 while every OpenAI-derived row contributes zero elements to `P` and consequently
 zero elements to the `orchestrator/free` review candidate set.
+
+`OPENCODE_ZEN_API_KEY` is the shared KV credential for OpenCode Zen and
+OpenCode Go. Those catalogs are independent provider accounts. Honest free
+rows from either catalog may enter `P` through that one credential. Missing
+or non-zero price evidence still fails `G`, so an unpriced Go listing does
+not become free by credential name.
+
+Operational evidence for this widening is ContextualWisdomLab/contextual-orchestrator
+PR #1094, Noema job 101747622034: the sidecar returned HTTP 429 on
+`google/gemma-4-31b-it:free` with caller `attempts=1` after 184s, while
+preflight `ready_count=1` was a NIM vision model. `OPENCODE_ZEN_API_KEY` was
+seeded in CI but excluded from `P` and from default `R`, so Zen/Go free
+evidence never entered the review pool. OpenCode handshake job 101759907361
+then failed waiting for a current-head verdict from the same sidecar.
 
 ## Security and routing rationale
 
@@ -74,7 +90,9 @@ No new routing heuristic is introduced by this change.
 
 The PR implementing this contract must prove at least the following cases:
 
-- all five provider credentials may be supplied and registered together;
+- all five required provider credentials may be supplied and registered together;
+- a CI-seeded `OPENCODE_ZEN_API_KEY` is registered by default bootstrap and
+  honest-free Zen and Go rows enter the review free pool;
 - globally discovered OpenAI rows never enter the review free pool;
 - an OpenAI credential that predates the current bootstrap cannot enter it;
 - an otherwise free, permitted provider credential that predates but was not
@@ -98,22 +116,23 @@ Hosted exact-head checks and independent review remain the merge authority.
 
 ## Redistribution boundary and source summaries
 
-FrugalGPT and RouteLLM are already vendored in `docs/papers/` and their
-redistribution basis is documented in `docs/papers/README.md`; this note reuses
-that repository evidence rather than creating duplicate paper copies. The newer
+FrugalGPT and RouteLLM remain cited and linked in `docs/papers/README.md`.
+The 2026-09-05 redistribution audit removed the earlier bundled copies because
+arXiv's distribution grant did not establish repository redistribution permission.
+This does not withdraw their research relevance or change the admission rule. The newer
 MMR-Bench source is cited and summarized here rather than vendored because this
 change does not need a local copy to execute and this PR does not assert a
 redistribution license for that manuscript. NIST publications are linked to
 their authoritative DOI/publication records rather than duplicated so the
 controlling revision and provenance remain explicit.
 
-- **FrugalGPT (Chen et al., 2024):** the vendored
-  `docs/papers/frugalgpt-cost-2305.05176.pdf` formulates cost/quality-aware use of
+- **FrugalGPT (Chen et al., 2023):** the
+  [arXiv preprint](https://arxiv.org/abs/2305.05176v1) formulates cost/quality-aware use of
   LLMs and evaluates cascades that can reduce serving cost while preserving or
   improving task performance. It is relevant only after provider authorization
   and capability admission; it does not authorize a provider credential.
-- **RouteLLM (Ong et al., 2024):** the vendored
-  `docs/papers/routellm-routing-2406.18665.pdf` trains routers from preference
+- **RouteLLM (Ong et al., 2024):** the
+  [arXiv paper](https://arxiv.org/abs/2406.18665) trains routers from preference
   data to choose between candidate LLMs under a quality/cost trade-off. It
   supports learned, evidence-evaluated routing rather than a hand-authored
   provider ordering.
@@ -134,9 +153,9 @@ hand-assigned priority, fixed tie-break, or heuristic fallback.
 
 ## References
 
-Chen, L., Zaharia, M., & Zou, J. (2024). FrugalGPT: How to use large language
-models while reducing cost and improving performance. *Transactions on Machine
-Learning Research*. https://arxiv.org/abs/2305.05176
+Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language
+models while reducing cost and improving performance* [Preprint]. arXiv.
+https://arxiv.org/abs/2305.05176v1
 
 Joint Task Force. (2020). *Security and privacy controls for information systems
 and organizations* (NIST Special Publication 800-53, Rev. 5). National Institute

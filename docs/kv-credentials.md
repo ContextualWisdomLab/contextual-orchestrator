@@ -286,13 +286,23 @@ principle **"No os.getenv, values from KV"**, that source moves to the KV:
 
 Provider credentials and gateway bearer authentication are separate concerns.
 The CLI resolves named server tokens from this KV when `--auth-token-key`,
-`--admin-token-key`, or `--inference-token-key` is used; it does not read the
-legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
-Explicit token flags remain local-development escape hatches. Add `--production`
- to require split admin/inference credentials and reject the insecure admin
- session cookie option; `--allow-public-bind` requires split credentials and
- also rejects the insecure cookie option.
+`--admin-token-key`, `--inference-token-key`, or `--trace-token-key` is used;
+it does not read the legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment
+variables at request time. Explicit token flags remain local-development
+escape hatches. Add `--production` to require split admin/inference
+credentials and reject the insecure admin session cookie option;
+`--allow-public-bind` requires split credentials and also rejects the
+insecure cookie option.
 Both gates fail before resolving any credential when a single token is selected.
+
+The `trace` purpose (ADR 0026) has its own optional credential,
+`--trace-token`/`--trace-token-key` (KV name `CONTEXTUAL_ORCHESTRATOR_TRACE_TOKEN`
+by default). In single-token mode (only `--auth-token`/`--auth-token-key`
+configured, with no admin/inference/trace token), `auth_token` still
+authorizes `trace` as the documented local escape hatch. In split
+admin/inference mode, admin and inference tokens never authorize `trace`:
+without a distinct `trace_token`, trace-bearing responses fail closed
+(`401`); with one configured, only that token authorizes the `trace` scope.
 
 For production ecosystem access, construct `SecurityConfig` with a reviewed
 `bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must
@@ -306,9 +316,9 @@ confidential-client secret placement remain deployment-controller operations.
 Once a provider's credential is registered in the KV, `contextual_orchestrator`
 can discover that provider's available models and turn them into agent-pool
 candidates automatically — no hand-written `agents.json` entry required.
-`contextual_orchestrator/model_discovery.py` covers seven provider sources out of the
-box, all resolved through `get_credential` (never fabricated, never read from
-`os.getenv`):
+`contextual_orchestrator/model_discovery.py` covers the providers below out of
+the box, all resolved through `get_credential` (never fabricated, never read
+from `os.getenv`):
 
 | Provider          | KV credential name       | Auth header       |
 | ------------------ | ------------------------ | ------------------ |
@@ -318,14 +328,17 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | OpenCode Go         | `OPENCODE_ZEN_API_KEY`   | `Bearer <token>`   |
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
-| Bytez               | `BYTEZ_API_KEY`          | `<token>`          |
+| Bytez               | `BYTEZ_API_KEY`          | raw token          |
 | Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
 
-OpenCode Go uses a distinct catalog and serving endpoint, but the same account
-credential as OpenCode Zen. Register `OPENCODE_ZEN_API_KEY` once in the KV;
-discovery never reads a second Go-specific secret from the environment. Only
-models.dev rows assigned to the OpenAI-compatible protocol enter this chat
-endpoint; Responses- and Anthropic-protocol rows fail closed.
+OpenCode Go reuses `OPENCODE_ZEN_API_KEY`. Registering that one credential
+discovers both `https://opencode.ai/zen/v1` and `https://opencode.ai/zen/go/v1`;
+the two catalogs stay separate provider accounts. The trusted review sidecar
+admits honest-free rows from those catalogs into `orchestrator/free` when that
+credential is present; `OPENAI_API_KEY` stays out of that pool.
+Only models.dev rows assigned to the OpenAI-compatible protocol enter Go's chat
+endpoint; Responses- and Anthropic-protocol rows are excluded. Go requires a
+paid subscription, so zero token rates do not make its models free.
 
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
 `LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
@@ -338,9 +351,14 @@ When serving the persisted agents, pass the same host with
 `--allowed-provider-host`; startup discovery reads this injected runtime policy
 and never re-reads or promotes gateway environment values.
 
-Bytez's raw token scheme (rather than `Bearer`) is why `ModelAgent` has an
+Bytez discovery sends the provider token without the OpenAI-compatible
+`Bearer` prefix. That provider-specific behavior is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
-doesn't use the OpenAI-compatible default.
+doesn't use the default. Discovery checks `task=chat` first and then the
+documented chat-completion-compatible `task=text-generation` catalog. It does
+not issue an unfiltered request. If both catalogs are empty or fail, refresh
+fails closed with a bounded error code; a persisted last-known-good catalog is
+kept unchanged.
 
 Register any subset of the provider keys, then discover:
 

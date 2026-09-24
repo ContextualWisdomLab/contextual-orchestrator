@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -65,6 +66,7 @@ def test_http_chat_accepts_string_metadata() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_metadata_non_object() -> None:
@@ -84,6 +86,7 @@ def test_http_chat_rejects_metadata_non_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_metadata_scalar_values_as_strings() -> None:
@@ -103,6 +106,7 @@ def test_http_chat_accepts_metadata_scalar_values_as_strings() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_metadata_nested_object_value() -> None:
@@ -124,6 +128,7 @@ def test_http_chat_rejects_metadata_nested_object_value() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_metadata_too_many_entries() -> None:
@@ -145,6 +150,7 @@ def test_http_chat_rejects_metadata_too_many_entries() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_metadata_key_too_long() -> None:
@@ -165,6 +171,7 @@ def test_http_chat_rejects_metadata_key_too_long() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_metadata_value_too_long() -> None:
@@ -185,6 +192,7 @@ def test_http_chat_rejects_metadata_value_too_long() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_string_metadata() -> None:
@@ -203,6 +211,7 @@ def test_http_completions_accepts_string_metadata() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_metadata_omitted() -> None:
@@ -220,6 +229,7 @@ def test_http_chat_accepts_metadata_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":

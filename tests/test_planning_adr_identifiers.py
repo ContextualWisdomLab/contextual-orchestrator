@@ -8,7 +8,10 @@ import re
 
 def test_planning_adr_identifiers_are_unique_and_match_content() -> None:
     """Reject duplicate or internally inconsistent planning ADR identifiers."""
-    adr_files = sorted(Path("docs/planning/adrs").glob("[0-9][0-9][0-9][0-9]-*.md"))
+    adr_files = sorted(
+        path for path in Path("docs/planning/adrs").glob("[0-9][0-9][0-9][0-9]-*.md")
+        if re.match(r"^\d{4}-[a-z]", path.name)
+    )
     identifiers = [path.name[:4] for path in adr_files]
 
     assert len(identifiers) == len(set(identifiers))

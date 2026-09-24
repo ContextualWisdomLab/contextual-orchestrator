@@ -8,7 +8,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -74,7 +74,123 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": ["measured", "unavailable"],
                     },
-                    "orchestration": {"type": "object"},
+                    "prompt_count_source": {
+                        "type": "string",
+                        "enum": ["provenance_exact"],
+                        "description": (
+                            "Present only when an authoritative prompt-message "
+                            "token count was obtained for this exact served "
+                            "request from token_counting.COUNTING_PROVENANCE_"
+                            "REGISTRY; omitted (never fabricated) otherwise."
+                        ),
+                    },
+                    "shared_context_budget": {
+                        "type": "object",
+                        "required": ["context_window", "prompt_tokens", "output_ceiling", "source"],
+                        "properties": {
+                            "context_window": {"type": "integer", "minimum": 1},
+                            "prompt_tokens": {"type": "integer", "minimum": 0},
+                            "output_ceiling": {"type": "integer"},
+                            "source": {"type": "string", "enum": ["exact"]},
+                        },
+                        "description": (
+                            "Present only when the served agent's context window, "
+                            "its published output ceiling, and an exact prompt-"
+                            "message token count were all authoritative for this "
+                            "exact request (see "
+                            "token_counting.shared_context_output_budget); "
+                            "omitted (never estimated) otherwise."
+                        ),
+                    },
+                    "orchestration": {
+                        "type": "object",
+                        "description": (
+                            "Sibling usage_source/measurement_status fields on this "
+                            "response label estimates; they never present a gateway "
+                            "estimate as authoritative provider usage."
+                        ),
+                        "properties": {
+                            "route": {"$ref": "#/components/schemas/OrchestrationRoute"},
+                        },
+                    },
+                },
+            },
+            "OrchestrationRouteAttempt": {
+                "type": "object",
+                "description": (
+                    "One per-candidate attempt evidence entry, recorded before "
+                    "(and, for the served candidate, alongside) a completion. "
+                    "Emitted by both the structured-synthesis candidate loop "
+                    "(_orchestrated_provider_completion) and the single-worker "
+                    "streaming fallback (stream_route) so callers see one fixed "
+                    "vocabulary regardless of path (issue #1016, rows 2 and 4)."
+                ),
+                "required": ["agent_id", "model", "outcome"],
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "model": {"type": "string"},
+                    "outcome": {
+                        "type": "string",
+                        "enum": [
+                            "served",
+                            "request_too_large",
+                            "retryable_transport",
+                            "deadline_exceeded",
+                            "fail_closed",
+                        ],
+                        "description": (
+                            "served: this candidate returned the completion. "
+                            "request_too_large: the payload exceeded a provider "
+                            "limit (HTTP 413). retryable_transport: a transient "
+                            "transport/provider failure (429/5xx/network) eligible "
+                            "for failover. deadline_exceeded: the administrator-"
+                            "configured model_timeout policy elapsed before a "
+                            "response was returned (reuses PR #1053's "
+                            "model_timeout error_code rather than a second "
+                            "vocabulary). fail_closed: a non-transient provider "
+                            "or client error that stops that candidate."
+                        ),
+                    },
+                    "error_code": {
+                        "type": "string",
+                        "description": "Optional OpenAI-compatible error code; absent when outcome is served.",
+                    },
+                    "provider_status": {
+                        "type": ["integer", "null"],
+                        "description": "Optional upstream HTTP status when the failure had one.",
+                    },
+                    "retryable": {
+                        "type": "boolean",
+                        "description": "Optional: whether the gateway's own transient-retry policy would retry this failure.",
+                    },
+                    "transport": {
+                        "type": "string",
+                        "description": (
+                            "Optional transport tag identifying which call path "
+                            "produced this attempt, e.g. structured_synthesis or stream."
+                        ),
+                    },
+                },
+            },
+            "OrchestrationRoute": {
+                "type": "object",
+                "description": (
+                    "Route evidence for one completion: every eligible agent, "
+                    "every attempt made (including the served one), and why the "
+                    "route terminated. Stable across the structured-synthesis "
+                    "and single-worker streaming fallback paths."
+                ),
+                "required": ["eligible_agent_ids", "attempted"],
+                "properties": {
+                    "eligible_agent_ids": {"type": "array", "items": {"type": "string"}},
+                    "attempted": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/OrchestrationRouteAttempt"},
+                    },
+                    "terminal_reason": {
+                        "type": "string",
+                        "description": "Why the route stopped, e.g. served, fail_closed, eligible_set_exhausted.",
+                    },
                 },
             },
             "ModelGroupWrite": {
@@ -191,6 +307,20 @@ OPENAPI_SPEC = {
                     "200": {"description": "Model"},
                     "404": {"description": "Model not found"},
                 },
+            }
+        },
+        "/v1/readiness": {
+            "get": {
+                "operationId": "get_inference_readiness",
+                "summary": "Get inference-scoped, per-candidate provider readiness diagnostics",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "refresh",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "boolean", "default": False},
+                }],
+                "responses": {"200": {"description": "Redacted provider readiness report"}},
             }
         },
         "/v1/chat/completions": {
@@ -471,6 +601,78 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Agent pool collection"}},
             }
         },
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy/history": {
+            "get": {
+                "operationId": "list_model_timeout_history",
+                "summary": "Read older model timeout changes with a stable revision cursor",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": "agent_pool_id", "in": "path", "required": True, "schema": {"type": "string"}},
+                    {"name": "worker_agent_id", "in": "path", "required": True, "schema": {"type": "string"}},
+                    {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
+                    {"name": "before_revision", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": _AGENT_POOL_INTEGER_MAX}},
+                ],
+                "responses": {
+                    "200": {"description": "Descending revisions; changed_at is Unix seconds, actor_id is an opaque digest or null",
+                            "content": {"application/json": {"schema": {
+                                "type": "object", "additionalProperties": False,
+                                "required": ["items", "next_before_revision", "history_available"],
+                                "properties": {
+                                    "history_available": {"type": "boolean"},
+                                    "next_before_revision": {"type": ["integer", "null"], "minimum": 1},
+                                    "items": {"type": "array", "maxItems": 100, "items": {
+                                        "type": "object", "additionalProperties": False,
+                                        "required": ["revision", "previous_seconds", "configured_seconds", "changed_at", "actor_id", "restored_from_revision"],
+                                        "properties": {
+                                            "revision": {"type": "integer", "minimum": 1},
+                                            "previous_seconds": {"type": ["number", "null"]},
+                                            "configured_seconds": {"type": ["number", "null"]},
+                                            "changed_at": {"type": "number"},
+                                            "actor_id": {"type": ["string", "null"]},
+                                            "restored_from_revision": {"type": ["integer", "null"], "minimum": 1},
+                                        },
+                                    }},
+                                },
+                            }}}},
+                    "400": {"description": "Invalid page size or revision cursor"},
+                    "401": {"description": "Administrator authentication required"},
+                    "404": {"description": "Model configuration not found"},
+                },
+            },
+        },
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}/timeout_policy": {
+            "get": {
+                "operationId": "get_model_timeout_policy",
+                "summary": "Read configured timeout and whether serving applies that model wait",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
+                    for name in ("agent_pool_id", "worker_agent_id")
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Stored policy and local snapshot; serving applies the selected model wait",
+                        "content": {"application/json": {"schema": {
+                            "type": "object", "additionalProperties": False,
+                            "required": ["configured_seconds", "revision", "unit",
+                                         "serving_snapshot_seconds", "serving_snapshot_revision",
+                                         "enforcement_available"],
+                            "properties": {
+                                "configured_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                                "revision": {"type": "integer", "minimum": 0},
+                                "unit": {"const": "seconds"},
+                                "serving_snapshot_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                                "serving_snapshot_revision": {"type": "integer", "minimum": 0},
+                                "enforcement_available": {"const": True},
+                            },
+                        }}},
+                    },
+                    "401": {"description": "Authentication required"},
+                    "403": {"description": "Administrator scope required"},
+                    "404": {"description": "Model configuration not found"},
+                },
+            },
+        },
         "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}": {
             "patch": {
                 "operationId": "patch_worker_agent",
@@ -523,6 +725,16 @@ OPENAPI_SPEC = {
                                         ]
                                     },
                                     "stream_usage_supported": {"type": "boolean"},
+                                    "model_timeout_seconds": {
+                                        "anyOf": [
+                                            {
+                                                "type": "number",
+                                                "exclusiveMinimum": 0,
+                                                "maximum": 2_147_483_647,
+                                            },
+                                            {"type": "null"},
+                                        ]
+                                    },
                                 },
                             },
                         },
@@ -606,7 +818,7 @@ OPENAPI_SPEC = {
         "/api/v1/provider_readiness/latest": {
             "get": {
                 "operationId": "get_latest_provider_readiness",
-                "summary": "Read or explicitly refresh bounded provider chat readiness",
+                "summary": "Read or explicitly refresh provider chat readiness",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [{
                     "name": "refresh",
@@ -617,12 +829,54 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Provider readiness report"}},
             }
         },
+        "/api/v1/provider_readiness": {
+            "get": {
+                "operationId": "get_inference_provider_readiness",
+                "summary": "Read provider readiness without triggering a probe",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "refresh",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "boolean", "default": False, "enum": [False]},
+                }],
+                "responses": {"200": {"description": "Read-only provider readiness report"}},
+            }
+        },
         "/api/v1/analytics_snapshots/latest": {
             "get": {
                 "operationId": "get_latest_analytics_snapshot",
                 "summary": "Get source-backed local KPI and guardrail metrics",
                 "security": [{"admin_bearer_auth": []}],
                 "responses": {"200": {"description": "Analytics snapshot"}},
+            }
+        },
+        "/api/v1/request_outcome_exports": {
+            "get": {
+                "operationId": "export_request_outcomes",
+                "summary": "Export service-admin prompt-free retained request associations",
+                "description": "Requires service-wide admin authority; not owner-scoped. "
+                               "The audit_replay purpose is route-owned. Reuse the returned "
+                               "high-water on continuation. Unmatched and truncated evidence "
+                               "must not be interpreted as a complete correctness cohort. "
+                               "Each observation's decision_latency_ms is the validated final "
+                               "durable acknowledgement interval in milliseconds, or null when "
+                               "unavailable. It is request-scoped, not generation or per-step latency.",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": "page_size", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}},
+                    {"name": "after_sequence", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 0, "default": 0}},
+                    {"name": "high_water_sequence", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 0}},
+                ],
+                "responses": {
+                    "200": {"description": "Bounded admission page with prompt-free workflow and batch associations"},
+                    "400": {"description": "Invalid or future pagination cursor"},
+                    "401": {"description": "Service-admin authority required"},
+                    "503": {"description": "Durable audit or export storage unavailable"},
+                },
             }
         },
         "/api/v1/sales_readiness/latest": {

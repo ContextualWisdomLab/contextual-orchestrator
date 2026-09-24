@@ -3,14 +3,15 @@ name = "contextual-orchestrator"
 version = "0.2.0"
 description = "Paper-grounded model orchestration lab with an enterprise admin console."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
   "cryptography>=43.0",
   "opentelemetry-api>=1.30.0",
   "opentelemetry-sdk>=1.30.0",
   "opentelemetry-exporter-otlp-proto-http>=1.30.0",
   "jsonschema>=4.26.0",
-  "fast-mlsirm @ https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz ; python_full_version >= '3.12'",
+  "egressweave>=0.1.0,<0.2.0",
+  "fast-mlsirm @ git+https://github.com/ContextualWisdomLab/fast-mlsirm.git@09f762ded35786dd1078222a4577ff09d649816f ; python_full_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
@@ -35,8 +36,10 @@ queue = [
 ]
 
 [dependency-groups]
+native-build = ["maturin==1.15.0"]
 dev = [
   "hypothesis>=6.100",
+  "openai==2.54.0",
   "pytest>=8.0",
 ]
 
@@ -45,6 +48,9 @@ object_name_pattern = "two_or_more_words_snake_case"
 
 [tool.setuptools.packages.find]
 include = ["contextual_orchestrator*"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["contextual_orchestrator"]

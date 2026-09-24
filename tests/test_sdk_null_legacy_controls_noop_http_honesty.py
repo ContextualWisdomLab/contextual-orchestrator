@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -71,6 +72,7 @@ def test_http_completions_accepts_null_echo_suffix_best_of() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_null_conversation_controls() -> None:
@@ -97,6 +99,7 @@ def test_http_responses_accepts_null_conversation_controls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_null_include_and_sdk_controls() -> None:
@@ -119,6 +122,7 @@ def test_http_chat_accepts_null_include_and_sdk_controls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_still_rejects_echo_true() -> None:
@@ -134,6 +138,7 @@ def test_http_completions_still_rejects_echo_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_still_rejects_previous_response_id() -> None:
@@ -153,3 +158,4 @@ def test_http_responses_still_rejects_previous_response_id() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

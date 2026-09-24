@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -68,6 +69,7 @@ def test_http_chat_accepts_whole_float_n_one() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_rejects_fractional_n() -> None:
@@ -87,6 +89,7 @@ def test_http_chat_rejects_fractional_n() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_whole_float_max_tokens() -> None:
@@ -105,6 +108,7 @@ def test_http_chat_accepts_whole_float_max_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_accepts_whole_float_max_completion_tokens() -> None:
@@ -123,6 +127,7 @@ def test_http_chat_accepts_whole_float_max_completion_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_stop_whitespace_is_omit() -> None:
@@ -142,6 +147,7 @@ def test_http_chat_stop_whitespace_is_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_stop_nonempty_still_rejected() -> None:
@@ -161,6 +167,7 @@ def test_http_chat_stop_nonempty_still_rejected() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_whole_float_n_and_best_of() -> None:
@@ -180,6 +187,7 @@ def test_http_completions_accepts_whole_float_n_and_best_of() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_whole_float_seed_named_unsupported() -> None:
@@ -197,6 +205,7 @@ def test_http_completions_whole_float_seed_named_unsupported() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_digit_and_float_max_output_tokens() -> None:
@@ -218,6 +227,7 @@ def test_http_responses_accepts_digit_and_float_max_output_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_accepts_whole_float_n_and_seed() -> None:
@@ -237,6 +247,7 @@ def test_http_responses_accepts_whole_float_n_and_seed() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_responses_rejects_fractional_max_output_tokens() -> None:
@@ -256,3 +267,4 @@ def test_http_responses_rejects_fractional_max_output_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()

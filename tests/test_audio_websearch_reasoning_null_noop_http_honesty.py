@@ -38,7 +38,8 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def _server():
@@ -66,6 +67,7 @@ def test_http_chat_accepts_null_audio_web_search_reasoning() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_audio_object() -> None:
@@ -85,6 +87,7 @@ def test_http_chat_still_rejects_audio_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_web_search_options_object() -> None:
@@ -104,6 +107,7 @@ def test_http_chat_still_rejects_web_search_options_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_chat_still_rejects_reasoning_object() -> None:
@@ -123,6 +127,7 @@ def test_http_chat_still_rejects_reasoning_object() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_accepts_null_chat_era_fields() -> None:
@@ -143,6 +148,7 @@ def test_http_completions_accepts_null_chat_era_fields() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_completions_still_rejects_nonnull_chat_era_field() -> None:
@@ -162,3 +168,4 @@ def test_http_completions_still_rejects_nonnull_chat_era_field() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
