@@ -289,7 +289,7 @@ jobs:
       - name: Build the installable package for this exact commit
         run: |
           set -euo pipefail
-          python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
+          uv build --wheel --python 3.12 --out-dir dist
           wheel="dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
           test -s "${wheel}"
           (cd dist && sha256sum "${wheel##*/}" > SHA256SUMS)
