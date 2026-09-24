@@ -35,6 +35,8 @@ provider call.
 - `base_blob`/`head_blob` identity is not verified by the gateway.
 - Participant checks are attestation, path segments, and a resident number
   pattern. They are not proof that no participant material exists.
+- Inline-media screening covers long standard and URL-safe Base64 runs. It is
+  a boundary heuristic, not proof that encoded content is absent.
 - No figure pixels are sent in v1.
 - `zdr_only` defaults to `true`. The review leaf should send `false` only for
   public repositories, mirroring its `require_zdr` visibility decision.

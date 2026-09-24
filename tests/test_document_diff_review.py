@@ -256,6 +256,11 @@ def _mutated(**changes) -> dict:
     [
         (_mutated(**{"objects.0.head_text": "data:image/png;base64,iVBORw0KGgo="}), 422, "inline_binary_content"),
         (_mutated(**{"objects.0.head_text": base64.b64encode(HEAD_DOCX).decode()[:4000]}), 422, "inline_binary_content"),
+        (
+            _mutated(**{"objects.0.head_text": base64.urlsafe_b64encode(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8).decode()}),
+            422,
+            "inline_binary_content",
+        ),
         (_mutated(**{"objects.0.head_text": "api_key=sk-abcdefghijklmnop123456"}), 422, "secret_detected"),
         (_mutated(**{"objects.0.head_text": "participant 900101-1234567"}), 422, "participant_identifier_detected"),
         (_mutated(path="data/participants/transcript.docx"), 422, "participant_material"),
@@ -268,6 +273,7 @@ def _mutated(**changes) -> dict:
     ids=[
         "data_uri",
         "base64_docx",
+        "urlsafe_base64_image",
         "secret",
         "resident_number",
         "participant_path",

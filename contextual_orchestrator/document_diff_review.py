@@ -90,7 +90,7 @@ _REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 _BLOB = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _OBJECT_HASH = re.compile(r"sha256:[0-9a-f]{64}")
 _DATA_URI = re.compile(r"data:[^,\s]{0,100},", re.IGNORECASE)
-_BASE64_RUN = re.compile(r"[A-Za-z0-9+/]{200,}={0,2}")
+_BASE64_RUN = re.compile(r"[A-Za-z0-9+/_-]{200,}={0,2}")
 _RESIDENT_REGISTRATION_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 # ZIP (DOCX/HWPX), PDF, PNG, JPEG, GIF, and OLE (HWP) signatures as decoded text.
 _BINARY_SIGNATURES = ("PK\x03\x04", "%PDF-", "\x89PNG", "\xff\xd8\xff", "GIF8", "\xd0\xcf\x11\xe0")
