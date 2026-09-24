@@ -275,6 +275,15 @@ def test_review_allocation_failure_is_typed_at_http_boundary(monkeypatch):
             ("/v1/responses", {
                 "model": TaskOrchestrator.FREE_MODEL, "input": "review",
             }),
+            ("/v1/chat/completions", {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "stream": True,
+            }),
+            ("/v1/responses", {
+                "model": TaskOrchestrator.FREE_MODEL, "input": "review",
+                "stream": True,
+            }),
         ):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{server.server_address[1]}{path}",

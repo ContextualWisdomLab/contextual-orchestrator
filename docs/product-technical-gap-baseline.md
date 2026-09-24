@@ -38,8 +38,10 @@ calibration authorizing model and test-time-compute allocation. Its supported
 `orchestrator/free` entrypoint therefore returns typed
 `allocation_evidence_unavailable` (503, no automatic retry) before a provider
 send or cache read. Route, conduct, passthrough, and stream entrypoints share
-this boundary. This intentionally pauses live review serving until an owner
-release supplies and validates the missing allocation contract; catalog
+this boundary. The HTTP model gate now applies it before Chat or Responses
+streaming writes a 200/SSE header; the earlier post-header error is covered
+by a four-shape HTTP regression. This intentionally pauses live review serving
+until an owner release supplies and validates the missing allocation contract; catalog
 admission and diagnostic ranking are not substitutes for that release.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)

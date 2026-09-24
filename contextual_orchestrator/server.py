@@ -2450,6 +2450,10 @@ def _require_pool_model(
         TaskOrchestrator.AUTO_MODEL,
         TaskOrchestrator.FREE_MODEL,
     }:
+        if model_name == TaskOrchestrator.FREE_MODEL:
+            require_allocation = getattr(orchestrator, "_require_review_allocation_evidence", None)
+            if callable(require_allocation):
+                require_allocation(model_name)
         if required_capability is None:
             if model_name != TaskOrchestrator.FREE_MODEL:
                 if any(zdr_allowed(agent) for agent in agents):
