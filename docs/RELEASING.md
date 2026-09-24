@@ -8,7 +8,8 @@ for the full design and its explicit non-goals.
 ## What a release is, and is not
 
 A canonical release is an annotated git tag `vX.Y.Z`, a published GitHub
-Release with `immutable: true`, and its verified mandatory SBOM. A versioned
+Release with `immutable: true`, its verified Python wheel and SHA-256 manifest,
+and its verified mandatory SBOM. A versioned
 URL alone is not evidence that GitHub has locked the tag and assets.
 
 - `.../releases/tag/vX.Y.Z` identifies the version-specific release. Consumers
@@ -24,6 +25,13 @@ only establishes a citable, verified release for an exact protected commit.
 It does not establish that every consumer-required API, authentication,
 deployment-identity or transport contract is implemented by that release.
 LifeOS and other consumers must verify their specific owner contracts too.
+
+The first version remains a candidate until an ordinary protected-main change
+selects its SemVer number and records API/schema compatibility in CHANGELOG.md.
+The current `0.2.0` project declaration is not release evidence. In particular,
+the wheel and signed assets do not prove a deployed gateway's runtime identity
+or provide the scoped Actions credential required by #1023. Consumers must
+check those contracts separately before replacing a source pin.
 
 ## Preconditions
 
@@ -50,6 +58,11 @@ LifeOS and other consumers must verify their specific owner contracts too.
 5. A successful `security.yml` run for that exact commit exposes a non-empty
    `cyclonedx-sbom/cyclonedx-sbom.json` artifact. Lookup, download, upload,
    empty-file or content-verification failure is fatal, not best effort.
+   The read-only release job builds the Python wheel from that same checkout,
+   installs it into an isolated directory to verify its declared version and
+   package contents, records its SHA-256 digest, and passes both files to publication. This wheel
+   is the installable Python package; the separately built Rust decision
+   measurement wheel remains a distinct dependency and is not bundled here.
 6. A repository administrator has enabled GitHub release immutability before
    publication. The normal workflow token has no Administration permission;
    do not add an administrative secret or expand the publisher's authority
@@ -79,26 +92,29 @@ LifeOS and other consumers must verify their specific owner contracts too.
    - runs `uv run --locked --extra api --extra db --extra queue --group dev
      python -m pytest -q`;
    - renders notes from the exact commit's CHANGELOG section;
-   - downloads the exact-commit mandatory CycloneDX SBOM and passes both
-     notes and SBOM to the publisher through an Actions artifact.
+   - downloads the exact-commit mandatory CycloneDX SBOM, builds the Python
+     wheel, records its SHA-256 digest, and passes these with the notes to the
+     publisher through an Actions artifact.
 5. The write-scoped `publish` job, only after verification succeeds:
    - rechecks fresh-main identity and exact-target checks before mutation;
-   - requires non-empty notes and SBOM inputs;
+   - requires non-empty notes, SBOM and wheel inputs, then checks the wheel
+     against the SHA-256 manifest;
    - creates and pushes an annotated tag only for a fresh publication;
    - verifies the exact remote tag object and its peeled target, so GitHub
      cannot synthesize a tag from a default branch;
    - admits an existing release only as a typed, matching-tag, non-prerelease
      Draft, or a complete already-published immutable release;
    - creates a new release with `--verify-tag --draft`;
-   - attaches any missing SBOM **only while the release is a Draft**, then
-     downloads it and compares its bytes with the verified input;
+   - attaches any missing SBOM, wheel and manifest **only while the release is
+     a Draft**, then downloads each and compares its bytes with the verified
+     input;
    - publishes the verified Draft. An already-public immutable release is
      verify-only and is neither recreated, edited nor uploaded to;
    - requires the resulting release to be non-Draft, non-prerelease,
      matching-tag and `immutable: true`, then runs `gh release verify` and
-     `gh release verify-asset` for the exact SBOM.
+     `gh release verify-asset` for each asset.
 6. Confirm the version-specific release, successful publication run, exact
-   tag/commit, immutable state, SBOM and its signed attestation. Do not admit
+   tag/commit, immutable state, wheel digest, SBOM and signed asset attestations. Do not admit
    a release merely because it appears in the GitHub Releases list.
 
 ## Recovery and known limitations
