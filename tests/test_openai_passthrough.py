@@ -826,7 +826,8 @@ def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
         server.server_close()
 
     assert status == 400
-    assert "vision" in body["error"]["message"]
+    assert body["error"]["code"] == "invalid_model"
+    assert "text/image input" in body["error"]["message"]
 
 
 def test_http_responses_endpoint_passes_through() -> None:

@@ -135,7 +135,7 @@ def test_prompt_count_source_absent_when_a_message_carries_a_non_text_content_pa
             ModelAgent(
                 "general_agent",
                 _VERIFIED_MODEL,
-                tags=("reasoning", "writing", "input:image"),
+                tags=("reasoning", "writing", "input:text", "input:image"),
             )
         ],
         token_counter=_stub_native_token_counter(),

@@ -23,7 +23,7 @@ def build() -> TaskOrchestrator:
             ModelAgent(
                 "general_agent",
                 "mock-planner",
-                tags=("reasoning", "writing", "input:image"),
+                tags=("reasoning", "writing", "input:text", "input:image"),
             )
         ]
     )

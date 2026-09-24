@@ -137,6 +137,14 @@ rather than the first truthy value. The exact extracted selection/validation
 probe covers 15 hostile alias/value pairs plus omitted-auto and normalized
 conduct (18 assertions total); full hosted acceptance remains pending.
 
+Inspection of the exact-head Security run on 2026-09-24 exposed stale HTTP regression fixtures:
+mixed text/image tests declared image-only or text-only agents, while two
+client-error tests expected the former error wording and one judge stub did
+not accept the now-required capability argument. The follow-up aligns those
+fixtures with the existing mixed-input contract; 388 focused tests pass with
+warnings treated as errors. The prior hosted failures and review verdict remain
+historical and do not establish acceptance for this follow-up head.
+
 Status remains **Proposed**. Protected exact-head Checks, independent review,
 ordinary merge, immutable owner release, and consumer pin are still required.
 Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,
