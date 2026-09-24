@@ -120,6 +120,8 @@ conduct or provider send; an unproven higher-priority candidate cannot become
 the final synthesizer. A catalog parameter declaration does not prove that the
 model will satisfy a particular schema. The gateway still validates returned
 content, and the caller must treat a failed or incomplete review as failure.
+The same admission rule applies to the Responses API's `text.format` request
+when it is converted to the chat-shaped provider contract.
 
 ### Completion replay boundary
 

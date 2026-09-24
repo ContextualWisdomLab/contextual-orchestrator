@@ -6231,11 +6231,15 @@ class TaskOrchestrator:
             )
             return result
 
+        admission_body = (
+            _responses_to_chat_payload(body)
+            if normalized_endpoint == "responses" else body
+        )
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
             {
                 candidate.id
                 for candidate in self.agents
-                if self._is_general_free_agent(candidate, chat_body=body)
+                if self._is_general_free_agent(candidate, chat_body=admission_body)
                 and self._zdr_agent_allowed(candidate)
             }
             if requested_model == self.FREE_MODEL
@@ -6256,9 +6260,9 @@ class TaskOrchestrator:
                 else allowed_agent_ids & replica_agent_ids
             )
         if requested_model == self.FREE_MODEL and (
-            body.get("tools") or body.get("response_format")
+            admission_body.get("tools") or admission_body.get("response_format")
         ) and not allowed_agent_ids:
-            capability = "tool_call" if body.get("tools") else "response_format"
+            capability = "tool_call" if admission_body.get("tools") else "response_format"
             raise ProviderUpstreamError(
                 agent_id=self.FREE_MODEL,
                 model=self.FREE_MODEL,

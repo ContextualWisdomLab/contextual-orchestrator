@@ -734,6 +734,28 @@ def test_review_free_direct_passthrough_rejects_unproven_format() -> None:
     assert client.calls == []
 
 
+def test_review_free_responses_passthrough_rejects_unproven_format() -> None:
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_agent", "primary-model", tags=("cost:free", "review"))],
+        client=client,
+    )
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "input": "review",
+            "text": {"format": {
+                "type": "json_schema", "name": "review",
+                "schema": {"type": "object"},
+            }},
+        }, endpoint="responses")
+
+    assert caught.value.client_status == 503
+    assert caught.value.detail["capability"] == "response_format"
+    assert client.calls == []
+
+
 def test_review_free_structured_synthesis_skips_unproven_preferred() -> None:
     client = SequencedProxyClient({
         "primary_agent": {"model": "primary-model"},
