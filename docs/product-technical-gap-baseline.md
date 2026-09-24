@@ -33,6 +33,60 @@ windows are too small, the request fails before send. Unknown windows remain
 unknown rather than being treated as sufficient capacity. This is local
 request-admission evidence, not full-message context proof or live readiness.
 
+The review gateway has no released estimand, utility rule, or held-out
+calibration authorizing model and test-time-compute allocation. Its supported
+`orchestrator/free` entrypoint therefore returns typed
+`allocation_evidence_unavailable` (503, no automatic retry) before a provider
+send or cache read. Route, conduct, passthrough, and stream entrypoints share
+this boundary. The HTTP model gate now applies it before Chat or Responses
+streaming writes a 200/SSE header; the earlier post-header error is covered
+by a four-shape HTTP regression. Both Chat and Responses OpenAPI operations
+now declare the typed 503 error envelope used by that boundary. Live review
+serving stays paused until an owner release supplies and validates the missing
+allocation contract. Catalog admission and diagnostic ranking alone cannot
+authorize selection.
+An explicit member-model request previously bypassed the review allocation
+gate. The owner now rejects it with typed, nonretryable
+`review_model_not_allowed` (400) before provider send; Chat streaming rejects
+it before opening SSE. Both Chat and Responses OpenAPI operations declare its
+typed 400 envelope. The RED direct-call test reached the provider path; the
+focused HTTP and direct-call regressions cover the corrected boundary.
+The [same-host synthetic request-path receipt](doctoring/review_gateway_failclosed_benchmark.md)
+records predecessor and repaired HEADs, direct/HTTP error counts, provider
+sends, latency, throughput, and measurement uncertainty. It is local evidence,
+not a hosted review or production-capacity result.
+The inspected [fast-mlsirm v0.11.4 release](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
+exposes [personnel selection utility](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/utility.py),
+[item-exposure routing](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/python/fast_mlsirm/exposure.py),
+and [survey-stratum allocation](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/v0.11.4/crates/mlsirm-core/src/sampling_design.rs).
+Those inspected APIs do not define the estimand, utility, or provider contract
+for allocating a review request among LLMs; their names alone cannot authorize
+reuse for this path. A later owner release still needs an exact contract audit.
+
+An isolated integration of existing #1209 (`d00cf413`), this review stack
+(`#1235` at `5ae59fbe`), and #1236 (`9135e789`) exposed two HTTP review
+regressions: a duplicate response key dropped review admission provenance when
+the ordinary attempt receipt was also present. The owner now retains both in
+one versioned route response, and its API schema accepts the ordinary,
+review-conduct, and review-proxy receipt shapes. After resolving three local
+merge conflicts, the immutable local probe commit `df31a814` passed the full
+Python 3.12/native decision-measurement suite: 5,120 passed, five tokenizer
+extension skips, and three warnings. This is synthetic merge evidence only;
+none of the source PRs has current-head protected approval, required hosted
+GREEN, an immutable owner release, or consumer acceptance.
+
+## 2026-09-25 review retry-count authority (#1106, proposed)
+
+The review gateway used the number of admitted free models to set
+`tool_retry_attempts`, which controls extra `route_once` judged-answer attempts
+and same-candidate retries. Catalog size is not calibration evidence for either
+decision. A RED regression with 13 admitted candidates observed a budget of
+four; the owner bootstrap now sets zero and the route test observes one call
+after a rejected answer. This does not remove eligible catalog rows or change
+the provider-shaped proxy candidate loop. It also does not supply a calibrated
+allocation policy or prove a live review. Issue #1106's research, immutable
+release, and consumer migration gates remain open.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`

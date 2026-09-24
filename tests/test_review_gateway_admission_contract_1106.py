@@ -8,14 +8,22 @@ and live readiness require separate evidence.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+import threading
 from typing import get_type_hints
+import urllib.error
+import urllib.request
 
+from jsonschema import validate
+
+from contextual_orchestrator.api_contract import OPENAPI_SPEC
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
 from contextual_orchestrator.orchestrator import TaskOrchestrator
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
+from contextual_orchestrator.server import SecurityConfig, build_server
 
 import pytest
 
@@ -199,6 +207,181 @@ def test_public_review_pool_admissions_type_hints_resolve():
     assert hints["return"]
 
 
+def test_review_pool_refuses_uncalibrated_allocation_before_provider_send(monkeypatch):
+    """Catalog eligibility alone never authorizes a review allocation."""
+    discovered = [
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+        _discovered("nvidia_nim", "nim-review", "NVIDIA_NIM_API_KEY"),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret", "NVIDIA_NIM_API_KEY": "nim-secret",
+    })
+    sends: list[str] = []
+
+    def forbid_send(*args, **kwargs):
+        del args, kwargs
+        sends.append("sent")
+        raise AssertionError("provider transport must not be reached")
+
+    monkeypatch.setattr(orchestrator.client, "chat", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "proxy_send", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "stream_chat", forbid_send)
+    messages = [{"role": "user", "content": "Review this change"}]
+    calls = (
+        lambda: orchestrator.complete(messages, mode="route", model_name=TaskOrchestrator.FREE_MODEL),
+        lambda: orchestrator.complete(messages, mode="conduct", model_name=TaskOrchestrator.FREE_MODEL),
+        lambda: orchestrator.route_once(messages, model_name=TaskOrchestrator.FREE_MODEL),
+        lambda: orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL, "messages": messages,
+        }),
+        lambda: list(orchestrator.stream_route(
+            messages, model_name=TaskOrchestrator.FREE_MODEL,
+        )),
+    )
+    for call in calls:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            call()
+        assert caught.value.error_code == "allocation_evidence_unavailable"
+        assert caught.value.client_status == 503
+        assert caught.value.retryable is False
+    assert sends == []
+
+
+def test_review_allocation_failure_is_typed_at_http_boundary(monkeypatch):
+    discovered = [_discovered("openrouter", "router-review", "OPENROUTER_API_KEY")]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret",
+    })
+    sends: list[str] = []
+
+    def forbid_send(*args, **kwargs):
+        del args, kwargs
+        sends.append("sent")
+        raise AssertionError("provider transport must not be reached")
+
+    monkeypatch.setattr(orchestrator.client, "chat", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "proxy_send", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "stream_chat", forbid_send)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token="review-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for path, body in (
+            ("/v1/chat/completions", {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+            }),
+            ("/v1/responses", {
+                "model": TaskOrchestrator.FREE_MODEL, "input": "review",
+            }),
+            ("/v1/chat/completions", {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "stream": True,
+            }),
+            ("/v1/responses", {
+                "model": TaskOrchestrator.FREE_MODEL, "input": "review",
+                "stream": True,
+            }),
+        ):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}{path}",
+                data=json.dumps(body).encode(),
+                headers={"content-type": "application/json", "authorization": "Bearer review-test-token"},
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(request, timeout=5)
+            with caught.value as response:
+                assert response.code == 503
+                payload = json.load(response)
+            assert payload["error"]["code"] == "allocation_evidence_unavailable"
+            assert payload["error"]["detail"]["retryable"] is False
+            response_schema = OPENAPI_SPEC["paths"][path]["post"]["responses"]["503"]["content"]["application/json"]["schema"]
+            validate(payload, {**response_schema, "components": OPENAPI_SPEC["components"]})
+        for path, body in (
+            ("/v1/chat/completions", {
+                "model": "router-review",
+                "messages": [{"role": "user", "content": "review"}],
+            }),
+            ("/v1/responses", {"model": "router-review", "input": "review"}),
+            ("/v1/chat/completions", {
+                "model": "router-review",
+                "messages": [{"role": "user", "content": "review"}],
+                "stream": True,
+            }),
+        ):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}{path}",
+                data=json.dumps(body).encode(),
+                headers={"content-type": "application/json", "authorization": "Bearer review-test-token"},
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(request, timeout=5)
+            with caught.value as response:
+                assert response.code == 400
+                payload = json.load(response)
+            assert payload["error"]["code"] == "review_model_not_allowed"
+            assert payload["error"]["detail"]["retryable"] is False
+            response_schema = OPENAPI_SPEC["paths"][path]["post"]["responses"]["400"]["content"]["application/json"]["schema"]
+            validate(payload, {**response_schema, "components": OPENAPI_SPEC["components"]})
+        assert sends == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_review_gateway_rejects_explicit_model_before_provider_send(monkeypatch):
+    """A caller cannot bypass the free-pool allocation gate by naming a member."""
+    discovered = [_discovered("openrouter", "router-review", "OPENROUTER_API_KEY")]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret",
+    })
+    sends: list[str] = []
+
+    def forbid_send(*args, **kwargs):
+        del args, kwargs
+        sends.append("sent")
+        raise AssertionError("provider transport must not be reached")
+
+    monkeypatch.setattr(orchestrator.client, "chat", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "proxy_send", forbid_send)
+    monkeypatch.setattr(orchestrator.client, "proxy_send_once", forbid_send)
+    for call in (
+        lambda: orchestrator.complete(
+            [{"role": "user", "content": "review"}],
+            mode="route",
+            model_name="router-review",
+        ),
+        lambda: orchestrator.proxy_completion({
+            "model": "router-review",
+            "messages": [{"role": "user", "content": "review"}],
+        }),
+        lambda: orchestrator.route_once(
+            [{"role": "user", "content": "review"}], model_name="router-review",
+        ),
+        lambda: orchestrator.conduct(
+            [{"role": "user", "content": "review"}], model_name="router-review",
+        ),
+        lambda: list(orchestrator.stream_route(
+            [{"role": "user", "content": "review"}], model_name="router-review",
+        )),
+    ):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            call()
+        assert caught.value.error_code == "review_model_not_allowed"
+        assert caught.value.client_status == 400
+        assert caught.value.retryable is False
+    assert sends == []
+
+
 def test_image_review_request_without_vision_evidence_stops_before_send(monkeypatch):
     """Text chat readiness cannot authorize an image-bearing review request."""
     discovered = [_discovered("openrouter", "text-review", "OPENROUTER_API_KEY")]
@@ -206,6 +389,8 @@ def test_image_review_request_without_vision_evidence_stops_before_send(monkeypa
     orchestrator = review_gateway.build_review_orchestrator({
         "OPENROUTER_API_KEY": "router-secret",
     })
+    # Isolate request capability admission from the separate allocation gate.
+    orchestrator._review_allocation_evidence_required = False
     sends: list[str] = []
 
     def forbid_send(*args, **kwargs):
@@ -252,6 +437,8 @@ def test_image_review_stream_selects_only_proven_vision_candidate(monkeypatch):
     orchestrator = review_gateway.build_review_orchestrator({
         "OPENROUTER_API_KEY": "router-secret", "NVIDIA_NIM_API_KEY": "nim-secret",
     })
+    # Isolate request capability admission from the separate allocation gate.
+    orchestrator._review_allocation_evidence_required = False
     orchestrator.agents = [
         replace(agent, priority=10) if agent.model == "text-review" else agent
         for agent in orchestrator.agents

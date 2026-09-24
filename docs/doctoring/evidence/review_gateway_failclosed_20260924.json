@@ -1,0 +1,425 @@
+{
+  "baseline-950": {
+    "cpu_count": 10,
+    "host": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.12.13",
+    "runner": "local loopback HTTP gateway and synthetic provider",
+    "scenarios": {
+      "direct_explicit": {
+        "latency_ms_p50": 19.516,
+        "latency_ms_p95": 201.982,
+        "outcomes": {
+          "200:ok": 200
+        },
+        "provider_paths": {
+          "/v1/chat/completions": 200
+        },
+        "provider_sends": 200,
+        "round_throughput_rps": [
+          65.87,
+          68.65,
+          65.71,
+          69.3,
+          67.46
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 67.4,
+        "throughput_rps_range": [
+          65.71,
+          69.3
+        ]
+      },
+      "http_explicit": {
+        "latency_ms_p50": 107.468,
+        "latency_ms_p95": 235.684,
+        "outcomes": {
+          "200:ok": 200
+        },
+        "provider_paths": {
+          "/v1/chat/completions": 400
+        },
+        "provider_sends": 400,
+        "round_throughput_rps": [
+          32.9,
+          33.9,
+          31.88,
+          34.05,
+          32.97
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 33.14,
+        "throughput_rps_range": [
+          31.88,
+          34.05
+        ]
+      },
+      "http_free_control": {
+        "latency_ms_p50": 2.402,
+        "latency_ms_p95": 4.878,
+        "outcomes": {
+          "503:allocation_evidence_unavailable": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          1212.96,
+          1119.23,
+          1627.88,
+          1759.54,
+          1664.45
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 1476.81,
+        "throughput_rps_range": [
+          1119.23,
+          1759.54
+        ]
+      }
+    },
+    "settings": {
+      "concurrency": 4,
+      "expected_explicit_status": 200,
+      "provider_delay_ms": 10.0,
+      "requests_per_round": 40,
+      "rounds": 5,
+      "warmup": 20
+    },
+    "source_sha": "9504495c6c616a15c314c7a38218a73b143aa5e1"
+  },
+  "baseline-950-repeat": {
+    "cpu_count": 10,
+    "host": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.12.13",
+    "runner": "local loopback HTTP gateway and synthetic provider",
+    "scenarios": {
+      "direct_explicit": {
+        "latency_ms_p50": 18.708,
+        "latency_ms_p95": 234.967,
+        "outcomes": {
+          "200:ok": 200
+        },
+        "provider_paths": {
+          "/v1/chat/completions": 200
+        },
+        "provider_sends": 200,
+        "round_throughput_rps": [
+          59.06,
+          67.35,
+          65.26,
+          67.1,
+          64.22
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 64.6,
+        "throughput_rps_range": [
+          59.06,
+          67.35
+        ]
+      },
+      "http_explicit": {
+        "latency_ms_p50": 109.722,
+        "latency_ms_p95": 254.233,
+        "outcomes": {
+          "200:ok": 200
+        },
+        "provider_paths": {
+          "/v1/chat/completions": 400
+        },
+        "provider_sends": 400,
+        "round_throughput_rps": [
+          33.25,
+          33.59,
+          32.05,
+          29.09,
+          29.98
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 31.59,
+        "throughput_rps_range": [
+          29.09,
+          33.59
+        ]
+      },
+      "http_free_control": {
+        "latency_ms_p50": 6.114,
+        "latency_ms_p95": 13.988,
+        "outcomes": {
+          "503:allocation_evidence_unavailable": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          744.09,
+          828.77,
+          546.98,
+          442.3,
+          393.75
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 591.18,
+        "throughput_rps_range": [
+          393.75,
+          828.77
+        ]
+      }
+    },
+    "settings": {
+      "concurrency": 4,
+      "expected_explicit_status": 200,
+      "provider_delay_ms": 10.0,
+      "requests_per_round": 40,
+      "rounds": 5,
+      "warmup": 20
+    },
+    "source_sha": "9504495c6c616a15c314c7a38218a73b143aa5e1"
+  },
+  "head-2ac": {
+    "cpu_count": 10,
+    "host": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.12.13",
+    "runner": "local loopback HTTP gateway and synthetic provider",
+    "scenarios": {
+      "direct_explicit": {
+        "latency_ms_p50": 0.004,
+        "latency_ms_p95": 0.02,
+        "outcomes": {
+          "400:review_model_not_allowed": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          39628.49,
+          84678.54,
+          62810.79,
+          73098.3,
+          33870.77
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 58817.38,
+        "throughput_rps_range": [
+          33870.77,
+          84678.54
+        ]
+      },
+      "http_explicit": {
+        "latency_ms_p50": 4.321,
+        "latency_ms_p95": 7.591,
+        "outcomes": {
+          "400:review_model_not_allowed": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          796.64,
+          860.37,
+          995.44,
+          735.27,
+          855.31
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 848.61,
+        "throughput_rps_range": [
+          735.27,
+          995.44
+        ]
+      },
+      "http_free_control": {
+        "latency_ms_p50": 4.616,
+        "latency_ms_p95": 9.472,
+        "outcomes": {
+          "503:allocation_evidence_unavailable": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          911.5,
+          705.03,
+          878.19,
+          863.28,
+          396.57
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 750.92,
+        "throughput_rps_range": [
+          396.57,
+          911.5
+        ]
+      }
+    },
+    "settings": {
+      "concurrency": 4,
+      "expected_explicit_status": 400,
+      "provider_delay_ms": 10.0,
+      "requests_per_round": 40,
+      "rounds": 5,
+      "warmup": 20
+    },
+    "source_sha": "2ac14caf6e1c221619b18dcb94330b0e4e98abc9"
+  },
+  "head-76": {
+    "cpu_count": 10,
+    "host": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.12.13",
+    "runner": "local loopback HTTP gateway and synthetic provider",
+    "scenarios": {
+      "direct_explicit": {
+        "latency_ms_p50": 0.004,
+        "latency_ms_p95": 0.008,
+        "outcomes": {
+          "400:review_model_not_allowed": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          48664.3,
+          72196.82,
+          91681.71,
+          99729.66,
+          99389.25
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 82332.35,
+        "throughput_rps_range": [
+          48664.3,
+          99729.66
+        ]
+      },
+      "http_explicit": {
+        "latency_ms_p50": 2.451,
+        "latency_ms_p95": 3.795,
+        "outcomes": {
+          "400:review_model_not_allowed": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          1551.9,
+          1476.42,
+          1586.18,
+          1583.73,
+          1449.07
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 1529.46,
+        "throughput_rps_range": [
+          1449.07,
+          1586.18
+        ]
+      },
+      "http_free_control": {
+        "latency_ms_p50": 3.299,
+        "latency_ms_p95": 6.79,
+        "outcomes": {
+          "503:allocation_evidence_unavailable": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          1224.13,
+          1344.07,
+          1159.42,
+          881.33,
+          798.58
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 1081.51,
+        "throughput_rps_range": [
+          798.58,
+          1344.07
+        ]
+      }
+    },
+    "settings": {
+      "concurrency": 4,
+      "expected_explicit_status": 400,
+      "provider_delay_ms": 10.0,
+      "requests_per_round": 40,
+      "rounds": 5,
+      "warmup": 20
+    },
+    "source_sha": "76f3367a1877b456bed624ff1fa811e3b54cda13"
+  },
+  "head-76-repeat": {
+    "cpu_count": 10,
+    "host": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.12.13",
+    "runner": "local loopback HTTP gateway and synthetic provider",
+    "scenarios": {
+      "direct_explicit": {
+        "latency_ms_p50": 0.005,
+        "latency_ms_p95": 0.022,
+        "outcomes": {
+          "400:review_model_not_allowed": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          34240.47,
+          63808.57,
+          70655.78,
+          61385.0,
+          27566.4
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 51531.24,
+        "throughput_rps_range": [
+          27566.4,
+          70655.78
+        ]
+      },
+      "http_explicit": {
+        "latency_ms_p50": 4.34,
+        "latency_ms_p95": 6.671,
+        "outcomes": {
+          "400:review_model_not_allowed": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          852.72,
+          958.64,
+          879.58,
+          912.77,
+          857.24
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 892.19,
+        "throughput_rps_range": [
+          852.72,
+          958.64
+        ]
+      },
+      "http_free_control": {
+        "latency_ms_p50": 3.386,
+        "latency_ms_p95": 7.497,
+        "outcomes": {
+          "503:allocation_evidence_unavailable": 200
+        },
+        "provider_paths": {},
+        "provider_sends": 0,
+        "round_throughput_rps": [
+          777.02,
+          839.31,
+          1042.44,
+          1077.05,
+          1313.85
+        ],
+        "samples": 200,
+        "throughput_rps_mean": 1009.94,
+        "throughput_rps_range": [
+          777.02,
+          1313.85
+        ]
+      }
+    },
+    "settings": {
+      "concurrency": 4,
+      "expected_explicit_status": 400,
+      "provider_delay_ms": 10.0,
+      "requests_per_round": 40,
+      "rounds": 5,
+      "warmup": 20
+    },
+    "source_sha": "76f3367a1877b456bed624ff1fa811e3b54cda13"
+  }
+}

@@ -5555,7 +5555,9 @@ class TaskOrchestrator:
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
         rate_limit_unknown_cooldown_seconds: float = 5.0,
+        review_allocation_evidence_required: bool = False,
     ) -> None:
+        self._review_allocation_evidence_required = review_allocation_evidence_required
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
         self._context_window_local = threading.local()
@@ -6035,6 +6037,7 @@ class TaskOrchestrator:
         ``role_effort_catalog`` is configured (``_role_effort_profile``
         returns ``None`` and behavior is unchanged).
         """
+        self._require_review_allocation_evidence(body.get("model"))
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
@@ -7683,6 +7686,30 @@ class TaskOrchestrator:
             return False
         return True
 
+    def _require_review_allocation_evidence(self, model_name: Any) -> None:
+        """Require the fixed review selector and calibrated allocation evidence."""
+        if not self._review_allocation_evidence_required:
+            return
+        if model_name != self.FREE_MODEL:
+            raise ProviderUpstreamError(
+                agent_id=self.FREE_MODEL,
+                model=self.FREE_MODEL,
+                error_code="review_model_not_allowed",
+                message="review gateway requires orchestrator/free",
+                client_status=400,
+                retryable=False,
+                transport="orchestration",
+            )
+        raise ProviderUpstreamError(
+            agent_id=self.FREE_MODEL,
+            model=self.FREE_MODEL,
+            error_code="allocation_evidence_unavailable",
+            message="review routing evidence is unavailable",
+            client_status=503,
+            retryable=False,
+            transport="orchestration",
+        )
+
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
@@ -7738,6 +7765,7 @@ class TaskOrchestrator:
             raise ValueError("model_name must be a non-empty string")
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
+        self._require_review_allocation_evidence(model_name)
         self._review_image_required_tags(messages, model_name)
         request_settings = getattr(self.client, "request_settings_snapshot", None)
         scoped_request = request_settings() if callable(request_settings) else None
@@ -7901,6 +7929,7 @@ class TaskOrchestrator:
         Bytes already sent cannot be recalled, so a mid-stream failure
         surfaces to the caller.
         """
+        self._require_review_allocation_evidence(model_name)
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
@@ -9369,6 +9398,7 @@ class TaskOrchestrator:
         measured accuracy steers future routing. Speed is explicitly not a
         design constraint at this layer -- correctness is.
         """
+        self._require_review_allocation_evidence(model_name)
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
@@ -9642,6 +9672,7 @@ class TaskOrchestrator:
         _review_no_replay: bool = False,
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
+        self._require_review_allocation_evidence(model_name)
         self._raise_if_spend_budget_exceeded()
         self._review_image_required_tags(messages, model_name)
         # Selector nature threaded to _invoke_with_rate_limit_recovery for
@@ -10197,6 +10228,8 @@ class TaskOrchestrator:
         ``_capability_agents``) is a distinct, non-role capability lookup and
         is deliberately left out of this filter.
         """
+        if free_only:
+            self._require_review_allocation_evidence(self.FREE_MODEL)
         source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
             agent
@@ -20041,6 +20074,10 @@ def chat_completion_response(
     the agent that actually served this request, next to
     ``prompt_count_source``; it is omitted when no such decision was made.
     """
+    route = result.get("route")
+    review_route = result.get("review_route")
+    if isinstance(review_route, dict):
+        route = {**(route if isinstance(route, dict) else {}), **review_route}
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result["mode"],
@@ -20050,7 +20087,7 @@ def chat_completion_response(
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
         "tool_loop_route": result.get("tool_loop_route"),
-        "route": result.get("review_route"),
+        "route": route,
         "tool_loop_agent_id": result.get("tool_loop_agent_id"),
         "requested_output_tokens": result.get("requested_output_tokens"),
         "effective_output_tokens": result.get("effective_output_tokens"),

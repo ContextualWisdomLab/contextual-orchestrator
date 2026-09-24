@@ -2445,6 +2445,9 @@ def _require_pool_model(
         if not getattr(agent, "disabled", False)
     ]
     zdr_allowed = getattr(orchestrator, "_zdr_agent_allowed", lambda agent: True)
+    require_allocation = getattr(orchestrator, "_require_review_allocation_evidence", None)
+    if callable(require_allocation):
+        require_allocation(model_name)
     if model_name in {
         TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
         TaskOrchestrator.AUTO_MODEL,

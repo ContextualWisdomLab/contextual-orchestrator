@@ -30,7 +30,6 @@ from .model_discovery import (
 from .orchestrator import ModelClient, TaskOrchestrator
 from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
-from .tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
 
 REVIEW_CREDENTIAL_NAMES = PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 REVIEW_FREE_POOL_CREDENTIAL_NAMES = (
@@ -91,8 +90,8 @@ def review_model_admission(
     """Return typed provenance for one already-admitted review-pool model.
 
     Admission itself happened in :func:`build_review_orchestrator`; this only
-    serializes the owner's evidence so a consumer can consume it directly
-    instead of re-deriving eligibility, readiness, or ordering.
+    serializes catalog evidence. It does not establish request readiness or
+    authorize an allocation order.
     """
     return ReviewModelAdmission(
         contract_version=REVIEW_READINESS_CONTRACT_VERSION,
@@ -203,8 +202,9 @@ def build_review_orchestrator(
     Every candidate satisfying those evidence-backed admission predicates is
     retained. This boundary does not impose a candidate-count cap, provider
     quota, price-derived ordering, hand-assigned priority, or fallback ranking.
-    Any subsequent model choice remains the routing layer's responsibility and
-    must be supported by its own executable evidence contract.
+    Catalog admission does not authorize a model choice. Until a released
+    calibrated allocation contract exists, the review free selector fails
+    closed before cache or provider transport.
     """
     requested_names = _validated_credential_names(credential_names)
     source_environment = os.environ if environment is None else environment
@@ -242,20 +242,14 @@ def build_review_orchestrator(
                 priority=0,
             )
         )
-    # ``TaskOrchestrator``'s generic default (1) caps internal failover at two
-    # candidates for every caller regardless of pool size. The org's
-    # opencode-review-dispatch workflow calls ``orchestrator/free`` exactly
-    # once per review and falls back to a model-unavailable evidence-only
-    # review on any rejected/failed answer (OPENCODE_MODEL_ATTEMPTS=1,
-    # OPENCODE_POOL_MAX_CYCLES=1 in ContextualWisdomLab/.github). Since this
-    # is the review pool's only external attempt, size the internal failover
-    # budget to the admitted catalog instead of the generic default, bounded
-    # by the documented hard ceiling.
-    tool_retry_attempts = min(max(len(agents) - 1, 0), MAX_TOOL_RETRY_ATTEMPTS)
     return TaskOrchestrator(
         agents,
         client=ModelClient(),
-        tool_retry_attempts=tool_retry_attempts,
+        # Pool size does not authorize extra judged-answer attempts or
+        # same-candidate replay. The provider-path candidate loop has its
+        # own failure-boundary contract; no retry budget is inferred here.
+        tool_retry_attempts=0,
+        review_allocation_evidence_required=True,
     )
 
 
