@@ -3367,6 +3367,7 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         response_bytes = 0
+        provider_finished = False
         try:
             with self._open_model_provider(
                 request,
@@ -3396,6 +3397,7 @@ class ModelClient:
                         continue
                     data = line[len("data:") :].strip()
                     if data == "[DONE]":
+                        provider_finished = True
                         break
                     try:
                         chunk = json.loads(data)
@@ -3414,16 +3416,30 @@ class ModelClient:
                         continue
                     if not isinstance(choices, list) or not choices:
                         continue
-                    stream_choices.extend(
+                    finish_reasons = [
                         {"finish_reason": choice["finish_reason"]}
                         for choice in choices
                         if isinstance(choice, dict)
                         and isinstance(choice.get("finish_reason"), str)
                         and choice["finish_reason"]
-                    )
+                    ]
+                    stream_choices.extend(finish_reasons)
+                    if finish_reasons:
+                        provider_finished = True
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
+            if not provider_finished:
+                raise ProviderUpstreamError(
+                    agent_id=agent.id,
+                    model=agent.model,
+                    error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                    message="provider stream ended without a completion signal",
+                    client_status=502,
+                    provider_status=None,
+                    retryable=False,
+                    transport="stream",
+                )
             _record_provider_response_telemetry(
                 {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
                 started,
