@@ -489,6 +489,50 @@ def test_stream_route_rejects_automatically_ranked_excluded_worker() -> None:
     )
 
 
+def test_stream_route_skips_proven_too_small_context_before_provider_send() -> None:
+    calls: list[str] = []
+    client = ModelClient()
+
+    def stream_chat(agent, messages, **kwargs):  # noqa: ANN001 - transport spy
+        del messages, kwargs
+        calls.append(agent.id)
+        yield "served output"
+
+    client.stream_chat = stream_chat
+    orchestrator = TaskOrchestrator([
+        ModelAgent("small_worker", "small-model", priority=10, context_window=10),
+        ModelAgent("large_worker", "large-model", priority=1, context_window=10),
+    ], client=client, token_counter=SimpleNamespace(
+        count_text=lambda _text, model: 100 if model == "small-model" else 2,
+    ))
+
+    assert "".join(orchestrator.stream_route([
+        {"role": "user", "content": "A prompt longer than one token"}
+    ])) == "served output"
+    assert calls == ["large_worker"]
+
+
+def test_stream_route_rejects_when_every_known_context_is_too_small() -> None:
+    calls: list[str] = []
+    client = ModelClient()
+
+    def stream_chat(agent, messages, **kwargs):  # noqa: ANN001 - transport spy
+        del agent, messages, kwargs
+        calls.append("sent")
+        yield "unexpected"
+
+    client.stream_chat = stream_chat
+    orchestrator = TaskOrchestrator([
+        ModelAgent("small_worker", "small-model", context_window=1),
+    ], client=client)
+
+    with pytest.raises(orchestrator_module.ProviderRequestTooLargeError):
+        list(orchestrator.stream_route([
+            {"role": "user", "content": "A prompt longer than one token"}
+        ]))
+    assert calls == []
+
+
 def test_stream_route_uses_canonical_provider_name_in_trace() -> None:
     orchestrator = TaskOrchestrator(
         [ModelAgent("general_agent", "m-model", base_url="mock://provider/path")]

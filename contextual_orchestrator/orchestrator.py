@@ -7926,6 +7926,21 @@ class TaskOrchestrator:
             candidates = _eligible_role_effort_candidates(candidates, effort_profile)
         if not candidates:
             candidates = [primary]
+        if pinned is None:
+            eligible: list[ModelAgent] = []
+            for candidate in candidates:
+                # Exact token counts are model-specific; check each candidate
+                # against its own tokenizer before excluding it.
+                prompt_bound, _ = self._prompt_token_lower_bound(text, candidate.model)
+                kept, _ = _context_window_exclusions([candidate], prompt_bound)
+                eligible.extend(kept)
+            if not eligible:
+                raise ProviderRequestTooLargeError(
+                    "every eligible candidate's known context window is smaller "
+                    "than the prompt's lower-bound token count"
+                )
+            candidates = eligible
+            primary = candidates[0]
 
         last_error: BaseException | None = None
         agent = primary

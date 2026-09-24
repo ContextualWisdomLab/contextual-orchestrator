@@ -26,6 +26,13 @@ ambiguous upstream failure. This narrows the older #1166 virtual-selector behavi
 below only for review-tagged `orchestrator/free`; it does not establish a
 provider idempotency contract or change other virtual selectors.
 
+Streaming route selection also checks each candidate's known context window
+against a conservative prompt-token lower bound for that candidate's model.
+A proven-too-small candidate is skipped before transport; when all known
+windows are too small, the request fails before send. Unknown windows remain
+unknown rather than being treated as sufficient capacity. This is local
+request-admission evidence, not full-message context proof or live readiness.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
