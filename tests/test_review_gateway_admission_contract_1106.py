@@ -382,6 +382,90 @@ def test_review_gateway_rejects_explicit_model_before_provider_send(monkeypatch)
     assert sends == []
 
 
+def test_review_gateway_rejects_capability_model_before_provider_send(monkeypatch):
+    """A chat-capable member cannot bypass review allocation via another API."""
+    discovered = [replace(
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+        capabilities=("chat", "image"),
+        output_modalities=("text", "image"),
+    )]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret",
+    })
+    sends: list[str] = []
+
+    def fake_send(*args, **kwargs):
+        del args, kwargs
+        sends.append("sent")
+        return {"data": [{"url": "https://example.com/synthetic.png"}]}
+
+    monkeypatch.setattr(orchestrator.client, "proxy_send", fake_send)
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_capability(
+            {"model": "router-review", "prompt": "synthetic image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+    assert caught.value.error_code == "review_model_not_allowed"
+    assert caught.value.client_status == 400
+    assert caught.value.retryable is False
+    assert sends == []
+
+
+def test_review_gateway_rerank_allocation_is_typed_and_never_sends(monkeypatch):
+    """Direct and HTTP capability routes share the review allocation gate."""
+    discovered = [replace(
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY"),
+        capabilities=("chat", "rerank"),
+    )]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    orchestrator = review_gateway.build_review_orchestrator({
+        "OPENROUTER_API_KEY": "router-secret",
+    })
+    sends: list[str] = []
+    monkeypatch.setattr(
+        orchestrator.client, "proxy_send", lambda *args, **kwargs: sends.append("sent"),
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token="review-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for model, status, code in (
+            ("router-review", 400, "review_model_not_allowed"),
+            (TaskOrchestrator.FREE_MODEL, 503, "allocation_evidence_unavailable"),
+            (None, 400, "review_model_not_allowed"),
+        ):
+            body = {"query": "synthetic", "documents": ["synthetic"]}
+            if model is not None:
+                body["model"] = model
+            with pytest.raises(ProviderUpstreamError) as caught:
+                orchestrator.proxy_capability(body, capability="rerank", endpoint="rerank")
+            assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+                status, code, False,
+            )
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/rerank",
+                data=json.dumps(body).encode(),
+                headers={"content-type": "application/json", "authorization": "Bearer review-test-token"},
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as rejected:
+                urllib.request.urlopen(request, timeout=5)
+            with rejected.value as response:
+                assert response.code == status
+                payload = json.load(response)
+            assert payload["error"]["code"] == code
+            assert payload["error"]["detail"]["retryable"] is False
+        assert sends == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_image_review_request_without_vision_evidence_stops_before_send(monkeypatch):
     """Text chat readiness cannot authorize an image-bearing review request."""
     discovered = [_discovered("openrouter", "text-review", "OPENROUTER_API_KEY")]
