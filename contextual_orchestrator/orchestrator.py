@@ -11067,6 +11067,18 @@ class TaskOrchestrator:
                             else self.client.chat(agent, messages)
                         )
                 except Exception as exc:
+                    if review_no_replay and "review" in agent.tags and isinstance(exc, urllib.error.HTTPError):
+                        response_error = exc
+                        try:
+                            exc = classify_provider_failure(
+                                response_error, agent_id=agent.id,
+                                model=agent.model, transport="chat",
+                            )
+                        finally:
+                            try:
+                                response_error.close()
+                            except Exception:  # noqa: BLE001 - preserve the classified failure
+                                pass
                     if _is_request_too_large_error(exc):
                         break
                     every_failure_was_request_too_large = False
@@ -11122,7 +11134,7 @@ class TaskOrchestrator:
                             # exception below proves no send took place.
                             if exc.provider_status != 429:
                                 self._record_failure(agent.id)
-                            raise
+                            raise exc from None
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
                         # the provider's own already-computed retryability
@@ -11147,6 +11159,29 @@ class TaskOrchestrator:
                         )
                     else:
                         decision = classify_tool_failure(exc)
+                        if review_no_replay and "review" in agent.tags and decision.kind in {
+                            ToolFailureKind.UNKNOWN, ToolFailureKind.RATE_LIMITED,
+                        }:
+                            rate_limit_signal = self._rate_limited_provider_signal(exc)
+                            if rate_limit_signal is not None:
+                                signal_status, signal_http_error = rate_limit_signal
+                                self._record_rate_limit(
+                                    agent.id,
+                                    resolve_retry_after_seconds(signal_http_error)
+                                    if signal_http_error is not None else None,
+                                    status=signal_status,
+                                )
+                            if decision.kind is ToolFailureKind.UNKNOWN:
+                                self._record_failure(agent.id)
+                            raise ProviderUpstreamError(
+                                agent_id=agent.id,
+                                model=agent.model,
+                                error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                                message="the provider request outcome is unknown; automatic replay is unsafe",
+                                client_status=502,
+                                retryable=False,
+                                transport="chat",
+                            ) from None
                     action = decision.action
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
