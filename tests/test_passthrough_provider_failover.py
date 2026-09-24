@@ -23,6 +23,7 @@ from contextual_orchestrator import (
 )
 from contextual_orchestrator.orchestrator import (
     ModelClient,
+    ProviderResponseError,
     ProviderRequestTooLargeError,
     _is_ambiguous_passthrough_transport_failure,
     _is_request_too_large_error,
@@ -868,6 +869,38 @@ def test_review_free_invoke_unknown_failure_does_not_replay(
     finally:
         for response in responses:
             response.close()
+        orchestrator.close()
+
+
+def test_review_free_malformed_provider_response_does_not_replay() -> None:
+    """A returned but unusable review completion cannot authorize another send."""
+    first = ModelAgent("first_agent", "first-model", priority=10,
+                       tags=("cost:free", "review"))
+    second = ModelAgent("second_agent", "second-model", priority=1,
+                        tags=("cost:free", "review"))
+    orchestrator = TaskOrchestrator([first, second], tool_retry_attempts=0)
+    calls: list[str] = []
+
+    def chat(agent: ModelAgent, _messages: list[dict[str, Any]]) -> str:
+        calls.append(agent.id)
+        if agent.id == first.id:
+            raise ProviderResponseError("synthetic unusable completion")
+        return "synthetic fallback"
+
+    orchestrator.client.chat = chat
+    try:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator._invoke_with_rate_limit_recovery(
+                first, [{"role": "user", "content": "synthetic"}],
+                text="synthetic", role="worker",
+                allowed_agent_ids={first.id, second.id},
+                review_no_replay=True, virtual_selector=True,
+            )
+        assert (caught.value.client_status, caught.value.error_code, caught.value.retryable) == (
+            502, "provider_outcome_unknown", False,
+        )
+        assert calls == [first.id]
+    finally:
         orchestrator.close()
 
 
