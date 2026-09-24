@@ -147,6 +147,13 @@ wait for that request.
 The structured-synthesis path uses the same explicit-refusal boundary: a bare
 404 is terminal, while an HTTP error body naming `model_not_found` permits
 advancing to another already eligible candidate.
+The live chat stream applies it before any content delta as well. A review
+candidate's 429/503 or uncertain transport failure stops that request, even
+when the gateway has not yet emitted a content byte. The failed attempt is
+retained as a workflow trace step, and the chat-stream usage ledger records an
+`unavailable` measurement when the provider supplied no usage. A direct local
+slot refusal, explicit model refusal, or request-size rejection can still
+advance; a streamed response that already emitted content never replays.
 This matches the non-idempotent retry boundary in
 [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
 

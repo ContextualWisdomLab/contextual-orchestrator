@@ -7962,12 +7962,21 @@ class TaskOrchestrator:
                 )
                 if not isinstance(upstream, ProviderUpstreamError):
                     raise
+                if isinstance(exc, urllib.error.HTTPError):
+                    try:
+                        exc.close()
+                    except Exception:
+                        pass  # Cleanup must not replace the classified failure.
                 last_error = upstream
+                if upstream.provider_status in (429, 503):
+                    self._record_rate_limit(
+                        agent.id,
+                        upstream.extra_detail.get("retry_after_seconds"),
+                        status=upstream.provider_status,
+                    )
                 decision = classify_provider_transport_failure(upstream.retryable)
-                if decision.circuit_failure:
+                if decision.circuit_failure and upstream.provider_status != 429:
                     self._record_failure(agent.id)
-                if decision.action is ToolFallbackAction.FAIL_CLOSED:
-                    raise upstream from None
                 if not request_too_large:
                     failed_usage = (
                         self.client.take_usage()
@@ -8002,6 +8011,76 @@ class TaskOrchestrator:
                     if isinstance(failed_usage, dict):
                         failed_step["usage"] = failed_usage
                     failed_trace_steps.append(failed_step)
+                review_candidate = free_only and "review" in agent.tags
+                explicit_refusal = (
+                    upstream.error_code == "model_not_found"
+                    and upstream.extra_detail.get("model_refusal_proven") is True
+                )
+                if review_candidate and not (
+                    request_too_large
+                    or isinstance(exc, _LocalProviderAdmissionTimeout)
+                    or explicit_refusal
+                ):
+                    ambiguous = (
+                        _is_ambiguous_passthrough_transport_failure(exc)
+                        or upstream.error_code in {
+                            "provider_connection_error", "provider_timeout"
+                        }
+                    )
+                    terminal = ProviderUpstreamError(
+                        agent_id=agent.id,
+                        model=agent.model,
+                        error_code=(
+                            PROVIDER_OUTCOME_UNKNOWN_CODE if ambiguous else upstream.error_code
+                        ),
+                        message=(
+                            "the provider request outcome is unknown; automatic replay is unsafe"
+                            if ambiguous else str(upstream)
+                        ),
+                        client_status=502 if ambiguous else upstream.client_status,
+                        provider_status=upstream.provider_status,
+                        retryable=False,
+                        transport="stream",
+                        extra_detail=dict(upstream.extra_detail),
+                    )
+                    run_id = workflow_run_id or f"run_{uuid.uuid4().hex}"
+                    record = self._with_effort_snapshot({
+                        "workflow_run_id": run_id,
+                        "created_at": int(time.time()),
+                        "mode": "route",
+                        "policy_mode": "route",
+                        "prompt_text": text,
+                        "answer": "",
+                        "trace": failed_trace_steps,
+                        "policy_snapshot": self.policy.as_dict(),
+                        "failure": {"code": terminal.error_code},
+                    })
+                    if owner_id is not None:
+                        record["owner_id"] = owner_id
+                    self._replace_workflow_run(record)
+                    if self._store is not None:
+                        self._store.save("workflow_run", run_id, self.get_workflow_run(run_id))
+                    self._append_audit_event("workflow_run_failed", {
+                        "workflow_run_id": run_id, "mode": "route",
+                        "failure_code": terminal.error_code,
+                    })
+                    terminal.extra_detail.update({
+                        "workflow_run_id": run_id,
+                        "terminal_reason": "fail_closed",
+                        "route": {
+                            "eligible_agent_ids": [candidate.id for candidate in candidates],
+                            "attempted": [
+                                _typed_attempt_entry(
+                                    agent.id, agent.model, upstream,
+                                    request_too_large=False,
+                                )
+                            ],
+                            "terminal_reason": "fail_closed",
+                        },
+                    })
+                    raise terminal from None
+                if decision.action is ToolFallbackAction.FAIL_CLOSED:
+                    raise upstream from None
                 continue
             last_error = None
             break

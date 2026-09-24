@@ -25,9 +25,11 @@ from contextual_orchestrator import orchestrator as orchestrator_module  # noqa:
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     ProviderResponseError,
+    _LocalProviderAdmissionTimeout,
     _parse_model_judge_reply,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
+from contextual_orchestrator.cost_router import CostRoutingCoordinator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
@@ -516,7 +518,7 @@ def test_stream_route_persists_owner() -> None:
 class _StreamFailThenServeClient:
     """First candidate's ``stream_chat`` raises; the second yields deltas."""
 
-    def __init__(self, first_error: ProviderUpstreamError) -> None:
+    def __init__(self, first_error: BaseException) -> None:
         self._first_error = first_error
         self.stream_calls: list[str] = []
 
@@ -579,6 +581,261 @@ def test_stream_route_records_typed_retryable_attempt_before_serving() -> None:
     assert trace[0]["transport"] == "stream"
     assert trace[0]["reason"]
     assert trace[1]["agent_id"] == "fallback_worker"
+
+
+def test_review_free_stream_does_not_replay_after_first_byte_unknown_failure() -> None:
+    """No emitted delta does not prove the provider rejected the review call."""
+    client = _StreamFailThenServeClient(
+        ProviderUpstreamError(
+            agent_id="primary_worker", model="primary-model",
+            error_code="rate_limit_exceeded", message="provider rejected the request",
+            client_status=429, provider_status=429, retryable=True,
+            transport="stream",
+        )
+    )
+    agents = [
+        ModelAgent("primary_worker", "primary-model", priority=10,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+        ModelAgent("fallback_worker", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        list(orchestrator.stream_route(
+            [{"role": "user", "content": "stream this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        ))
+
+    assert caught.value.provider_status == 429
+    assert client.stream_calls == ["primary_worker"]
+    failed = next(iter(orchestrator._workflow_runs.values()))
+    assert failed["failure"]["code"] == "rate_limit_exceeded"
+    assert failed["trace"][0]["agent_id"] == "primary_worker"
+
+
+def test_review_free_stream_failure_records_unavailable_usage() -> None:
+    client = ModelClient()
+    calls: list[str] = []
+
+    def stream(agent, _messages, **_kwargs):
+        calls.append(agent.id)
+        if agent.id == "primary_worker":
+            raise ProviderUpstreamError(
+                agent_id=agent.id, model=agent.model,
+                error_code="rate_limit_exceeded", message="provider rejected the request",
+                client_status=429, provider_status=429, retryable=True,
+                transport="stream",
+            )
+        yield "served output"
+
+    client.stream_chat = stream
+    orchestrator = TaskOrchestrator([
+        ModelAgent("primary_worker", "primary-model", priority=10,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+        ModelAgent("fallback_worker", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+    ], client=client)
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator, port=0,
+        security=SecurityConfig(auth_token="stream-token"), coordinator=coordinator,
+    )
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "stream": True,
+            }).encode(),
+            headers={"Authorization": "Bearer stream-token", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            frames = response.read().decode().splitlines()
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+    assert calls == ["primary_worker"]
+    errors = [json.loads(frame[6:]) for frame in frames if frame.startswith("data: {") and '"error"' in frame]
+    assert errors[0]["error"]["detail"]["usage_measurement_status"] == "unavailable"
+    assert errors[0]["error"]["detail"]["retryable"] is False
+    assert errors[0]["error"]["detail"]["route"]["attempted"][0]["agent_id"] == "primary_worker"
+    assert errors[0]["error"]["detail"]["route"]["attempted"][0]["outcome"] == "retryable_transport"
+    rows = coordinator.ledger.records()
+    assert len(rows) == 1
+    assert rows[0]["measurement_status"] == "unavailable"
+    assert rows[0]["provider_name"] == "mock"
+
+
+def test_review_free_stream_explicit_model_refusal_can_advance() -> None:
+    client = _StreamFailThenServeClient(
+        ProviderUpstreamError(
+            agent_id="primary_worker", model="primary-model",
+            error_code="model_not_found", message="model unavailable",
+            client_status=404, provider_status=404, retryable=False,
+            transport="stream", extra_detail={"model_refusal_proven": True},
+        )
+    )
+    orchestrator = TaskOrchestrator([
+        ModelAgent("primary_worker", "primary-model", priority=10,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+        ModelAgent("fallback_worker", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+    ], client=client)
+
+    assert "".join(orchestrator.stream_route(
+        [{"role": "user", "content": "review"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )) == "served output"
+    assert client.stream_calls == ["primary_worker", "fallback_worker"]
+
+
+def test_review_free_stream_local_slot_refusal_can_advance() -> None:
+    client = _StreamFailThenServeClient(_LocalProviderAdmissionTimeout("no local slot"))
+    orchestrator = TaskOrchestrator([
+        ModelAgent("primary_worker", "primary-model", priority=10,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+        ModelAgent("fallback_worker", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+    ], client=client)
+
+    assert "".join(orchestrator.stream_route(
+        [{"role": "user", "content": "review"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )) == "served output"
+    assert client.stream_calls == ["primary_worker", "fallback_worker"]
+
+
+def test_review_free_stream_safe_failover_keeps_both_usage_rows() -> None:
+    client = ModelClient()
+    calls: list[str] = []
+
+    def stream(agent, _messages, **_kwargs):
+        calls.append(agent.id)
+        if agent.id == "primary_worker":
+            raise ProviderUpstreamError(
+                agent_id=agent.id, model=agent.model,
+                error_code="model_not_found", message="model unavailable",
+                client_status=404, provider_status=404, retryable=False,
+                transport="stream", extra_detail={"model_refusal_proven": True},
+            )
+        yield "served output"
+
+    client.stream_chat = stream
+    orchestrator = TaskOrchestrator([
+        ModelAgent("primary_worker", "primary-model", priority=10,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+        ModelAgent("fallback_worker", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+    ], client=client)
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator, port=0,
+        security=SecurityConfig(auth_token="stream-token"), coordinator=coordinator,
+    )
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "stream": True,
+            }).encode(),
+            headers={"Authorization": "Bearer stream-token", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = response.read().decode()
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+    assert "served output" in body
+    assert calls == ["primary_worker", "fallback_worker"]
+    rows = coordinator.ledger.records()
+    assert len(rows) == 2
+    assert {row["model_name"] for row in rows} == {"primary-model", "fallback-model"}
+    assert all(row["measurement_status"] == "unavailable" for row in rows)
+
+
+def test_chat_stream_usage_write_failure_is_typed(monkeypatch) -> None:
+    orchestrator = TaskOrchestrator([
+        ModelAgent("route_worker", "mock-model", tags=("reasoning", "writing"))
+    ])
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    def fail_usage(**_kwargs):
+        raise RuntimeError("usage store unavailable")
+
+    monkeypatch.setattr(coordinator, "record_stream_usage", fail_usage)
+    server = build_server(orchestrator, port=0, coordinator=coordinator)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    frames: list[str] = []
+    handler._begin_sse = lambda: True
+    handler._write_sse = lambda frame: frames.append(frame) is None
+    try:
+        handler._stream_route_completion(
+            orchestrator, SecurityConfig(auth_token="stream-token"),
+            [{"role": "user", "content": "hello"}], "mock-model",
+        )
+    finally:
+        server.server_close()
+
+    errors = [json.loads(frame[6:]) for frame in frames if '"error"' in frame]
+    assert errors[0]["error"]["code"] == "usage_recording_failed"
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+def test_review_free_stream_preserves_audited_model_timeout() -> None:
+    client = _StreamFailThenServeClient(
+        ProviderUpstreamError(
+            agent_id="primary_worker", model="primary-model",
+            error_code="model_timeout", message="administrator timeout elapsed",
+            client_status=504, provider_status=None, retryable=False,
+            transport="stream",
+        )
+    )
+    orchestrator = TaskOrchestrator([
+        ModelAgent("primary_worker", "primary-model", priority=10,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+        ModelAgent("fallback_worker", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+    ], client=client)
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        list(orchestrator.stream_route(
+            [{"role": "user", "content": "review"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        ))
+    assert caught.value.error_code == "model_timeout"
+    assert caught.value.retryable is False
+    assert client.stream_calls == ["primary_worker"]
+
+
+def test_review_free_stream_timeout_has_unknown_outcome_without_replay() -> None:
+    client = _StreamFailThenServeClient(TimeoutError("read timed out"))
+    orchestrator = TaskOrchestrator([
+        ModelAgent("primary_worker", "primary-model", priority=10,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+        ModelAgent("fallback_worker", "fallback-model", priority=1,
+                   tags=("cost:free", "review", "reasoning", "writing")),
+    ], client=client)
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        list(orchestrator.stream_route(
+            [{"role": "user", "content": "review"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        ))
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.retryable is False
+    assert client.stream_calls == ["primary_worker"]
 
 
 def test_stream_route_records_typed_deadline_exceeded_attempt() -> None:
