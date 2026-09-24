@@ -7809,6 +7809,13 @@ class TaskOrchestrator:
                 request_too_large = _is_request_too_large_error(exc)
                 if (agent.group_name or free_only) and not request_too_large:
                     self._group_router.observe_failure(agent.id)
+                if isinstance(exc, ProviderUpstreamError) and (emitted or pinned is not None):
+                    route_attempts.append(_typed_attempt_entry(
+                        agent.id, agent.model, exc, request_too_large=request_too_large
+                    ))
+                    exc.extra_detail["route"] = route_evidence(
+                        "stream_interrupted" if emitted else "pinned_candidate_failed"
+                    )
                 if emitted or pinned is not None:
                     raise
                 if isinstance(exc, ToolFallbackStoppedError):

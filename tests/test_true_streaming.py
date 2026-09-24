@@ -670,6 +670,55 @@ def test_stream_exhaustion_retains_typed_attempts_without_provider_prose() -> No
     assert "private provider response" not in json.dumps(caught.value.detail)
 
 
+@pytest.mark.parametrize(
+    ("model_name", "emit_first", "terminal_reason"),
+    [
+        ("primary-model", False, "pinned_candidate_failed"),
+        (TaskOrchestrator.AUTO_MODEL, True, "stream_interrupted"),
+    ],
+)
+def test_stream_terminal_provider_error_keeps_route(
+    model_name: str, emit_first: bool, terminal_reason: str
+) -> None:
+    """A pinned or partially emitted stream retains typed failure provenance."""
+    class FailingStream:
+        def stream_chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+            del messages, kwargs
+            if emit_first:
+                yield "partial"
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="authentication_error",
+                message="private provider response",
+                client_status=401,
+                provider_status=401,
+                retryable=False,
+                transport="stream",
+            )
+
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=FailingStream())
+    deltas: list[str] = []
+    with pytest.raises(ProviderUpstreamError) as caught:
+        for delta in orchestrator.stream_route(
+            [{"role": "user", "content": "continue"}], model_name=model_name
+        ):
+            deltas.append(delta)
+    assert deltas == (["partial"] if emit_first else [])
+    route = caught.value.detail["route"]
+    assert route["terminal_reason"] == terminal_reason
+    assert route["attempted"] == [{
+        "agent_id": "primary_worker",
+        "model": "primary-model",
+        "outcome": "fail_closed",
+        "error_code": "authentication_error",
+        "provider_status": 401,
+        "retryable": False,
+        "transport": "stream",
+    }]
+    assert "private provider response" not in json.dumps(caught.value.detail)
+
+
 def test_stream_route_records_typed_deadline_exceeded_attempt() -> None:
     """An administrator model-timeout attempt is typed distinctly from other failures."""
     client = _StreamFailThenServeClient(
