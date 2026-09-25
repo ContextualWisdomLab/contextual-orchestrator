@@ -10931,6 +10931,8 @@ class TaskOrchestrator:
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
+        attempt_receipts: list[dict[str, Any]] = []
+        selected_candidate_ids = [candidate.id for candidate in candidates]
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -10988,21 +10990,47 @@ class TaskOrchestrator:
                         # decision distinguishing which failure kinds that would
                         # actually be safe for.
                         raise
-                    if isinstance(exc, ProviderUpstreamError):
-                        last_upstream_error = exc
-                        if exc.provider_status in (429, 503):
+                    classified_provider_error = (
+                        exc
+                        if isinstance(exc, ProviderUpstreamError)
+                        else (
+                            classify_provider_failure(
+                                exc,
+                                agent_id=agent.id,
+                                model=agent.model,
+                                transport="chat",
+                            )
+                            if isinstance(
+                                exc,
+                                (
+                                    urllib.error.HTTPError,
+                                    urllib.error.URLError,
+                                    TimeoutError,
+                                    ConnectionError,
+                                    socket.timeout,
+                                    http.client.HTTPException,
+                                ),
+                            )
+                            else None
+                        )
+                    )
+                    if classified_provider_error is not None:
+                        last_upstream_error = classified_provider_error
+                        if classified_provider_error.provider_status in (429, 503):
                             # Quota cooldown, tracked separately from the
                             # circuit breaker below (a 429 is not a model
                             # health failure) so a caller-level storm-wait
                             # (_invoke_with_rate_limit_recovery) can see it.
                             self._record_rate_limit(
                                 agent.id,
-                                exc.extra_detail.get("retry_after_seconds"),
-                                status=exc.provider_status,
+                                classified_provider_error.extra_detail.get(
+                                    "retry_after_seconds"
+                                ),
+                                status=classified_provider_error.provider_status,
                             )
                         if (
                             excluded_agent_ids is not None
-                            and exc.error_code == "model_not_found"
+                            and classified_provider_error.error_code == "model_not_found"
                         ):
                             excluded_agent_ids.add(agent.id)
                             self._record_failure(agent.id)
@@ -11015,7 +11043,9 @@ class TaskOrchestrator:
                         # never be accidentally downgraded to fail-closed by
                         # incidental wording in an upstream error body (e.g. a
                         # 400 that happens to mention "invalid arguments").
-                        decision = classify_provider_transport_failure(exc.retryable)
+                        decision = classify_provider_transport_failure(
+                            classified_provider_error.retryable
+                        )
                     elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             raise
@@ -11032,6 +11062,31 @@ class TaskOrchestrator:
                     else:
                         decision = classify_tool_failure(exc)
                     action = decision.action
+                    if classified_provider_error is not None:
+                        has_remaining_candidates = any(
+                            candidate.id != agent.id for candidate in candidates
+                        )
+                        attempt_receipts.append(
+                            _passthrough_attempt_record(
+                                classified_provider_error,
+                                provider_name=(
+                                    agent.provider_name.strip() or "unreported"
+                                ),
+                                attempt_number=len(attempt_receipts) + 1,
+                                failover_decision=(
+                                    "retry_same_candidate"
+                                    if (
+                                        action is ToolFallbackAction.RETRY_SAME_AGENT
+                                        and retry_attempt < retry_limit
+                                    )
+                                    else (
+                                        "advance_to_next_candidate"
+                                        if has_remaining_candidates
+                                        else "eligible_candidates_exhausted"
+                                    )
+                                ),
+                            )
+                        )
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
                     if (
@@ -11097,6 +11152,19 @@ class TaskOrchestrator:
                 "request body exceeds every eligible provider limit"
             )
         if last_upstream_error is not None:
+            _set_passthrough_attempt_evidence(
+                last_upstream_error,
+                selected_candidate_ids=selected_candidate_ids,
+                attempts=attempt_receipts,
+                terminal_reason="eligible_candidates_exhausted",
+            )
+            attempted_candidates = len(
+                {attempt["agent_id"] for attempt in attempt_receipts}
+            )
+            last_upstream_error.args = (
+                f"all {attempted_candidates} candidate agents failed; "
+                "see attempts for each provider failure",
+            )
             raise last_upstream_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
