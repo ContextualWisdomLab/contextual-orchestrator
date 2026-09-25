@@ -7070,10 +7070,11 @@ class TaskOrchestrator:
                 f"provider {agent.id} returned no structured response content"
             )
 
-        def record_synthesis_failure(candidate: ModelAgent) -> None:
-            """Record the failed attempt in both ledgers before advancing or raising."""
+        def record_synthesis_failure(candidate: ModelAgent, *, rate_limited: bool = False) -> None:
+            """Record a failed attempt without treating quota rejection as unhealthy."""
             nonlocal synthesis_failure_recorded
-            self._record_failure(candidate.id)
+            if not rate_limited:
+                self._record_failure(candidate.id)
             if candidate.group_name or free_only:
                 self._group_router.observe_failure(candidate.id)
             synthesis_failure_recorded = True
@@ -7081,7 +7082,7 @@ class TaskOrchestrator:
         synthesis_route_attempts: list[dict[str, Any]] = []
         synthesis_eligible_agent_ids: list[str] = []
 
-        def send_synthesis(
+        def send_synthesis_once(
             payload: dict[str, Any],
             *,
             allow_cross_candidate_fallback: bool = True,
@@ -7108,6 +7109,11 @@ class TaskOrchestrator:
                     ),
                 ]
             )
+            if virtual_model and allow_cross_candidate_fallback:
+                ordered_candidates = [
+                    candidate for candidate in ordered_candidates
+                    if self._rate_limit_remaining(candidate.id) is None
+                ]
             attempts = synthesis_route_attempts
             eligible_agent_ids = synthesis_eligible_agent_ids
             eligible_agent_ids.extend(
@@ -7335,10 +7341,23 @@ class TaskOrchestrator:
                                 continue
                             if not isinstance(classified, ProviderUpstreamError):
                                 raise classified from None
-                            record_synthesis_failure(candidate)
+                            rate_signal = self._rate_limited_provider_signal(exc)
+                            if rate_signal is not None:
+                                status, http_error = rate_signal
+                                self._record_rate_limit(
+                                    candidate.id,
+                                    resolve_retry_after_seconds(http_error)
+                                    if http_error is not None else None,
+                                    status=status,
+                                )
+                            record_synthesis_failure(
+                                candidate,
+                                rate_limited=rate_signal is not None and rate_signal[0] == 429,
+                            )
                             if virtual_model and classified.retryable:
                                 last_retryable_upstream_error = classified
-                                request_exclusions.add(candidate.id)
+                                if rate_signal is None or rate_signal[0] != 429:
+                                    request_exclusions.add(candidate.id)
                                 continue
                             if (
                                 virtual_model
@@ -7370,6 +7389,81 @@ class TaskOrchestrator:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
+
+        def send_synthesis(
+            payload: dict[str, Any],
+            *,
+            allow_cross_candidate_fallback: bool = True,
+            require_output: bool = True,
+            repair_mode: bool = False,
+        ) -> tuple[dict[str, Any], ModelAgent]:
+            """Retry only virtual synthesis after every available route returns 429."""
+            nonlocal final_agent
+            if not virtual_model or not allow_cross_candidate_fallback or repair_mode:
+                return send_synthesis_once(
+                    payload,
+                    allow_cross_candidate_fallback=allow_cross_candidate_fallback,
+                    require_output=require_output,
+                    repair_mode=repair_mode,
+                )
+            preferred = final_agent
+            wait_deadline: float | None = None
+            while True:
+                available = [
+                    candidate for candidate in synthesis_candidates
+                    if candidate.id not in request_exclusions
+                ]
+                cooling = [
+                    candidate for candidate in available
+                    if self._rate_limit_remaining(candidate.id) is not None
+                ]
+                if wait_deadline is not None and time.monotonic() >= wait_deadline:
+                    storm = rate_limited_storm_error(
+                        agent_id=preferred.id,
+                        model=preferred.model,
+                        retry_after_seconds=0.0,
+                        transport="structured_synthesis",
+                        cooldown_source=self._rate_limit_cooldown_source(preferred.id),
+                    )
+                    raise _attach_route_evidence_to_upstream_error(
+                        storm,
+                        _route_evidence_payload(
+                            eligible_agent_ids=synthesis_eligible_agent_ids,
+                            attempted=synthesis_route_attempts,
+                            terminal_reason="rate_limited_storm",
+                        ),
+                    ) from None
+                if available and len(cooling) == len(available):
+                    if wait_deadline is None:
+                        wait_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
+                    try:
+                        self._await_rate_limit_recovery(
+                            cooling,
+                            deadline=wait_deadline,
+                            transport="structured_synthesis",
+                            virtual_selector=True,
+                        )
+                    except ProviderUpstreamError as storm:
+                        raise _attach_route_evidence_to_upstream_error(
+                            storm,
+                            _route_evidence_payload(
+                                eligible_agent_ids=synthesis_eligible_agent_ids,
+                                attempted=synthesis_route_attempts,
+                                terminal_reason="rate_limited_storm",
+                            ),
+                        ) from None
+                round_start = len(synthesis_route_attempts)
+                try:
+                    return send_synthesis_once(payload, require_output=require_output)
+                except ProviderUpstreamError:
+                    round_attempts = synthesis_route_attempts[round_start:]
+                    if not round_attempts or any(
+                        row.get("provider_status") != 429 for row in round_attempts
+                    ):
+                        raise
+                    if wait_deadline is None:
+                        wait_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
+                    final_agent = preferred
 
         response_format = chat_body.get("response_format")
         synthesis_started = time.perf_counter()
@@ -7486,6 +7580,10 @@ class TaskOrchestrator:
                     not _is_request_too_large_error(exc)
                     and not isinstance(exc, EffortProfileError)
                     and not synthesis_failure_recorded
+                    and not (
+                        isinstance(exc, ProviderUpstreamError)
+                        and exc.provider_status == 429
+                    )
                 ):
                     record_synthesis_failure(final_agent)
                 if structured_attempt_steps:
