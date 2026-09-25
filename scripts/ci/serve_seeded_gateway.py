@@ -23,7 +23,10 @@ from contextual_orchestrator.credentials import (
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.model_discovery import PROVIDER_MODEL_SOURCES
+from contextual_orchestrator.model_discovery import (
+    PROVIDER_MODEL_SOURCES,
+    credential_env_names,
+)
 
 PROVIDER_KEY_ENV_NAMES = tuple(
     dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
@@ -36,7 +39,13 @@ def seed_credentials_from_bootstrap_env() -> list[str]:
     set_backend(InMemoryCredentialBackend())
     seeded: list[str] = []
     for credential_name in (*PROVIDER_KEY_ENV_NAMES, SERVER_AUTH_ENV_NAME):
-        value = os.environ.pop(credential_name, None)
+        # Pop every accepted spelling so no alias lingers in the environment;
+        # the first non-empty one in documented order wins.
+        value = None
+        for env_name in credential_env_names(credential_name):
+            candidate = os.environ.pop(env_name, None)
+            if candidate and not value:
+                value = candidate
         # Bootstrap transport only: the trusted CI job injects each value into
         # this process environment; nothing reads os.environ again after this.
         if value:

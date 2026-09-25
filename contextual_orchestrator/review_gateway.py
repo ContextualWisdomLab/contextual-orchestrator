@@ -24,6 +24,7 @@ from .credentials import NotConfigured, get_credential, register_credential
 from .model_discovery import (
     DiscoveredModel,
     agent_from_discovered,
+    bootstrap_credential_value,
     discover_all_models,
     general_free_serving_candidates,
 )
@@ -158,9 +159,8 @@ def register_review_credentials(
     requested_names = _validated_credential_names(credential_names)
     registered: list[str] = []
     for name in requested_names:
-        raw_value = environment.get(name, "")
-        value = raw_value.rstrip("\r\n") if isinstance(raw_value, str) else ""
-        if value and value.strip():
+        value = bootstrap_credential_value(environment, name)
+        if value:
             register_credential(name, value)
             registered.append(name)
     raw_auth_value = environment.get(REVIEW_AUTH_CREDENTIAL_NAME, "")
