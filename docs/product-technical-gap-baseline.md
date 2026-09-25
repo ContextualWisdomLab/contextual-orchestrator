@@ -2005,9 +2005,10 @@ The gateway advanced after the first OpenRouter 429, but the next candidate
 also returned 429. Earlier NIM candidates had failed with connection errors,
 so the mixed-failure guard above refused to wait for the known 429 cooldown.
 The chat path also counted both 429 responses as circuit failures. The repair
-waits within the existing request budget and retries only candidates with a
-recorded cooldown; it leaves earlier failed calls untouched and keeps 429 out
-of circuit and group-health observations. This local regression proves the
+waits within the existing request budget and retries only the explicitly
+rejected 429 candidate when failures are mixed; it leaves earlier failed calls
+and mixed 503 outcomes untouched and keeps 429 out of circuit and group-health
+observations. This local regression proves the
 gateway decision only. A hosted Noema approval and merge remain separate gates.
 
 `server.py` answers a raised `provider_rate_limited` error with `429` and a

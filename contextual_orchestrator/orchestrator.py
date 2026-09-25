@@ -11108,6 +11108,7 @@ class TaskOrchestrator:
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
+        last_quota_rejection: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -11174,6 +11175,8 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
+                        if quota_rejection:
+                            last_quota_rejection = exc
                         if exc.provider_status in (429, 503):
                             # Quota cooldown, tracked separately from the
                             # circuit breaker below (a 429 is not a model
@@ -11281,6 +11284,8 @@ class TaskOrchestrator:
                 "request body exceeds every eligible provider limit"
             )
         if last_upstream_error is not None:
+            if last_upstream_error.error_code == "model_not_found" and last_quota_rejection:
+                raise last_quota_rejection
             raise last_upstream_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
@@ -11924,10 +11929,10 @@ class TaskOrchestrator:
 
         route_once and conduct's per-step call both reach candidate
         exhaustion through :meth:`_invoke`. When that exhaustion's last
-        failures include a recorded 429/503 cooldown, wait out the earliest eligible cooldown via
-        :meth:`_await_rate_limit_recovery`. Retry only those rejected candidates;
-        a different candidate's failed or unknown-outcome call must not be
-        replayed when the failure set is mixed.
+        failures include a recorded 429/503 cooldown, wait out the earliest
+        eligible cooldown via :meth:`_await_rate_limit_recovery`. For a mixed
+        failure set, retry only the candidate that explicitly returned 429;
+        another candidate's failed or unknown-outcome call cannot be replayed.
 
         ``virtual_selector`` is the caller's own already-computed selector
         nature (route_once/conduct: ``model_name in {GATEWAY_DEFAULT_MODEL,
@@ -11959,7 +11964,7 @@ class TaskOrchestrator:
                     excluded_agent_ids=excluded_agent_ids,
                     prompt_token_lower_bound=prompt_token_lower_bound,
                 )
-            except ProviderUpstreamError:
+            except ProviderUpstreamError as exc:
                 required_tags = self._image_input_required_tags(messages)
                 prompt_context = self._prompt_interaction(messages)
                 candidates = self._failover_candidates(
@@ -11983,8 +11988,14 @@ class TaskOrchestrator:
                     for candidate in candidates
                     if self._rate_limit_remaining(candidate.id) is not None
                 ]
-                if not virtual_selector or not cooling:
+                if not virtual_selector or not cooling or exc.provider_status not in (429, 503):
                     raise
+                if len(cooling) != len(candidates):
+                    if exc.provider_status != 429:
+                        raise
+                    cooling = [candidate for candidate in cooling if candidate.id == exc.agent_id]
+                    if not cooling:
+                        raise
                 if wait_deadline is None:
                     wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
                 if not self._await_rate_limit_recovery(
