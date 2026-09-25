@@ -1881,9 +1881,9 @@ second 429 before the repair. Candidate #1220 records each quota cooldown,
 keeps quota failures out of the health circuit, and reuses
 `_await_rate_limit_recovery` for a bounded retry only when every eligible
 candidate is cooling. Mixed failures and exhausted wait budgets still return
-typed errors with route evidence. The document-diff, structured synthesis,
-and rate-limit regression suites pass locally (74 tests); current-head hosted
-checks, independent review, protected merge, and central sidecar adoption
+typed errors with route evidence. The HTTP, document-diff, structured synthesis,
+and rate-limit regressions pass locally (98 tests); current-head hosted checks,
+independent review, protected merge, and central sidecar adoption
 remain unverified. The central sidecar pin in `.github#2366` carries the
 earlier ordinary-routing repair, not this structured successor.
 
