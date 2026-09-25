@@ -669,6 +669,48 @@ def test_http_route_once_storm_with_no_retry_after_and_no_budget_returns_429_ass
     assert body["error"]["detail"]["cooldown_source"] == "assumed"
 
 
+@pytest.mark.parametrize("rate_limited_first", [False, True])
+def test_free_route_retries_only_the_rejected_candidate_after_mixed_failures(
+    rate_limited_first: bool,
+) -> None:
+    """A known 429 may recover without replaying another failed provider call."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=1.0
+    )
+    unavailable = ProviderUpstreamError(
+        agent_id="fallback_free_agent" if rate_limited_first else "primary_free_agent",
+        model="unavailable-model",
+        error_code="model_not_found",
+        message="model unavailable",
+        client_status=404,
+        provider_status=404,
+        retryable=False,
+        transport="chat",
+    )
+    outcomes = {
+        "primary_free_agent": [unavailable],
+        "fallback_free_agent": [_rate_limited_upstream_error(0.1), "served after cooldown"],
+    }
+    if rate_limited_first:
+        outcomes = {
+            "primary_free_agent": [_rate_limited_upstream_error(0.1), "served after cooldown"],
+            "fallback_free_agent": [unavailable],
+        }
+    chat_outcomes = QueuedChatOutcomes(outcomes)
+    orchestrator.client.chat = chat_outcomes
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "hello"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "served after cooldown"
+    retried = "primary_free_agent" if rate_limited_first else "fallback_free_agent"
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent", retried]
+    assert retried not in orchestrator._circuit
+    orchestrator.close()
+
+
 def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:
     """A conduct (deep-path) request's worker step waits out the same storm."""
     agents = [

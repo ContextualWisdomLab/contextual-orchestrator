@@ -11143,7 +11143,14 @@ class TaskOrchestrator:
                     if _is_request_too_large_error(exc):
                         break
                     every_failure_was_request_too_large = False
-                    if agent.group_name or allowed_agent_ids is not None:
+                    quota_rejection = (
+                        isinstance(exc, ProviderUpstreamError)
+                        and exc.provider_status == 429
+                    )
+                    if (
+                        (agent.group_name or allowed_agent_ids is not None)
+                        and not quota_rejection
+                    ):
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
                         # Deliberately terminal, even inside a free/auto virtual
@@ -11209,15 +11216,15 @@ class TaskOrchestrator:
                     else:
                         decision = classify_tool_failure(exc)
                     action = decision.action
-                    # A failed attempt is one Bernoulli stability observation
-                    # for measured group routing regardless of what happens next.
+                    # Quota rejection is admission evidence, not a failed
+                    # health observation for measured group routing.
                     if (
                         action is ToolFallbackAction.RETRY_SAME_AGENT
                         and retry_attempt < retry_limit
                     ):
                         retry_attempt += 1
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
-                        if decision.circuit_failure:  # pragma: no branch - retry-classified failures always trip the circuit
+                        if decision.circuit_failure and not quota_rejection:
                             self._record_failure(agent.id)
                         if self.tool_retry_backoff_seconds:
                             retry_ceiling = min(
@@ -11232,7 +11239,7 @@ class TaskOrchestrator:
                         decision = downgrade_to_failover(decision)
                         action = decision.action
                     self._record_tool_fallback(agent.id, decision, retry_attempt)
-                    if decision.circuit_failure:
+                    if decision.circuit_failure and not quota_rejection:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
@@ -11913,18 +11920,14 @@ class TaskOrchestrator:
         virtual_selector: bool,
         prompt_token_lower_bound: int | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
-        """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
+        """Call :meth:`_invoke`, retrying only cooled-down candidates after exhaustion.
 
         route_once and conduct's per-step call both reach candidate
         exhaustion through :meth:`_invoke`. When that exhaustion's last
-        failure is a 429/503 AND every candidate currently eligible for this
-        call is rate-limited (a genuine storm, not a mixed failure set),
-        waits out the earliest cooldown via :meth:`_await_rate_limit_recovery`
-        and retries the whole call instead of propagating the exhaustion --
-        the same admission contract ``proxy_completion`` applies to its own
-        passthrough failover loop. A mixed failure set (some candidate is not
-        rate-limited) re-raises exactly as :meth:`_invoke` would have,
-        unchanged.
+        failures include a recorded 429/503 cooldown, wait out the earliest eligible cooldown via
+        :meth:`_await_rate_limit_recovery`. Retry only those rejected candidates;
+        a different candidate's failed or unknown-outcome call must not be
+        replayed when the failure set is mixed.
 
         ``virtual_selector`` is the caller's own already-computed selector
         nature (route_once/conduct: ``model_name in {GATEWAY_DEFAULT_MODEL,
@@ -11936,21 +11939,27 @@ class TaskOrchestrator:
         ``_invoke``'s pre-existing exhaustion contract for a pinned model.
         """
         wait_deadline: float | None = None
+        recovery_agent_ids: set[str] | None = None
         while True:
+            permitted_ids = allowed_agent_ids
+            if recovery_agent_ids is not None:
+                permitted_ids = (
+                    recovery_agent_ids
+                    if permitted_ids is None
+                    else permitted_ids & recovery_agent_ids
+                )
             try:
                 return self._invoke(
                     primary,
                     messages,
                     text=text,
                     role=role,
-                    allowed_agent_ids=allowed_agent_ids,
+                    allowed_agent_ids=permitted_ids,
                     eligibility_role=eligibility_role,
                     excluded_agent_ids=excluded_agent_ids,
                     prompt_token_lower_bound=prompt_token_lower_bound,
                 )
-            except ProviderUpstreamError as exc:
-                if exc.provider_status not in (429, 503):
-                    raise
+            except ProviderUpstreamError:
                 required_tags = self._image_input_required_tags(messages)
                 prompt_context = self._prompt_interaction(messages)
                 candidates = self._failover_candidates(
@@ -11958,7 +11967,7 @@ class TaskOrchestrator:
                     text,
                     eligibility_role or role,
                     required_tags=required_tags,
-                    allowed_agent_ids=allowed_agent_ids,
+                    allowed_agent_ids=permitted_ids,
                     prompt_context=prompt_context,
                     skip_rate_limited=False,
                     prompt_token_lower_bound=prompt_token_lower_bound,
@@ -11969,22 +11978,17 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not virtual_selector or any(
-                    self._rate_limit_remaining(candidate.id) is None
+                cooling = [
+                    candidate
                     for candidate in candidates
-                ):
-                    # Not a genuine storm to wait out: either the caller
-                    # pinned one explicit concrete model (fail fast,
-                    # unchanged pre-existing contract -- see
-                    # _await_rate_limit_recovery's docstring), or some
-                    # eligible candidate is not rate-limited -- a genuine,
-                    # unrelated exhaustion/failure. Preserve _invoke's own
-                    # exhaustion contract exactly.
+                    if self._rate_limit_remaining(candidate.id) is not None
+                ]
+                if not virtual_selector or not cooling:
                     raise
                 if wait_deadline is None:
                     wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
                 if not self._await_rate_limit_recovery(
-                    candidates,
+                    cooling,
                     deadline=wait_deadline,
                     transport="chat",
                     virtual_selector=virtual_selector,
@@ -11993,6 +11997,7 @@ class TaskOrchestrator:
                     # nothing to wait for after all. Never loop without
                     # having actually waited -- re-raise the real failure.
                     raise
+                recovery_agent_ids = {candidate.id for candidate in cooling}
                 continue
 
     @staticmethod
