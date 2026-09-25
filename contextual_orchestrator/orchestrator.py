@@ -11743,18 +11743,13 @@ class TaskOrchestrator:
         virtual_selector: bool,
         prompt_token_lower_bound: int | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
-        """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
+        """Call :meth:`_invoke`, waiting for a cooled candidate after exhaustion.
 
         route_once and conduct's per-step call both reach candidate
-        exhaustion through :meth:`_invoke`. When that exhaustion's last
-        failure is a 429/503 AND every candidate currently eligible for this
-        call is rate-limited (a genuine storm, not a mixed failure set),
-        waits out the earliest cooldown via :meth:`_await_rate_limit_recovery`
-        and retries the whole call instead of propagating the exhaustion --
-        the same admission contract ``proxy_completion`` applies to its own
-        passthrough failover loop. A mixed failure set (some candidate is not
-        rate-limited) re-raises exactly as :meth:`_invoke` would have,
-        unchanged.
+        exhaustion through :meth:`_invoke`. When any eligible candidate has
+        a recorded 429/503 cooldown, wait for the earliest one within the
+        request budget and retry selection. A later 400 or 504 from another
+        candidate must not prevent that cooled candidate from recovering.
 
         ``virtual_selector`` is the caller's own already-computed selector
         nature (route_once/conduct: ``model_name in {GATEWAY_DEFAULT_MODEL,
@@ -11778,8 +11773,8 @@ class TaskOrchestrator:
                     excluded_agent_ids=excluded_agent_ids,
                     prompt_token_lower_bound=prompt_token_lower_bound,
                 )
-            except ProviderUpstreamError as exc:
-                if exc.provider_status not in (429, 503):
+            except ProviderUpstreamError:
+                if not virtual_selector:
                     raise
                 required_tags = ("vision",) if self._source_image_parts(messages) else ()
                 prompt_context = self._prompt_interaction(messages)
@@ -11799,17 +11794,10 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not virtual_selector or any(
-                    self._rate_limit_remaining(candidate.id) is None
+                if not any(
+                    self._rate_limit_remaining(candidate.id) is not None
                     for candidate in candidates
                 ):
-                    # Not a genuine storm to wait out: either the caller
-                    # pinned one explicit concrete model (fail fast,
-                    # unchanged pre-existing contract -- see
-                    # _await_rate_limit_recovery's docstring), or some
-                    # eligible candidate is not rate-limited -- a genuine,
-                    # unrelated exhaustion/failure. Preserve _invoke's own
-                    # exhaustion contract exactly.
                     raise
                 if wait_deadline is None:
                     wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)

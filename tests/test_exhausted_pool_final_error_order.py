@@ -65,7 +65,7 @@ def _serve(monkeypatch, statuses: tuple[int, int, int]) -> tuple[int, str | None
         for priority, model in zip((30, 20, 10), _MODELS)
     ]
     server = build_server(
-        TaskOrchestrator(agents, tool_retry_attempts=0),
+        TaskOrchestrator(agents, tool_retry_attempts=0, rate_limit_wait_seconds=0),
         port=0,
         security=SecurityConfig(auth_token=_TOKEN),
     )
@@ -99,8 +99,8 @@ def _serve(monkeypatch, statuses: tuple[int, int, int]) -> tuple[int, str | None
         ((504, 504, 400), (504, "provider_timeout")),
         ((400, 504, 504), (504, "provider_timeout")),
         ((504, 400, 504), (504, "provider_timeout")),
-        ((429, 400, 400), (429, "rate_limit_exceeded")),
-        ((400, 429, 400), (429, "rate_limit_exceeded")),
+        ((429, 400, 400), (429, "provider_rate_limited")),
+        ((400, 429, 400), (429, "provider_rate_limited")),
         ((504, 400, 413), (504, "provider_timeout")),
     ],
 )

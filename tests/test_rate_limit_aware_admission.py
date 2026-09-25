@@ -543,6 +543,56 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
     assert chat_outcomes.calls.count("fallback_free_agent") == 1
 
 
+@pytest.mark.parametrize("other_status", [400, 504])
+def test_http_route_once_retries_cooling_candidate_after_mixed_exhaustion(other_status: int) -> None:
+    """A non-cooling failure must not hide a 429 candidate that can recover."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    other_error = ProviderUpstreamError(
+        agent_id="fallback_free_agent",
+        model="fallback-free-model",
+        error_code="invalid_request_error" if other_status == 400 else "provider_timeout",
+        message="other candidate failed",
+        client_status=other_status,
+        provider_status=other_status,
+        retryable=other_status == 504,
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_rate_limited_upstream_error(1.0), "served after wait"],
+            "fallback_free_agent": [other_error],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        status, body, _response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 200, body
+    assert body["choices"][0]["message"]["content"] == "served after wait"
+    assert chat_outcomes.calls == [
+        "primary_free_agent",
+        "fallback_free_agent",
+        "primary_free_agent",
+    ]
+
+
 def test_http_route_once_storm_without_budget_returns_429() -> None:
     """Same storm with no wait budget: honest 429 + Retry-After on the route_once path."""
     orchestrator = TaskOrchestrator(
