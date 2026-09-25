@@ -113,10 +113,12 @@ remain open acceptance conditions for issue #1106.
 
 For a review-tagged `orchestrator/free` candidate, a read timeout or connection
 reset after the transport began has unknown outcome and stops the request with
-`provider_outcome_unknown`; a second provider is not called. HTTP 429, 503,
-408, 409, and 425 alone likewise do not prove the completion was never
-applied, so these responses terminate this request. Provider-declared cooldown
-is still recorded for later requests. Direct local-slot admission failure
+`provider_outcome_unknown`; a second provider is not called. An explicit HTTP
+429 is a quota rejection: the gateway records its cooldown and may try another
+eligible candidate, or wait within its bounded budget when every candidate is
+cooling. A wrapped failure that merely contains a 429 does not establish that
+the outer send was rejected. HTTP 503, 408, 409, and 425 remain terminal for
+the review request. Direct local-slot admission failure
 before the transport call, or a provider response explicitly identifying
 `model_not_found` or a request-size rejection,
 can advance to another eligible candidate. The test counts transport calls
@@ -124,7 +126,8 @@ on each side of the local slot and asserts that an unknown outcome never
 causes a second send. This narrows the earlier virtual-selector failover
 behavior for the review pool; other virtual selectors retain their prior
 contract. The same no-replay rule follows each actual review-tagged candidate
-through route and conduct calls, including a mixed free pool. A non-review
+through route and conduct calls for uncertain outcomes, including a mixed free
+pool. A non-review
 candidate retains its prior retry policy. A bodyless HTTP 404 cannot authorize
 another review send. No provider idempotency agreement has been established.
 This matches the non-idempotent retry boundary in

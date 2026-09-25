@@ -119,15 +119,18 @@ at `5665b0ad` (selection-design receipt and provider allowlist classification).
 This is local contract evidence, not live provider readiness, judged review
 quality, protected delivery, or issue #1106 completion. Calibrated allocation,
 immutable release, and the central consumer's preflight removal remain open.
-The follow-up RED also showed a review-free request being sent to a second
-provider after a post-send timeout or HTTP 429. The review path now stops
-those attempts without replay, while a direct pre-send local-slot failure
-can still advance. Transport-call counts and typed terminal errors pass in
-the focused suite. Request-shaped tool eligibility now reaches conduct roles
-and structured synthesis; review-free conduct role calls also stop on an
-ambiguous upstream failure. This narrows the older #1166 virtual-selector behavior
-below only for review-tagged `orchestrator/free`; it does not establish a
-provider idempotency contract or change other virtual selectors.
+The follow-up RED showed unsafe review replay after a post-send timeout;
+review-tagged completions now stop on that unknown outcome. A separate RED
+showed that the review route stopped after an explicit provider 429 even with
+another eligible free candidate. The owner now records the rejected candidate's
+cooldown and advances on direct 429, including HTTP tool requests and JSON-schema
+synthesis. An all-429 pool waits only within its configured budget and otherwise
+returns typed 429. A wrapped error with a nested 429 remains sticky because the
+outer send's outcome is unknown. Direct pre-send local-slot failure can still
+advance; HTTP 503 and post-send timeout remain terminal. Synthetic transport
+call counts and typed errors cover these boundaries. This source evidence does
+not establish provider idempotency, a protected release, or Noema approval;
+the observed Noema job used the older `767e67fb` sidecar pin.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
