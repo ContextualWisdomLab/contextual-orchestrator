@@ -11016,6 +11016,11 @@ class TaskOrchestrator:
                         # incidental wording in an upstream error body (e.g. a
                         # 400 that happens to mention "invalid arguments").
                         decision = classify_provider_transport_failure(exc.retryable)
+                        if exc.provider_status == 429:
+                            # Quota refusal already selected a cooldown above;
+                            # another immediate call to this agent only spends
+                            # the same quota and must not open its health circuit.
+                            decision = replace(downgrade_to_failover(decision), circuit_failure=False)
                     elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             raise
