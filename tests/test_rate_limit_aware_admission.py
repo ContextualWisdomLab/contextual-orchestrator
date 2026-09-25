@@ -851,9 +851,11 @@ def test_route_once_preserves_attempts_across_judge_rejected_worker_rounds() -> 
     ]
     assert [attempt["outcome"] for attempt in result["route"]["attempted"]] == [
         "retryable_transport",
-        "retryable_transport",
         "served",
         "served",
+    ]
+    assert chat_outcomes.calls == [
+        "primary_free_agent", "fallback_free_agent", "fallback_free_agent"
     ]
     assert result["route"]["terminal_reason"] == "served"
     orchestrator.close()
@@ -1107,10 +1109,14 @@ def test_free_tool_request_advances_after_explicit_429(review_tagged: bool) -> N
     assert "primary_free_agent" not in orchestrator._circuit
 
 
-def test_http_route_once_storm_without_budget_returns_429() -> None:
+@pytest.mark.parametrize("review_tagged", [False, True])
+def test_http_route_once_storm_without_budget_returns_429(review_tagged: bool) -> None:
     """Same storm with no wait budget: honest 429 + Retry-After on the route_once path."""
+    agents = _free_route_agents()
+    if review_tagged:
+        agents = [replace(agent, tags=(*agent.tags, "review")) for agent in agents]
     orchestrator = TaskOrchestrator(
-        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=0.0
+        agents, tool_retry_attempts=0, rate_limit_wait_seconds=0.0
     )
     chat_outcomes = QueuedChatOutcomes(
         {
@@ -1153,6 +1159,7 @@ def test_http_route_once_storm_without_budget_returns_429() -> None:
         body["error"]["detail"]["route"]["terminal_reason"]
         == "rate_limit_wait_budget_exhausted"
     )
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent"]
 
 
 def test_http_route_once_storm_with_no_retry_after_waits_the_assumed_cooldown() -> None:

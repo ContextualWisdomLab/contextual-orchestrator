@@ -759,7 +759,7 @@ def test_conduct_limits_every_free_role_to_admitted_candidates() -> None:
 
 @pytest.mark.parametrize("status", [429, 502, 503])
 def test_review_free_conduct_does_not_replay_upstream_failure(status: int) -> None:
-    """Conduct's own role calls obey the review completion replay boundary."""
+    """Conduct advances on quota refusal while unknown outcomes stay sticky."""
     first = ModelAgent("first_agent", "first-model", priority=10,
                        tags=("cost:free", "review"))
     second = ModelAgent("second_agent", "second-model", priority=1,
@@ -775,7 +775,7 @@ def test_review_free_conduct_does_not_replay_upstream_failure(status: int) -> No
                 raise ProviderUpstreamError(
                     agent_id=first.id,
                     model=first.model,
-                    error_code="api_error",
+                    error_code="rate_limit_exceeded" if status == 429 else "api_error",
                     message="provider failed",
                     client_status=status,
                     provider_status=status,
@@ -786,16 +786,26 @@ def test_review_free_conduct_does_not_replay_upstream_failure(status: int) -> No
 
     client = ChatClient()
     orchestrator = TaskOrchestrator([first, second], client=client)
-    with pytest.raises(ProviderUpstreamError) as caught:
-        orchestrator.conduct(
+    if status == 429:
+        result = orchestrator.conduct(
             [{"role": "user", "content": "review"}],
             model_name=TaskOrchestrator.FREE_MODEL,
             _allowed_agent_ids={first.id, second.id},
             _review_no_replay=True,
         )
-
-    assert caught.value.provider_status == status
-    assert client.calls == [first.id]
+        assert result["mode"] == "conduct"
+        assert client.calls[:2] == [first.id, second.id]
+        assert client.calls.count(first.id) == 1
+    else:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.conduct(
+                [{"role": "user", "content": "review"}],
+                model_name=TaskOrchestrator.FREE_MODEL,
+                _allowed_agent_ids={first.id, second.id},
+                _review_no_replay=True,
+            )
+        assert caught.value.provider_status == status
+        assert client.calls == [first.id]
 
 
 def test_explicit_structured_synthesis_normalizes_413() -> None:
