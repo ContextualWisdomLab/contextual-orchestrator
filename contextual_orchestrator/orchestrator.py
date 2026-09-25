@@ -6468,13 +6468,22 @@ class TaskOrchestrator:
         # request that never hits a cooldown pays no extra cost.
         rate_limited_skipped: list[str] = []
         wait_deadline: float | None = None
+        # Unattempted candidates are safe to call; after an attempt, only an
+        # explicit 429/503 rejection with a recorded cooldown may admit it again.
+        retryable_ids = {candidate.id for candidate in candidates}
         while True:
             eligible_round: list[ModelAgent] = []
             round_now = time.monotonic()
             for candidate in candidates:
-                if self._rate_limit_remaining(candidate.id, now=round_now) is None:
+                if (
+                    candidate.id in retryable_ids
+                    and self._rate_limit_remaining(candidate.id, now=round_now) is None
+                ):
                     eligible_round.append(candidate)
-                elif candidate.id not in rate_limited_skipped:
+                elif (
+                    self._rate_limit_remaining(candidate.id, now=round_now) is not None
+                    and candidate.id not in rate_limited_skipped
+                ):
                     # Record this evidence now: a round that succeeds returns
                     # before the post-round recompute below ever runs.
                     rate_limited_skipped.append(candidate.id)
@@ -6546,6 +6555,7 @@ class TaskOrchestrator:
                             # so their request stops even with another candidate.
                             # Other virtual selectors retain their prior policy.
                             self._record_failure(candidate.id)
+                            retryable_ids.discard(candidate.id)
                             if candidate.group_name:
                                 self._group_router.observe_failure(candidate.id)
                             attempt_receipts.append(
@@ -6632,6 +6642,13 @@ class TaskOrchestrator:
                             else None,
                             status=signal_status,
                         )
+                    if (
+                        rate_limit_signal is not None
+                        and self._rate_limit_remaining(candidate.id) is not None
+                    ):
+                        retryable_ids.add(candidate.id)
+                    else:
+                        retryable_ids.discard(candidate.id)
                     # A 429 is quota exhaustion, not a model health failure: it
                     # must never trip or feed the circuit breaker (unlike a
                     # 503, which stays a real availability signal).
@@ -6688,6 +6705,16 @@ class TaskOrchestrator:
                     rate_limited_skipped.append(candidate.id)
             if wait_deadline is None:
                 wait_deadline = time.monotonic() + self._rate_limit_wait_budget(agent)
+            retry_candidates = [
+                candidate for candidate in candidates if candidate.id in retryable_ids
+            ]
+            attempted_ids = {candidate.id for candidate in eligible_round}
+            if any(
+                candidate.id not in attempted_ids
+                and self._rate_limit_remaining(candidate.id) is None
+                for candidate in retry_candidates
+            ) and time.monotonic() < wait_deadline:
+                continue
             # Delegate the earliest-ready/budget decision to the single
             # shared implementation (also used by
             # _invoke_with_rate_limit_recovery for route_once/conduct): waits
@@ -6697,7 +6724,7 @@ class TaskOrchestrator:
             # candidate attempted this round failed for an unrelated reason
             # -- so fall through to normal failure reporting below.
             if not self._await_rate_limit_recovery(
-                candidates,
+                retry_candidates,
                 deadline=wait_deadline,
                 transport="passthrough",
                 virtual_selector=virtual_selector,

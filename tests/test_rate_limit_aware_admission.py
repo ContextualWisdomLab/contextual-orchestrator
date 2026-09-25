@@ -282,6 +282,31 @@ def test_storm_with_budget_waits_and_succeeds_on_retry() -> None:
     assert orchestrator._circuit == {}
 
 
+def test_mixed_failure_wait_retries_only_explicitly_rejected_candidate() -> None:
+    """A later 429 can recover without replaying an earlier uncertain send."""
+    client = SequencedRateLimitClient(
+        {
+            "primary_free_agent": [ConnectionResetError("provider outcome unknown")],
+            "fallback_free_agent": [
+                _rate_limited_error(headers={"Retry-After": "1"}),
+                {"id": "chatcmpl_recovered", "choices": []},
+            ],
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), client=client, rate_limit_wait_seconds=5.0
+    )
+
+    result = orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "hi"}]}
+    )
+
+    assert result["id"] == "chatcmpl_recovered"
+    assert client.calls == ["primary_free_agent", "fallback_free_agent", "fallback_free_agent"]
+    assert orchestrator._circuit["primary_free_agent"]["failures"] == 1.0
+    assert "fallback_free_agent" not in orchestrator._circuit
+
+
 # --------------------------------------------------------------------------
 # Storm without budget: honest 429 to the caller
 # --------------------------------------------------------------------------
