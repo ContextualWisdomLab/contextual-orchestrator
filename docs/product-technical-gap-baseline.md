@@ -86,6 +86,31 @@ environment's missing locked `pytest-asyncio` and inherited deprecated
 `jsonschema.RefResolver` warnings remain explicit. Hosted exact-head gates,
 independent review, protected merge, immutable release, and consumer adoption
 remain required.
+## 2026-09-25 review tool-request admission (#1106, proposed)
+
+The #940 baseline below intentionally allowed a free model with unknown tool
+support to receive a tool request. Issue #1106's later Strix tool-call 404
+shows why plain-chat readiness cannot authorize that request shape. The owner
+now requires positive discovery evidence for review-pool tool calls: the
+existing `tool_call:single|multi` tags determine admission for the actual
+request, and an empty eligible set returns typed 503 before provider send.
+Focused RED reproduced unknown-evidence admission, missing fail-closed
+behavior, and replay after ambiguous failures. The locked local environment
+passed 388 neighboring tests on 2026-09-25. Four provider-reliability tests
+were deselected after reproducing the same failures on unmodified `origin/main`
+at `5665b0ad` (selection-design receipt and provider allowlist classification).
+This is local contract evidence, not live provider readiness, judged review
+quality, protected delivery, or issue #1106 completion. Calibrated allocation,
+immutable release, and the central consumer's preflight removal remain open.
+The follow-up RED also showed a review-free request being sent to a second
+provider after a post-send timeout or HTTP 429. The review path now stops
+those attempts without replay, while a direct pre-send local-slot failure
+can still advance. Transport-call counts and typed terminal errors pass in
+the focused suite. Request-shaped tool eligibility now reaches conduct roles
+and structured synthesis; review-free conduct role calls also stop on an
+ambiguous upstream failure. This narrows the older #1166 virtual-selector behavior
+below only for review-tagged `orchestrator/free`; it does not establish a
+provider idempotency contract or change other virtual selectors.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 

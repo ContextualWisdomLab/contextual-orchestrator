@@ -271,8 +271,8 @@ def test_virtual_passthrough_all_oversized_tool_errors_preserve_size_contract() 
     assert orchestrator._circuit == {}
 
 
-def test_free_passthrough_raw_timeout_advances_with_attempt_evidence() -> None:
-    """Virtual free selectors may advance past one ambiguous timeout (#1166)."""
+def test_free_passthrough_raw_timeout_does_not_replay() -> None:
+    """A post-send timeout cannot authorize another free completion."""
     client = SequencedProxyClient(
         {
             "primary_agent": TimeoutError("provider timed out"),
@@ -281,23 +281,89 @@ def test_free_passthrough_raw_timeout_advances_with_attempt_evidence() -> None:
     )
     orchestrator = _build(client)
     orchestrator.agents = [
-        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+        replace(agent, tags=(*agent.tags, "cost:free", "review", "tool_call:multi"))
+        for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
+
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert caught.value.detail["attempts"][0]["failover_decision"] == "sticky_candidate_failure"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "primary_agent" in orchestrator._circuit
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_free_passthrough_status_does_not_authorize_cross_provider_replay(status: int) -> None:
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(status),
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free", "review"))
+        for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "review"}]}
+        )
+
+    assert caught.value.provider_status == status
+    assert caught.value.detail["attempts"][0]["failover_decision"] == "sticky_candidate_failure"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_free_review_explicit_model_rejection_can_advance() -> None:
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(404, {"error": {"code": "model_not_found"}}),
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free", "review"))
+        for agent in orchestrator.agents
     ]
 
     result = orchestrator.proxy_completion(
-        {
-            "model": TaskOrchestrator.FREE_MODEL,
-            "messages": [{"role": "user", "content": "use the tool"}],
-            "tools": [{"type": "function", "function": {"name": "inspect"}}],
-        }
+        {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "review"}]}
     )
 
     assert result["model"] == "fallback-model"
-    assert [agent_id for agent_id, _ in client.calls] == [
-        "primary_agent",
-        "fallback_agent",
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+def test_free_review_bodyless_404_cannot_authorize_replay() -> None:
+    client = SequencedProxyClient({
+        "primary_agent": _http_error(404),
+        "fallback_agent": {"model": "fallback-model"},
+    })
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free", "review"))
+        for agent in orchestrator.agents
     ]
-    assert "primary_agent" in orchestrator._circuit
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "review"}],
+        })
+
+    assert caught.value.provider_status == 404
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
@@ -505,6 +571,193 @@ def test_orchestrated_structured_synthesis_advances_on_413(model: str) -> None:
         "primary_agent",
         "fallback_agent",
     ]
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_review_free_structured_synthesis_does_not_replay_on_http_status(
+    status: int,
+) -> None:
+    """A status alone cannot prove a review completion was never applied."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(status),
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("primary_agent", "primary-model", priority=10,
+                       tags=("cost:free", "review", "response_format")),
+            ModelAgent("fallback_agent", "fallback-model", priority=1,
+                       tags=("cost:free", "review", "response_format")),
+        ],
+        client=client,
+    )
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.proxy_completion(
+                {
+                    "model": TaskOrchestrator.FREE_MODEL,
+                    "messages": [{"role": "user", "content": "review"}],
+                    "response_format": {"type": "json_object"},
+                },
+                single_agent=False,
+            )
+
+    assert caught.value.provider_status == status
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_review_free_structured_synthesis_timeout_has_unknown_outcome() -> None:
+    """An ambiguous synthesis timeout stops before another free send."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": TimeoutError("read timed out"),
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("primary_agent", "primary-model", priority=10,
+                       tags=("cost:free", "review", "response_format")),
+            ModelAgent("fallback_agent", "fallback-model", priority=1,
+                       tags=("cost:free", "review", "response_format")),
+        ],
+        client=client,
+    )
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.proxy_completion(
+                {
+                    "model": TaskOrchestrator.FREE_MODEL,
+                    "messages": [{"role": "user", "content": "review"}],
+                    "response_format": {"type": "json_object"},
+                },
+                single_agent=False,
+            )
+
+    assert caught.value.error_code == "provider_outcome_unknown"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_review_free_conduct_requires_tool_evidence_before_any_send() -> None:
+    """Conduct must receive the same request-shaped pool as synthesis."""
+    client = SequencedProxyClient({"unknown_agent": {"model": "unknown-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("unknown_agent", "unknown-model", tags=("cost:free", "review"))],
+        client=client,
+    )
+    with patch.object(orchestrator, "conduct") as conduct:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.proxy_completion(
+                {
+                    "model": TaskOrchestrator.FREE_MODEL,
+                    "messages": [{"role": "user", "content": "review"}],
+                    "tools": [{"type": "function", "function": {"name": "inspect"}}],
+                },
+                single_agent=False,
+            )
+
+    assert caught.value.error_code == "request_capability_unavailable"
+    conduct.assert_not_called()
+    assert client.calls == []
+
+
+def test_review_free_conduct_receives_request_admitted_candidates() -> None:
+    """Unknown tool support cannot enter an earlier conduct role."""
+    client = SequencedProxyClient(
+        {
+            "known_agent": {
+                "model": "known-model",
+                "choices": [{"message": {"content": "{}"}}],
+            },
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("unknown_agent", "unknown-model", priority=10,
+                       tags=("cost:free", "review")),
+            ModelAgent("known_agent", "known-model", priority=1,
+                       tags=("cost:free", "review", "tool_call:single")),
+        ],
+        client=client,
+    )
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()) as conduct:
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            },
+            single_agent=False,
+        )
+
+    assert conduct.call_args.kwargs["_allowed_agent_ids"] == {"known_agent"}
+    assert [agent_id for agent_id, _ in client.calls] == ["known_agent"]
+
+
+def test_conduct_limits_every_free_role_to_admitted_candidates() -> None:
+    """The first conduct role cannot send through an excluded free model."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("unknown_agent", "unknown-model", priority=10,
+                       tags=("cost:free", "review")),
+            ModelAgent("known_agent", "known-model", priority=1,
+                       tags=("cost:free", "review", "tool_call:single")),
+        ]
+    )
+    with patch.object(
+        orchestrator, "_invoke_with_rate_limit_recovery", side_effect=RuntimeError("stop")
+    ) as invoke:
+        with pytest.raises(RuntimeError, match="stop"):
+            orchestrator.conduct(
+                [{"role": "user", "content": "review"}],
+                model_name=TaskOrchestrator.FREE_MODEL,
+                _allowed_agent_ids={"known_agent"},
+            )
+
+    assert invoke.call_args.kwargs["allowed_agent_ids"] == {"known_agent"}
+
+
+@pytest.mark.parametrize("status", [429, 502, 503])
+def test_review_free_conduct_does_not_replay_upstream_failure(status: int) -> None:
+    """Conduct's own role calls obey the review completion replay boundary."""
+    first = ModelAgent("first_agent", "first-model", priority=10,
+                       tags=("cost:free", "review"))
+    second = ModelAgent("second_agent", "second-model", priority=1,
+                        tags=("cost:free", "review"))
+
+    class ChatClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, _messages: list[dict[str, Any]]) -> str:
+            self.calls.append(agent.id)
+            if agent.id == first.id:
+                raise ProviderUpstreamError(
+                    agent_id=first.id,
+                    model=first.model,
+                    error_code="api_error",
+                    message="provider failed",
+                    client_status=status,
+                    provider_status=status,
+                    retryable=True,
+                    transport="chat",
+                )
+            return "answer"
+
+    client = ChatClient()
+    orchestrator = TaskOrchestrator([first, second], client=client)
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.conduct(
+            [{"role": "user", "content": "review"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+            _allowed_agent_ids={first.id, second.id},
+            _review_no_replay=True,
+        )
+
+    assert caught.value.provider_status == status
+    assert client.calls == [first.id]
 
 
 def test_explicit_structured_synthesis_normalizes_413() -> None:
@@ -929,6 +1182,7 @@ def _free_pool_with_tool_call_evidence(
             tags=(
                 *agent.tags,
                 "cost:free",
+                "review",
                 *(primary_tags if agent.id == "primary_agent" else ("tool_call:multi",)),
             ),
         )
@@ -1049,8 +1303,8 @@ def test_free_pool_keeps_single_tool_call_agent_for_requests_without_tools(tools
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
-def test_free_pool_keeps_agent_without_tool_call_evidence() -> None:
-    """Absent evidence never excludes: ADR-0035 capability tags are positive declarations."""
+def test_free_pool_requires_tool_call_evidence_for_tool_request() -> None:
+    """A plain-chat candidate cannot be admitted for an unproven tool shape."""
     client = SequencedProxyClient(
         {
             "primary_agent": {"model": "primary-model"},
@@ -1061,8 +1315,25 @@ def test_free_pool_keeps_agent_without_tool_call_evidence() -> None:
 
     result = orchestrator.proxy_completion(_two_tool_request())
 
-    assert result["model"] == "primary-model"
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "chat"}]}
+    )["model"] == "primary-model"
+
+
+def test_free_pool_without_tool_evidence_fails_before_provider_send() -> None:
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = _free_pool_with_tool_call_evidence(client, ())
+    orchestrator.agents = [orchestrator.agents[0]]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(_one_tool_request())
+
+    assert caught.value.error_code == "request_capability_unavailable"
+    assert caught.value.client_status == 503
+    assert caught.value.detail["capability"] == "tool_call"
+    assert client.calls == []
 
 
 @pytest.mark.parametrize(
@@ -1855,6 +2126,44 @@ def test_local_admission_timeout_preserves_send_boundary(monkeypatch, after_send
         else:
             result = router.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
             assert result["model"] == "fallback-model"
+            assert sent == ["fallback_agent"]
+
+
+@pytest.mark.parametrize("after_send", [False, True])
+def test_review_free_replay_requires_direct_local_slot_proof(monkeypatch, after_send: bool) -> None:
+    """Count actual transport calls across the local slot and provider boundary."""
+    from contextlib import nullcontext
+    from contextual_orchestrator.orchestrator import _local_provider_slot
+
+    client = ModelClient(timeout=0.001)
+    router = _build(client)
+    router.agents = [
+        replace(
+            agent,
+            base_url=f"local://127.0.0.1:{19451 + index}/v1",
+            tags=(*agent.tags, "cost:free", "review"),
+        )
+        for index, agent in enumerate(router.agents)
+    ]
+    sent: list[str] = []
+
+    def raw_send(agent, *args, **kwargs):
+        sent.append(agent.id)
+        if after_send and agent.id == "primary_agent":
+            raise TimeoutError("response lost after send")
+        return {"model": agent.model, "choices": []}
+
+    monkeypatch.setattr(client, "_send_raw_with_retry", raw_send)
+    slot = nullcontext() if after_send else _local_provider_slot(router.agents[0], 1, None)
+    with slot:
+        request = {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "x"}]}
+        if after_send:
+            with pytest.raises(ProviderUpstreamError) as caught:
+                router.proxy_completion(request)
+            assert caught.value.error_code == "provider_outcome_unknown"
+            assert sent == ["primary_agent"]
+        else:
+            assert router.proxy_completion(request)["model"] == "fallback-model"
             assert sent == ["fallback_agent"]
 
 

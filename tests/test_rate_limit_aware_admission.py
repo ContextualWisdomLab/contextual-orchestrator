@@ -457,6 +457,45 @@ class QueuedChatOutcomes:
         return outcome
 
 
+@pytest.mark.parametrize("primary_review", [True, False])
+def test_mixed_free_pool_replay_follows_failed_candidate(primary_review: bool) -> None:
+    """A review send stops while an ordinary free candidate can advance."""
+    primary = ModelAgent(
+        "primary_agent", "primary-model", priority=10,
+        tags=("cost:free", "reasoning", "review") if primary_review
+        else ("cost:free", "reasoning"),
+    )
+    fallback = ModelAgent(
+        "fallback_agent", "fallback-model", priority=1,
+        tags=("cost:free", "reasoning") if primary_review
+        else ("cost:free", "reasoning", "review"),
+    )
+    orchestrator = TaskOrchestrator([primary, fallback], tool_retry_attempts=0)
+    failure = ProviderUpstreamError(
+        agent_id=primary.id, model=primary.model,
+        error_code="rate_limit_exceeded", message="rate limited",
+        client_status=429, provider_status=429, retryable=True,
+        transport="chat", extra_detail={"retry_after_seconds": 1.0},
+    )
+    outcomes = QueuedChatOutcomes({primary.id: [failure], fallback.id: ["served"]})
+    orchestrator.client.chat = outcomes
+    try:
+        call = lambda: orchestrator._invoke_with_rate_limit_recovery(
+            primary, [{"role": "user", "content": "review"}],
+            text="review", role="worker", allowed_agent_ids={primary.id, fallback.id},
+            review_no_replay=True, virtual_selector=True,
+        )
+        if primary_review:
+            with pytest.raises(ProviderUpstreamError):
+                call()
+            assert outcomes.calls == [primary.id]
+        else:
+            assert call()[0] == "served"
+            assert outcomes.calls == [primary.id, fallback.id]
+    finally:
+        orchestrator.close()
+
+
 def _free_route_agents() -> list[ModelAgent]:
     return [
         ModelAgent(
@@ -1134,7 +1173,7 @@ def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:
             tags=(
                 "cost:free",
                 "planning", "reasoning", "research",
-                "verification", "security", "review", "debugging",
+                "verification", "security", "debugging",
                 "writing",
                 "coding", "implementation",
             ),

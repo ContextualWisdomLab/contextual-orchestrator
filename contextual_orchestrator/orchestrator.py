@@ -2198,7 +2198,9 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
     return False
 
 
-def _is_passthrough_failover_error(exc: BaseException) -> bool:
+def _is_passthrough_failover_error(
+    exc: BaseException, *, review_free_request: bool = False
+) -> bool:
     """Recognize failures proving that a passthrough request was not accepted."""
     if isinstance(exc, _LocalProviderAdmissionTimeout):
         return True
@@ -2212,12 +2214,26 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, ProviderUpstreamError):
             if current.provider_status in _PASSTHROUGH_REJECTED_STATUS:
-                return True
+                if not review_free_request or current.provider_status not in (404, 410):
+                    return True
+                if current.extra_detail.get("model_refusal_proven") is True:
+                    return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and current.code in _PASSTHROUGH_REJECTED_STATUS
         ):
-            return True
+            if not review_free_request or current.code not in (404, 410):
+                return True
+            try:
+                body = json.loads(provider_error_body(current))
+            except Exception:  # noqa: BLE001 - provider error bodies are untrusted streams
+                body = None
+            if (
+                isinstance(body, dict)
+                and isinstance(body.get("error"), dict)
+                and body["error"].get("code") == "model_not_found"
+            ):
+                return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and _is_provider_tool_description_limit_error(current)
@@ -6386,6 +6402,16 @@ class TaskOrchestrator:
                 if allowed_agent_ids is None
                 else allowed_agent_ids & replica_agent_ids
             )
+        if requested_model == self.FREE_MODEL and body.get("tools") and not allowed_agent_ids:
+            raise ProviderUpstreamError(
+                agent_id=self.FREE_MODEL,
+                model=self.FREE_MODEL,
+                error_code="request_capability_unavailable",
+                message="no free review model has evidence for this request's tool calls",
+                client_status=503,
+                transport="passthrough",
+                extra_detail={"capability": "tool_call"},
+            )
         # Cross-provider failover lives ONLY on this plain virtual passthrough
         # path (and the virtual tools path reached with single_agent=True).
         # Conducted structured synthesis never replays across providers — see
@@ -6484,33 +6510,41 @@ class TaskOrchestrator:
                         model=candidate.model,
                         transport="passthrough",
                     )
-                    failover_eligible = _is_passthrough_failover_error(exc)
+                    review_free_request = (
+                        requested_model == self.FREE_MODEL and "review" in candidate.tags
+                    )
+                    can_advance_ambiguous = virtual_selector and not review_free_request
+                    failover_eligible = _is_passthrough_failover_error(
+                        exc, review_free_request=review_free_request
+                    )
+                    if review_free_request and classified.provider_status in {
+                        408, 409, 425, 429, 503
+                    }:
+                        # A status alone does not establish that the provider
+                        # never applied this non-idempotent completion.
+                        failover_eligible = False
                     prior_attempted = {item["agent_id"] for item in attempt_receipts}
                     has_remaining_candidates = any(
                         other.id != candidate.id and other.id not in prior_attempted
                         for other in candidates
                     )
                     if not failover_eligible:
+                        if review_free_request:
+                            rate_limit_signal = self._rate_limited_provider_signal(exc)
+                            if rate_limit_signal is not None:
+                                signal_status, signal_http_error = rate_limit_signal
+                                self._record_rate_limit(
+                                    candidate.id,
+                                    resolve_retry_after_seconds(signal_http_error)
+                                    if signal_http_error is not None
+                                    else None,
+                                    status=signal_status,
+                                )
                         if _is_ambiguous_passthrough_transport_failure(exc):
-                            # This candidate's own outcome is unknown (the timeout
-                            # or reset may follow provider acceptance), so it is
-                            # always recorded as a failure -- the breaker learns
-                            # it either way. What differs is whether the *request*
-                            # may move on:
-                            #
-                            # * Virtual selector: the caller delegated candidate
-                            #   selection to the gateway, so the gateway owns
-                            #   failover the same way
-                            #   ``_orchestrated_provider_completion`` advances a
-                            #   virtual selector across retryable transport
-                            #   failures (502/429/timeout) -- continue to the
-                            #   next ranked candidate instead of failing the
-                            #   whole request on one ambiguous attempt when other
-                            #   ready candidates exist (Strix run 34754423834
-                            #   attempt 2, PR #1166).
-                            # * Explicit concrete model: never reaches this
-                            #   multi-candidate loop; kept as defense in depth
-                            #   with the typed ``provider_outcome_unknown``.
+                            # The candidate may already have applied the request.
+                            # Review-free completions have no idempotency proof,
+                            # so their request stops even with another candidate.
+                            # Other virtual selectors retain their prior policy.
                             self._record_failure(candidate.id)
                             if candidate.group_name:
                                 self._group_router.observe_failure(candidate.id)
@@ -6523,16 +6557,16 @@ class TaskOrchestrator:
                                     attempt_number=len(attempt_receipts) + 1,
                                     failover_decision=(
                                         "advance_to_next_candidate"
-                                        if virtual_selector and has_remaining_candidates
+                                        if can_advance_ambiguous and has_remaining_candidates
                                         else (
                                             "eligible_candidates_exhausted"
-                                            if virtual_selector
+                                            if can_advance_ambiguous
                                             else "sticky_candidate_failure"
                                         )
                                     ),
                                 )
                             )
-                            if virtual_selector:
+                            if can_advance_ambiguous:
                                 last_failure = (classified, candidate)
                                 every_failure_was_request_too_large = False
                                 continue
@@ -6830,6 +6864,27 @@ class TaskOrchestrator:
 
         self._raise_if_spend_budget_exceeded()
         request_exclusions: set[str] = set()
+        free_request_ids = (
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_general_free_agent(candidate, chat_body=chat_body)
+                and self._zdr_agent_allowed(candidate)
+            }
+            if free_only
+            else None
+        )
+        if free_only and chat_body.get("tools") and not free_request_ids:
+            raise ProviderUpstreamError(
+                agent_id="orchestrator/free",
+                model=self.FREE_MODEL,
+                error_code="request_capability_unavailable",
+                message="no eligible free provider supports the requested tools",
+                client_status=503,
+                retryable=False,
+                transport="structured_synthesis",
+                extra_detail={"capability": "tool_call"},
+            )
         workflow = self.conduct(
             messages,
             model_name=(
@@ -6840,7 +6895,10 @@ class TaskOrchestrator:
                 else str(requested_model)
             ),
             _excluded_agent_ids=request_exclusions,
-            _allowed_agent_ids=None if virtual_model else {final_agent.id},
+            _allowed_agent_ids=(
+                free_request_ids if free_only else None if virtual_model else {final_agent.id}
+            ),
+            _review_no_replay=free_only,
         )
         in_flight_tokens, in_flight_cost = self._trace_budget_spend(workflow["trace"])
         self._raise_if_spend_budget_exceeded(
@@ -6951,12 +7009,7 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {
-                candidate.id
-                for candidate in self.agents
-                if self._is_general_free_agent(candidate, chat_body=chat_body)
-                and self._zdr_agent_allowed(candidate)
-            }
+            free_request_ids
             if free_only
             else (
                 {
@@ -7310,6 +7363,27 @@ class TaskOrchestrator:
                                 raise classified from None
                             record_synthesis_failure(candidate)
                             if virtual_model and classified.retryable:
+                                if (
+                                    free_only
+                                    and "review" in candidate.tags
+                                    and not isinstance(exc, _LocalProviderAdmissionTimeout)
+                                ):
+                                    if _is_ambiguous_passthrough_transport_failure(exc):
+                                        classified = ProviderUpstreamError(
+                                            agent_id=candidate.id,
+                                            model=candidate.model,
+                                            error_code=PROVIDER_OUTCOME_UNKNOWN_CODE,
+                                            message=(
+                                                "the provider request outcome is unknown; "
+                                                "automatic replay is unsafe"
+                                            ),
+                                            client_status=502,
+                                            retryable=False,
+                                            transport="structured_synthesis",
+                                        )
+                                    raise attach_route(
+                                        classified, terminal_reason="fail_closed"
+                                    ) from None
                                 last_retryable_upstream_error = classified
                                 request_exclusions.add(candidate.id)
                                 continue
@@ -9431,6 +9505,7 @@ class TaskOrchestrator:
                     text=text,
                     role="worker",
                     allowed_agent_ids=allowed_agent_ids,
+                    review_no_replay=free_only,
                     virtual_selector=virtual_selector,
                     prompt_token_lower_bound=prompt_bound,
                 )
@@ -9673,6 +9748,7 @@ class TaskOrchestrator:
         workflow_run_id: str | None = None,
         _excluded_agent_ids: set[str] | None = None,
         _allowed_agent_ids: set[str] | None = None,
+        _review_no_replay: bool = False,
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
@@ -9724,6 +9800,9 @@ class TaskOrchestrator:
             for candidate in self.agents
             if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
+        if model_name == self.FREE_MODEL and _allowed_agent_ids is not None:
+            free_ids.intersection_update(_allowed_agent_ids)
+        review_no_replay = _review_no_replay or model_name == self.FREE_MODEL
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
             _allowed_agent_ids
@@ -9826,6 +9905,7 @@ class TaskOrchestrator:
                 allowed_agent_ids=(
                     free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
                 ),
+                review_no_replay=review_no_replay,
                 excluded_agent_ids=_excluded_agent_ids,
                 virtual_selector=virtual_selector,
                 prompt_token_lower_bound=step_prompt_bound,
@@ -10579,13 +10659,10 @@ class TaskOrchestrator:
     ) -> bool:
         """Return true only for zero-priced models fit for *blind* free serving.
 
-        When the caller passes the inbound ``chat_body``, an agent carrying the
-        positive ``tool_call:single`` discovery evidence is also withheld from
-        a request whose shape that evidence proved rejected (see
-        :func:`_request_requires_parallel_tool_calls`, issue #940). The
-        passthrough 400 failover in :func:`_is_single_tool_call_limit_error`
-        stays as the safety net for shapes no evidence covers; this check only
-        avoids a provider round-trip the catalog already knows will fail.
+        For review-pool tool requests, the discovery probe must establish tool
+        support for the request shape. ``tool_call:single`` admits one call;
+        ``tool_call:multi`` admits either shape. An unproven review candidate
+        stays available for plain chat but cannot be selected for tools.
 
         Zero price alone does not certify fitness for the general-purpose
         ``orchestrator/free`` chat pool: that pool serves every role and
@@ -10604,12 +10681,15 @@ class TaskOrchestrator:
         """
         if not (self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)):
             return False
-        if (
-            chat_body is not None
-            and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags
-            and _request_requires_parallel_tool_calls(chat_body)
-        ):
-            return False
+        if chat_body is not None and chat_body.get("tools"):
+            parallel = _request_requires_parallel_tool_calls(chat_body)
+            if parallel and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags:
+                return False
+            if "review" in agent.tags and not (
+                "tool_call:multi" in agent.tags
+                or (not parallel and SINGLE_TOOL_CALL_EVIDENCE_TAG in agent.tags)
+            ):
+                return False
         return True
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
@@ -11223,6 +11303,7 @@ class TaskOrchestrator:
         text: str,
         role: str,
         allowed_agent_ids: set[str] | None = None,
+        review_no_replay: bool = False,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
         prompt_token_lower_bound: int | None = None,
@@ -11478,16 +11559,28 @@ class TaskOrchestrator:
                                 exc.extra_detail.get("retry_after_seconds"),
                                 status=exc.provider_status,
                             )
-                        if (
+                        if exc.error_code == "model_not_found" and (
                             excluded_agent_ids is not None
-                            and exc.error_code == "model_not_found"
+                            or (review_no_replay and "review" in agent.tags)
+                        ) and (
+                            not review_no_replay
+                            or "review" not in agent.tags
+                            or exc.extra_detail.get("model_refusal_proven") is True
                         ):
-                            excluded_agent_ids.add(agent.id)
+                            if excluded_agent_ids is not None:
+                                excluded_agent_ids.add(agent.id)
                             self._record_failure(agent.id)
                             _append_typed_route_failure(
                                 route_attempts, agent, exc, transport="chat"
                             )
                             break
+                        if review_no_replay and "review" in agent.tags:
+                            # A review completion may have been accepted before
+                            # this transport failure. Only the direct local-slot
+                            # exception below proves no send took place.
+                            if exc.provider_status != 429:
+                                self._record_failure(agent.id)
+                            raise
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
                         # the provider's own already-computed retryability
@@ -12304,6 +12397,7 @@ class TaskOrchestrator:
         text: str,
         role: str,
         allowed_agent_ids: set[str] | None = None,
+        review_no_replay: bool = False,
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
         virtual_selector: bool,
@@ -12343,6 +12437,7 @@ class TaskOrchestrator:
                     text=text,
                     role=role,
                     allowed_agent_ids=allowed_agent_ids,
+                    review_no_replay=review_no_replay,
                     eligibility_role=eligibility_role,
                     excluded_agent_ids=excluded_agent_ids,
                     prompt_token_lower_bound=prompt_token_lower_bound,
@@ -12381,6 +12476,11 @@ class TaskOrchestrator:
                     raise exc
 
                 if exc.provider_status not in (429, 503):
+                    raise_with_recovered_route()
+                if review_no_replay and any(
+                    agent.id == exc.agent_id and "review" in agent.tags
+                    for agent in self.agents
+                ):
                     raise_with_recovered_route()
                 required_tags = ("vision",) if self._source_image_parts(messages) else ()
                 prompt_context = self._prompt_interaction(messages)
