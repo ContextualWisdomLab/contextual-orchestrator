@@ -147,6 +147,93 @@ def test_virtual_structured_transport_failure_advances_to_next_candidate(model: 
     assert orchestrator._group_router.member_report(second.id)["success_count"] == 1
 
 
+def test_free_structured_429_storm_waits_and_retries_eligible_pool() -> None:
+    """A Noema-shaped structured request survives a brief free-pool quota storm."""
+    first = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
+    second = ModelAgent("second_agent", "second-model", "mock://second", tags=("cost:free",))
+    orchestrator = TaskOrchestrator(
+        [first, second], rate_limit_wait_seconds=1.0, tool_retry_attempts=0
+    )
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if len(calls) <= 2:
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_rate_limited",
+                message="provider quota exhausted",
+                client_status=429,
+                provider_status=429,
+                retryable=True,
+                transport="structured_synthesis",
+                extra_detail={"retry_after_seconds": 0.01},
+            )
+        return _completion('{"input_count":10}', 1)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            _request(TaskOrchestrator.FREE_MODEL), single_agent=False
+        )
+
+    assert calls == [first.id, second.id, second.id]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    assert [entry["agent_id"] for entry in result["orchestration"]["route"]["attempted"]] == calls
+    assert orchestrator._circuit.get(first.id, {}).get("failures", 0) == 0
+    assert orchestrator._circuit.get(second.id, {}).get("failures", 0) == 0
+
+
+@pytest.mark.parametrize("second_status", [429, 502])
+def test_free_structured_429_recovery_is_bounded_and_requires_a_quota_storm(
+    second_status: int,
+) -> None:
+    """A spent wait budget or mixed transport failure stops after one pool sweep."""
+    first = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
+    second = ModelAgent("second_agent", "second-model", "mock://second", tags=("cost:free",))
+    orchestrator = TaskOrchestrator(
+        [first, second], rate_limit_wait_seconds=0.0, tool_retry_attempts=0
+    )
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        status = 429 if agent is first else second_status
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="provider_rate_limited" if status == 429 else "upstream_unavailable",
+            message="provider unavailable",
+            client_status=status,
+            provider_status=status,
+            retryable=True,
+            transport="structured_synthesis",
+            extra_detail={"retry_after_seconds": 0.1} if status == 429 else {},
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderUpstreamError) as exc_info,
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.FREE_MODEL), single_agent=False
+        )
+
+    assert calls == [first.id, second.id]
+    assert exc_info.value.provider_status == second_status
+    assert [
+        entry["agent_id"] for entry in exc_info.value.extra_detail["route"]["attempted"]
+    ] == calls
+
+
 @pytest.mark.parametrize(
     "failure_order",
     [
