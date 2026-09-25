@@ -6533,6 +6533,13 @@ class TaskOrchestrator:
                         # never applied this non-idempotent completion. A
                         # direct 429 is an explicit quota rejection.
                         failover_eligible = False
+                    if review_free_request and classified.provider_status == 429 and not (
+                        (isinstance(exc, ProviderUpstreamError) and exc.provider_status == 429)
+                        or (isinstance(exc, urllib.error.HTTPError) and exc.code == 429)
+                    ):
+                        # A nested 429 does not prove the outer failed send
+                        # was rejected by the provider.
+                        failover_eligible = False
                     prior_attempted = {item["agent_id"] for item in attempt_receipts}
                     has_remaining_candidates = any(
                         other.id != candidate.id and other.id not in prior_attempted
