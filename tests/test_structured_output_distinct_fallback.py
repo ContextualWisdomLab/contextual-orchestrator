@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import urllib.error
 from unittest.mock import patch
@@ -196,6 +197,7 @@ def test_free_structured_synthesis_waits_out_an_all_429_storm() -> None:
     assert calls == [first.id, second.id, first.id]
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
     assert [row["provider_status"] for row in result["orchestration"]["route"]["attempted"][:2]] == [429, 429]
+    assert result["orchestration"]["route"]["stage"] == "structured_synthesis"
     assert first.id not in orchestrator._circuit
     assert second.id not in orchestrator._circuit
 
@@ -355,6 +357,76 @@ def test_free_structured_synthesis_does_not_replay_a_mixed_failure() -> None:
     assert [row["provider_status"] for row in caught.value.extra_detail["route"]["attempted"]] == [429, 502]
 
 
+def test_unknown_transport_then_two_429s_exposes_structured_stage_without_replay() -> None:
+    """A synthetic unknown outcome followed by quota rejects remains fail closed."""
+    agents = [
+        ModelAgent(f"agent_{index}", f"model-{index}", f"mock://{index}", tags=("cost:free",))
+        for index in range(3)
+    ]
+    orchestrator = TaskOrchestrator(
+        agents, rate_limit_wait_seconds=1.0, rate_limit_unknown_cooldown_seconds=0.01
+    )
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == agents[0].id:
+            raise http.client.RemoteDisconnected("synthetic disconnect")
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="rate_limit_exceeded",
+            message="synthetic quota rejection",
+            client_status=429,
+            provider_status=429,
+            retryable=True,
+            transport="structured_synthesis",
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=agents[0]),
+        patch.object(orchestrator, "_ranked_agents", return_value=agents),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderUpstreamError) as caught,
+    ):
+        orchestrator.proxy_completion(_request(TaskOrchestrator.FREE_MODEL), single_agent=False)
+
+    route = caught.value.extra_detail["route"]
+    assert calls == [agent.id for agent in agents]
+    assert route["stage"] == "structured_synthesis"
+    assert [row["provider_status"] for row in route["attempted"]] == [None, 429, 429]
+    assert all("synthetic" not in str(row) for row in route["attempted"])
+
+
+def test_conduct_failure_keeps_its_candidate_route_and_stage() -> None:
+    """A structured request identifies conduct failures before final synthesis."""
+    agent = ModelAgent("agent_0", "model-0", "mock://0", tags=("cost:free",))
+    orchestrator = TaskOrchestrator([agent])
+    failure = ProviderUpstreamError(
+        agent_id=agent.id,
+        model=agent.model,
+        error_code="upstream_unavailable",
+        message="synthetic disconnect",
+        client_status=502,
+        retryable=True,
+        extra_detail={"route": {
+            "eligible_agent_ids": [agent.id],
+            "attempted": [{"agent_id": agent.id, "provider_status": None, "outcome": "retryable_transport"}],
+            "terminal_reason": "eligible_set_exhausted",
+        }},
+    )
+    with (
+        patch.object(orchestrator, "conduct", side_effect=failure),
+        patch.object(orchestrator, "_select_agent", return_value=agent),
+        pytest.raises(ProviderUpstreamError) as caught,
+    ):
+        orchestrator.proxy_completion(_request(TaskOrchestrator.FREE_MODEL), single_agent=False)
+
+    assert caught.value.extra_detail["route"]["stage"] == "conduct"
+    assert caught.value.extra_detail["route"]["attempted"][0]["agent_id"] == agent.id
+
+
 @pytest.mark.parametrize("statuses", [(429, 413), (413, 429)])
 def test_free_structured_synthesis_waits_when_other_route_rejects_size(
     statuses: tuple[int, int],
@@ -438,6 +510,7 @@ def test_free_structured_repair_recovers_after_all_429() -> None:
     assert calls == [agents[0].id, agents[0].id, agents[1].id, agents[0].id]
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
     assert [row["provider_status"] for row in result["orchestration"]["route"]["attempted"] if row["outcome"] != "served"] == [429, 429]
+    assert result["orchestration"]["route"]["stage"] == "structured_repair"
 
 
 def test_free_structured_synthesis_does_not_replay_nonretryable_429() -> None:
