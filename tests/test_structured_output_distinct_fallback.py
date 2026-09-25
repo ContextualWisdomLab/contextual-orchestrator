@@ -428,6 +428,29 @@ def test_conduct_failure_keeps_its_candidate_route_and_stage() -> None:
     assert caught.value.extra_detail["route"]["attempted"][0]["agent_id"] == agent.id
 
 
+def test_conduct_response_failure_keeps_its_route_and_stage() -> None:
+    """A malformed conduct response preserves its typed route evidence."""
+    agent = ModelAgent("agent_0", "model-0", "mock://0", tags=("cost:free",))
+    orchestrator = TaskOrchestrator([agent])
+    failure = ProviderResponseError(
+        "synthetic invalid response",
+        detail={"route": {
+            "eligible_agent_ids": [agent.id],
+            "attempted": [{"agent_id": agent.id, "outcome": "fail_closed"}],
+            "terminal_reason": "fail_closed",
+        }},
+    )
+    with (
+        patch.object(orchestrator, "conduct", side_effect=failure),
+        patch.object(orchestrator, "_select_agent", return_value=agent),
+        pytest.raises(ProviderResponseError) as caught,
+    ):
+        orchestrator.proxy_completion(_request(TaskOrchestrator.FREE_MODEL), single_agent=False)
+
+    assert caught.value.detail["route"]["stage"] == "conduct"
+    assert caught.value.detail["route"]["attempted"][0]["agent_id"] == agent.id
+
+
 @pytest.mark.parametrize("statuses", [(429, 413), (413, 429)])
 def test_free_structured_synthesis_waits_when_other_route_rejects_size(
     statuses: tuple[int, int],
