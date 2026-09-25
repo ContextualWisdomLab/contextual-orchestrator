@@ -7399,7 +7399,7 @@ class TaskOrchestrator:
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Retry only virtual synthesis after every available route returns 429."""
             nonlocal final_agent
-            if not virtual_model or not allow_cross_candidate_fallback or repair_mode:
+            if not virtual_model or not allow_cross_candidate_fallback:
                 return send_synthesis_once(
                     payload,
                     allow_cross_candidate_fallback=allow_cross_candidate_fallback,
@@ -7413,6 +7413,10 @@ class TaskOrchestrator:
                     candidate for candidate in synthesis_candidates
                     if candidate.id not in request_exclusions
                 ]
+                synthesis_eligible_agent_ids.extend(
+                    candidate.id for candidate in available
+                    if candidate.id not in synthesis_eligible_agent_ids
+                )
                 cooling = [
                     candidate for candidate in available
                     if self._rate_limit_remaining(candidate.id) is not None
@@ -7454,10 +7458,12 @@ class TaskOrchestrator:
                         ) from None
                 round_start = len(synthesis_route_attempts)
                 try:
-                    return send_synthesis_once(payload, require_output=require_output)
-                except ProviderUpstreamError:
+                    return send_synthesis_once(
+                        payload, require_output=require_output, repair_mode=repair_mode
+                    )
+                except ProviderUpstreamError as exc:
                     round_attempts = synthesis_route_attempts[round_start:]
-                    if not round_attempts or any(
+                    if not exc.retryable or not round_attempts or any(
                         row.get("provider_status") != 429 for row in round_attempts
                     ):
                         raise
