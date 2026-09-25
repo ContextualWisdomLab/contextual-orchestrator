@@ -59,6 +59,12 @@ class _RecordingClient(ModelClient):
             ],
         }
 
+    def proxy_send_once(  # type: ignore[override]
+        self, agent: ModelAgent, endpoint: str, payload: dict
+    ) -> dict:
+        """Keep virtual passthrough inside the synthetic transport."""
+        return self.proxy_send(agent, endpoint, payload)
+
 
 def _orchestrator() -> TaskOrchestrator:
     return TaskOrchestrator(
@@ -180,6 +186,315 @@ def test_endpoint_capacity_check_performs_no_provider_io() -> None:
 
     assert client.agent_ids == []
     assert client.embed_calls == 0
+
+
+def test_endpoint_scope_accepts_request_aware_free_image_pool() -> None:
+    """Image-capable free endpoints must survive request-aware preflight."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Review this synthetic figure."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AA=="},
+                },
+            ],
+        }
+    ]
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "vision_free",
+                "vision-free-model",
+                base_url="https://vision.example/v1",
+                tags=(
+                    "cost:free",
+                    "reasoning",
+                    "writing",
+                    "input:text",
+                    "input:image",
+                    "output:text",
+                ),
+            )
+        ],
+        client=_RecordingClient(),
+    )
+
+    with orchestrator.routing_endpoint_scope(
+        "https://vision.example", TaskOrchestrator.FREE_MODEL, messages=messages
+    ):
+        assert orchestrator._free_pool_agent_ids(messages=messages) == {
+            "vision_free"
+        }
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Review this figure."},
+                            {
+                                "type": " Image_Url ",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ],
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Review this figure."},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ],
+            },
+        ),
+    ],
+)
+def test_http_endpoint_scope_accepts_free_image_pool(
+    path: str, payload: dict
+) -> None:
+    """Both public chat surfaces must preserve image-aware endpoint admission."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "vision_free",
+                "vision-free-model",
+                base_url="https://vision.example/v1",
+                tags=(
+                    "cost:free",
+                    "reasoning",
+                    "writing",
+                    "input:text",
+                    "input:image",
+                    "output:text",
+                ),
+            )
+        ],
+        client=_RecordingClient(),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _post_json(
+            server,
+            path,
+            {**payload, "routing": {"endpoint": "https://vision.example"}},
+        )
+        assert status == 200, document
+        assert set(orchestrator.client.agent_ids) == {"vision_free"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("path", "request_content"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Review this figure."},
+                            {
+                                "type": "image_url",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Review this figure."},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_free_image_stream_rejects_before_sse_without_image_pool(
+    path: str, request_content: dict
+) -> None:
+    """Missing image capacity must return HTTP 400 before SSE starts."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "text_free",
+                "text-free-model",
+                tags=("cost:free", "reasoning", "writing", "input:text", "output:text"),
+            )
+        ],
+        client=_RecordingClient(),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _post_json(
+            server,
+            path,
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "stream": True,
+                **request_content,
+            },
+        )
+        assert status == 400, document
+        assert document["error"]["code"] == "invalid_model"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("false_form", ["false", 0])
+@pytest.mark.parametrize(
+    ("path", "request_content"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Review this figure."},
+                            {
+                                "type": "image_url",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Review this figure."},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,AA==",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_http_endpoint_scope_normalizes_parallel_tool_false_before_image_admission(
+    path: str,
+    request_content: dict,
+    false_form: object,
+) -> None:
+    """Both endpoint preflights must normalize accepted false tool-call forms."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "vision_single_tool_free",
+                "vision-single-tool-free-model",
+                base_url="https://vision.example/v1",
+                tags=(
+                    "cost:free",
+                    "reasoning",
+                    "writing",
+                    "input:text",
+                    "input:image",
+                    "output:text",
+                    "tool_call:single",
+                ),
+            )
+        ],
+        client=_RecordingClient(),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": "Synthetic test tool",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for tool_name in ("inspect_one", "inspect_two")
+    ]
+    try:
+        status, document = _post_json(
+            server,
+            path,
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                **request_content,
+                "tools": tools,
+                "parallel_tool_calls": false_form,
+                "routing": {"endpoint": "https://vision.example"},
+            },
+        )
+        assert status == 200, document
+        assert set(orchestrator.client.agent_ids) == {"vision_single_tool_free"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_endpoint_is_limited_to_supported_surfaces_and_forces_sync() -> None:

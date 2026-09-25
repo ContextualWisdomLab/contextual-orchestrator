@@ -1,5 +1,157 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-19 free multimodal review routing — Proposed
+
+Canonical owner PR
+[#1203](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1203)
+with functional repair `7f30351ccb36bb676ad0b23fe71ea1cce9f98645`
+(tree `157468c88470e93dc2f3e19f03acbf34ff32219f`) repairs the
+`orchestrator/free` image-admission boundary used by the proposed
+`ContextualWisdomLab/.github` DOCX/HWPX review leaf #2281. Five RED
+regressions proved that Responses conversion selected a higher-priority
+text-only model, template planning and the model judge dropped
+`input:image`, mixed-case discovery evidence was unroutable, and the changed
+admission predicate was still published as readiness contract v1. Follow-up
+RED cases then proved that proxy failover and realtime judging could lose the
+image requirement, explicit image-only rows entered the mixed envelope, and
+the first fix also rejected documented legacy `vision` agents with no
+`input:*` evidence. A later endpoint regression proved that preflight and
+pool admission still rejected an endpoint-local image-capable free agent
+before request-aware selection.
+
+The owner now carries normalized image evidence through Responses, template
+roles, conducted invocation, proxy failover, realtime judging, and model
+judging; readiness contract v2 records the predicate change. Explicit
+`input:image` without `input:text` is rejected, while legacy `vision` with no
+`input:*` declaration remains eligible. Endpoint preflight, Chat Completions,
+and Responses now apply that same request-shaped pool boundary; endpoints
+without local eligible capacity still fail closed. Exact head
+`79fef32bda4dd599ea973e790b09e58ed02dd9b1` (tree
+`645b468916ddb3c4437a96151c6740ab08d9f646`) completed 127 related
+RED-to-GREEN tests; `compileall` and diff checks passed. Current source head
+`738ab3689d110685ca07f09b7c51031f11d3f07f` (tree
+`404b820ac844c0133cd18a32f6833d5082db7c6b`) additionally removes the two
+stale collection blockers, preserves null as an unbounded provider-batch wait,
+closes the remaining touched loopback listeners at their owning boundaries,
+and aligns image-bearing HTTP fixtures with explicit `input:image` capability.
+The expanded warnings-as-errors lane completed 117 tests; `compileall` and diff
+checks passed. Earlier
+head `f8783af9` completed 244 related tests with warnings treated as errors and
+Ruff. The full local collection is not claimed: a provider-key-free fail-fast
+run reached 1,156 passed / 1 skipped after the listener and capability-fixture
+repairs, then stopped because the borrowed verifier lacks the required Rust
+`_decision_receipt` extension. The borrowed verifier also lacks the configured
+asyncio plugin; neither missing environment dependency is bypassed in product
+code.
+
+HTTP-boundary RED `1527821a5b61d2e114e8d34e5f9bc5163a4b9b0a`
+proved that endpoint preflight consumed raw accepted false forms
+(`parallel_tool_calls: "false"` and `0`) before the serving path normalized
+them. With two tools, that falsely rejected the endpoint's only
+`tool_call:single` image-capable free agent as unavailable. GREEN
+`a7ed3364eb2c40b543ed0d0421d1aa14ea1ed985` normalizes the flag once at
+the shared Chat/Responses HTTP boundary before endpoint admission; invalid
+forms still fail closed. The focused endpoint plus multimodal suites completed
+46 tests with warnings treated as errors. This is local source evidence, not
+hosted or release evidence.
+
+Judge-failover RED `7f69bacb0d35f00e6902df8e440efeafbe08dbe3` proved that a selected free image judge could fail over to an ineligible text-only or paid sibling after the outer selector had already enforced capability and price. GREEN `37435b5e82e9fe53abc67b032c67df83425c0250` persists the exact outer free/image-qualified agent ID set into the adapter failover port, so an inner retry cannot escape that authority boundary. This evidence remains distinct from the later HTTP worker-preflight repair.
+
+Current-head P1 RED `2b5c290ca56526c26f390949aecd87d85c2462b6`
+proved that a free image candidate excluded from the `worker` role could still
+satisfy HTTP preflight and commit HTTP 200/SSE before routing rejected it. The
+same generation corrected two stale fixtures: the judge now represents an
+admitted text+image chat candidate with a valid two-criterion IRT result, and
+the Responses endpoint fake owns `proxy_send_once` instead of reaching a real
+transport. GREEN `1b31f8cd6a73cf98ac873e7f569caeddcd234257`
+(tree `5d45fc5395e4b5ccfa2e7f47ea30f74a13e75418`) makes request-aware
+free-pool preflight role-aware without changing ordinary internal pool
+selection. The three affected suites complete **91 tests** with warnings as
+errors; compileall and diff checks pass. Hosted exact-head protection remains
+required.
+
+A subsequent P0 review found that intermediate source commit `7ad13041c30d18e35694c2c071a577ae774d986a` embedded a tool-output truncation marker, deleted 4,042 lines from `orchestrator.py`, and failed `py_compile` before import. Ordinary-forward GREEN `b7440092d1cda47008271ed658fe372f536dd58f` (tree `e8dc294a853a54df6db794a42edb509b6b8b0e74`) restores canonical complete source blob `1dd97e36fe1579c434413317a5366f9f27d6e766`, reapplies only the verified role-aware preflight delta, and contains no truncation marker. Exact-tree `py_compile` passes and the same three affected suites complete **91 tests** with warnings as errors. This repair does not convert queued hosted checks or review transport into approval.
+
+A preservation regression at ordinary-forward RED `33e3998ac9f6b1373cdfda83a760f19214f2237c`
+proved that the branch snapshot had dropped 87 of 148 protected level-two
+sections, including PRD, TRD, Context Map, roadmap, delivery-gate, and incident
+authority. The repair restores the complete protected `main` baseline and
+keeps this Proposed owner section additive; it does not promote the lane to
+Accepted or claim hosted acceptance.
+
+Capability-precedence RED `8f8755dc2f43d6ae154f9528af9e244508084a31`
+proved that a legacy `vision` tag could still admit a row whose explicit
+`input:text` evidence denied image input. GREEN
+`efedb3f5ceecb28183ca2263eba47b1c182112e9` makes explicit `input:*`
+evidence authoritative and consults legacy `vision` only when no explicit
+input evidence exists. Exact remote behavior verification covers four
+boundaries: `vision` plus `input:text` rejects, explicit `input:image`
+admits, unqualified legacy `vision` admits, and text-only explicit evidence
+rejects. The extracted exact production method and RED contract compile;
+hosted exact-head acceptance remains pending.
+
+Durable-pool RED `a3b7fc3d` with predicate refinement `c250f4b7` proved that
+rows written before constructor normalization retained case-variant
+`input:Text` / `input:Image` tags. `_AgentPoolStore.load_all()` restored those
+bytes unchanged, while runtime admission compared lowercase literals, so a
+previously admitted free image model became unreachable after restart.
+Runtime input-modality evidence is now normalized once at the admission
+boundary; explicit-input precedence and the unqualified legacy `vision`
+fallback are unchanged. The persisted restart regression, multimodal routing,
+agent-pool, discovery, bootstrap, and review-gateway selection completed **265
+tests** with warnings as errors. This repairs compatibility with existing rows;
+it does not promote Proposed catalog evidence or hosted acceptance.
+
+
+Explicit-conduct RED `cf78470d892eb52e4e860cc30c67282fffc835eb`
+proved that Chat Completions preflight checked only the `worker` role. An
+image-capable `orchestrator/free` pool whose sole candidate excluded
+`thinker`, `verifier`, and `synthesizer` therefore passed admission, entered
+the four-stage plan, and returned `500 internal_error` at the first missing
+role. GREEN `5ebab72d952dcd50b30c065247edfd88d669f38a`
+validates the effective HTTP mode before admission and requires eligible free
+capacity for every template-conduct role. The same boundary covers structured
+chat responses, whose serving path is always conduct. Incomplete capacity now
+fails closed as typed HTTP 400 before provider I/O; route mode retains its
+worker-only admission. This is Proposed exact-source evidence, not hosted
+acceptance, release, or consumer completion.
+
+Responses-conduct RED `45323e12401590e17773718be53d133ea37f34c6`
+proves that non-stream image-bearing `orchestrator/free` Responses with a
+structured output contract were preflighted as worker-only route traffic, then
+entered the four-role conduct plan and surfaced a missing `thinker` as HTTP 500.
+GREEN `3a76ce9e35c66d92828608c92d1c1ab0ab694c57` derives the preflight mode
+from the same tools, response-format, and provider-path facts that select
+conduct execution. Missing conduct capacity now fails closed as typed HTTP 400;
+streamed route requests retain worker-only admission and their existing typed
+stream restrictions. This remains Proposed exact-source evidence pending hosted
+Checks, independent review, ordinary merge, immutable release, and consumer pin.
+
+Mode-alias RED `10f96453a6050ab47575e4975aa068cb4f899e23` proved that
+Chat Completions selected `orchestration`, `orchestration_mode`, and `mode`
+with truthiness chaining. Explicit `null`, blank strings, `false`, and `0`
+therefore collapsed into omitted-mode `auto` instead of reaching the typed
+`invalid_mode` boundary. GREEN
+`c3e4e94cf6566f6a0187c502d279dccc6989d4a1` selects the first present alias
+rather than the first truthy value. The exact extracted selection/validation
+probe covers 15 hostile alias/value pairs plus omitted-auto and normalized
+conduct (18 assertions total); full hosted acceptance remains pending.
+
+Inspection of the exact-head Security run on 2026-09-24 exposed stale HTTP regression fixtures:
+mixed text/image tests declared image-only or text-only agents, while two
+client-error tests expected the former error wording and one judge stub did
+not accept the now-required capability argument. The follow-up aligns those
+fixtures with the existing mixed-input contract; 388 focused tests pass with
+warnings treated as errors. The prior hosted failures and review verdict remain
+historical and do not establish acceptance for this follow-up head.
+
+Status remains **Proposed**. Protected exact-head Checks, independent review,
+ordinary merge, immutable owner release, and consumer pin are still required.
+Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,
+but remains Draft/Proposed until exact-head hosted protection, independent
+review, this owner's ordinary merge and immutable release, and a consumer pin
+all complete. The owner fix does not bypass those gates.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
@@ -1847,6 +1999,18 @@ waiting is impossible. Two callers reach it:
   `_invoke` call instead of propagating the exhaustion. A mixed failure set
   re-raises exactly as `_invoke` would have, unchanged.
 
+2026-09-25 correction for PR #1203: the current-head Noema sidecar artifact
+from run 36025844713 records request `5aa9e46eb6a64aabbd13e4f6adeb0140`.
+The gateway advanced after the first OpenRouter 429, but the next candidate
+also returned 429. Earlier NIM candidates had failed with connection errors,
+so the mixed-failure guard above refused to wait for the known 429 cooldown.
+The chat path also counted both 429 responses as circuit failures. The repair
+waits within the existing request budget and retries only the explicitly
+rejected 429 candidate when failures are mixed; it leaves earlier failed calls
+and mixed 503 outcomes untouched and keeps 429 out of circuit and group-health
+observations. This local regression proves the
+gateway decision only. A hosted Noema approval and merge remain separate gates.
+
 `server.py` answers a raised `provider_rate_limited` error with `429` and a
 `Retry-After` header (or the equivalent field in the terminal SSE error frame
 when headers are already flushed) regardless of which of the two callers
@@ -1991,8 +2155,8 @@ parameter, threaded in by `route_once` and `conduct`, each of which computes
 `model_name in {GATEWAY_DEFAULT_MODEL, AUTO_MODEL, FREE_MODEL}` once from
 their own `model_name` parameter. `_invoke_with_rate_limit_recovery`'s own
 "not a genuine storm" guard changed from `len(candidates) < 2 or any(...)` to
-`not virtual_selector or any(...)`, preserving the untouched "some eligible
-candidate is not rate-limited -- a mixed, unrelated failure" branch.
+`not virtual_selector or any(...)` at that revision. The 2026-09-25 correction
+above replaces its mixed-failure stop with a retry limited to cooled candidates.
 
 Tests added to `tests/test_rate_limit_aware_admission.py`: a virtual selector
 (`FREE_MODEL`) with exactly ONE eligible candidate that answers 429 with

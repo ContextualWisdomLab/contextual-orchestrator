@@ -320,7 +320,8 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(orchestrator, "_invoke", fake_invoke)
 
-    def judge(text, fallback, *, free_only=False):
+    def judge(text, fallback, *, free_only=False, required_tags=()):
+        assert required_tags == ()
         accepted = "strong" in fallback["verifier_output"]
         return {
             "accepted": accepted,

@@ -1414,6 +1414,47 @@ def _nim_vision_model() -> DiscoveredModel:
     )
 
 
+
+def test_free_image_chat_serving_candidates_admits_text_plus_image_free_chat() -> None:
+    """Figure-review selector keeps free text+image chat rows, not image-only."""
+    from contextual_orchestrator.model_discovery import (
+        DiscoveredModel,
+        free_image_chat_serving_candidates,
+        general_free_serving_candidates,
+    )
+
+    vision = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.2-11b-vision-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://nim.example/v1",
+        auth_scheme="Bearer",
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        is_free=True,
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+    )
+    image_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="image-only-ocr",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://nim.example/v1",
+        auth_scheme="Bearer",
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        is_free=True,
+        capabilities=("chat",),
+        input_modalities=("image",),
+        output_modalities=("text",),
+    )
+    assert general_free_serving_candidates([vision, image_only]) == []
+    assert [m.model_id for m in free_image_chat_serving_candidates([vision, image_only])] == [
+        vision.model_id
+    ]
+
+
 def test_general_free_serving_candidates_excludes_a_free_vision_only_input_model() -> None:
     """The general-purpose free pool must exclude a zero-priced vision-input model.
 
@@ -3291,6 +3332,28 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
         "embedding",
         "capability:embedding",
     )
+
+
+def test_agent_from_discovered_normalizes_capability_and_modality_tags() -> None:
+    """Provider casing must not make explicit image evidence unroutable."""
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="vendor/vision-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("Chat", "Vision"),
+        input_modalities=("Text", "Image"),
+        output_modalities=("Text",),
+        is_free=True,
+    )
+
+    tags = agent_from_discovered(discovered).tags
+
+    assert "capability:vision" in tags
+    assert "input:image" in tags
+    assert "output:text" in tags
+    assert "input:Image" not in tags
 
 
 def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:

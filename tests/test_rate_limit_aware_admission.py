@@ -403,7 +403,9 @@ def test_429_does_not_trip_circuit_breaker_but_503_still_does() -> None:
 # --------------------------------------------------------------------------
 
 
-def _rate_limited_upstream_error(retry_after_seconds: float | None) -> ProviderUpstreamError:
+def _rate_limited_upstream_error(
+    retry_after_seconds: float | None, agent_id: str = "unit"
+) -> ProviderUpstreamError:
     """Build the classified 429 ``_invoke`` sees from ``ModelClient.chat``.
 
     ``retry_after_seconds=None`` models a provider that stated no
@@ -413,7 +415,7 @@ def _rate_limited_upstream_error(retry_after_seconds: float | None) -> ProviderU
     """
     extra_detail = {} if retry_after_seconds is None else {"retry_after_seconds": retry_after_seconds}
     return ProviderUpstreamError(
-        agent_id="unit",
+        agent_id=agent_id,
         model="unit-model",
         error_code="rate_limit_exceeded",
         message="rate limited",
@@ -667,6 +669,81 @@ def test_http_route_once_storm_with_no_retry_after_and_no_budget_returns_429_ass
     assert response.getheader("retry-after") == "4"
     assert body["error"]["code"] == PROVIDER_RATE_LIMITED_CODE
     assert body["error"]["detail"]["cooldown_source"] == "assumed"
+
+
+@pytest.mark.parametrize("rate_limited_first", [False, True])
+def test_free_route_retries_only_the_rejected_candidate_after_mixed_failures(
+    rate_limited_first: bool,
+) -> None:
+    """A known 429 may recover without replaying another failed provider call."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=1.0
+    )
+    unavailable = ProviderUpstreamError(
+        agent_id="fallback_free_agent" if rate_limited_first else "primary_free_agent",
+        model="unavailable-model",
+        error_code="model_not_found",
+        message="model unavailable",
+        client_status=404,
+        provider_status=404,
+        retryable=False,
+        transport="chat",
+    )
+    outcomes = {
+        "primary_free_agent": [unavailable],
+        "fallback_free_agent": [
+            _rate_limited_upstream_error(0.1, "fallback_free_agent"), "served after cooldown"
+        ],
+    }
+    if rate_limited_first:
+        outcomes = {
+            "primary_free_agent": [
+                _rate_limited_upstream_error(0.1, "primary_free_agent"), "served after cooldown"
+            ],
+            "fallback_free_agent": [unavailable],
+        }
+    chat_outcomes = QueuedChatOutcomes(outcomes)
+    orchestrator.client.chat = chat_outcomes
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "hello"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "served after cooldown"
+    retried = "primary_free_agent" if rate_limited_first else "fallback_free_agent"
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent", retried]
+    assert retried not in orchestrator._circuit
+    orchestrator.close()
+
+
+def test_mixed_503_cooldown_does_not_replay_a_provider_call() -> None:
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=1.0
+    )
+    unavailable = ProviderUpstreamError(
+        agent_id="primary_free_agent", model="primary-free-model",
+        error_code="model_not_found", message="model unavailable",
+        client_status=404, provider_status=404, retryable=False, transport="chat",
+    )
+    overloaded = ProviderUpstreamError(
+        agent_id="fallback_free_agent", model="fallback-free-model",
+        error_code="provider_unavailable", message="upstream unavailable",
+        client_status=503, provider_status=503, retryable=True, transport="chat",
+        extra_detail={"retry_after_seconds": 0.1},
+    )
+    chat_outcomes = QueuedChatOutcomes({
+        "primary_free_agent": [unavailable], "fallback_free_agent": [overloaded],
+    })
+    orchestrator.client.chat = chat_outcomes
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}], model_name=TaskOrchestrator.FREE_MODEL
+        )
+    assert excinfo.value.provider_status == 503
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent"]
+    orchestrator.close()
 
 
 def test_conduct_worker_step_waits_out_storm_and_serves_the_request() -> None:

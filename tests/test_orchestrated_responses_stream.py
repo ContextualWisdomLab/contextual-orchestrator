@@ -185,24 +185,25 @@ def test_conduct_preserves_responses_instructions_for_every_stage() -> None:
     assert all("Caller instructions:\nAnswer in Korean." in message for message in observed_system_messages)
 
 
-def test_conduct_keeps_planned_agent_when_no_vision_alternative_exists() -> None:
-    """A multimodal workflow may use its planned model when no tagged alternative exists."""
+def test_conduct_fails_closed_when_no_vision_agent_exists() -> None:
+    """A multimodal workflow must not use an agent without image evidence."""
     orchestrator = TaskOrchestrator([
         ModelAgent("workflow_agent", "mock-model", base_url="mock://provider"),
     ])
 
-    result = orchestrator.conduct([
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "inspect"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
-            ],
-        }
-    ])
-
-    assert result["trace"]
-    assert {step["agent_id"] for step in result["trace"]} == {"workflow_agent"}
+    with pytest.raises(RuntimeError, match="no chat-compatible agent available"):
+        orchestrator.conduct([
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "inspect"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AA=="},
+                    },
+                ],
+            }
+        ])
 
 
 def test_duplicate_workflow_roles_close_each_reasoning_summary_part() -> None:
