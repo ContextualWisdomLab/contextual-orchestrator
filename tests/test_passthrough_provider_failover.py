@@ -596,14 +596,17 @@ def test_orchestrated_structured_synthesis_advances_on_413(model: str) -> None:
 
 
 @pytest.mark.parametrize("status", [429, 503])
-def test_review_free_structured_synthesis_does_not_replay_on_http_status(
+def test_review_free_structured_synthesis_advances_only_after_429(
     status: int,
 ) -> None:
-    """A status alone cannot prove a review completion was never applied."""
+    """Quota rejection can advance; an ambiguous 503 stays on its candidate."""
     client = SequencedProxyClient(
         {
             "primary_agent": _http_error(status),
-            "fallback_agent": {"model": "fallback-model"},
+            "fallback_agent": {
+                "model": "fallback-model",
+                "choices": [{"message": {"content": "{}"}}],
+            },
         }
     )
     orchestrator = TaskOrchestrator(
@@ -616,8 +619,8 @@ def test_review_free_structured_synthesis_does_not_replay_on_http_status(
         client=client,
     )
     with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
-        with pytest.raises(ProviderUpstreamError) as caught:
-            orchestrator.proxy_completion(
+        if status == 429:
+            result = orchestrator.proxy_completion(
                 {
                     "model": TaskOrchestrator.FREE_MODEL,
                     "messages": [{"role": "user", "content": "review"}],
@@ -625,9 +628,22 @@ def test_review_free_structured_synthesis_does_not_replay_on_http_status(
                 },
                 single_agent=False,
             )
-
-    assert caught.value.provider_status == status
-    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+            assert result["model"] == "fallback-model"
+            assert [agent_id for agent_id, _ in client.calls] == [
+                "primary_agent", "fallback_agent"
+            ]
+        else:
+            with pytest.raises(ProviderUpstreamError) as caught:
+                orchestrator.proxy_completion(
+                    {
+                        "model": TaskOrchestrator.FREE_MODEL,
+                        "messages": [{"role": "user", "content": "review"}],
+                        "response_format": {"type": "json_object"},
+                    },
+                    single_agent=False,
+                )
+            assert caught.value.provider_status == status
+            assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
 def test_review_free_structured_synthesis_timeout_has_unknown_outcome() -> None:
