@@ -1044,6 +1044,61 @@ def test_http_route_once_all_size_exhaustion_preserves_route_evidence() -> None:
     assert route["terminal_reason"] == "request_too_large_exhausted"
 
 
+def test_free_tool_request_advances_after_explicit_429() -> None:
+    """An explicit quota rejection should not retry the same cooling candidate."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=2, rate_limit_wait_seconds=0.0
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [
+                _rate_limited_upstream_error(30.0),
+                "unexpected same-agent retry",
+            ],
+            "fallback_free_agent": ["served after failover"],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    orchestrator._realtime_route_judge = lambda **_kwargs: {
+        "accepted": True,
+        "reason": "accepted",
+        "verifier_output": "",
+        "judge": "test",
+    }
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        status, body, _response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "check this"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "inspect",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 200, body
+    assert body["choices"][0]["message"]["content"] == "served after failover"
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent"]
+    assert "primary_free_agent" not in orchestrator._circuit
+
+
 def test_http_route_once_storm_without_budget_returns_429() -> None:
     """Same storm with no wait budget: honest 429 + Retry-After on the route_once path."""
     orchestrator = TaskOrchestrator(

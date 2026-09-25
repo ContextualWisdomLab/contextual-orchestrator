@@ -139,6 +139,12 @@ owner tests and protected release. See [the evidence receipt](https://github.com
 These are failed deliveries in the accuracy denominator, not measured routing
 decision latencies. Their elapsed times include work beyond initial selection.
 
+## Noema free-pool 429 follow-up, 2026-09-25
+
+Required Noema Review run [36026163711](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36026163711), job `107824690321`, used sidecar source `767e67fbc6b881a452761f32abb69b9971b9b03b` for PR #1231. Its `noema-sidecar-evidence` artifact `10844122590` records 19 provider attempts across eight distinct candidates for one request ID. After several NIM attempts, two different OpenRouter free models each explicitly returned 429. The 1197.3-second caller attempt then ended with 429. Thus this run proves cross-candidate routing occurred; it does not prove that another eligible, ready candidate remained after the final rejection. The preflight's six ready routes are earlier liveness evidence, not the request's terminal candidate count.
+
+The Noema workflow scheduled a bounded same-head continuation after 131 seconds, but its `POST /repos/{repo}/dispatches` failed with `Resource not accessible by integration` (403). This is a separate workflow credential/permission blocker. The current gateway code also retried an explicitly 429-rejected candidate before advancing when `tool_retry_attempts` was nonzero; the tool-bearing `orchestrator/free` HTTP regression for this repair asserts one call to that candidate followed by one call to the next eligible candidate. It does not authorize replay of ambiguous transport failures or claim that the pinned sidecar contains this repair. Recheck the exact sidecar source, hosted request trace, and current-head review verdict before release or attribution of a future 429.
+
 ## Stacked quality-trigger repair
 
 Lineage correction: existing PR #1066 at
