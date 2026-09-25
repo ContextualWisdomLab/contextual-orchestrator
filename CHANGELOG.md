@@ -77,6 +77,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   verification alongside the existing SBOM. Two builds at the commit's fixed
   source timestamp must have identical bytes. A resumed Draft must preserve
   matching asset bytes; an incomplete published release fails closed.
+- Release notes longer than GitHub's 125,000-character Release body limit are
+  cut on a line boundary and link the complete CHANGELOG.md at the exact
+  release commit, so an oversized section cannot strand a pushed tag.
 - A canonical, immutable release mechanism: `.github/workflows/release.yml`
   (`workflow_dispatch` only, explicit `version` input, never triggered by
   push/schedule/merge), split into a read-only, credential-less `verify` job

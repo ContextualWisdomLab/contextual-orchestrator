@@ -94,7 +94,9 @@ check those contracts separately before replacing a source pin.
    - checks the exact-head rollup and project version;
    - installs locked test dependencies, builds the Rust decision measurement
      with `maturin develop`, then runs `uv run --no-sync python -m pytest -q`;
-   - renders notes from the exact commit's CHANGELOG section;
+   - renders notes from the exact commit's CHANGELOG section, cutting a
+     section over GitHub's 125,000-character body limit on a line boundary
+     and linking the complete CHANGELOG.md at that commit;
    - downloads the exact-commit mandatory CycloneDX SBOM, builds the Python
      wheel, records its SHA-256 digest, and passes these with the notes to the
      publisher through an Actions artifact.
