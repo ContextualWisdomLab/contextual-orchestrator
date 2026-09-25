@@ -6897,10 +6897,16 @@ class TaskOrchestrator:
             allow_cross_candidate_fallback: bool = True,
             require_output: bool = True,
             repair_mode: bool = False,
+            retried_rate_limit: bool = False,
+            prior_attempts: list[dict[str, Any]] | None = None,
+            prior_eligible_ids: list[str] | None = None,
+            rate_limit_deadline: float | None = None,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Advance on 413 and retryable transport; JSON repair lives outside."""
             nonlocal final_agent, synthesis_failure_recorded
             preferred = final_agent
+            if rate_limit_deadline is None:
+                rate_limit_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
             last_model_not_found: ProviderUpstreamError | None = None
             last_retryable_upstream_error: ProviderUpstreamError | None = None
             last_response_error: ProviderResponseError | None = None
@@ -6918,8 +6924,13 @@ class TaskOrchestrator:
                     ),
                 ]
             )
-            attempts: list[dict[str, Any]] = []
-            eligible_agent_ids = [candidate.id for candidate in ordered_candidates]
+            attempts = prior_attempts if prior_attempts is not None else []
+            eligible_agent_ids = (
+                prior_eligible_ids
+                if prior_eligible_ids is not None
+                else [candidate.id for candidate in ordered_candidates]
+            )
+            rate_limited_candidates: set[str] = set()
 
             def route_evidence(*, terminal_reason: str) -> dict[str, Any]:
                 return {
@@ -7090,6 +7101,22 @@ class TaskOrchestrator:
                                 continue
                             if not isinstance(classified, ProviderUpstreamError):
                                 raise classified from None
+                            if (
+                                virtual_model
+                                and classified.retryable
+                                and classified.provider_status == 429
+                                and (
+                                    isinstance(exc, ProviderUpstreamError)
+                                    or isinstance(exc, urllib.error.HTTPError)
+                                )
+                            ):
+                                self._record_rate_limit(
+                                    candidate.id,
+                                    resolve_retry_after_seconds(exc)
+                                    if isinstance(exc, urllib.error.HTTPError)
+                                    else classified.extra_detail.get("retry_after_seconds"),
+                                )
+                                rate_limited_candidates.add(candidate.id)
                             record_synthesis_failure(candidate)
                             if virtual_model and classified.retryable:
                                 last_retryable_upstream_error = classified
@@ -7111,6 +7138,35 @@ class TaskOrchestrator:
                                 exc.close()
                             except Exception:
                                 pass  # Cleanup must not replace the classified outcome.
+            if rate_limited_candidates and not retried_rate_limit:
+                cooling = [
+                    candidate for candidate in synthesis_candidates
+                    if candidate.id in rate_limited_candidates
+                    and self._rate_limit_remaining(candidate.id) is not None
+                ]
+                if cooling:
+                    try:
+                        self._await_rate_limit_recovery(
+                            cooling,
+                            deadline=rate_limit_deadline,
+                            transport="structured_synthesis",
+                            virtual_selector=True,
+                        )
+                    except ProviderUpstreamError as exc:
+                        raise attach_route(
+                            exc, terminal_reason="cooldown_budget_exhausted"
+                        ) from None
+                request_exclusions.difference_update(rate_limited_candidates)
+                return send_synthesis(
+                    payload,
+                    allow_cross_candidate_fallback=allow_cross_candidate_fallback,
+                    require_output=require_output,
+                    repair_mode=repair_mode,
+                    retried_rate_limit=True,
+                    prior_attempts=attempts,
+                    prior_eligible_ids=eligible_agent_ids,
+                    rate_limit_deadline=rate_limit_deadline,
+                )
             if last_retryable_upstream_error is not None:
                 raise attach_route(
                     last_retryable_upstream_error,

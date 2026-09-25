@@ -147,6 +147,83 @@ def test_virtual_structured_transport_failure_advances_to_next_candidate(model: 
     assert orchestrator._group_router.member_report(second.id)["success_count"] == 1
 
 
+def test_free_structured_synthesis_retries_rejected_rate_limit_after_exhaustion() -> None:
+    """An explicit 429 can recover after another candidate's 502."""
+    first = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
+    second = ModelAgent("second_agent", "second-model", "mock://second", tags=("cost:free",))
+    orchestrator = TaskOrchestrator(
+        [first, second], rate_limit_wait_seconds=0.1,
+        rate_limit_unknown_cooldown_seconds=0.001,
+    )
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == first.id and calls.count(first.id) == 2:
+            return _completion('{"input_count":10}', 1)
+        status = 429 if agent.id == first.id else 502
+        raise ProviderUpstreamError(
+            agent_id=agent.id, model=agent.model,
+            error_code="rate_limit_exceeded" if status == 429 else "api_error",
+            message="upstream rejected request", client_status=status,
+            provider_status=status, retryable=True,
+            transport="structured_synthesis",
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            _request(TaskOrchestrator.FREE_MODEL), single_agent=False,
+        )
+
+    assert calls == [first.id, second.id, first.id]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    assert [step["provider_status"] for step in result["orchestration"]["route"]["attempted"][:2]] == [429, 502]
+    assert result["orchestration"]["route"]["attempted"][-1]["outcome"] == "served"
+
+
+def test_free_structured_synthesis_bounds_rate_limit_retry() -> None:
+    """A repeated 429 gets one retry; an ambiguous 502 is not replayed."""
+    first = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
+    second = ModelAgent("second_agent", "second-model", "mock://second", tags=("cost:free",))
+    orchestrator = TaskOrchestrator(
+        [first, second], rate_limit_wait_seconds=0.1,
+        rate_limit_unknown_cooldown_seconds=0.001,
+    )
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        status = 429 if agent.id == first.id else 502
+        raise ProviderUpstreamError(
+            agent_id=agent.id, model=agent.model,
+            error_code="rate_limit_exceeded" if status == 429 else "api_error",
+            message="upstream rejected request", client_status=status,
+            provider_status=status, retryable=True,
+            transport="structured_synthesis",
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderUpstreamError) as exc_info,
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.FREE_MODEL), single_agent=False,
+        )
+
+    assert calls == [first.id, second.id, first.id]
+    assert exc_info.value.provider_status == 429
+    assert exc_info.value.extra_detail["route"]["terminal_reason"] == "eligible_set_exhausted"
+    assert len(exc_info.value.extra_detail["route"]["attempted"]) == 3
+
+
 @pytest.mark.parametrize(
     "failure_order",
     [
