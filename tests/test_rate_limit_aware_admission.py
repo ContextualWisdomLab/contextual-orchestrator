@@ -23,6 +23,7 @@ import time
 import urllib.error
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from email.message import Message
 from typing import Any
 
@@ -1044,10 +1045,17 @@ def test_http_route_once_all_size_exhaustion_preserves_route_evidence() -> None:
     assert route["terminal_reason"] == "request_too_large_exhausted"
 
 
-def test_free_tool_request_advances_after_explicit_429() -> None:
+@pytest.mark.parametrize("review_tagged", [False, True])
+def test_free_tool_request_advances_after_explicit_429(review_tagged: bool) -> None:
     """An explicit quota rejection should not retry the same cooling candidate."""
+    agents = _free_route_agents()
+    if review_tagged:
+        agents = [
+            replace(agent, tags=(*agent.tags, "review", "tool_call:single"))
+            for agent in agents
+        ]
     orchestrator = TaskOrchestrator(
-        _free_route_agents(), tool_retry_attempts=2, rate_limit_wait_seconds=0.0
+        agents, tool_retry_attempts=2, rate_limit_wait_seconds=0.0
     )
     chat_outcomes = QueuedChatOutcomes(
         {

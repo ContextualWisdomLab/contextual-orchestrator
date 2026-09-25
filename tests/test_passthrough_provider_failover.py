@@ -300,7 +300,7 @@ def test_free_passthrough_raw_timeout_does_not_replay() -> None:
     assert "primary_agent" in orchestrator._circuit
 
 
-@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("status", [503])
 def test_free_passthrough_status_does_not_authorize_cross_provider_replay(status: int) -> None:
     client = SequencedProxyClient(
         {
@@ -322,6 +322,28 @@ def test_free_passthrough_status_does_not_authorize_cross_provider_replay(status
     assert caught.value.provider_status == status
     assert caught.value.detail["attempts"][0]["failover_decision"] == "sticky_candidate_failure"
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_free_review_passthrough_explicit_429_advances() -> None:
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(429),
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free", "review"))
+        for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "review"}]}
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+    assert "primary_agent" not in orchestrator._circuit
 
 
 def test_free_review_explicit_model_rejection_can_advance() -> None:
