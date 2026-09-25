@@ -139,6 +139,28 @@ owner tests and protected release. See [the evidence receipt](https://github.com
 These are failed deliveries in the accuracy denominator, not measured routing
 decision latencies. Their elapsed times include work beyond initial selection.
 
+## Noema free-pool 429 follow-up, 2026-09-25
+
+Required Noema Review run [36026163711](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36026163711), job `107824690321`, used sidecar source `767e67fbc6b881a452761f32abb69b9971b9b03b` for PR #1231. Its `noema-sidecar-evidence` artifact `10844122590` records 19 provider attempts across eight distinct candidates for one request ID. After several NIM attempts, two different OpenRouter free models each explicitly returned 429. The 1197.3-second caller attempt then ended with 429. Thus this run proves cross-candidate routing occurred; it does not prove that another eligible, ready candidate remained after the final rejection. The preflight's six ready routes are earlier liveness evidence, not the request's terminal candidate count.
+
+The Noema workflow scheduled a bounded same-head continuation after 131 seconds, but its `POST /repos/{repo}/dispatches` failed with `Resource not accessible by integration` (403). This is a separate workflow credential/permission blocker. The current gateway code also retried an explicitly 429-rejected candidate before advancing when `tool_retry_attempts` was nonzero; the tool-bearing `orchestrator/free` HTTP regression for this repair asserts one call to that candidate followed by one call to the next eligible candidate. It does not authorize replay of ambiguous transport failures or claim that the pinned sidecar contains this repair. Recheck the exact sidecar source, hosted request trace, and current-head review verdict before release or attribution of a future 429.
+
+### Structured synthesis 429 follow-up, 2026-09-25
+
+[Noema run 36024200990](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36024200990)
+reported a terminal 429 after 1288 seconds through the older sidecar source
+pin `767e67fbc6b881a452761f32abb69b9971b9b03b`. Its single caller attempt
+does not reveal internal candidate attempts. Source inspection separately found
+that Noema sends `orchestrator/free` with a JSON schema, and structured final
+synthesis exhausted retryable 429 candidates without the bounded cooldown
+recovery already used by conduct and passthrough. The focused regression was
+RED on parent `84736f4d` and GREEN after applying that shared wait contract to
+final synthesis and schema repair. Tests cover an all-429 storm, prior cooldown,
+budget expiry, mixed 429/502 and 429/413 outcomes, and a nonretryable 429.
+This is source-side evidence; a protected merged
+revision, immutable release, updated consumer pin, and a fresh hosted Noema
+run are still needed for delivery and acceptance.
+
 ## Stacked quality-trigger repair
 
 Lineage correction: existing PR #1066 at

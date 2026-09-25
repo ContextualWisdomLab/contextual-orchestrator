@@ -103,6 +103,34 @@ environment's missing locked `pytest-asyncio` and inherited deprecated
 `jsonschema.RefResolver` warnings remain explicit. Hosted exact-head gates,
 independent review, protected merge, immutable release, and consumer adoption
 remain required.
+## 2026-09-25 review tool-request admission (#1106, proposed)
+
+The #940 baseline below intentionally allowed a free model with unknown tool
+support to receive a tool request. Issue #1106's later Strix tool-call 404
+shows why plain-chat readiness cannot authorize that request shape. The owner
+now requires positive discovery evidence for review-pool tool calls: the
+existing `tool_call:single|multi` tags determine admission for the actual
+request, and an empty eligible set returns typed 503 before provider send.
+Focused RED reproduced unknown-evidence admission, missing fail-closed
+behavior, and replay after ambiguous failures. The locked local environment
+passed 388 neighboring tests on 2026-09-25. Four provider-reliability tests
+were deselected after reproducing the same failures on unmodified `origin/main`
+at `5665b0ad` (selection-design receipt and provider allowlist classification).
+This is local contract evidence, not live provider readiness, judged review
+quality, protected delivery, or issue #1106 completion. Calibrated allocation,
+immutable release, and the central consumer's preflight removal remain open.
+The follow-up RED showed unsafe review replay after a post-send timeout;
+review-tagged completions now stop on that unknown outcome. A separate RED
+showed that the review route stopped after an explicit provider 429 even with
+another eligible free candidate. The owner now records the rejected candidate's
+cooldown and advances on direct 429, including HTTP tool requests and JSON-schema
+synthesis. An all-429 pool waits only within its configured budget and otherwise
+returns typed 429. A wrapped error with a nested 429 remains sticky because the
+outer send's outcome is unknown. Direct pre-send local-slot failure can still
+advance; HTTP 503 and post-send timeout remain terminal. Synthetic transport
+call counts and typed errors cover these boundaries. This source evidence does
+not establish provider idempotency, a protected release, or Noema approval;
+the observed Noema job used the older `767e67fb` sidecar pin.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 

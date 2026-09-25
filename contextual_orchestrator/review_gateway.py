@@ -68,11 +68,10 @@ which owner contract is live.
 
 @dataclass(frozen=True)
 class ReviewModelAdmission:
-    """Typed, request-scoped provenance for one admitted review-pool model.
+    """Typed catalog provenance for one admitted review-pool model.
 
-    Every field is owner-produced evidence about *why* the candidate is
-    admitted, so a consumer never has to re-derive eligibility, re-probe
-    readiness, or apply its own provider/model/fallback heuristics.
+    These fields explain catalog eligibility. They do not certify that a
+    particular request shape is supported or that the provider is live.
     """
 
     contract_version: str
@@ -109,11 +108,10 @@ def review_model_admission(
 def review_pool_admissions(
     agents: Sequence[Any],
 ) -> list[ReviewModelAdmission]:
-    """Project a built review pool into versioned, consumer-readable provenance.
+    """Project a built review pool into versioned catalog provenance.
 
-    The owner exposes this so a caller can send only the gateway token and
-    ``model: orchestrator/free`` -- no provider/model/fallback parameters,
-    no credential eligibility, no candidate catalog, no probing.
+    The caller sends only the gateway token and ``model: orchestrator/free``;
+    request-specific admission and execution remain gateway responsibilities.
     """
     return [
         ReviewModelAdmission(
