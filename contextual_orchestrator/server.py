@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import mmap
+import re
 import secrets
 import socket
 import struct
@@ -97,6 +98,41 @@ from .file_registry import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_LOG_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
+_LOG_ERROR = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_BUILD_SHA = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def _terminal_model_from_trace(result: Mapping[str, Any], orchestrator: TaskOrchestrator) -> str:
+    """Report only the final successful trace member, never an attempted model."""
+    if result.get("cache_status") == "hit":
+        return "unknown"
+    trace = result.get("trace")
+    if not isinstance(trace, list) or not trace:
+        return "unknown"
+    final = trace[-1]
+    if (
+        not isinstance(final, dict)
+        or final.get("role") not in {"worker", "synthesizer", "repair"}
+        or "output" not in final
+        or any(final.get(key) for key in ("error", "error_code", "failure_code"))
+        or final.get("validation_outcome") not in (None, "accepted")
+    ):
+        return "unknown"
+    agent_id = final.get("served_agent_id") or final.get("agent_id")
+    for agent in orchestrator.agents:
+        if agent.id == agent_id and _LOG_MODEL.fullmatch(agent.model):
+            return agent.model
+    return "unknown"
+
+
+def _terminal_model_from_response(result: Mapping[str, Any], orchestrator: TaskOrchestrator) -> str:
+    """Accept a final response model only when it names a configured member."""
+    model = result.get("model")
+    if isinstance(model, str) and _LOG_MODEL.fullmatch(model):
+        if any(agent.model == model for agent in orchestrator.agents):
+            return model
+    return "unknown"
 
 _SAFE_BINARY_CONTENT_TYPES = frozenset(
     {
@@ -5586,6 +5622,7 @@ def build_server(
     coordinator: CostRoutingCoordinator | None = None,
     release_authority: Mapping[str, Any] | None = None,
     decision_receipts: bool = False,
+    build_sha: str | None = None,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server.
 
@@ -5594,6 +5631,9 @@ def build_server(
     every completion is priced, recorded, and sync/batch routed.
     """
     security = security or SecurityConfig()
+    if build_sha is not None and not _BUILD_SHA.fullmatch(build_sha):
+        raise ValueError("build_sha must be a lowercase full Git commit SHA")
+    log_build_sha = build_sha or "unknown"
     if type(decision_receipts) is not bool:
         raise TypeError("decision_receipts must be a boolean")
     if decision_receipts:
@@ -5742,6 +5782,8 @@ def build_server(
             """
             self._request_body_consumed = False
             self._last_status = None
+            self._terminal_error_class = None
+            self._terminal_served_model = "unknown"
             self._response_headers_sent = False
             self.command = None
             self.path = None
@@ -5776,9 +5818,9 @@ def build_server(
         def _log_request_summary(self, started: float | None) -> None:
             """Emit one body-free INFO summary line per completed request.
 
-            Carries method, path, status, latency, and the bounded ADR 0122
-            correlation hash only -- never headers, a query string beyond the
-            raw path, or a request/response body. A connection that never
+            Carries method, path, status, latency, correlation identity,
+            verified build identity, and bounded terminal outcome metadata;
+            never headers, a query string, or a request/response body. A connection that never
             delivered any request bytes at all (the client simply closed a
             reused keep-alive connection) has no method, no path, AND no
             status, and is skipped -- there is nothing to report.
@@ -5817,7 +5859,7 @@ def build_server(
             if not method and not path and status is None:
                 return
             _LOGGER.info(
-                "%s request_id=%s",
+                "%s request_id=%s served_model=%s error_class=%s build_sha=%s",
                 summarize_request_for_log(
                     method=method or "-",
                     path=path or "-",
@@ -5826,6 +5868,13 @@ def build_server(
                     session_id_hash=session_id_hash(),
                 ),
                 current_request_id() or "-",
+                self._terminal_served_model if status == 200 else "unknown",
+                (
+                    "unknown" if status is None else
+                    "none" if status < 400 else
+                    self._terminal_error_class or "unknown"
+                ),
+                log_build_sha,
             )
 
         def do_GET(self) -> None:  # noqa: N802
@@ -7318,6 +7367,22 @@ def build_server(
                             if tool_loop
                             else _response_payload(proxied, include_trace)
                         )
+                        if tool_loop:
+                            self._terminal_served_model = _terminal_model_from_response(
+                                proxied, orchestrator
+                            )
+                        else:
+                            lineage = proxied.get("orchestration")
+                            workflow_id = lineage.get("workflow_run_id") if isinstance(lineage, dict) else None
+                            if isinstance(workflow_id, str):
+                                try:
+                                    workflow = orchestrator.get_workflow_run(workflow_id)
+                                except Exception:  # Diagnostics never change a served response.
+                                    pass
+                                else:
+                                    self._terminal_served_model = _terminal_model_from_trace(
+                                        workflow, orchestrator
+                                    )
                         if stream:
                             self._send_sse(
                                 sse_stream_body(
@@ -7436,6 +7501,9 @@ def build_server(
                         )
                         self._send(result, 202)
                         return
+                    self._terminal_served_model = _terminal_model_from_trace(
+                        result, orchestrator
+                    )
                     if include_trace:
                         self._audit_trace_disclosure("/v1/chat/completions")
                     orchestrator.record_analytics_event(
@@ -8554,6 +8622,7 @@ def build_server(
                     and self._decision_failure_reason == "unfinished"):
                     self._decision_failure_reason = "selection_failed"
             request_id = current_request_id() or uuid.uuid4().hex
+            self._terminal_error_class = code if _LOG_ERROR.fullmatch(code) else "unknown"
             error_detail = {**(detail or {}), "request_id": request_id}
             _LOGGER.warning(
                 "request_failed status=%s code=%s request_id=%s", status, code, request_id
@@ -9252,6 +9321,7 @@ def serve(
     release_authority: Mapping[str, Any] | None = None,
     *,
     decision_receipts: bool = False,
+    build_sha: str | None = None,
 ) -> None:
     """Serve the API with optional release authority and opt-in decision receipts."""
     server = build_server(
@@ -9263,6 +9333,7 @@ def serve(
         coordinator=coordinator,
         release_authority=release_authority,
         decision_receipts=decision_receipts,
+        build_sha=build_sha,
     )
     print(f"listening on http://{host}:{port}")
     try:

@@ -461,6 +461,66 @@ def test_http_error_ids_correlate_over_real_connections(caplog):
     assert len(set(request_ids)) == 2
 
 
+def test_terminal_http_log_has_typed_outcome_and_verified_build(caplog):
+    """One response owns one bounded terminal line, including an auth error."""
+    import http.client
+
+    build_sha = "a" * 40
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0, build_sha=build_sha)
+    server_thread = _start_test_server(server)
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            for path, expected_status in (("/healthz?token=synthetic-secret", 200), ("/v1/models", 401)):
+                connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+                try:
+                    connection.request("GET", path)
+                    with connection.getresponse() as response:
+                        assert response.status == expected_status
+                        response.read()
+                finally:
+                    connection.close()
+            _wait_for_caplog(
+                caplog,
+                lambda text: text.count("http_request method=GET") >= 2,
+            )
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+
+    summaries = [
+        record.getMessage() for record in caplog.records
+        if record.name == "contextual_orchestrator.server"
+        and record.getMessage().startswith("http_request ")
+    ]
+    assert len(summaries) == 2
+    assert "path=/healthz status=200" in summaries[0]
+    assert "served_model=unknown error_class=none" in summaries[0]
+    assert "path=/v1/models status=401" in summaries[1]
+    assert "served_model=unknown error_class=unauthorized" in summaries[1]
+    assert all(f"build_sha={build_sha}" in line for line in summaries)
+    assert "synthetic-secret" not in caplog.text
+
+
+def test_terminal_model_uses_final_successful_member_only():
+    """Attempted candidates and virtual response names cannot become served models."""
+    agents = [ModelAgent("first_agent", "provider/first"), ModelAgent("second_agent", "provider/second")]
+    orchestrator = SimpleNamespace(agents=agents)
+    trace = [
+        {"role": "worker", "agent_id": "first_agent", "output": "failed", "error": "synthetic_failure"},
+        {"role": "worker", "agent_id": "first_agent", "served_agent_id": "second_agent", "output": "ok"},
+    ]
+    assert server_module._terminal_model_from_trace({"trace": trace}, orchestrator) == "provider/second"
+    assert server_module._terminal_model_from_trace({"trace": [trace[-1] | {"role": "judge"}]}, orchestrator) == "unknown"
+    assert server_module._terminal_model_from_trace({"trace": [trace[-1] | {"failure_code": "synthetic"}]}, orchestrator) == "unknown"
+    assert server_module._terminal_model_from_trace({"trace": trace, "cache_status": "hit"}, orchestrator) == "unknown"
+    assert server_module._terminal_model_from_response({"model": "orchestrator/free"}, orchestrator) == "unknown"
+    assert server_module._terminal_model_from_response({"model": "provider/second"}, orchestrator) == "provider/second"
+    assert server_module._terminal_model_from_response({"model": "provider/second\nsecret"}, orchestrator) == "unknown"
+    with pytest.raises(ValueError, match="build_sha"):
+        build_server(orchestrator, port=0, build_sha="unverified")
+
+
 def test_provider_diagnostic_events_preserve_request_identity(caplog):
     """Every retry outcome keeps trusted identity before untrusted error text."""
     agent = ModelAgent("diagnostic_agent", "mock-model")
@@ -800,7 +860,10 @@ def test_per_request_info_summary_reports_method_path_and_status(caplog):
     summary_lines = [row.getMessage() for row in caplog.records
                      if row.getMessage().startswith("http_request ")]
     assert len(summary_lines) == 1
-    assert re.search(r" request_id=[0-9a-f]{32}$", summary_lines[0])
+    assert re.search(
+        r" request_id=[0-9a-f]{32} served_model=unknown error_class=none build_sha=unknown$",
+        summary_lines[0],
+    )
 
 
 def test_per_request_info_summary_never_includes_query_string(caplog):
