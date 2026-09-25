@@ -346,6 +346,30 @@ def test_free_review_passthrough_explicit_429_advances() -> None:
     assert "primary_agent" not in orchestrator._circuit
 
 
+def test_free_review_passthrough_wrapped_429_does_not_replay() -> None:
+    wrapped = RuntimeError("transport outcome unknown")
+    wrapped.__cause__ = _http_error(429)
+    client = SequencedProxyClient(
+        {
+            "primary_agent": wrapped,
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free", "review"))
+        for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        orchestrator.proxy_completion(
+            {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "review"}]}
+        )
+
+    assert caught.value.detail["attempts"][0]["failover_decision"] == "sticky_candidate_failure"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 def test_free_review_explicit_model_rejection_can_advance() -> None:
     client = SequencedProxyClient(
         {
