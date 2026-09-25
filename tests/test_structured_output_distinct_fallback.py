@@ -395,6 +395,7 @@ def test_unknown_transport_then_two_429s_exposes_structured_stage_without_replay
     route = caught.value.extra_detail["route"]
     assert calls == [agent.id for agent in agents]
     assert route["stage"] == "structured_synthesis"
+    assert caught.value.detail["route"] == route
     assert [row["provider_status"] for row in route["attempted"]] == [None, 429, 429]
     assert all("synthetic" not in str(row) for row in route["attempted"])
 
