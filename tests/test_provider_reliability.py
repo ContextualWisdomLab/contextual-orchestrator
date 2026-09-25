@@ -1225,6 +1225,63 @@ def test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_age
     assert "priced_worker" not in send_calls
 
 
+def test_free_model_exhausts_mixed_retryable_transports_with_attempt_evidence() -> None:
+    """Every virtual-pool transient failure advances and survives in the final error."""
+    calls: list[str] = []
+    statuses = {
+        "free_route_a": 429,
+        "free_route_b": 503,
+    }
+
+    class MixedTransientFailures(ModelClient):
+        def chat(
+            self, agent: ModelAgent, messages: list, temperature: float = 0.2
+        ) -> str:  # type: ignore[override]
+            del messages, temperature
+            calls.append(agent.id)
+            if agent.id in statuses:
+                raise classify_provider_failure(
+                    _http_error(statuses[agent.id]),
+                    agent_id=agent.id,
+                    model=agent.model,
+                )
+            if agent.id == "free_route_c":
+                raise TimeoutError("provider read timed out")
+            raise ConnectionResetError("provider connection reset")
+
+    orchestrator = _free_pool_orchestrator(
+        MixedTransientFailures(),
+        free_ids=("free_route_a", "free_route_b", "free_route_c", "free_route_d"),
+    )
+    orchestrator.tool_retry_attempts = 0
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert calls == [
+        "free_route_a",
+        "free_route_b",
+        "free_route_c",
+        "free_route_d",
+    ]
+    error = excinfo.value
+    assert error.retryable is True
+    assert "4 candidate" in str(error)
+    attempts = error.detail["attempts"]
+    assert [attempt["agent_id"] for attempt in attempts] == calls
+    assert [attempt["provider_status"] for attempt in attempts] == [
+        429,
+        503,
+        None,
+        None,
+    ]
+    assert [attempt["retryable"] for attempt in attempts] == [True, True, True, True]
+    assert error.detail["selected_candidate_ids"] == calls
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
