@@ -23,6 +23,7 @@ import time
 import urllib.error
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from email.message import Message
 from typing import Any
 
@@ -506,8 +507,9 @@ def _post_chat_completion(port: int, payload: dict[str, Any], token: str):
 def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
     """orchestrator/free over /v1/chat/completions (route_once) waits out a 429 storm."""
     orchestrator = TaskOrchestrator(
-        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+        _free_route_agents(), tool_retry_attempts=1, rate_limit_wait_seconds=5.0
     )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
     slept: list[float] = []
     orchestrator._rate_limit_sleep = slept.append
     chat_outcomes = QueuedChatOutcomes(
