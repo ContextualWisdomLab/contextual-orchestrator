@@ -10,7 +10,11 @@ from contextual_orchestrator.credentials import (
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.model_discovery import DiscoveredModel
+from contextual_orchestrator.model_discovery import (
+    DiscoveredModel,
+    EXPERIENTAL_LABS_API_KEY_ALIAS,
+    EXPERIENTIAL_LABS_API_KEY,
+)
 from contextual_orchestrator import review_gateway
 
 
@@ -60,6 +64,17 @@ def test_register_review_credentials_accepts_all_supplied_credentials() -> None:
     assert all(get_credential(name) == environment[name] for name in requested)
 
 
+def test_register_review_credentials_canonicalizes_experiential_alias() -> None:
+    """The legacy typo is accepted but stored under the canonical KV name."""
+    registered = review_gateway.register_review_credentials(
+        {EXPERIENTAL_LABS_API_KEY_ALIAS: "experiential-secret"},
+        credential_names=[EXPERIENTAL_LABS_API_KEY_ALIAS],
+    )
+
+    assert registered == (EXPERIENTAL_LABS_API_KEY_ALIAS,)
+    assert get_credential(EXPERIENTIAL_LABS_API_KEY) == "experiential-secret"
+
+
 def test_register_review_credentials_preserves_non_line_ending_bytes() -> None:
     """Mounted CR/LF is normalized without stripping legitimate boundary spaces."""
     registered = review_gateway.register_review_credentials(
@@ -77,6 +92,11 @@ def test_review_free_pool_admits_opencode_zen_key_and_excludes_openai() -> None:
     assert "OPENCODE_ZEN_API_KEY" in review_gateway.REVIEW_CREDENTIAL_NAMES
     assert "OPENAI_API_KEY" not in review_gateway.REVIEW_FREE_POOL_CREDENTIAL_NAMES
     assert "OPENAI_API_KEY" in review_gateway.REVIEW_CREDENTIAL_NAMES
+    assert (
+        EXPERIENTIAL_LABS_API_KEY
+        in review_gateway.REVIEW_FREE_POOL_CREDENTIAL_NAMES
+    )
+    assert EXPERIENTAL_LABS_API_KEY_ALIAS in review_gateway.REVIEW_CREDENTIAL_NAMES
 
 
 def test_free_review_candidates_exclude_unverified_free_sources() -> None:

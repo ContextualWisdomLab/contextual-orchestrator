@@ -34,6 +34,8 @@ from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     DISCOVERY_TOOL_CALL_MULTI_TAG,
     DISCOVERY_TOOL_CALL_SINGLE_TAG,
+    EXPERIENTAL_LABS_API_KEY_ALIAS,
+    EXPERIENTIAL_LABS_API_KEY,
     PROVIDER_DISCOVERY_DEADLINE_SECONDS,
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
@@ -1012,6 +1014,34 @@ BYTEZ_SOURCE = ProviderModelSource(
     task_filter="chat",
     capabilities=("chat",),
 )
+
+
+def test_discover_experiential_labs_accepts_legacy_credential_alias() -> None:
+    """A legacy CI secret name resolves to the canonical discovered identity."""
+    source = next(
+        item
+        for item in PROVIDER_MODEL_SOURCES
+        if item.provider_name == "experiential_labs"
+    )
+    register_credential(EXPERIENTAL_LABS_API_KEY_ALIAS, "experiential-secret")
+    seen_requests = []
+
+    def urlopen(request, timeout=None, **_kwargs):
+        del timeout
+        seen_requests.append(request)
+        return _Response({"data": [{"id": "experiential/model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert seen_requests[0].full_url == "https://api.experientiallabs.ai/v1/models"
+    assert seen_requests[0].get_header("Authorization") == "Bearer experiential-secret"
+    assert [model.credential_name for model in discovered] == [
+        EXPERIENTIAL_LABS_API_KEY
+    ]
 
 
 def test_discover_provider_models_skips_when_credential_missing() -> None:
