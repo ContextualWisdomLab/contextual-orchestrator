@@ -484,7 +484,7 @@ class QueuedChatOutcomes:
 
 @pytest.mark.parametrize("primary_review", [True, False])
 def test_mixed_free_pool_replay_follows_failed_candidate(primary_review: bool) -> None:
-    """A review send stops while an ordinary free candidate can advance."""
+    """An explicit quota rejection advances even when the candidate is review tagged."""
     primary = ModelAgent(
         "primary_agent", "primary-model", priority=10,
         tags=("cost:free", "reasoning", "review") if primary_review
@@ -510,13 +510,8 @@ def test_mixed_free_pool_replay_follows_failed_candidate(primary_review: bool) -
             text="review", role="worker", allowed_agent_ids={primary.id, fallback.id},
             review_no_replay=True, virtual_selector=True,
         )
-        if primary_review:
-            with pytest.raises(ProviderUpstreamError):
-                call()
-            assert outcomes.calls == [primary.id]
-        else:
-            assert call()[0] == "served"
-            assert outcomes.calls == [primary.id, fallback.id]
+        assert call()[0] == "served"
+        assert outcomes.calls == [primary.id, fallback.id]
     finally:
         orchestrator.close()
 
