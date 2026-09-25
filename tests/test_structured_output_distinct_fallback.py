@@ -355,6 +355,50 @@ def test_free_structured_synthesis_does_not_replay_a_mixed_failure() -> None:
     assert [row["provider_status"] for row in caught.value.extra_detail["route"]["attempted"]] == [429, 502]
 
 
+@pytest.mark.parametrize("statuses", [(429, 413), (413, 429)])
+def test_free_structured_synthesis_waits_when_other_route_rejects_size(
+    statuses: tuple[int, int],
+) -> None:
+    """A 413 retires only that candidate; the remaining quota route can recover."""
+    agents = [
+        ModelAgent(f"agent_{index}", f"model-{index}", f"mock://{index}", tags=("cost:free",))
+        for index in range(2)
+    ]
+    orchestrator = TaskOrchestrator(
+        agents, rate_limit_wait_seconds=1.0, rate_limit_unknown_cooldown_seconds=0.01
+    )
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if len(calls) <= 2:
+            status = statuses[len(calls) - 1]
+            if status == 413:
+                raise ProviderRequestTooLargeError("request exceeds provider limit")
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="rate_limit_exceeded",
+                message="provider rejected the request",
+                client_status=status,
+                provider_status=status,
+                retryable=True,
+                transport="structured_synthesis",
+            )
+        return _completion('{"input_count":10}', 1)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=agents[0]),
+        patch.object(orchestrator, "_ranked_agents", return_value=agents),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(_request(TaskOrchestrator.FREE_MODEL), single_agent=False)
+
+    assert calls == [agents[0].id, agents[1].id, agents[statuses.index(429)].id]
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+
+
 def test_free_structured_repair_recovers_after_all_429() -> None:
     """A quota storm during schema repair waits without replaying initial synthesis."""
     agents = [

@@ -7464,7 +7464,9 @@ class TaskOrchestrator:
                 except ProviderUpstreamError as exc:
                     round_attempts = synthesis_route_attempts[round_start:]
                     if not exc.retryable or not round_attempts or any(
-                        row.get("provider_status") != 429 for row in round_attempts
+                        row.get("provider_status") != 429
+                        and row.get("outcome") != "request_too_large"
+                        for row in round_attempts
                     ):
                         raise
                     if wait_deadline is None:

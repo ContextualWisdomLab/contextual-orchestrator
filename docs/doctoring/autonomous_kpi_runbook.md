@@ -150,8 +150,8 @@ synthesis exhausted retryable 429 candidates without the bounded cooldown
 recovery already used by conduct and passthrough. The focused regression was
 RED on parent `84736f4d` and GREEN after applying that shared wait contract to
 final synthesis and schema repair. Tests cover an all-429 storm, prior cooldown,
-budget expiry, mixed 429/502 failure, and a nonretryable 429. This is source-side
-evidence; a protected merged
+budget expiry, mixed 429/502 and 429/413 outcomes, and a nonretryable 429.
+This is source-side evidence; a protected merged
 revision, immutable release, updated consumer pin, and a fresh hosted Noema
 run are still needed for delivery and acceptance.
 
