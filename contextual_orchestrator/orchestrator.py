@@ -11026,6 +11026,19 @@ class TaskOrchestrator:
                                 retry_safe=False,
                                 circuit_failure=False,
                             )
+                        elif exc.provider_status == 503:
+                            # An explicit availability rejection: replaying the
+                            # same candidate immediately only spends the caller's
+                            # deadline before the remaining candidates are tried.
+                            # Advance at once; unlike a 429, a 503 still feeds
+                            # the health circuit.
+                            decision = ToolFailureDecision(
+                                kind=ToolFailureKind.TRANSPORT_ERROR,
+                                action=ToolFallbackAction.FAILOVER_AGENT,
+                                reason_code="tool_failure.transport_error.failover_agent",
+                                retry_safe=False,
+                                circuit_failure=True,
+                            )
                         else:
                             decision = classify_provider_transport_failure(exc.retryable)
                     elif isinstance(exc, ProviderResponseError):

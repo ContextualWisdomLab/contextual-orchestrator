@@ -829,12 +829,12 @@ def test_free_model_advances_through_the_free_pool_on_retryable_5xx() -> None:
 
     assert result["answer"] == "[free_route_c] answer"
     assert result["trace"][0]["served_agent_id"] == "free_route_c"
-    # tool_retry_attempts=1 gives each failing free route one same-agent retry
-    # before advancing — the request-time-failure retry budget from point 2.
+    # tool_retry_attempts=1 gives the 502 route one same-agent retry before
+    # advancing — the request-time-failure retry budget from point 2. An
+    # explicit 503 availability rejection advances without that replay.
     assert calls == [
         "free_route_a",
         "free_route_a",
-        "free_route_b",
         "free_route_b",
         "free_route_c",
     ]
@@ -1223,6 +1223,88 @@ def test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_age
         "stack underneath _invoke's own retry-then-failover decision"
     )
     assert "priced_worker" not in send_calls
+
+
+def test_free_model_advances_after_503_without_replaying_the_same_candidate() -> None:
+    """A 503 is an availability rejection: advance at once, keep circuit evidence.
+
+    The default same-agent retry budget used to replay the rejected candidate
+    first, so a pool of 503/429 routes spent roughly two provider calls per
+    candidate and could run out of caller deadline before reaching the tail of
+    the candidate list.
+    """
+    calls: list[str] = []
+
+    class UnavailablePrimary(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(_http_error(503), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        UnavailablePrimary(), free_ids=("free_route_a", "free_route_b", "free_route_c")
+    )
+    orchestrator.tool_retry_attempts = 2
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert calls == ["free_route_a", "free_route_b"]
+    # Unlike a 429, a 503 remains a real availability signal for the breaker.
+    assert orchestrator._circuit["free_route_a"]["failures"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("statuses", "final_status"),
+    [
+        ((503, 429, 503, 429), 429),
+        ((429, 503, 429, 503), 503),
+        ((503, 503, 503, 503), 503),
+    ],
+)
+def test_free_model_tries_every_candidate_once_when_all_return_429_or_503(
+    statuses: tuple[int, ...], final_status: int
+) -> None:
+    """Every eligible free candidate is attempted exactly once before the final error.
+
+    No candidate is replayed immediately, the priced worker is never promoted,
+    and the caller receives the last candidate's classified upstream status.
+    """
+    free_ids = ("free_route_a", "free_route_b", "free_route_c", "free_route_d")
+    status_by_agent = dict(zip(free_ids, statuses))
+    calls: list[str] = []
+
+    class RejectingFreeTier(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            calls.append(agent.id)
+            raise classify_provider_failure(
+                _http_error(status_by_agent.get(agent.id, 500)),
+                agent_id=agent.id,
+                model=agent.model,
+            )
+
+    orchestrator = _free_pool_orchestrator(RejectingFreeTier(), free_ids=free_ids)
+    orchestrator.tool_retry_attempts = 2
+    # No storm wait: a mixed 429/503 set is not a genuine storm, and a 503
+    # without Retry-After records no cooldown, so the route must end after
+    # one pass over the candidate list.
+    orchestrator.rate_limit_wait_seconds = 0.0
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert calls == list(free_ids)
+    assert "priced_worker" not in calls
+    assert excinfo.value.provider_status == final_status
+    assert excinfo.value.retryable is True
 
 
 if __name__ == "__main__":
