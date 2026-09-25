@@ -1558,13 +1558,17 @@ def _route_evidence_payload(
     eligible_agent_ids: list[str],
     attempted: list[dict[str, Any]],
     terminal_reason: str,
+    stage: str | None = None,
 ) -> dict[str, Any]:
     """Build the shared ``orchestration.route`` evidence object."""
-    return {
+    evidence = {
         "eligible_agent_ids": eligible_agent_ids,
         "attempted": list(attempted),
         "terminal_reason": terminal_reason,
     }
+    if stage is not None:
+        evidence["stage"] = stage
+    return evidence
 
 
 def _attach_route_evidence_to_upstream_error(
@@ -6857,18 +6861,25 @@ class TaskOrchestrator:
 
         self._raise_if_spend_budget_exceeded()
         request_exclusions: set[str] = set()
-        workflow = self.conduct(
-            messages,
-            model_name=(
-                self.FREE_MODEL
-                if free_only
-                else self.GATEWAY_DEFAULT_MODEL
-                if virtual_model
-                else str(requested_model)
-            ),
-            _excluded_agent_ids=request_exclusions,
-            _allowed_agent_ids=None if virtual_model else {final_agent.id},
-        )
+        try:
+            workflow = self.conduct(
+                messages,
+                model_name=(
+                    self.FREE_MODEL
+                    if free_only
+                    else self.GATEWAY_DEFAULT_MODEL
+                    if virtual_model
+                    else str(requested_model)
+                ),
+                _excluded_agent_ids=request_exclusions,
+                _allowed_agent_ids=None if virtual_model else {final_agent.id},
+            )
+        except (ProviderUpstreamError, ProviderResponseError) as exc:
+            detail = exc.extra_detail if isinstance(exc, ProviderUpstreamError) else exc.detail
+            route = detail.get("route")
+            if isinstance(route, dict):
+                route["stage"] = "conduct"
+            raise
         in_flight_tokens, in_flight_cost = self._trace_budget_spend(workflow["trace"])
         self._raise_if_spend_budget_exceeded(
             additional_output_tokens=in_flight_tokens,
@@ -7122,11 +7133,12 @@ class TaskOrchestrator:
             )
 
             def route_evidence(*, terminal_reason: str) -> dict[str, Any]:
-                return {
-                    "eligible_agent_ids": list(eligible_agent_ids),
-                    "attempted": list(attempts),
-                    "terminal_reason": terminal_reason,
-                }
+                return _route_evidence_payload(
+                    eligible_agent_ids=list(eligible_agent_ids),
+                    attempted=attempts,
+                    terminal_reason=terminal_reason,
+                    stage="structured_repair" if repair_mode else "structured_synthesis",
+                )
 
             def attach_route(
                 error: ProviderUpstreamError, *, terminal_reason: str
@@ -7241,6 +7253,7 @@ class TaskOrchestrator:
                                         ),
                                         attempted=merged_attempts,
                                         terminal_reason="fail_closed",
+                                        stage="structured_repair" if repair_mode else "structured_synthesis",
                                     ),
                                 )
                             # A prior candidate already set this flag, so the
@@ -7435,6 +7448,7 @@ class TaskOrchestrator:
                             eligible_agent_ids=synthesis_eligible_agent_ids,
                             attempted=synthesis_route_attempts,
                             terminal_reason="rate_limited_storm",
+                            stage="structured_repair" if repair_mode else "structured_synthesis",
                         ),
                     ) from None
                 if available and len(cooling) == len(available):
@@ -7454,6 +7468,7 @@ class TaskOrchestrator:
                                 eligible_agent_ids=synthesis_eligible_agent_ids,
                                 attempted=synthesis_route_attempts,
                                 terminal_reason="rate_limited_storm",
+                                stage="structured_repair" if repair_mode else "structured_synthesis",
                             ),
                         ) from None
                 round_start = len(synthesis_route_attempts)
