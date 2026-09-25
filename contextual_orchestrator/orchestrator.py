@@ -11015,7 +11015,19 @@ class TaskOrchestrator:
                         # never be accidentally downgraded to fail-closed by
                         # incidental wording in an upstream error body (e.g. a
                         # 400 that happens to mention "invalid arguments").
-                        decision = classify_provider_transport_failure(exc.retryable)
+                        if exc.provider_status == 429:
+                            # The provider explicitly rejected this attempt. Its
+                            # cooldown belongs to quota admission, not the
+                            # health circuit or an immediate same-agent retry.
+                            decision = ToolFailureDecision(
+                                kind=ToolFailureKind.RATE_LIMITED,
+                                action=ToolFallbackAction.FAILOVER_AGENT,
+                                reason_code="tool_failure.rate_limited.failover_agent",
+                                retry_safe=False,
+                                circuit_failure=False,
+                            )
+                        else:
+                            decision = classify_provider_transport_failure(exc.retryable)
                     elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             raise
