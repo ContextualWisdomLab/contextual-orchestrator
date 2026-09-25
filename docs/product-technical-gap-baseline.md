@@ -1871,6 +1871,22 @@ synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
 site, so the worker step required by the owner's report gets the fix, and so
 do the other roles for free, without a second implementation.
 
+### 2026-09-25 structured review synthesis follow-up — proposed in #1220
+
+The coverage note above did not include `response_format` synthesis. Noema's
+structured review request can reach `_orchestrated_provider_completion`, whose
+provider-facing synthesis loop exhausted a free pool after 429 responses
+without calling the shared cooldown wait. A focused regression failed on the
+second 429 before the repair. Candidate #1220 records each quota cooldown,
+keeps quota failures out of the health circuit, and reuses
+`_await_rate_limit_recovery` for a bounded retry only when every eligible
+candidate is cooling. Mixed failures and exhausted wait budgets still return
+typed errors with route evidence. The document-diff, structured synthesis,
+and rate-limit regression suites pass locally (74 tests); current-head hosted
+checks, independent review, protected merge, and central sidecar adoption
+remain unverified. The central sidecar pin in `.github#2366` carries the
+earlier ordinary-routing repair, not this structured successor.
+
 ### Follow-up (same day): an omitted cooldown header must still count as cooling
 
 `_record_rate_limit(agent_id, None)` originally returned without recording
