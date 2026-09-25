@@ -6527,10 +6527,11 @@ class TaskOrchestrator:
                         exc, review_free_request=review_free_request
                     )
                     if review_free_request and classified.provider_status in {
-                        408, 409, 425, 429, 503
+                        408, 409, 425, 503
                     }:
-                        # A status alone does not establish that the provider
-                        # never applied this non-idempotent completion.
+                        # These statuses do not establish that the provider
+                        # never applied this non-idempotent completion. A
+                        # direct 429 is an explicit quota rejection.
                         failover_eligible = False
                     prior_attempted = {item["agent_id"] for item in attempt_receipts}
                     has_remaining_candidates = any(
@@ -11601,10 +11602,14 @@ class TaskOrchestrator:
                                 route_attempts, agent, exc, transport="chat"
                             )
                             break
-                        if review_no_replay and "review" in agent.tags:
+                        if (
+                            review_no_replay
+                            and "review" in agent.tags
+                            and exc.provider_status != 429
+                        ):
                             # A review completion may have been accepted before
-                            # this transport failure. Only the direct local-slot
-                            # exception below proves no send took place.
+                            # this transport failure. An explicit 429 rejection
+                            # may advance; other post-send outcomes stay sticky.
                             if exc.provider_status != 429:
                                 self._record_failure(agent.id)
                             raise
@@ -12516,7 +12521,7 @@ class TaskOrchestrator:
 
                 if exc.provider_status not in (429, 503):
                     raise_with_recovered_route()
-                if review_no_replay and any(
+                if exc.provider_status != 429 and review_no_replay and any(
                     agent.id == exc.agent_id and "review" in agent.tags
                     for agent in self.agents
                 ):
