@@ -24,7 +24,7 @@ def test_hourly_loop_uses_the_local_free_orchestrator_without_copilot_token() ->
         assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "node scripts/ci/install_locked_opencode.mjs" in workflow
-    assert "python -m pip install --require-hashes -r requirements.lock" in workflow
+    assert "uv sync --locked --extra api --extra db --extra queue" in workflow
     assert "while :; do" in workflow
     assert "gateway_pid=$!" in workflow
     assert 'kill -0 "$gateway_pid"' in workflow
@@ -129,4 +129,3 @@ def test_adr_0007_body_and_index_status_agree_and_stay_proposed_while_open() -> 
         "ADR-0007 is unmerged: both body and index status must be `Proposed` "
         "until ordinary protected-branch merge grants exact-head acceptance"
     )
-

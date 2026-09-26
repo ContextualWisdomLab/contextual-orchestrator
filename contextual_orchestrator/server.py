@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from email.message import Message
 from http.cookies import CookieError, SimpleCookie
@@ -7359,69 +7360,70 @@ def build_server(
                     if stream:
                         self._acquire_measured_slot()
                         self._classification_slot_held = True
-                    route_stream = bool(
-                        stream and not tools_list
-                        and orchestrator.would_route(messages, mode, model_name)
-                    )
-                    if route_stream:
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use Responses streaming",
-                            )
-                        include_trace = False
-                    elif include_trace and not explicit_trace:
-                        self._authorize_trace_access()
-                    started_at = time.perf_counter()
-                    model_client = orchestrator.client
-                    request_settings = {
-                        "max_output_tokens": max_tokens,
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "presence_penalty": presence_penalty,
-                        "frequency_penalty": frequency_penalty,
-                    }
-                    if tools_list:
-                        request_settings["tools"] = tools_list
-                        if normalized_tool_choice is not None:
-                            request_settings["tool_choice"] = normalized_tool_choice
-                        if body.get("parallel_tool_calls") is not None:
-                            request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
-                    with model_client.request_settings(**request_settings):
+                    with getattr(orchestrator, "_request_execution_scope", nullcontext)():
+                        route_stream = bool(
+                            stream and not tools_list
+                            and orchestrator.would_route(messages, mode, model_name)
+                        )
                         if route_stream:
-                            self._stream_route_completion(
-                                orchestrator,
-                                security,
+                            if explicit_trace:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use Responses streaming",
+                                )
+                            include_trace = False
+                        elif include_trace and not explicit_trace:
+                            self._authorize_trace_access()
+                        started_at = time.perf_counter()
+                        model_client = orchestrator.client
+                        request_settings = {
+                            "max_output_tokens": max_tokens,
+                            "temperature": temperature,
+                            "top_p": top_p,
+                            "presence_penalty": presence_penalty,
+                            "frequency_penalty": frequency_penalty,
+                        }
+                        if tools_list:
+                            request_settings["tools"] = tools_list
+                            if normalized_tool_choice is not None:
+                                request_settings["tool_choice"] = normalized_tool_choice
+                            if body.get("parallel_tool_calls") is not None:
+                                request_settings["parallel_tool_calls"] = body["parallel_tool_calls"]
+                        with model_client.request_settings(**request_settings):
+                            if route_stream:
+                                self._stream_route_completion(
+                                    orchestrator,
+                                    security,
+                                    messages,
+                                    model_name,
+                                    include_usage=include_usage,
+                                    slot_acquired=True,
+                                )
+                                orchestrator.record_analytics_event(
+                                    "chat_completion_requested",
+                                    {
+                                        "endpoint_path": "/v1/chat/completions",
+                                        "actor_scope": "inference",
+                                        "status_code": 200,
+                                        "run_mode": "route",
+                                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                        "response_streamed": True,
+                                    },
+                                )
+                                return
+                            result = self._run(lambda: coordinator.complete(
                                 messages,
-                                model_name,
-                                include_usage=include_usage,
-                                slot_acquired=True,
-                            )
-                            orchestrator.record_analytics_event(
-                                "chat_completion_requested",
-                                {
-                                    "endpoint_path": "/v1/chat/completions",
-                                    "actor_scope": "inference",
-                                    "status_code": 200,
-                                    "run_mode": "route",
-                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                                    "response_streamed": True,
-                                },
-                            )
-                            return
-                        result = self._run(lambda: coordinator.complete(
-                            messages,
-                            mode=mode,
-                            attribution=attribution,
-                            hints=routing,
-                            model_name=model_name,
-                            workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass or bool(tools_list),
-                            cache_partition=cache_partition,
-                            owner_id=security.principal_id(self.headers),
-                            zdr_only=zdr_only,
-                        ))
+                                mode=mode,
+                                attribution=attribution,
+                                hints=routing,
+                                model_name=model_name,
+                                workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                cache_bypass=cache_bypass or bool(tools_list),
+                                cache_partition=cache_partition,
+                                owner_id=security.principal_id(self.headers),
+                                zdr_only=zdr_only,
+                            ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
@@ -8877,27 +8879,28 @@ def build_server(
                 }
                 emit("response.output_item.added", output_index=0, item=reasoning_item)
                 try:
-                    if orchestrator.would_route(messages, "auto", model_name):
-                        progress("worker", "started")
-                        workflow_run_id = f"run_{uuid.uuid4().hex}"
-                        parts = list(
-                            orchestrator.stream_route(
-                                messages,
-                                workflow_run_id=workflow_run_id,
-                                model_name=model_name,
+                    with getattr(orchestrator, "_request_execution_scope", nullcontext)():
+                        if orchestrator.would_route(messages, "auto", model_name):
+                            progress("worker", "started")
+                            workflow_run_id = f"run_{uuid.uuid4().hex}"
+                            parts = list(
+                                orchestrator.stream_route(
+                                    messages,
+                                    workflow_run_id=workflow_run_id,
+                                    model_name=model_name,
+                                )
                             )
-                        )
-                        progress("worker", "completed")
-                        result = (
-                            orchestrator.get_workflow_run(workflow_run_id)
-                            if coordinator is not None
-                            else {"answer": "".join(parts)}
-                        )
-                    else:
-                        conduct_kwargs = {"model_name": model_name, "progress": progress}
-                        if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
-                            conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
-                        result = orchestrator.conduct(messages, **conduct_kwargs)
+                            progress("worker", "completed")
+                            result = (
+                                orchestrator.get_workflow_run(workflow_run_id)
+                                if coordinator is not None
+                                else {"answer": "".join(parts)}
+                            )
+                        else:
+                            conduct_kwargs = {"model_name": model_name, "progress": progress}
+                            if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
+                                conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
+                            result = orchestrator.conduct(messages, **conduct_kwargs)
                 except ConnectionAbortedError:
                     self._decision_failure_reason = "cancelled"
                     raise

@@ -129,6 +129,42 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
     assert 0 < timeout <= 30
 
 
+def test_uptime_fetch_rejects_oversized_response_before_json_parse(monkeypatch) -> None:
+    """A telemetry response may not be read or parsed beyond its byte boundary."""
+    payload = json.dumps(
+        {
+            "data": {
+                "endpoints": [{"uptime_last_30m": 99.5}],
+                "padding": "x" * 256,
+            }
+        }
+    ).encode()
+    requested_sizes: list[int] = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            requested_sizes.append(size)
+            return payload if size < 0 else payload[:size]
+
+    monkeypatch.setattr(uptime_module, "_OPENROUTER_UPTIME_RESPONSE_MAX_BYTES", 64, raising=False)
+    monkeypatch.setattr(
+        uptime_module.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(),
+    )
+    collector, _, _, _ = _collectors(None)
+    del collector._fetch_uptime
+
+    assert collector._fetch_uptime("org/model-a") is None
+    assert requested_sizes == [65]
+
+
 def test_uptime_fetch_does_not_hang_forever_on_an_unresponsive_endpoint(monkeypatch) -> None:
     """A stalled connection is bounded end-to-end, not blocked forever.
 
