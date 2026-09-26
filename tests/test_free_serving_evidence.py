@@ -16,6 +16,7 @@ from contextual_orchestrator.free_serving_evidence import (
     CostVerdict,
     FreeServingLedger,
     classify_reported_cost,
+    credential_route_identity,
     free_serving_admitted,
     record_reported_cost,
 )
@@ -27,6 +28,7 @@ from contextual_orchestrator.orchestrator import (
     ModelAgent,
     ModelClient,
     TaskOrchestrator,
+    _free_serving_route_identity,
 )
 
 EXPERIENTIAL = "experiential_labs"
@@ -45,6 +47,13 @@ def _discovered(provider: str, model_id: str, *, free: bool = True) -> Discovere
         is_free=free,
         input_modalities=("text",),
         output_modalities=("text",),
+    )
+
+
+def _discovered_route_identity(model: DiscoveredModel) -> str:
+    """Return the ledger identity used when a discovered route becomes an agent."""
+    return credential_route_identity(
+        model.provider_name, model.credential_name, model.chat_base_url
     )
 
 
@@ -148,6 +157,8 @@ def test_discovery_and_serving_selectors_share_the_signal() -> None:
         ModelAgent(
             id=f"{model.provider_name}_route",
             model=model.model_id,
+            base_url=model.chat_base_url,
+            credential_key=model.credential_name,
             provider_name=model.provider_name,
             tags=("chat", "cost:free"),
         )
@@ -164,12 +175,27 @@ def test_discovery_and_serving_selectors_share_the_signal() -> None:
     # No evidence: Experiential is paid (fail-closed); catalog-free OpenRouter serves.
     assert _free_now() == (["openrouter"], ["openrouter"])
 
-    record_reported_cost(EXPERIENTIAL, "promo-model", {"cost": 0, "is_byok": False})
+    record_reported_cost(
+        EXPERIENTIAL,
+        "promo-model",
+        {"cost": 0, "is_byok": False},
+        route_identity=_discovered_route_identity(discovered[0]),
+    )
     assert _free_now() == (["openrouter"], ["openrouter"])
 
     # Free allowance exhausted and credits overflow billed the call: demote at once.
-    record_reported_cost(EXPERIENTIAL, "promo-model", {"cost": 0.0021, "is_byok": False})
-    record_reported_cost("openrouter", "vendor/model:free", {"cost": 0.5, "is_byok": False})
+    record_reported_cost(
+        EXPERIENTIAL,
+        "promo-model",
+        {"cost": 0.0021, "is_byok": False},
+        route_identity=_discovered_route_identity(discovered[0]),
+    )
+    record_reported_cost(
+        "openrouter",
+        "vendor/model:free",
+        {"cost": 0.5, "is_byok": False},
+        route_identity=_discovered_route_identity(discovered[1]),
+    )
     assert _free_now() == ([], [])
 
 
@@ -217,11 +243,17 @@ def test_model_client_records_evidence_from_every_completed_call(monkeypatch) ->
     payload = {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]}
 
     assert client._send(agent, payload) == "OK"
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, "promo-model") is CostVerdict.FREE
+    assert (
+        FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), "promo-model")
+        is CostVerdict.FREE
+    )
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
     assert client._send(agent, payload) == "OK"
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, "promo-model") is CostVerdict.PAID
+    assert (
+        FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), "promo-model")
+        is CostVerdict.PAID
+    )
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
@@ -592,7 +624,12 @@ def test_model_client_demotes_a_route_on_a_served_429_free_quota_error(monkeypat
 
     agent = _agent()
     client = ModelClient()
-    record_reported_cost(EXPERIENTIAL, agent.model, {"cost": 0, "is_byok": False})
+    record_reported_cost(
+        EXPERIENTIAL,
+        agent.model,
+        {"cost": 0, "is_byok": False},
+        route_identity=_free_serving_route_identity(agent),
+    )
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
     error = _http_error(429, _quota_body("insufficient_quota"))
@@ -604,7 +641,7 @@ def test_model_client_demotes_a_route_on_a_served_429_free_quota_error(monkeypat
     payload = {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]}
     with pytest.raises(urllib.error.HTTPError):
         client._send(agent, payload)
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.EXHAUSTED
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is CostVerdict.EXHAUSTED
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
     # The cached error body stays readable for downstream classifiers.
     assert orchestrator_module._http_error_payload(error) == _quota_body("insufficient_quota")
@@ -622,8 +659,18 @@ def test_model_client_non_quota_http_errors_are_unknown_only_for_evidence_routes
         tags=("chat", "cost:free"),
     )
     client = ModelClient()
-    record_reported_cost(EXPERIENTIAL, agent.model, {"cost": 0, "is_byok": False})
-    record_reported_cost("openrouter", other.model, {"cost": 0, "is_byok": False})
+    record_reported_cost(
+        EXPERIENTIAL,
+        agent.model,
+        {"cost": 0, "is_byok": False},
+        route_identity=_free_serving_route_identity(agent),
+    )
+    record_reported_cost(
+        "openrouter",
+        other.model,
+        {"cost": 0, "is_byok": False},
+        route_identity=_free_serving_route_identity(other),
+    )
 
     def _raise(*_args, **_kwargs):
         raise _http_error(503, {"error": {"code": "overloaded"}})
@@ -633,8 +680,8 @@ def test_model_client_non_quota_http_errors_are_unknown_only_for_evidence_routes
         payload = {"model": route.model, "messages": [{"role": "user", "content": "hi"}]}
         with pytest.raises(urllib.error.HTTPError):
             client._send(route, payload)
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
-    assert FREE_SERVING_LEDGER.verdict("openrouter", other.model) is CostVerdict.FREE
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is CostVerdict.UNKNOWN
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(other), other.model) is CostVerdict.FREE
 
 
 def test_serving_hooks_skip_idempotent_cost_but_keep_quota_authority() -> None:
@@ -654,7 +701,7 @@ def test_serving_hooks_skip_idempotent_cost_but_keep_quota_authority() -> None:
     orchestrator_module._record_free_serving_quota_error(
         agent, _http_error(429, _quota_body("free_limit_reached")), request
     )
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.EXHAUSTED
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is CostVerdict.EXHAUSTED
 
 
 @pytest.mark.parametrize(
@@ -729,9 +776,19 @@ def test_promotion_nominates_but_never_admits_without_pre_send_authority() -> No
     assert apply_free_promotions(rows, EXPERIENTIAL, frozenset()) is rows
 
     assert general_free_serving_candidates(marked) == []
-    record_reported_cost(EXPERIENTIAL, "promo-model", {"cost": 0, "is_byok": False})
+    record_reported_cost(
+        EXPERIENTIAL,
+        "promo-model",
+        {"cost": 0, "is_byok": False},
+        route_identity=_discovered_route_identity(marked[0]),
+    )
     assert general_free_serving_candidates(marked) == []
-    record_reported_cost(EXPERIENTIAL, "other-model", {"cost": 0, "is_byok": False})
+    record_reported_cost(
+        EXPERIENTIAL,
+        "other-model",
+        {"cost": 0, "is_byok": False},
+        route_identity=_discovered_route_identity(marked[1]),
+    )
     assert general_free_serving_candidates(marked) == []
 
 
@@ -806,7 +863,12 @@ def _sse(usage: dict[str, object] | None) -> list[bytes]:
 
 def _free_route(agent: ModelAgent) -> None:
     FREE_SERVING_LEDGER.reset()
-    record_reported_cost(agent.provider_name, agent.model, {"cost": 0, "is_byok": False})
+    record_reported_cost(
+        agent.provider_name,
+        agent.model,
+        {"cost": 0, "is_byok": False},
+        route_identity=_free_serving_route_identity(agent),
+    )
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
@@ -835,7 +897,7 @@ def test_send_records_unknown_for_an_unreadable_body(monkeypatch, failure) -> No
     _open_returning(client, monkeypatch, _FAILURES[failure])
     with pytest.raises(Exception):
         client._send(agent, {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]})
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is CostVerdict.UNKNOWN
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
@@ -856,9 +918,9 @@ def test_send_records_failed_calls(monkeypatch, error, expected) -> None:
     _open_raising(client, monkeypatch, error)
     with pytest.raises(type(error)):
         client._send(agent, {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]})
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is expected
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
-    assert FREE_SERVING_LEDGER.demoted(EXPERIENTIAL, agent.model) is (
+    assert FREE_SERVING_LEDGER.demoted(_free_serving_route_identity(agent), agent.model) is (
         expected is CostVerdict.EXHAUSTED
     )
 
@@ -882,7 +944,7 @@ def test_stream_records_the_final_usage_frame(monkeypatch, usage, expected) -> N
     monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
     _open_returning(client, monkeypatch, lambda: _SSEResponse(_sse(usage)))
     assert "".join(_stream(client, agent)) == "OK"
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is expected
     assert TaskOrchestrator([agent])._is_free_agent(agent) is (expected is CostVerdict.FREE)
 
 
@@ -899,7 +961,7 @@ def test_stream_records_unknown_when_it_fails_mid_stream(monkeypatch) -> None:
         for delta in _stream(client, agent):
             received.append(delta)
     assert received == ["O"]
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is CostVerdict.UNKNOWN
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
@@ -914,7 +976,7 @@ def test_stream_records_unknown_when_the_consumer_abandons_it(monkeypatch) -> No
     stream = _stream(client, agent)
     assert next(stream) == "O"
     stream.close()  # GeneratorExit before the final usage frame
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is CostVerdict.UNKNOWN
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
@@ -936,7 +998,7 @@ def test_stream_records_open_failures(monkeypatch, error, expected) -> None:
     _open_raising(client, monkeypatch, error)
     with pytest.raises(Exception):
         list(_stream(client, agent))
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is expected
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
@@ -958,7 +1020,7 @@ def test_proxy_send_once_records_evidence_through_send_raw(monkeypatch, body, ex
     monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
     _open_returning(client, monkeypatch, lambda: _FakeResponse(body))
     assert _passthrough(client, agent)["usage"] == body["usage"]
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is expected
     assert TaskOrchestrator([agent])._is_free_agent(agent) is (expected is CostVerdict.FREE)
 
 
@@ -987,7 +1049,7 @@ def test_proxy_send_once_records_failed_calls(monkeypatch, setup, expected) -> N
         _open_raising(client, monkeypatch, error)
     with pytest.raises(Exception):
         _passthrough(client, agent)
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is expected
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
@@ -998,7 +1060,7 @@ def test_send_raw_records_evidence_directly(monkeypatch) -> None:
     assert client._send_raw(agent, "chat/completions", {"model": agent.model})["usage"] == (
         _FREE_BODY["usage"]
     )
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.FREE
+    assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is CostVerdict.FREE
 
 
 def test_failure_recording_never_masks_the_provider_error(monkeypatch) -> None:
