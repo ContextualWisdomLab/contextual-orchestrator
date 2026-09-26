@@ -40,6 +40,7 @@ from .credentials import NotConfigured, get_credential
 from .free_serving_evidence import (
     COST_EVIDENCE_REQUIRED_PROVIDERS,
     EXPERIENTIAL_PROMOTIONS_URL,
+    credential_route_identity,
     free_promotion_slugs,
     free_serving_admitted,
     is_free_nominated,
@@ -2531,7 +2532,14 @@ def general_free_serving_candidates(
         model
         for model in discovered
         if is_free_nominated(model)
-        and free_serving_admitted(model.provider_name, model.model_id, catalog_free=model.is_free)
+        and free_serving_admitted(
+            model.provider_name,
+            model.model_id,
+            catalog_free=model.is_free,
+            route_identity=credential_route_identity(
+                model.provider_name, model.credential_name, model.chat_base_url
+            ),
+        )
         and is_routable_discovered_model(model)
         and not _requires_non_text_input(model)
     ]
