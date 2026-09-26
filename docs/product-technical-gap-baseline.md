@@ -1,5 +1,26 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-26 credential-route entitlement isolation — Proposed
+
+Current-head review of PR #1260 at `8f3b3d2fcf0c34c34eceb855894895b42dacd774`
+found two authority defects. The idempotency regression expected no verdict even
+though an explicit 429 `free_limit_reached` is cost-independent quota authority,
+and the ledger collapsed different credential accounts sharing one provider/model.
+RED `c3b3a3c57ab4ec22a273c8dc4e0d358f8c67c4fc` corrects the quota oracle and
+proves that billing `KEY_A` must not demote sibling `KEY_B`. The predecessor
+fails the credential-isolation behavior.
+
+GREEN `382cc0c3ddc55221df256c016e5d35b716394da6` separates policy provider from
+route identity; `5b732be0636a27453e6ee18171ef31e04998c3ba` binds runtime observations and
+admission to a secret-free credential-name plus endpoint fingerprint; and
+`39f75e86b4c7eb0144caa681612a76c8c5c71532` applies the identical key in
+discovery. Exact remote Python AST parsing passed for four changed source/test
+files. Direct production-module probes passed credential isolation 2/2 and
+idempotent quota authority 1/1. No credential value is read or exposed.
+
+This is source-level GREEN only. Exact-head hosted Checks, independent approval,
+protected-main integration, immutable release, and production-cost evidence
+remain unverified; status stays Proposed.
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
