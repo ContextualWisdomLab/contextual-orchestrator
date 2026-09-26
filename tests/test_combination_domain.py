@@ -110,7 +110,7 @@ def test_records_are_json_compatible() -> None:
 def test_strategies_satisfy_the_protocol() -> None:
     for strategy in (
         RankedFirst(),
-        PluralityVote(normalized_text_key, min_support=0.5),
+        PluralityVote(normalized_text_key),
         ScoredBestOfN(lambda candidate: 1.0),
     ):
         assert isinstance(strategy, CombinationStrategy)
@@ -146,7 +146,7 @@ def test_normalized_text_key_rejects_non_text() -> None:
 
 
 def test_plurality_vote_overrules_the_top_ranked_minority() -> None:
-    outcome = PluralityVote(normalized_text_key, min_support=0.5).combine(
+    outcome = PluralityVote(normalized_text_key).combine(
         _set("Lyon", "Paris.", "paris", "Marseille")
     )
     assert outcome.selected is not None
@@ -161,52 +161,43 @@ def test_plurality_vote_overrules_the_top_ranked_minority() -> None:
     )
 
 
-def test_plurality_vote_breaks_count_ties_by_best_supporter_rank() -> None:
-    outcome = PluralityVote(normalized_text_key, min_support=0.1).combine(
-        _set("b", "a", "a", "b")
-    )
-    assert outcome.selected is not None and outcome.selected.agent_id == "agent_0"
-
-
-def test_plurality_vote_abstains_below_declared_support() -> None:
-    outcome = PluralityVote(normalized_text_key, min_support=0.6).combine(
-        _set("a", "a", "b", "c", "d")
-    )
+def test_plurality_vote_abstains_when_maximum_counts_tie() -> None:
+    outcome = PluralityVote(normalized_text_key).combine(_set("b", "a", "a", "b"))
     assert outcome.abstained
-    assert outcome.reason == "insufficient_agreement"
+    assert outcome.reason == "plurality_tie"
+    assert outcome.support == pytest.approx(0.5)
+
+
+def test_plurality_vote_uses_the_unique_mode_without_a_policy_threshold() -> None:
+    outcome = PluralityVote(normalized_text_key).combine(_set("a", "a", "b", "c", "d"))
+    assert outcome.selected is not None and outcome.selected.agent_id == "agent_0"
+    assert outcome.reason == "plurality"
     assert outcome.support == pytest.approx(0.4)
 
 
 def test_plurality_support_counts_unextractable_candidates() -> None:
-    outcome = PluralityVote(normalized_text_key, min_support=0.5).combine(
-        _set("a", "", "...", "b")
-    )
-    assert outcome.abstained and outcome.support == pytest.approx(0.25)
-    none = PluralityVote(normalized_text_key, min_support=0.5).combine(_set("", "..."))
+    outcome = PluralityVote(normalized_text_key).combine(_set("a", "", "...", "b"))
+    assert outcome.abstained and outcome.reason == "plurality_tie"
+    assert outcome.support == pytest.approx(0.25)
+    none = PluralityVote(normalized_text_key).combine(_set("", "..."))
     assert none.abstained and none.reason == "no_extractable_answer"
     assert none.support == 0.0
 
 
-@pytest.mark.parametrize("threshold", [0, -0.1, 1.01, math.nan, True, "0.5"])
-def test_plurality_vote_requires_a_declared_threshold(threshold) -> None:
-    with pytest.raises(ValueError):
-        PluralityVote(normalized_text_key, min_support=threshold)
-
-
 def test_plurality_vote_rejects_bad_extractors() -> None:
     with pytest.raises(TypeError):
-        PluralityVote("not callable", min_support=0.5)  # type: ignore[arg-type]
+        PluralityVote("not callable")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="string or None"):
-        PluralityVote(lambda text: 3, min_support=0.5).combine(_set("a"))  # type: ignore[arg-type,return-value]
+        PluralityVote(lambda text: 3).combine(_set("a"))  # type: ignore[arg-type,return-value]
 
 
 def test_plurality_vote_treats_empty_key_as_unextractable() -> None:
-    outcome = PluralityVote(lambda text: "", min_support=0.5).combine(_set("a"))
+    outcome = PluralityVote(lambda text: "").combine(_set("a"))
     assert outcome.reason == "no_extractable_answer"
 
 
 def test_scored_best_of_n_selects_max_and_skips_unscored() -> None:
-    scores = {"agent_0": None, "agent_1": 0.4, "agent_2": 0.9, "agent_3": 0.9}
+    scores = {"agent_0": None, "agent_1": 0.4, "agent_2": 0.9, "agent_3": 0.8}
     outcome = ScoredBestOfN(lambda candidate: scores[candidate.agent_id]).combine(
         _set("a", "b", "c", "d")
     )
@@ -216,8 +207,14 @@ def test_scored_best_of_n_selects_max_and_skips_unscored() -> None:
         ("agent_0", None),
         ("agent_1", 0.4),
         ("agent_2", 0.9),
-        ("agent_3", 0.9),
+        ("agent_3", 0.8),
     )
+
+
+def test_scored_best_of_n_abstains_when_maximum_scores_tie() -> None:
+    outcome = ScoredBestOfN(lambda candidate: 0.9).combine(_set("a", "b"))
+    assert outcome.abstained
+    assert outcome.reason == "score_tie"
 
 
 def test_scored_best_of_n_never_scores_empty_answers() -> None:
@@ -255,7 +252,7 @@ def test_plurality_vote_mechanism_beats_best_single_on_independent_errors() -> N
     item_count, worker_count = 400, 5
     single_correct = [0] * worker_count
     vote_correct = 0
-    vote = PluralityVote(normalized_text_key, min_support=0.2)
+    vote = PluralityVote(normalized_text_key)
     for _item in range(item_count):
         texts = []
         for worker in range(worker_count):

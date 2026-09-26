@@ -114,7 +114,19 @@ def test_collect_candidates_returns_none_when_all_fail() -> None:
     )
     assert result.candidates is None
     assert result.as_record()["candidates"] == []
-    assert select_answer(result, PluralityVote(normalized_text_key, min_support=0.5)) is None
+    assert select_answer(result, PluralityVote(normalized_text_key)) is None
+
+
+def test_collect_candidates_defaults_to_upstream_owned_completion() -> None:
+    result = collect_candidates(
+        ["a_one"],
+        MESSAGES,
+        _port({"a_one": CompletionReply("done")}),
+        max_concurrency=1,
+    )
+    assert result.failures == ()
+    assert result.candidates is not None
+    assert result.candidates.candidates[0].text == "done"
 
 
 @pytest.mark.parametrize(
@@ -150,7 +162,7 @@ def test_select_answer_votes_over_the_fan_out() -> None:
         max_concurrency=3,
         deadline_seconds=5,
     )
-    outcome = select_answer(result, PluralityVote(normalized_text_key, min_support=0.5))
+    outcome = select_answer(result, PluralityVote(normalized_text_key))
     assert outcome is not None and outcome.selected.agent_id == "b_two"
 
 
