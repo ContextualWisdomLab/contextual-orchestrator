@@ -5722,16 +5722,6 @@ repository-authored values. #1000 owns the broad routing repair; #911's
 observations can remain evidence but are not by themselves a production
 policy.
 
-**Amendment (2026-09-22): operator opt-in mechanism, default unchanged.**
-The KV setting `CONTEXTUAL_ORCHESTRATOR_OBSERVED_HEALTH_QUARANTINE=enabled`
-(or `TaskOrchestrator(observed_health_quarantine=True)`) adds failure-class
-weighting, a cooldown longer than one slow attempt, a failure-rate window that
-a single success cannot erase, a half-open probe, and demotion of members
-whose last failure was slow. The default stays off, which is the legacy
-3/30 policy, per the boundary above. Replay evidence, proposed values and the
-enablement decision are in
-[the observed-health runbook](doctoring/observed-health-quarantine.md).
-
 ## 2026-09-12 Optimizer cardinality acceptance and calibration boundary
 
 Frozen `090b4ec841cfc78b45248b561f1cef6396b57429` rejects incomplete/extra
@@ -7169,3 +7159,25 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+
+## 2026-09-27 Observed-health admission authority — Proposed
+
+PR #1221 exposed an operator-activatable routing policy whose fixed weight,
+failure-rate threshold, observation window, cooldown, exponential escalation,
+and all-open ordering changed candidate admission without a released
+mathematical, statistical, psychometric, standards-based, or experimentally
+validated authority. An opt-in Boolean or KV value records intent, not evidence;
+the failure-only sidecar replay is explicitly biased and cannot calibrate those
+decisions.
+
+RED `ee58cb09` proves both supported activation surfaces remained reachable:
+the constructor accepted `observed_health_quarantine=True`, and KV `enabled`
+activated the same heuristic policy. The forward repair removes that
+decision-affecting runtime surface and its replay artifacts instead of replacing
+one arbitrary policy with another. The independent provider boundary remains:
+HTTP 429 records quota cooldown evidence but never breaker health, while 503
+remains an availability failure. Focused authority and three-path HTTP status
+contracts must be GREEN on the exact successor before review. A future health
+policy requires immutable owner identity, executable calibration provenance,
+validated sampling/failure denominators, and a versioned released contract;
+until then activation fails closed.
