@@ -1091,6 +1091,14 @@ class ProviderEmbeddingBatchBackend:
         self._closed.set()
         with self._executor_lock:
             executor, self._executor = self._executor, None
+        for job_id, event in list(self._terminal_events.items()):
+            if self._registry.durable:
+                # The next backend can reclaim persisted work after this worker exits.
+                event.set()
+            else:
+                self.cancel(
+                    BatchJob(job_id=job_id, backend=self.name), reason="backend closed"
+                )
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -1164,6 +1172,7 @@ class ProviderEmbeddingBatchBackend:
                     job_id,
                     lease_seconds=self._claim_lease_seconds,
                     renew_until_epoch=deadline_epoch,
+                    renew_while=lambda: not self._closed.is_set(),
                 ) as execution_claim:
                     self._run_claimed_job(job_id, execution_claim)
             except ClaimNotAcquired:
@@ -1255,6 +1264,8 @@ class ProviderEmbeddingBatchBackend:
         requests = list(self._requests[job_id])
         try:
             vectors, prompt_tokens = self._runner(requests)
+            if self._closed.is_set():
+                execution_claim.mark_lost()
             execution_claim.ensure_owned()
             if time.time() >= self._execution_deadline(job_id):
                 self._publish_terminal(
@@ -1295,6 +1306,9 @@ class ProviderEmbeddingBatchBackend:
         except ClaimNotAcquired:
             raise
         except Exception as exc:  # noqa: BLE001 - polling exposes bounded failure metadata
+            if self._closed.is_set():
+                execution_claim.mark_lost()
+            execution_claim.ensure_owned()
             error = {
                 "error_type": type(exc).__name__,
                 "http_status": getattr(
@@ -1347,18 +1361,24 @@ class ProviderEmbeddingBatchBackend:
                 self._errors[job_id] = error
             self._states[job_id] = status
 
-    def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
+    def wait(self, job: BatchJob, *, timeout: float | None) -> Dict[str, Any]:
         """Wait within the caller's explicit deadline for a terminal state.
 
-        ``timeout`` may be ``float("inf")`` when the caller has no wall-clock
-        deadline (contextual-orchestrator's no-implicit-deadline default);
-        ``threading.Event.wait`` raises ``OverflowError`` for a non-finite
-        timeout on CPython, so a non-finite value is translated to ``None``
+        ``timeout`` may be ``None`` or ``float("inf")`` when the caller has no
+        wall-clock deadline (contextual-orchestrator's no-implicit-deadline
+        default). ``threading.Event.wait`` raises ``OverflowError`` for a
+        non-finite timeout on CPython, so both forms are translated to ``None``
         (block indefinitely) rather than passed through.
         """
         event = self._terminal_events.get(job.job_id)
         if event is not None:
-            event.wait(timeout=timeout if math.isfinite(timeout) else None)
+            event.wait(
+                timeout=(
+                    timeout
+                    if timeout is not None and math.isfinite(timeout)
+                    else None
+                )
+            )
         return self.poll(job)
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:

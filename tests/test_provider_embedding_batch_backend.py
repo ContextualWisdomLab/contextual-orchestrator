@@ -20,7 +20,7 @@ from contextual_orchestrator.batch_routing import (
     ProviderEmbeddingBatchBackend,
     _DaemonWorkerPool,
 )
-from contextual_orchestrator.cost_router import _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+from contextual_orchestrator.cost_router import _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
@@ -50,7 +50,11 @@ class _SyntheticExactCounter:
 
 
 def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> None:
-    """A null model timeout does not break the existing batch-retention boundary."""
+    """A null model timeout leaves the batch execution deadline unbounded.
+
+    The registry retention window is not substituted as an implicit deadline;
+    see ``test_unbounded_execution_timeout_never_substitutes_registry_retention``.
+    """
     coordinator = CostRoutingCoordinator(
         TaskOrchestrator([], allow_empty_agents=True),
         embedding_token_counter=_SyntheticExactCounter(),
@@ -58,7 +62,7 @@ def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> N
 
     backend = coordinator._provider_embedding_backend()
 
-    assert backend._execution_timeout_seconds == 604_800
+    assert backend._execution_timeout_seconds is None
     assert backend._claim_lease_seconds is None
     backend.close()
 
@@ -370,6 +374,33 @@ def test_close_waits_for_start_to_submit_work() -> None:
     assert shutdown_called.is_set()
 
 
+def test_close_releases_unbounded_wait_for_queued_local_job() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(_requests):
+        started.set()
+        release.wait(timeout=5)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(runner, max_concurrency=1)
+    first = backend.submit([EmbeddingBatchRequest(input_text="first")])
+    assert started.wait(timeout=1)
+    queued = backend.submit([EmbeddingBatchRequest(input_text="queued")])
+    result = {}
+    waiter = threading.Thread(
+        target=lambda: result.update(backend.wait(queued, timeout=None)), daemon=True
+    )
+    waiter.start()
+
+    backend.close()
+    waiter.join(timeout=1)
+    release.set()
+    assert not waiter.is_alive()
+    assert result["status"] == "cancelled"
+    assert backend.poll(first)["status"] == "cancelled"
+
+
 def test_daemon_worker_pool_submit_after_shutdown_raises_instead_of_stranding_work() -> None:
     """A post-shutdown ``submit`` must fail fast, not enqueue behind sentinels.
 
@@ -593,7 +624,7 @@ def test_durable_provider_embedding_backend_survives_unbounded_client_timeout() 
     coordinator = CostRoutingCoordinator(orchestrator, job_registry=registry)
 
     backend = coordinator._embedding_backends["provider"]
-    assert backend._claim_lease_seconds == _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+    assert backend._claim_lease_seconds == _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
     backend.close()
 
 

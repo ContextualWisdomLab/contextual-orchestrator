@@ -57,8 +57,8 @@ jobs:
 
       - name: Install hash-locked quality tools
         run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+          uv pip install --python .venv/bin/python --require-hashes -r requirements-opencode-review-ci.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Prove complete benchmark coverage and public docstrings
         run: |
@@ -81,9 +81,9 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
-          python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
+          uv build --wheel --no-build-isolation --out-dir dist
           python scripts/verify_decision_wheel_manifest.py dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
-          python -m pip install --no-deps \
+          uv pip install --python .venv/bin/python --no-deps \
             --target "$RUNNER_TEMP/nim-wheel-site" \
             dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
           cd "$RUNNER_TEMP"
@@ -109,8 +109,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
       - name: Install fuzz dependencies
-        run: python -m pip install --require-hashes -r requirements.lock -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt
+        run: |
+          uv sync --locked --extra api --extra db --extra queue --group dev
+          uv pip install --python .venv/bin/python --require-hashes -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run property-based fuzz tests
         run: python -m pytest tests/fuzz -q

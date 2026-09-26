@@ -92,6 +92,7 @@ from .tool_fallback import (
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
 from .reasoning_effort_profile import (
+    EffortCatalogSnapshot,
     ReasoningEffortProfile,
     apply_request_profile,
     snapshot_role_effort_catalog,
@@ -102,6 +103,39 @@ from .token_counting import (
     prompt_token_lower_bound as _prompt_token_lower_bound_evidence,
     shared_context_output_budget,
 )
+
+
+_REQUEST_EXECUTION_SNAPSHOT: ContextVar[
+    tuple[object, EffortCatalogSnapshot | None, OrchestrationPolicy] | None
+] = ContextVar("contextual_orchestrator_request_execution_snapshot", default=None)
+
+
+def _request_execution_scoped(method: Callable) -> Callable:
+    """Keep one policy and effort revision across nested and suspended calls."""
+    if inspect.isgeneratorfunction(method):
+        @wraps(method)
+        def scoped_stream(self, *args, **kwargs):
+            with self._request_execution_scope():
+                context = copy_context()
+                stream = method(self, *args, **kwargs)
+            exhausted = object()
+            try:
+                while True:
+                    item = context.run(next, stream, exhausted)
+                    if item is exhausted:
+                        return
+                    yield item
+            finally:
+                context.run(stream.close)
+
+        return scoped_stream
+
+    @wraps(method)
+    def scoped_call(self, *args, **kwargs):
+        with self._request_execution_scope():
+            return method(self, *args, **kwargs)
+
+    return scoped_call
 
 
 _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
@@ -2574,7 +2608,7 @@ class ModelClient:
                 centered = [(value / 255.0) * 2.0 - 1.0 for value in raw]
                 vectors.append(centered)
             return vectors, None
-        destination = self._validate_provider(agent)  # pragma: no cover
+        destination = self._validated_destination(agent, transport="embedding")  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
         response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
@@ -3262,7 +3296,7 @@ class ModelClient:
                 yield answer[start : start + 24]
             return
 
-        destination = self._validate_provider(agent)  # pragma: no cover
+        destination = self._validated_destination(agent, transport="stream")  # pragma: no cover
         settings = self.request_settings_snapshot()
         payload = {  # pragma: no cover
             "model": agent.model,
@@ -3654,7 +3688,7 @@ class ModelClient:
             method="POST",
         )
         try:
-            with self._open_model_provider(request, self._validate_provider(agent), agent) as response:  # pragma: no cover
+            with self._open_model_provider(request, self._validated_destination(agent, transport="passthrough"), agent) as response:  # pragma: no cover
                 return self._read_bounded_response(
                     response, MAX_PROVIDER_RESPONSE_BYTES
                 ), response.headers.get_content_type()
@@ -3680,7 +3714,7 @@ class ModelClient:
             agent,
             "GET",
             f"/{endpoint.lstrip('/')}",
-            destination=self._validate_provider(agent),
+            destination=self._validated_destination(agent, transport="passthrough"),
             max_response_bytes=max_response_bytes,
         )
 
@@ -3692,7 +3726,7 @@ class ModelClient:
             agent,
             "DELETE",
             f"/{endpoint.lstrip('/')}",
-            destination=self._validate_provider(agent),
+            destination=self._validated_destination(agent, transport="passthrough"),
             max_response_bytes=max_response_bytes,
         )
 
@@ -3710,7 +3744,7 @@ class ModelClient:
             method="GET",
         )
         with self._open_model_provider(  # pragma: no cover
-            request, self._validate_provider(agent), agent
+            request, self._validated_destination(agent, transport="passthrough"), agent
         ) as response:
             return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
 
@@ -3747,7 +3781,7 @@ class ModelClient:
             method="POST",
         )
         with self._open_model_provider(  # pragma: no cover
-            request, self._validate_provider(agent), agent
+            request, self._validated_destination(agent, transport="passthrough"), agent
         ) as response:
             result = json.loads(
                 self._read_bounded_response(response, max_response_bytes).decode("utf-8")
@@ -3919,6 +3953,15 @@ class ModelClient:
             "echo": echoed,
         }
 
+    def _validated_destination(self, agent: ModelAgent, *, transport: str) -> ProviderDestination:
+        """Preserve the caller's transport without changing provider overrides."""
+        try:
+            return self._validate_provider(agent)
+        except ProviderUpstreamError as exc:
+            raise classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport=transport
+            ) from None
+
     def _validate_provider(self, agent: ModelAgent) -> ProviderDestination:
         """Reject unsafe model endpoints and return the exact address to connect to."""
         # Runtime secret must be resolvable from the KV — never an env var name,
@@ -3971,10 +4014,17 @@ class ModelClient:
         policy = EgressPolicy.from_hosts(self.allowed_provider_hosts, allow_local=False)
         try:
             validated = validate_egress_url_details(agent.base_url, policy=policy)
-        except EgressNotAllowedError as exc:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted") from exc
+        except EgressNotAllowedError:
+            validated = None
         if validated is None:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_connection_error",
+                message=f"provider {agent.id} host is not allowlisted",
+                client_status=502,
+                retryable=False,
+            ) from None
         # Reuse EgressWeave's already-validated, already-resolved addresses
         # directly rather than re-resolving — re-resolving here would reopen
         # the validate-then-connect DNS-rebinding gap EgressWeave closes.
@@ -4041,7 +4091,7 @@ class ModelClient:
         elif _is_local_provider_url(agent.base_url):
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
-            destination = self._validate_provider(agent)  # pragma: no cover
+            destination = self._validated_destination(agent, transport="batch")  # pragma: no cover
             batch_error: ProviderUpstreamError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
@@ -5534,7 +5584,6 @@ class TaskOrchestrator:
         allow_empty_agents: bool = False,
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
-        rate_limit_unknown_cooldown_seconds: float = 5.0,
     ) -> None:
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
@@ -5561,6 +5610,7 @@ class TaskOrchestrator:
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
+        self._psychometric_persistence_lock = threading.Lock()
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
@@ -5568,7 +5618,6 @@ class TaskOrchestrator:
         self._openrouter_collector = OpenRouterUptimeCollector(
             self.candidates,
             self._group_router,
-            self._quality_router,
         )
         self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
@@ -5627,7 +5676,7 @@ class TaskOrchestrator:
         # production uses full jitter to avoid synchronized retry bursts.
         self._tool_retry_sleep = time.sleep
         self._tool_retry_jitter = random.uniform
-        self.policy = OrchestrationPolicy()
+        self._configured_policy = OrchestrationPolicy()
         # Opt-in issue #568 catalog. None keeps production answers and payload
         # keys unchanged. Operator next action: pass default_role_effort_catalog()
         # to attach a replayable snapshot; do not treat that as a default change.
@@ -5660,14 +5709,11 @@ class TaskOrchestrator:
         # exhaustion, not a model health failure, so it must never trip or feed
         # _circuit (see _record_failure call sites gated on rate_limit_signal).
         self._rate_limit_until: dict[str, float] = {}
-        # Agent ids whose current _rate_limit_until entry came from
-        # rate_limit_unknown_cooldown_seconds (the provider sent a 429/503
-        # with no Retry-After/x-ratelimit-reset*), not a provider-stated
-        # value. Kept in sync with _rate_limit_until: an entry is added or
-        # removed only when _record_rate_limit's own "only extend forward"
-        # gate actually changes which value is currently winning, and
-        # removed when _rate_limit_remaining expires the cooldown.
-        self._rate_limit_assumed: set[str] = set()
+        # Agent ids whose 429 carried no provider timing evidence. Those
+        # candidates remain unavailable until process/operator reset: RFC 9110
+        # permits Retry-After to be absent, but that absence supplies no
+        # mathematical authority for inventing a retry instant.
+        self._rate_limit_unavailable: set[str] = set()
         self._rate_limit_lock = threading.Lock()
         # Injectable wait seam (mirrors _tool_retry_sleep) so a rate-limit-storm
         # test can assert the requested wait duration without a real sleep.
@@ -5688,29 +5734,6 @@ class TaskOrchestrator:
         # sourced from the KV-backed bootstrap config the caller resolves
         # before constructing this orchestrator, never from os.getenv here.
         self.rate_limit_wait_seconds = float(rate_limit_wait_seconds)
-        if (
-            isinstance(rate_limit_unknown_cooldown_seconds, bool)
-            or not isinstance(rate_limit_unknown_cooldown_seconds, (int, float))
-            or not math.isfinite(float(rate_limit_unknown_cooldown_seconds))
-            or rate_limit_unknown_cooldown_seconds < 0
-        ):
-            raise ValueError(
-                "rate_limit_unknown_cooldown_seconds must be a finite nonnegative number"
-            )
-        # Administrator-owned assumed cooldown applied when a 429/503 omits
-        # both Retry-After and x-ratelimit-reset* (RFC 9110 10.2.3 allows
-        # Retry-After to be absent entirely; several real providers, e.g.
-        # NIM and OpenRouter, frequently omit it). Without this, an unknown
-        # cooldown previously recorded nothing at all -- the candidate was
-        # never marked cooling, _await_rate_limit_recovery saw no candidates
-        # to wait for, and the request failed exactly as if this feature did
-        # not exist. This is a caller-contract bound, not a discovered
-        # provider fact: it is deliberately short (5s default) because an
-        # unknown cooldown should be re-probed soon rather than parked for a
-        # long assumed duration that may be wildly wrong in either
-        # direction. Sourced the same way as rate_limit_wait_seconds --
-        # never read from os.getenv here.
-        self.rate_limit_unknown_cooldown_seconds = float(rate_limit_unknown_cooldown_seconds)
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
         if cache_provider is not None and cache_ttl:
             raise ValueError("cache_provider and cache_ttl cannot both be configured")
@@ -5837,13 +5860,15 @@ class TaskOrchestrator:
         # Rate-limit-storm evidence for an org sidecar preflight (e.g.
         # contextual-orchestrator-preflight.json's ready_count/account_skip_after_429
         # fields) to wait on instead of exiting: exposes each currently
-        # cooling-down agent's remaining seconds, whether that cooldown was
-        # provider-stated or assumed (the provider sent 429/503 with no
-        # Retry-After/x-ratelimit-reset*), and the soonest any of them
-        # clears, without probing external providers.
+        # cooling-down agent's remaining seconds, or ``None`` when the
+        # provider supplied no retry timing. The latter is fail-closed
+        # evidence, never a synthetic deadline. Also exposes the soonest
+        # finite cooldown, without probing external providers.
         rate_limited_until = {
             item["agent_id"]: {
-                "remaining_seconds": round(remaining, 3),
+                "remaining_seconds": (
+                    round(remaining, 3) if math.isfinite(remaining) else None
+                ),
                 "cooldown_source": self._rate_limit_cooldown_source(item["agent_id"]),
             }
             for item in active
@@ -5859,9 +5884,17 @@ class TaskOrchestrator:
             "rate_limited_until": rate_limited_until,
             "earliest_ready_seconds": (
                 round(
-                    min(entry["remaining_seconds"] for entry in rate_limited_until.values()), 3
+                    min(
+                        entry["remaining_seconds"]
+                        for entry in rate_limited_until.values()
+                        if entry["remaining_seconds"] is not None
+                    ),
+                    3,
                 )
-                if rate_limited_until
+                if any(
+                    entry["remaining_seconds"] is not None
+                    for entry in rate_limited_until.values()
+                )
                 else None
             ),
             "items": items,
@@ -5929,7 +5962,10 @@ class TaskOrchestrator:
         return report
 
     def _reload_state(self) -> None:
+        candidate_ids = set(self._psychometric_candidate_ids(self.candidates))
         for observation in self._store.load("psychometric_observation"):
+            if str(observation["agent_id"]) not in candidate_ids:
+                continue
             self._psychometric_router.observe_context_id(
                 str(observation["context_id"]),
                 str(observation["agent_id"]),
@@ -5937,6 +5973,7 @@ class TaskOrchestrator:
                 observation.get("vector"),
                 observation.get("irt_row", ()),
             )
+        self._retain_psychometric_candidates()
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record, restored=True)
             # A batch_route row persisted before judging (see batch_route's
@@ -5985,6 +6022,7 @@ class TaskOrchestrator:
         }
     )
 
+    @_request_execution_scoped
     def proxy_completion(
         self,
         body: dict[str, Any],
@@ -7598,6 +7636,7 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
+    @_request_execution_scoped
     def complete(
         self,
         messages: list[ChatMessage],
@@ -7727,6 +7766,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return not self._needs_workflow(text)
 
+    @_request_execution_scoped
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -7900,6 +7940,7 @@ class TaskOrchestrator:
             text=text,
             answer=answer,
             served_id=agent.id,
+            served_deployment_id=self._psychometric_candidate_id(agent),
             latency_seconds=latency_seconds,
             usage=usage,
             free_only=free_only,
@@ -7917,6 +7958,9 @@ class TaskOrchestrator:
         }
         if isinstance(usage, dict):
             trace_step["usage"] = usage
+        trace_step["selection_design"] = self._selection_design_receipt(
+            candidates, candidates[:candidates.index(agent) + 1], agent
+        )
         if isinstance(output_budget, dict):
             trace_step.update(output_budget)
         record = self._with_effort_snapshot(
@@ -7969,7 +8013,14 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
-        parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        parameters = {
+            **parameters,
+            "zdr_only": _REQUEST_ZDR_ONLY.get(),
+            "policy_snapshot": self.policy.as_dict(),
+        }
+        effort_snapshot = self._effort_snapshot()
+        if effort_snapshot is not None:
+            parameters["reasoning_effort_snapshot_hash"] = effort_snapshot.snapshot_hash
         if resolved_mode is not None:
             parameters["resolved_mode"] = resolved_mode
         endpoint_partition = _request_endpoint_partition()
@@ -7986,6 +8037,7 @@ class TaskOrchestrator:
             partition=cache_partition,
         )
 
+    @_request_execution_scoped
     def run(
         self,
         messages: list[ChatMessage],
@@ -8133,6 +8185,7 @@ class TaskOrchestrator:
         )
         return output_tokens, round(output_cost, 6)
 
+    @_request_execution_scoped
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
 
@@ -8424,6 +8477,7 @@ class TaskOrchestrator:
             text=prompt,
             answer=result["content"],
             served_id=agent.id,
+            served_deployment_id=self._psychometric_candidate_id(agent),
             latency_seconds=None,
             usage=result.get("usage"),
             free_only=False,
@@ -8708,6 +8762,7 @@ class TaskOrchestrator:
             updated_agents = [agent for agent in updated_candidates if not agent.disabled]
             self.candidates = updated_candidates
             self.agents = updated_agents
+            self._retain_psychometric_candidates()
             self._append_audit_event(
                 "model_timeout_policy_changed",
                 {
@@ -8993,6 +9048,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
+        self._retain_psychometric_candidates()
         for agent in effective_discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
@@ -9095,6 +9151,7 @@ class TaskOrchestrator:
         """Store this thread's most recent context-window exclusion evidence."""
         self._context_window_local.value = value
 
+    @_request_execution_scoped
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -9173,6 +9230,7 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = (
                 self._invoke_with_rate_limit_recovery(
                     candidate,
@@ -9182,8 +9240,13 @@ class TaskOrchestrator:
                     allowed_agent_ids=allowed_agent_ids,
                     virtual_selector=virtual_selector,
                     prompt_token_lower_bound=prompt_bound,
+                    selection_design_sink=selection_design.append,
                 )
             )
+            if not selection_design:
+                selection_design.append(self._selection_design_receipt(
+                    ranked_pool, [candidate], self._agent(attempt_served_id)
+                ))
             extras = getattr(self, "_last_assistant_message", None)
             self._last_assistant_message = None
             output_budget = getattr(self, "_last_output_budget", None)
@@ -9206,6 +9269,7 @@ class TaskOrchestrator:
             }
             if attempt_usage is not None:
                 row["usage"] = attempt_usage
+            row["selection_design"] = selection_design[0]
             if isinstance(output_budget, dict):
                 row.update(output_budget)
             if attempt_served_id != candidate.id:
@@ -9224,6 +9288,7 @@ class TaskOrchestrator:
                     text=text,
                     answer=answer,
                     served_id=served_id,
+                    served_deployment_id=selection_design[0]["selected_deployment_id"],
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
@@ -9279,6 +9344,7 @@ class TaskOrchestrator:
         text: str,
         answer: str,
         served_id: str,
+        served_deployment_id: str | None = None,
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
@@ -9308,6 +9374,7 @@ class TaskOrchestrator:
                 self._observe_contextual_quality(
                     prompt_context,
                     served_id,
+                    served_deployment_id=served_deployment_id,
                     accepted=accepted,
                     latency_seconds=latency_seconds,
                     output_tokens=output_tokens,
@@ -9356,6 +9423,7 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @_request_execution_scoped
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -9510,6 +9578,7 @@ class TaskOrchestrator:
                 )
                 step_prompt_bound = prompt_bound
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
                 agent,
                 step_messages,
@@ -9521,7 +9590,12 @@ class TaskOrchestrator:
                 excluded_agent_ids=_excluded_agent_ids,
                 virtual_selector=virtual_selector,
                 prompt_token_lower_bound=step_prompt_bound,
+                selection_design_sink=selection_design.append,
             )
+            if not selection_design:
+                selection_design.append(self._selection_design_receipt(
+                    [agent], [agent], self._agent(served_id)
+                ))
             extras = self._last_assistant_message
             self._last_assistant_message = None
             output_budget = self._last_output_budget
@@ -9541,6 +9615,7 @@ class TaskOrchestrator:
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
+            row["selection_design"] = selection_design[0]
             if isinstance(output_budget, dict):
                 row.update(output_budget)
             if served_id != agent.id:  # pragma: no cover
@@ -9682,11 +9757,50 @@ class TaskOrchestrator:
                 + ", ".join(unsupported_roles)
             )
 
+    @property
+    def policy(self) -> OrchestrationPolicy:
+        """Read the active request policy or the configured policy between requests."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        return active[2] if active is not None and active[0] is self else self._configured_policy
+
+    @policy.setter
+    def policy(self, policy: OrchestrationPolicy) -> None:
+        """Update the policy used when a new request starts."""
+        self._configured_policy = policy
+
+    @contextmanager
+    def _request_execution_scope(self):
+        """Capture policy and validated effort once across nested calls."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            yield
+            return
+        policy = self._configured_policy
+        token = _REQUEST_EXECUTION_SNAPSHOT.set((self, self._effort_snapshot(), policy))
+        try:
+            yield
+        finally:
+            _REQUEST_EXECUTION_SNAPSHOT.reset(token)
+
+    def _effort_snapshot(self) -> EffortCatalogSnapshot | None:
+        """Use the active catalog, or validate a fresh standalone copy."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            return active[1]
+        catalog = self.role_effort_catalog
+        return snapshot_role_effort_catalog(dict(catalog)) if catalog is not None else None
+
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
-        """Return the opt-in profile bound to one workflow role."""
-        if self.role_effort_catalog is None:
+        """Use the request revision while preserving standalone role lookups."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is None or active[0] is not self:
+            catalog = self.role_effort_catalog
+            return catalog.get(role) if catalog is not None else None
+        snapshot = active[1]
+        if snapshot is None:
             return None
-        return self.role_effort_catalog.get(role)
+        profile = snapshot.role_profiles.get(role)
+        return ReasoningEffortProfile(**profile) if profile is not None else None
 
     def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
         """Attach a replayable role-effort snapshot when the operator opted in.
@@ -9695,13 +9809,14 @@ class TaskOrchestrator:
         on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
         the constructor catalog to keep today's payload.
         """
-        if self.role_effort_catalog is None:
+        result["policy_snapshot"] = self.policy.as_dict()
+        snapshot = self._effort_snapshot()
+        if snapshot is None:
             return result
-        snapshot = snapshot_role_effort_catalog(self.role_effort_catalog)
         result["reasoning_effort_snapshot"] = {
             "profile_version": snapshot.profile_version,
             "snapshot_hash": snapshot.snapshot_hash,
-            "role_profiles": snapshot.role_profiles,
+            "role_profiles": copy.deepcopy(snapshot.role_profiles),
         }
         return result
 
@@ -10006,24 +10121,74 @@ class TaskOrchestrator:
             or not self._psychometric_router.has_observations()
         ):
             return candidates
+        by_evidence_id = dict(zip(
+            self._psychometric_candidate_ids(candidates), candidates, strict=True
+        ))
         evidence = self._psychometric_router.ranked_evidence(
-            [candidate.id for candidate in candidates],
+            by_evidence_id,
             prompt_context,
             self._embed_cached(prompt_context),
         )
         if not evidence:
             return candidates
-        by_id = {candidate.id: candidate for candidate in candidates}
-        evidenced_ids = [agent_id for agent_id, _score in evidence]
-        return [by_id[agent_id] for agent_id in evidenced_ids] + [
-            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        evidenced_ids = [evidence_id for evidence_id, _score in evidence]
+        evidenced_agent_ids = {by_evidence_id[evidence_id].id for evidence_id in evidenced_ids}
+        return [by_evidence_id[evidence_id] for evidence_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
+
+    def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
+        """Bind observed quality to a deployment and its decode policy."""
+        return self._psychometric_candidate_ids((agent,))[0]
+
+    def _psychometric_candidate_ids(self, agents: Iterable[ModelAgent]) -> list[str]:
+        """Preserve ordered candidates under one validated effort revision."""
+        agents = list(agents)
+        if not agents:
+            return []
+        snapshot = self._effort_snapshot()
+        catalog_hash = snapshot.snapshot_hash if snapshot is not None else None
+        identities = []
+        for agent in agents:
+            configuration = json.dumps(
+                {"agent": agent.to_config(), "role_effort_catalog": catalog_hash},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
+            identities.append(f"{agent.id}:{revision}")
+        return identities
+
+    def _selection_design_receipt(
+        self,
+        candidates: Iterable[ModelAgent],
+        attempted: Iterable[ModelAgent],
+        selected: ModelAgent,
+    ) -> dict[str, Any]:
+        """Describe deterministic assignment without fabricating a propensity."""
+        policy = json.dumps(
+            self.policy.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        candidates = list(candidates)
+        attempted = list(attempted)
+        identities = self._psychometric_candidate_ids([*candidates, *attempted, selected])
+        return {
+            "assignment_mechanism": "deterministic_ranked",
+            "propensity_status": "not_identified",
+            "selected_probability": None,
+            "policy_snapshot_hash": hashlib.sha256(policy).hexdigest(),
+            "candidate_deployment_ids": identities[:len(candidates)],
+            "attempted_deployment_ids": identities[len(candidates):-1],
+            "selected_deployment_id": identities[-1],
+        }
 
     def _observe_contextual_quality(
         self,
         prompt_context: str,
         served_id: str,
         *,
+        served_deployment_id: str | None = None,
         accepted: bool,
         latency_seconds: float | None,
         output_tokens: int | None,
@@ -10031,29 +10196,26 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
-        self._psychometric_router.observe(
-            prompt_context,
-            served_id,
-            accepted,
-            self._embed_cached(prompt_context),
-            irt_row,
-        )
-        if self._store is not None:
-            context_id = self._psychometric_router.context_id(prompt_context)
-            record = next(
-                item
-                for item in self._psychometric_router.records()
-                if item["context_id"] == context_id and item["agent_id"] == served_id
+        with self._psychometric_persistence_lock:
+            candidate_id = served_deployment_id or self._psychometric_candidate_id(self._agent(served_id))
+            if candidate_id not in self._psychometric_candidate_ids(self.candidates):
+                return
+            self._psychometric_router.observe(
+                prompt_context, candidate_id, accepted,
+                self._embed_cached(prompt_context), irt_row,
             )
-            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
-            self._store.save("psychometric_observation", key, record)
-            retained = {
-                hashlib.sha256(
-                    f"{item['context_id']}\0{item['agent_id']}".encode()
-                ).hexdigest()
-                for item in self._psychometric_router.records()
-            }
-            self._store.prune_keyed("psychometric_observation", retained)
+            if self._store is not None:
+                context_id = self._psychometric_router.context_id(prompt_context)
+                records = self._psychometric_router.records()
+                record = next(item for item in records
+                              if item["context_id"] == context_id and item["agent_id"] == candidate_id)
+                key = hashlib.sha256(f"{context_id}\0{candidate_id}".encode()).hexdigest()
+                self._store.save("psychometric_observation", key, record)
+                retained = {
+                    hashlib.sha256(f"{item['context_id']}\0{item['agent_id']}".encode()).hexdigest()
+                    for item in records
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     # --- dual-ledger membership maintenance ---------------------------------
 
@@ -10075,6 +10237,20 @@ class TaskOrchestrator:
         """Forget members that left the pool in every ledger."""
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
+        self._retain_psychometric_candidates()
+
+    def _retain_psychometric_candidates(self) -> None:
+        """Discard observations for deployments no longer in the pool."""
+        with self._psychometric_persistence_lock:
+            self._psychometric_router.retain_agents(
+                self._psychometric_candidate_ids(self.candidates)
+            )
+            if self._store is not None:
+                retained = {
+                    hashlib.sha256(f"{item['context_id']}\0{item['agent_id']}".encode()).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
@@ -10774,6 +10950,7 @@ class TaskOrchestrator:
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
         prompt_token_lower_bound: int | None = None,
+        selection_design_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -10824,6 +11001,7 @@ class TaskOrchestrator:
             ]
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        attempted: list[ModelAgent] = []
         race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
@@ -10922,7 +11100,13 @@ class TaskOrchestrator:
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
                 )
+                if selection_design_sink is not None:
+                    selection_design_sink(self._selection_design_receipt(
+                        candidates, race_members,
+                        next(member for member in race_members if member.id == outcome.winner_endpoint_id),
+                    ))
                 return output, served_id, served_model, usage
+            attempted.extend(race_members)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
         last_provider_response_error: ProviderResponseError | None = None
@@ -10932,6 +11116,7 @@ class TaskOrchestrator:
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
+            attempted.append(agent)
             retry_attempt = 0
             while True:
                 try:
@@ -11015,7 +11200,27 @@ class TaskOrchestrator:
                         # never be accidentally downgraded to fail-closed by
                         # incidental wording in an upstream error body (e.g. a
                         # 400 that happens to mention "invalid arguments").
-                        decision = classify_provider_transport_failure(exc.retryable)
+                        if exc.provider_status == 429:
+                            active_cooldown = (
+                                self._rate_limit_remaining(agent.id) is not None
+                            )
+                            decision = ToolFailureDecision(
+                                kind=ToolFailureKind.RATE_LIMITED,
+                                action=(
+                                    ToolFallbackAction.FAILOVER_AGENT
+                                    if active_cooldown
+                                    else ToolFallbackAction.RETRY_SAME_AGENT
+                                ),
+                                reason_code=(
+                                    "tool_failure.rate_limited.failover_agent"
+                                    if active_cooldown
+                                    else "tool_failure.rate_limited.retry_same_agent"
+                                ),
+                                retry_safe=not active_cooldown,
+                                circuit_failure=False,
+                            )
+                        else:
+                            decision = classify_provider_transport_failure(exc.retryable)
                     elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             raise
@@ -11086,6 +11291,8 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
+                if selection_design_sink is not None:
+                    selection_design_sink(self._selection_design_receipt(candidates, attempted, agent))
                 return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None
@@ -11516,19 +11723,19 @@ class TaskOrchestrator:
         if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
 
-    #: Statuses for which an absent Retry-After/x-ratelimit-reset* still
-    #: records an assumed cooldown. Deliberately 429 only: 503 ("service
+    #: Statuses for which an absent Retry-After/x-ratelimit-reset* records
+    #: unavailable timing evidence. Deliberately 429 only: 503 ("service
     #: unavailable") is a genuine, possibly permanent availability signal
     #: with no inherent quota-recovery semantics, so an unheadered 503
     #: keeps requiring an explicit provider-stated duration to be treated as
     #: cooling at all -- unlike 429, which is unambiguously quota exhaustion
     #: even when the provider forgot to say for how long.
-    _ASSUMABLE_RATE_LIMIT_STATUSES = frozenset({429})
+    _INDETERMINATE_RATE_LIMIT_STATUSES = frozenset({429})
 
     def _record_rate_limit(
         self, agent_id: str, retry_after_seconds: float | None, *, status: int = 429
     ) -> None:
-        """Record one 429/503 quota cooldown, provider-stated or assumed.
+        """Record one 429/503 quota cooldown without inventing retry timing.
 
         ``retry_after_seconds is None`` means the provider's response carried
         no ``Retry-After``/``x-ratelimit-reset*`` at all (RFC 9110 10.2.3
@@ -11537,37 +11744,36 @@ class TaskOrchestrator:
         was the original defect: a candidate whose 429 omitted the header was
         never marked cooling, so an all-omitted-header storm looked identical
         to "nothing is rate-limited" and failed exactly as if this whole
-        feature were absent. An unknown duration on a 429 (``status``'s
-        default) therefore records ``self.rate_limit_unknown_cooldown_seconds``
-        (an assumed cooldown, tracked in ``_rate_limit_assumed``) instead of
-        skipping the record. An unknown duration on any other status (pass
-        the real one explicitly) records nothing, preserving that status's
-        existing exhaustion behavior -- see
-        :data:`_ASSUMABLE_RATE_LIMIT_STATUSES`.
+        feature were absent. An unknown duration on a 429 records an
+        unavailable retry instant instead of guessing one. An unknown
+        duration on any other status records nothing, preserving that
+        status's existing exhaustion behavior.
 
-        Cooldowns only ever extend forward: a second, larger cooldown for the
-        same agent before the first expires replaces it (and its source
-        label with it), but a smaller/stale one -- provider-stated or
-        assumed -- never shortens an in-flight cooldown or overwrites its
-        source label.
+        Finite provider deadlines only extend forward. Unknown timing replaces
+        a finite deadline because the latest response withdrew timing
+        authority; a later provider-declared duration replaces unavailable
+        timing because it restores that authority.
         """
-        assumed = retry_after_seconds is None
-        if assumed and status not in self._ASSUMABLE_RATE_LIMIT_STATUSES:
+        unavailable = retry_after_seconds is None
+        if unavailable and status not in self._INDETERMINATE_RATE_LIMIT_STATUSES:
             return
-        resolved_seconds = (
-            self.rate_limit_unknown_cooldown_seconds
-            if assumed
-            else max(float(retry_after_seconds), 0.0)
+        until = (
+            math.inf
+            if unavailable
+            else time.monotonic() + max(float(retry_after_seconds), 0.0)
         )
-        until = time.monotonic() + resolved_seconds
         with self._rate_limit_lock:
             current = self._rate_limit_until.get(agent_id)
-            if current is None or until > current:
+            if (
+                current is None
+                or agent_id in self._rate_limit_unavailable
+                or until > current
+            ):
                 self._rate_limit_until[agent_id] = until
-                if assumed:
-                    self._rate_limit_assumed.add(agent_id)
+                if unavailable:
+                    self._rate_limit_unavailable.add(agent_id)
                 else:
-                    self._rate_limit_assumed.discard(agent_id)
+                    self._rate_limit_unavailable.discard(agent_id)
 
     def _rate_limit_remaining(self, agent_id: str, *, now: float | None = None) -> float | None:
         """Return remaining cooldown seconds for ``agent_id``, or ``None`` when clear."""
@@ -11579,12 +11785,12 @@ class TaskOrchestrator:
             remaining = until - moment
             if remaining <= 0:
                 self._rate_limit_until.pop(agent_id, None)
-                self._rate_limit_assumed.discard(agent_id)
+                self._rate_limit_unavailable.discard(agent_id)
                 return None
             return remaining
 
     def _rate_limit_cooldown_source(self, agent_id: str) -> str:
-        """Return ``"assumed"`` when ``agent_id``'s active cooldown has no provider-stated duration, else ``"provider"``.
+        """Return whether active cooldown timing is provider-owned or unavailable.
 
         Meaningful only when the caller already knows ``agent_id`` is
         currently rate-limited (a non-``None`` :meth:`_rate_limit_remaining`);
@@ -11592,7 +11798,7 @@ class TaskOrchestrator:
         harmless default.
         """
         with self._rate_limit_lock:
-            return "assumed" if agent_id in self._rate_limit_assumed else "provider"
+            return "unavailable" if agent_id in self._rate_limit_unavailable else "provider"
 
     def _rate_limited_snapshot(self) -> dict[str, float]:
         """Return ``{agent_id: remaining_seconds}`` for every currently cooling-down agent."""
@@ -11692,8 +11898,9 @@ class TaskOrchestrator:
           already resolved via :meth:`_rate_limit_wait_budget`);
         * otherwise raises the honest
           :func:`contextual_orchestrator.provider_errors.rate_limited_storm_error`
-          (429, ``Retry-After``) instead of letting the caller fail as a
-          generic connection error or opaque exhaustion.
+          (429, with ``Retry-After`` only for provider-declared finite timing)
+          instead of letting the caller fail as a generic connection error or
+          opaque exhaustion.
         """
         if not virtual_selector:
             return False
@@ -11710,13 +11917,23 @@ class TaskOrchestrator:
         )
         earliest_ready = self._rate_limit_remaining(earliest_agent.id, now=now)
         remaining_budget = deadline - now
-        if earliest_ready is None or remaining_budget <= 0 or earliest_ready > remaining_budget:
+        cooldown_source = self._rate_limit_cooldown_source(earliest_agent.id)
+        if (
+            earliest_ready is None
+            or not math.isfinite(earliest_ready)
+            or remaining_budget <= 0
+            or earliest_ready > remaining_budget
+        ):
             raise rate_limited_storm_error(
                 agent_id=earliest_agent.id,
                 model=earliest_agent.model,
-                retry_after_seconds=earliest_ready if earliest_ready is not None else 0.0,
+                retry_after_seconds=(
+                    earliest_ready
+                    if earliest_ready is not None and math.isfinite(earliest_ready)
+                    else None
+                ),
                 transport=transport,
-                cooldown_source=self._rate_limit_cooldown_source(earliest_agent.id),
+                cooldown_source=cooldown_source,
             ) from None
         # Single bounded wait, never a busy-loop; caller re-runs selection
         # once the earliest candidate's cooldown has elapsed.
@@ -11735,6 +11952,7 @@ class TaskOrchestrator:
         excluded_agent_ids: set[str] | None = None,
         virtual_selector: bool,
         prompt_token_lower_bound: int | None = None,
+        selection_design_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call :meth:`_invoke`, waiting out a total rate-limit storm instead of failing.
 
@@ -11760,6 +11978,7 @@ class TaskOrchestrator:
         """
         wait_deadline: float | None = None
         while True:
+            cooling_at_round_start = set(self._rate_limited_snapshot())
             try:
                 return self._invoke(
                     primary,
@@ -11770,6 +11989,7 @@ class TaskOrchestrator:
                     eligibility_role=eligibility_role,
                     excluded_agent_ids=excluded_agent_ids,
                     prompt_token_lower_bound=prompt_token_lower_bound,
+                    selection_design_sink=selection_design_sink,
                 )
             except ProviderUpstreamError as exc:
                 if exc.provider_status not in (429, 503):
@@ -11792,10 +12012,36 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not virtual_selector or any(
-                    self._rate_limit_remaining(candidate.id) is None
+                ready = [
+                    candidate
                     for candidate in candidates
+                    if self._rate_limit_remaining(candidate.id) is None
+                ]
+                # A candidate skipped this round only because it was still
+                # cooling, and whose cooldown expired before this check, did
+                # not fail: re-run selection within the wait budget instead
+                # of reading it as a mixed failure. Assumed cooldowns recorded
+                # microseconds apart made this a race on wall-clock timing.
+                # _invoke only attempts a cooling candidate when every healthy
+                # candidate is cooling; one that then failed for another
+                # reason costs at most one more round, because it is no longer
+                # cooling at the next round start and re-raises below.
+                expired_unattempted = [
+                    candidate
+                    for candidate in ready
+                    if candidate.id in cooling_at_round_start
+                ]
+                if wait_deadline is None and expired_unattempted:
+                    wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
+                if (
+                    virtual_selector
+                    and ready
+                    and len(expired_unattempted) == len(ready)
+                    and wait_deadline is not None
+                    and time.monotonic() < wait_deadline
                 ):
+                    continue
+                if not virtual_selector or len(expired_unattempted) < len(ready):
                     # Not a genuine storm to wait out: either the caller
                     # pinned one explicit concrete model (fail fast,
                     # unchanged pre-existing contract -- see

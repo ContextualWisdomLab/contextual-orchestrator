@@ -214,6 +214,7 @@ class JobRegistryFactory:
         *,
         lease_seconds: float | None = None,
         renew_until_epoch: float | None = None,
+        renew_while: Callable[[], bool] | None = None,
     ):
         """Return an atomic shard claim with bounded lease and acquisition wait."""
         lock_name = f"batch_job_registry:{name}:claim:{key}"
@@ -245,6 +246,9 @@ class JobRegistryFactory:
                     def renew_claim() -> None:
                         interval = _claim_renewal_interval_seconds(lease_seconds)
                         while not stop_renewal.wait(interval):
+                            if renew_while is not None and not renew_while():
+                                lease.mark_lost()
+                                return
                             remaining = renew_until_epoch - time.time()
                             if remaining <= 0:
                                 lease.mark_lost()

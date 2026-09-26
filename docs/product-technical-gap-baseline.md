@@ -1,5 +1,37 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-26 protected-main test-signal recovery — Proposed
+
+Canonical owner PR [#1266](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1266)
+recovers the runtime and test authority lost by earlier restack merges. Its exact
+CI-equivalent baseline exposed 153 failures plus one collection error on
+protected `main@5665b0ad`; the first owner repair removes 77 OpenRouter
+availability/answer-quality violations and restores collection so remaining
+failures are visible rather than hidden.
+
+The existing RED
+`test_unbounded_synchronous_embedding_waits_for_provider_completion` proves
+that the application default `timeout=None` reached
+`ProviderEmbeddingBatchBackend.wait`, where `math.isfinite(None)` raised
+`TypeError` instead of waiting for provider completion. GREEN
+`343bf7f82fd4f483ca829295c735b4e75017e31c` accepts `None` and non-finite
+numeric deadlines as the same explicit unbounded contract; documentation
+successor `ea1ac223bd8eb8c137c490ef7871734a27558a69` records that boundary.
+This is source evidence only until fresh exact-head hosted tests execute.
+
+Hosted RED run [36147466940](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36147466940)
+selected the repository's pinned Rust 1.97.1 directory override, whose
+`profile = "minimal"` omitted `rustfmt` and `clippy`; the Rust gate therefore
+failed before formatting or linting. GREEN source
+`6e70a196d715fd3c9ba9b89bc8698f252ead04e5` declares both components in
+`rust-toolchain.toml`. This is configuration evidence only until its fresh
+exact-head hosted Rust gate completes.
+
+Status remains **Proposed**. Missing #1074 production carryover, typed EgressWeave
+allowlist errors, ADR/citation inventory repairs, and replacement of the
+unhashable fast-mlsirm VCS dependency remain separate causal gates. Protected
+integration, immutable release, and consumer pins have not occurred.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
@@ -1949,6 +1981,29 @@ suite passed 3704/3705 (1 skipped) with only that same SDK-pin failure and
 the separately known local-only `mcp.Client` privacy test failure, neither
 touched by this change. `python -m interrogate -v contextual_orchestrator/`
 reported 100% docstring coverage.
+
+### 2026-09-27 correction: headerless 429 admission fails closed
+
+The assumed five-second cooldown described above is superseded. RFC 9110
+section 10.2.3 makes `Retry-After` optional; absence of that field and the
+recognized provider reset headers provides no authority for a retry time.
+`TaskOrchestrator` therefore records a headerless 429 as unavailable with no
+deadline, tries any other eligible candidate, and returns typed 429 with
+`cooldown_source: "unavailable"`, no `Retry-After`, and `retryable: false`
+when every candidate has unknown timing. The former constructor/CLI setting
+was removed. Provider readiness emits JSON `null` for the absent duration and
+never serializes `Infinity`; a later unknown-duration observation also
+invalidates an older finite provider deadline, while newer provider timing
+restores one. The owner-boundary RED test is
+commit `887e2f07390b1a8f7697578f91e92c2a34dfca3a`; final exact-head GREEN
+evidence and hosted-gate state are recorded on PR #1249.
+
+The later `Retry-After: 0` regression at `cb058737` initially failed before
+reaching that boundary because its `FREE_MODEL` fixture omitted the required
+`cost:free` eligibility declaration. The fixture now declares the production
+admission fact explicitly; the focused route, rate-limit, workflow-security,
+and wheel-build contracts pass together. This is test-evidence repair only and
+does not broaden free-pool eligibility or change production routing.
 
 ## 2026-09-14 rate-limit-aware admission: explicit-vs-virtual selector, not candidate count
 
@@ -7159,3 +7214,29 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+## 2026-09-27 PR #1249: durable provider-embedding shutdown claim fence
+
+Observation time: 2026-09-27 Asia/Seoul. Status: **Proposed** until exact-head
+hosted checks and independent approval complete.
+
+- **Gap:** `ProviderEmbeddingBatchBackend.close()` woke local waiters but the
+  durable execution lease kept renewing while an in-flight provider runner
+  remained blocked. A replacement worker therefore could not reclaim the job,
+  and a result returning immediately after close could still be published by
+  the closing worker.
+- **RED:** `a406675cc13e879dabdf81a150fd97536f74b944` proves renewal continues
+  after close; `2bd7b70387c62a16b15e9b0bca7f613c2d69739c` proves the
+  pre-renewal race can publish a late result.
+- **Action:** `e6707f72421860817114d13ade7c6daa0c8b9e6b` makes durable claim
+  renewal observe backend liveness; `a89f269a5633e9c60dbbcd3336234634e0bc9524`
+  marks the claim lost before any post-close provider result can publish.
+- **Evidence:** the exact-source batch-registry harness passes 23 tests,
+  including both shutdown races. This is focused evidence, not a full-suite
+  or hosted-GREEN claim.
+- **Exception-path correction:** RED
+  `c93fc2e1fb0229aaf7e5de0aaae6216bdca98bf5` proves that a provider failure
+  returning immediately after `close()` could still publish `failed` before
+  the renewal thread observed shutdown. GREEN
+  `709d4ca655c71f7671a7d700e46477b9f800a36c` applies the same ownership fence
+  before failure publication. The exact-source registry suite passes 24 tests;
+  hosted checks and independent approval remain the delivery gates.

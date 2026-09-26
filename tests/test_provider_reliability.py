@@ -966,6 +966,35 @@ def test_passthrough_allowlist_failure_reports_passthrough_transport() -> None:
     assert excinfo.value.transport == "passthrough"
 
 
+@pytest.mark.parametrize(
+    ("surface", "transport"),
+    [("embedding", "embedding"), ("stream", "stream"), ("batch", "batch"),
+     ("passthrough_get", "passthrough")],
+)
+def test_allowlist_failure_preserves_callers_transport(surface: str, transport: str) -> None:
+    client = ModelClient(allowed_provider_hosts={"ok.example"})
+    agent = ModelAgent(
+        "blocked_agent", "blocked-model", base_url="https://blocked.example/v1",
+        credential_key="MODEL_KEY",
+    )
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    try:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            if surface == "embedding":
+                client.embed_with_usage(agent, ["hello"])
+            elif surface == "stream":
+                next(client.stream_chat(agent, [{"role": "user", "content": "hello"}]))
+            elif surface == "batch":
+                client.batch_chat(agent, {"request-1": [{"role": "user", "content": "hello"}]})
+            else:
+                client.proxy_get_json(agent, "files/example", max_response_bytes=1024)
+    finally:
+        set_backend(None)
+    assert caught.value.transport == transport
+
+
 def test_free_model_advances_past_unallowlisted_provider_host() -> None:
     """A host-allowlist miss must skip to the next free candidate, not 500."""
     calls: list[str] = []
