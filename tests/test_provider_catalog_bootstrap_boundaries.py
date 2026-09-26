@@ -266,14 +266,14 @@ def _make_memory_store() -> Any:
     return InMemoryProviderCatalogStore()
 
 
-def test_runtime_raises_when_selection_returns_empty_for_nonchat_rows() -> None:
-    """A catalog store serving only guard-class rows must fail closed."""
+def test_runtime_rejects_nonchat_only_discovery_before_selection() -> None:
+    """A guard-only catalog cannot retain a serving credential."""
     openai = _source("openai", "OPENAI_API_KEY")
     guard_only = _StubCatalogStore([_model(openai, "llama-guard-3-8b")])
     set_backend(InMemoryCredentialBackend())
     try:
         with pytest.raises(
-            ProviderBootstrapError, match="selected no persisted chat-compatible"
+            ProviderBootstrapError, match="has no persisted chat-compatible"
         ):
             bootstrap_provider_catalog_runtime(
                 environ=_environment(),
@@ -282,7 +282,28 @@ def test_runtime_raises_when_selection_returns_empty_for_nonchat_rows() -> None:
                 discovery=lambda _sources: ([_model(openai, "llama-guard-3-8b")], []),
                 model_limit=4,
             )
-        # Rollback removed the registered secret after the failed selection.
+        # Rollback removed the key before the guard-only row could be selected.
+        assert get_credential("OPENAI_API_KEY") is None
+    finally:
+        set_backend(None)
+
+
+def test_runtime_raises_when_selection_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail closed if selection unexpectedly returns no eligible model."""
+    openai = _source("openai", "OPENAI_API_KEY")
+    monkeypatch.setattr(pcb, "select_model_group_diverse_models", lambda *_args, **_kwargs: ())
+    set_backend(InMemoryCredentialBackend())
+    try:
+        with pytest.raises(
+            ProviderBootstrapError, match="selected no persisted chat-compatible"
+        ):
+            bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=_make_memory_store(),
+                sources=(openai,),
+                discovery=lambda _sources: ([_model(openai, "gpt-live")], []),
+                model_limit=4,
+            )
         assert get_credential("OPENAI_API_KEY") is None
     finally:
         set_backend(None)
