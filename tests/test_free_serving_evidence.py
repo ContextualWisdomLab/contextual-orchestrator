@@ -225,6 +225,38 @@ def test_model_client_records_evidence_from_every_completed_call(monkeypatch) ->
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
+def test_unnamed_configured_agent_keeps_paid_evidence_on_its_stable_identity(monkeypatch) -> None:
+    """A paid response must demote a valid configured agent with no provider label."""
+    agent = ModelAgent(
+        id="unnamed_free_agent",
+        model="catalog-free-model",
+        base_url="https://example.invalid/v1",
+        tags=("chat", "cost:free"),
+    )
+    FREE_SERVING_LEDGER.reset()
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is True
+
+    client = ModelClient()
+    monkeypatch.setattr(
+        client,
+        "_open_model_provider",
+        lambda *_args, **_kwargs: _FakeResponse(
+            {
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {"cost": 0.003, "is_byok": False},
+            }
+        ),
+    )
+    payload = {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]}
+
+    assert client._send(agent, payload) == "OK"
+    assert (
+        FREE_SERVING_LEDGER.verdict("configured_agent:unnamed_free_agent", agent.model)
+        is CostVerdict.PAID
+    )
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
+
+
 # --- Promotions nomination, persistent demotion, idempotency ----------------
 
 _UTC_2026_09_26_1000 = 1790416800.0  # 2026-09-26T10:00:00Z (19:00 KST)
