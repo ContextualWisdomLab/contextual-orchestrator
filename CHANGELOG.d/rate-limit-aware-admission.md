@@ -23,16 +23,15 @@ a `502` connection failure. `provider_readiness_report`
 instead of exiting.
 
 A 429 that states no cooldown at all (RFC 9110 permits omitting
-`Retry-After`/`x-ratelimit-reset*`, and NIM/OpenRouter routinely do) now
-records an assumed cooldown -- the new `rate_limit_unknown_cooldown_seconds`
-default (5s) -- instead of nothing, so an all-omitted-header storm can no
-longer look identical to "nothing is rate-limited" and fail as if this
-feature did not exist; every cooldown surface labels itself
-`cooldown_source: "provider"` or `"assumed"` accordingly, and a provider-stated
-cooldown is never shortened or relabeled by a later assumed one. This
-assumption applies to 429 only (a 503 with no header keeps requiring a real
-provider-stated duration) -- scoped narrowly after concrete pre-existing-test
-regression evidence, not by design intent alone.
+`Retry-After`) is recorded as unavailable without inventing a deadline.
+An all-omitted-header storm therefore returns the typed
+`provider_rate_limited` 429 with `cooldown_source: "unavailable"`, no
+`Retry-After`, and `retryable: false`; other eligible candidates are still
+tried. Provider-declared finite timing remains labeled `"provider"` and can
+authorize bounded waiting. Readiness renders unavailable timing as JSON
+`null`, not non-standard `Infinity`. The former 5-second assumed cooldown and
+its constructor/CLI option were removed because neither RFC 9110 nor provider
+evidence authorizes that retry decision.
 
 The wait admission decision no longer turns on candidate count. An earlier
 version of this guard returned immediately whenever fewer than two

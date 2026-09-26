@@ -128,13 +128,12 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   a per-agent quota cooldown from `Retry-After` (or a numeric
   `x-ratelimit-reset*` fallback) separately from the health circuit breaker --
   a 429 is quota exhaustion, not a model health failure, and does not trip it.
-  A 429 with neither header (RFC 9110 permits omitting it; NIM/OpenRouter
-  routinely do) records an *assumed* cooldown -- the administrator-owned
-  `rate_limit_unknown_cooldown_seconds` default -- instead of nothing, tagged
-  `cooldown_source: "assumed"` (vs `"provider"`) everywhere a cooldown is
-  surfaced; a 503 with neither header keeps requiring a real provider-stated
-  duration, since it is a possibly-permanent availability signal without a
-  429's inherent quota-recovery semantics. `TaskOrchestrator._failover_candidates`
+  A 429 with neither header (RFC 9110 permits omitting it) is recorded as
+  unavailable without a synthetic retry deadline, tagged
+  `cooldown_source: "unavailable"`. An all-unavailable storm fails closed with
+  typed 429, no `Retry-After`, and `retryable: false`; readiness represents
+  the absent duration as JSON `null`. A 503 with neither header still requires
+  a provider-stated duration. `TaskOrchestrator._failover_candidates`
   skips a currently cooled-down candidate for every caller by default, falling
   back to the full list only when every candidate is limited. The
   wait-then-retry/honest-429 decision is one shared method,

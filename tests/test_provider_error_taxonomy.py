@@ -43,10 +43,14 @@ from contextual_orchestrator.provider_errors import (  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
-def _http_error(code: int, body: bytes | None = None) -> urllib.error.HTTPError:
+def _http_error(
+    code: int,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> urllib.error.HTTPError:
     payload = io.BytesIO(body) if body is not None else None
     return urllib.error.HTTPError(
-        "https://provider.example/chat/completions", code, "error", None, payload
+        "https://provider.example/chat/completions", code, "error", headers, payload
     )
 
 
@@ -488,11 +492,9 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     The fake client raises exactly what ``ModelClient._send_with_retry`` now
     produces -- a classified ``ProviderUpstreamError`` -- so this exercises the
     real boundary contract between the transport layer and agent failover.
-    Time is simulated: each provider call costs ``call_seconds`` and the
-    rate-limit sleep advances the clock. With real time, calls that take any
-    time made the two assumed cooldowns expire at different instants; the
-    candidate skipped while still cooling became ready before the storm check
-    and was read as a mixed failure, surfacing the raw 429 early.
+    Time is simulated so provider-call duration cannot make the result depend
+    on wall-clock scheduling. Missing provider timing must fail closed without
+    a sleep or a fabricated retry instant.
     """
     now = [1000.0]
     slept: list[float] = []
@@ -527,10 +529,11 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     exc = excinfo.value
     assert exc.error_code == PROVIDER_RATE_LIMITED_CODE
     assert exc.client_status == 429
-    assert exc.retryable is True
-    assert exc.extra_detail["cooldown_source"] == "assumed"
+    assert exc.retryable is False
+    assert exc.extra_detail["cooldown_source"] == "unavailable"
+    assert "retry_after_seconds" not in exc.extra_detail
     assert exc.agent_id in {"primary_worker", "backup_worker"}
-    assert slept and sum(slept) <= orchestrator.rate_limit_wait_seconds
+    assert slept == []
 
 
 def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
@@ -568,7 +571,7 @@ def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
 def test_invoke_serves_candidate_whose_cooldown_expired_while_skipped(monkeypatch) -> None:
     """A candidate skipped while cooling is retried once ready, not read as a mixed failure.
 
-    Round one: both candidates reject with an assumed-cooldown 429, recorded
+    Round one: both candidates reject with a provider-declared cooldown, recorded
     ``call_seconds`` apart. After the storm wait only the earlier one is ready;
     it rejects again while the other's cooldown lapses. That lapsed candidate
     never failed in this round, so selection must re-run and serve it instead
@@ -585,7 +588,7 @@ def test_invoke_serves_candidate_whose_cooldown_expired_while_skipped(monkeypatc
             calls.append(agent.id)
             if calls.count(agent.id) > 1 and agent.id == calls[1]:
                 return "served after cooldown"
-            with _http_error(429) as response_error:
+            with _http_error(429, headers={"x-ratelimit-reset": "0.02"}) as response_error:
                 raise classify_provider_failure(
                     response_error, agent_id=agent.id, model=agent.model
                 )
