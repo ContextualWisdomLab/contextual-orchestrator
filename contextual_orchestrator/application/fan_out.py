@@ -105,7 +105,7 @@ def collect_candidates(
     complete: CompletionPort,
     *,
     max_concurrency: int,
-    deadline_seconds: float,
+    deadline_seconds: float | None = None,
 ) -> FanOutResult:
     """Ask every worker the same question in parallel.
 
@@ -117,9 +117,12 @@ def collect_candidates(
         complete: The completion port.
         max_concurrency: Upper bound on simultaneous calls. Declared by the
             caller; there is no default.
-        deadline_seconds: Wall-clock budget for the whole fan-out. Workers
-            still running at the deadline are recorded as
-            ``deadline_exceeded``; their threads are not awaited.
+        deadline_seconds: Optional explicit administrative wall-clock budget
+            for the whole fan-out. ``None`` leaves completion to the upstream
+            provider and is the default. Workers still running at a finite
+            deadline are recorded as ``deadline_exceeded``; their threads are
+            not awaited and the completion port remains responsible for
+            cancelling upstream work.
 
     Returns:
         The collected candidates and failures.
@@ -132,7 +135,11 @@ def collect_candidates(
     if not messages:
         raise ValueError("fan-out needs at least one message")
     concurrency = _require_positive_int(max_concurrency, "max_concurrency")
-    deadline = _require_positive_seconds(deadline_seconds, "deadline_seconds")
+    deadline = (
+        None
+        if deadline_seconds is None
+        else _require_positive_seconds(deadline_seconds, "deadline_seconds")
+    )
 
     executor = ThreadPoolExecutor(
         max_workers=min(concurrency, len(ids)), thread_name_prefix="fan_out"
@@ -226,7 +233,7 @@ def mixture_of_agents(
     complete: CompletionPort,
     *,
     max_concurrency: int,
-    deadline_seconds: float,
+    deadline_seconds: float | None = None,
 ) -> MixtureOfAgentsResult:
     """Run proposers in parallel, then have the aggregator synthesize.
 
@@ -234,7 +241,9 @@ def mixture_of_agents(
     arrived. If no proposer answered, the aggregator is not called and
     ``answer`` is ``None`` (fail-closed: no single-model fallback is
     substituted silently; the caller decides). The aggregator call is not
-    bounded by ``deadline_seconds``; bound it inside the port.
+    bounded by ``deadline_seconds``; the completion port owns any explicit
+    administrative bound for that call. The proposer layer defaults to no
+    elapsed-time cutoff when ``deadline_seconds`` is ``None``.
     """
     if not isinstance(aggregator_id, str) or not aggregator_id.strip():
         raise ValueError("aggregator_id must be a nonempty string")

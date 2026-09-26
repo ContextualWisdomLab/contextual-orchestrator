@@ -22,8 +22,8 @@ Implemented strategies and their sources:
   times; here the voters are different workers, which the paper treats as a
   model ensemble. The agreement share is reported as ``support``, because the
   paper finds that consistency correlates with accuracy (Section 3.5). The
-  ``min_support`` abstention threshold and the rank tie-break are this
-  repository's design choices, not the paper's.
+  Tied maximum counts abstain because the cited rule supplies no secondary
+  authority for choosing one tied answer.
 - ``ScoredBestOfN``: best-of-n selection by an external scorer, such as the
   fast-mlsirm judge. The scorer is a port; this module does not choose one.
 """
@@ -101,9 +101,6 @@ class PluralityVote:
             Unextractable candidates still count in the ``support``
             denominator, so a vote among few parseable answers is not
             reported as unanimous.
-        min_support: Required share of *all* candidates that must back the
-            winning key, in ``(0, 1]``. Below it the strategy abstains. There
-            is no default: the threshold is a declared policy value.
     """
 
     name = "plurality_vote"
@@ -111,20 +108,11 @@ class PluralityVote:
     def __init__(
         self,
         answer_key: Callable[[str], str | None],
-        *,
-        min_support: float,
     ) -> None:
-        """Validate the extractor and the declared support threshold."""
+        """Validate and store the answer extractor."""
         if not callable(answer_key):
             raise TypeError("answer_key must be callable")
-        if (
-            type(min_support) not in (int, float)
-            or not math.isfinite(min_support)
-            or not 0 < min_support <= 1
-        ):
-            raise ValueError("min_support must be a number in (0, 1]")
         self._answer_key = answer_key
-        self._min_support = float(min_support)
 
     def combine(self, candidates: CandidateSet) -> CombinationOutcome:
         """Vote over extracted keys; break count ties by best supporter rank."""
@@ -147,22 +135,21 @@ class PluralityVote:
                 support=0.0,
                 evidence=evidence,
             )
-        # Members were appended in rank order, so group[0] is the best-ranked
-        # supporter of each key.
-        winning_key = min(
-            supporters,
-            key=lambda item: (-len(supporters[item]), supporters[item][0].rank),
-        )
-        winners = supporters[winning_key]
-        support = len(winners) / len(candidates)
-        if support < self._min_support:
+        maximum_count = max(len(group) for group in supporters.values())
+        winning_keys = [
+            key for key, group in supporters.items() if len(group) == maximum_count
+        ]
+        support = maximum_count / len(candidates)
+        if len(winning_keys) != 1:
             return CombinationOutcome(
                 strategy=self.name,
                 selected=None,
-                reason="insufficient_agreement",
+                reason="plurality_tie",
                 support=support,
                 evidence=evidence,
             )
+        winning_key = winning_keys[0]
+        winners = supporters[winning_key]
         return CombinationOutcome(
             strategy=self.name,
             selected=winners[0],
@@ -191,7 +178,7 @@ class ScoredBestOfN:
         self._scorer = scorer
 
     def combine(self, candidates: CandidateSet) -> CombinationOutcome:
-        """Score nonempty candidates and pick the maximum, ties by rank."""
+        """Score candidates and select a unique maximum, abstaining on ties."""
         scored: list[tuple[CandidateAnswer, float]] = []
         evidence: list[tuple[str, float | None]] = []
         for member in candidates.candidates:
@@ -208,10 +195,18 @@ class ScoredBestOfN:
                 reason="no_scored_candidate",
                 evidence=tuple(evidence),
             )
-        best, _score = min(scored, key=lambda pair: (-pair[1], pair[0].rank))
+        maximum_score = max(score for _candidate, score in scored)
+        best = [candidate for candidate, score in scored if score == maximum_score]
+        if len(best) != 1:
+            return CombinationOutcome(
+                strategy=self.name,
+                selected=None,
+                reason="score_tie",
+                evidence=tuple(evidence),
+            )
         return CombinationOutcome(
             strategy=self.name,
-            selected=best,
+            selected=best[0],
             reason="highest_score",
             evidence=tuple(evidence),
         )
