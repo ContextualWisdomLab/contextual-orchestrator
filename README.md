@@ -92,7 +92,7 @@ This does not require administrator readiness access or provider credentials.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
 
-Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](docs/kv-credentials.md)):
+Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/kv-credentials.md)):
 
 ```json
 {
@@ -124,7 +124,7 @@ For a local `mlx-lm` OpenAI-compatible server, use the explicit `mlx://` scheme.
 }
 ```
 
-The full local candidate registry is [examples/agents.local.json](examples/agents.local.json).
+The full local candidate registry is [examples/agents.local.json](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/examples/agents.local.json).
 It contains the public `contextual-orchestrator` candidate, discovered MLX
 worker models, and every discovered llama.cpp/LM Studio candidate. Discovery
 does not decide governance state: seed candidates are enabled by default, while
@@ -136,10 +136,10 @@ explicit; runtime discovery does not silently change the pool.
 
 Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests (`1..64`; the current measured starting point for this server is `8`); when serving HTTP, set `--max-concurrent-runs N` explicitly as well if the measured batch concurrency exceeds the secure default of `8`. Keep interactive route/conduct requests on the default sequential path.
 
-Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](docs/planning/adrs/0001-fail-closed-model-judgment.md).
+Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/planning/adrs/0001-fail-closed-model-judgment.md).
 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
-Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez, and an allowlisted OpenAI-compatible gateway) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. Bytez discovery queries only the documented `chat` and `text-generation` task catalogs, in that order; an empty or failed refresh is not accepted as a healthy zero-model catalog, and an existing last-known-good catalog remains available. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
+Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez, and an allowlisted OpenAI-compatible gateway) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. Bytez discovery queries only the documented `chat` and `text-generation` task catalogs, in that order; an empty or failed refresh is not accepted as a healthy zero-model catalog, and an existing last-known-good catalog remains available. See [docs/kv-credentials.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
 
 Seed the credential into the KV once at bootstrap:
 
@@ -171,31 +171,31 @@ One public interface:
 - `/api/v1/provider_readiness/latest` reports provider liveness separately from an explicit chat readiness probe; `?refresh=true` re-probes instead of returning the cached result.
 - `/api/v1/analytics_snapshots/latest` returns source-backed local KPI definitions (trace completeness, policy-safe run rate, successful chat requests, and related event-derived counts) from in-memory runtime state, localized via the same locale bundles as the admin console.
 - `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Valid provider usage is authoritative; declared model IDs may use the packaged Rust tokenizer for exact raw textual output. Prompt framing, tools, multimodal input, unknown tokenizers, and missing native code remain unavailable. Cost is computed only when every required count and operator-supplied price is available. See [Observability & spend](#observability--spend).
-- `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
-- `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
-- `/api/v1/commercial_evidence_manifests/latest` shows the evidence gaps to resolve before commercial due diligence. The former `/api/v1/buyer_evidence_manifests/latest` route remains a deprecated compatibility alias.
-- `/api/v1/commercial_handoff_bundles/latest` shows the handoff evidence and remaining commercial follow-ups. The former `/api/v1/buyer_handoff_bundles/latest` route remains a deprecated compatibility alias.
-- `/api/v1/saleability_decisions/latest` exposes the final KRW 2,000,000,000 saleability decision gate with concrete blockers, warning conditions, and review-process non-blocker policy.
-- `/api/v1/commercial_evidence_exports/latest` exposes the portable commercial evidence export across saleability, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and external evidence gaps.
-- `/api/v1/commercial_acceptance_checks/latest` exposes the buyer acceptance check across evidence export, runtime endpoint chain, buyer packet, admin surface, verification, Figma, review-process policy, packaging decision, and external evidence gaps.
-- `/api/v1/commercial_buyer_acceptance_workflows/latest` exposes the buyer acceptance workflow across owner-scoped runbook steps, Go/Warning/No-Go rules, runtime evidence, Figma artifacts, analytics truthfulness, review-process policy, and packaging decision.
-- `/api/v1/commercial_release_candidates/latest` exposes the local commercial release-candidate manifest across acceptance, runtime endpoints, repository distribution packet, security metadata, admin surface, verification, Figma, review-process policy, packaging decision, and external release gaps.
-- `/api/v1/commercial_gap_registers/latest` exposes the commercial gap register that turns release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence.
-- `/api/v1/commercial_procurement_readiness/latest` exposes the commercial procurement readiness gate across license, rights, security metadata, distribution packet, admin evidence, production support/SLO input, buyer legal/ROI/procurement input, review-process policy, and packaging decision.
-- `/api/v1/commercial_contract_readiness/latest` exposes the commercial contract readiness gate across support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, buyer order-form inputs, review-process policy, and packaging decision.
-- `/api/v1/commercial_onboarding_readiness/latest` exposes the commercial onboarding readiness gate that turns production support/SLO and buyer-specific input warnings into paid-onboarding owners, actions, and exit criteria.
-- `/api/v1/commercial_operations_readiness/latest` exposes the commercial operations readiness gate that turns production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into operations handoff owners, actions, and exit criteria.
-- `/api/v1/commercial_security_attestations/latest` exposes the commercial security attestation gate that separates repo-local security evidence from external attestation, hosted scan, and buyer privacy/DPA gaps.
-- `/api/v1/commercial_value_readiness/latest` exposes the commercial value readiness gate that separates repo-local measured value evidence from buyer-specific ROI, reference proof, budget-owner, and payback-input gaps.
-- `/api/v1/commercial_close_readiness/latest` exposes the commercial close readiness gate that separates repo-local sellable product evidence from buyer signatures, DPA/security acceptance, budget/PO, and go-live authorization gaps.
-- `/api/v1/commercial_go_to_market_readiness/latest` exposes the commercial go-to-market readiness index that ties close, value, security, evidence export, buyer handoff, saleability, admin evidence, analytics truthfulness, Figma artifacts, review-process policy, and packaging decision into one buyer/stakeholder review packet.
-- `/api/v1/commercial_launch_readiness/latest` exposes the commercial launch readiness gate that packages GTM, runtime, acceptance, operator, admin, analytics, Figma, review-process, and packaging evidence while keeping buyer environment, production telemetry, and signature inputs as explicit warnings.
-- `/api/v1/commercial_completion_scorecards/latest` exposes the runtime commercial completion scorecard for the KRW 2,000,000,000 program-completion standard across Product Design, Figma, Superpowers, Ponytail, Data Analytics, runtime, verification, review-policy, packaging, and external follow-up evidence.
-- `/api/v1/commercial_demo_scenarios/latest` exposes the KRW 2,000,000,000 commercial demo scenarios packet across compatible API smoke, workflow trace, access-list evidence, evaluation replay, admin readiness, metric truthfulness, Figma review, buyer acceptance, review-process policy, and packaging decision.
-- `/api/v1/commercial_proposal_packets/latest` exposes the KRW 2,000,000,000 commercial proposal packet across completion, demo, acceptance, value, security, contract, onboarding, operations, analytics truthfulness, Figma review, review-process policy, packaging decision, and buyer-specific follow-ups.
-- `/api/v1/commercial_purchase_approval_packets/latest` exposes the KRW 2,000,000,000 commercial purchase approval packet across proposal, close, procurement, contract, value, security, onboarding, operations, analytics truthfulness, Figma review, review-process policy, packaging decision, and buyer signature/budget authority follow-ups.
-- `/api/v1/commercial_due_diligence_rooms/latest` exposes the KRW 2,000,000,000 commercial due diligence room across purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external missing artifacts.
-- `/api/v1/commercial_investment_committee_memos/latest` exposes the KRW 2,000,000,000 commercial investment committee memo across due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external approval conditions.
+- `/api/v1/sales_readiness/latest` returns a local enterprise-pilot readiness report covering API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
+- `/api/v1/commercial_readiness/latest` returns a commercial due-diligence readiness snapshot for the local runtime. It is process-local evidence, not a valuation guarantee or purchase commitment.
+- `/api/v1/commercial_evidence_manifests/latest` lists evidence gaps still open for commercial due diligence. The former `/api/v1/buyer_evidence_manifests/latest` route remains a deprecated compatibility alias.
+- `/api/v1/commercial_handoff_bundles/latest` returns handoff evidence and remaining commercial follow-ups. The former `/api/v1/buyer_handoff_bundles/latest` route remains a deprecated compatibility alias.
+- `/api/v1/saleability_decisions/latest` returns the saleability decision with concrete blockers, warning conditions, and review-process non-blocker policy.
+- `/api/v1/commercial_evidence_exports/latest` returns a portable commercial evidence export across saleability, runtime reports, diligence documents, Figma artifacts, verification commands, review-process policy, packaging decision, and external evidence gaps.
+- `/api/v1/commercial_acceptance_checks/latest` returns an acceptance check across evidence export, runtime endpoint chain, diligence packet, admin surface, verification, Figma, review-process policy, packaging decision, and external evidence gaps.
+- `/api/v1/commercial_buyer_acceptance_workflows/latest` returns the buyer acceptance workflow across owner-scoped runbook steps, Go/Warning/No-Go rules, runtime evidence, Figma artifacts, analytics truthfulness, review-process policy, and packaging decision.
+- `/api/v1/commercial_release_candidates/latest` returns the local commercial release-candidate manifest across acceptance, runtime endpoints, repository distribution packet, security metadata, admin surface, verification, Figma, review-process policy, packaging decision, and external release gaps.
+- `/api/v1/commercial_gap_registers/latest` returns the commercial gap register that turns release-candidate external gaps into owner, source, required-input, and status rows.
+- `/api/v1/commercial_procurement_readiness/latest` returns procurement readiness across license, rights, security metadata, distribution packet, admin evidence, production support/SLO input, legal/ROI/procurement input, review-process policy, and packaging decision.
+- `/api/v1/commercial_contract_readiness/latest` returns contract readiness across support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, order-form inputs, review-process policy, and packaging decision.
+- `/api/v1/commercial_onboarding_readiness/latest` returns onboarding readiness that turns production support/SLO and deployment-specific input warnings into owners, actions, and exit criteria.
+- `/api/v1/commercial_operations_readiness/latest` returns operations readiness that turns production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into handoff owners, actions, and exit criteria.
+- `/api/v1/commercial_security_attestations/latest` returns a security attestation that separates repo-local security evidence from external attestation, hosted scan, and privacy/DPA gaps.
+- `/api/v1/commercial_value_readiness/latest` returns value readiness that separates repo-local measured value evidence from ROI, reference proof, budget-owner, and payback-input gaps.
+- `/api/v1/commercial_close_readiness/latest` returns close readiness that separates repo-local sellable product evidence from signatures, DPA/security acceptance, budget/PO, and go-live authorization gaps.
+- `/api/v1/commercial_go_to_market_readiness/latest` returns a go-to-market readiness index that ties close, value, security, evidence export, handoff, saleability, admin evidence, analytics truthfulness, Figma artifacts, review-process policy, and packaging decision into one review packet.
+- `/api/v1/commercial_launch_readiness/latest` returns launch readiness that packages GTM, runtime, acceptance, operator, admin, analytics, Figma, review-process, and packaging evidence while keeping environment, production telemetry, and signature inputs as explicit warnings.
+- `/api/v1/commercial_completion_scorecards/latest` returns the runtime commercial completion scorecard across product design, Figma, analytics, runtime, verification, review-policy, packaging, and external follow-up evidence.
+- `/api/v1/commercial_demo_scenarios/latest` returns commercial demo scenarios across compatible API smoke, workflow trace, access-list evidence, evaluation replay, admin readiness, metric truthfulness, Figma review, acceptance, review-process policy, and packaging decision.
+- `/api/v1/commercial_proposal_packets/latest` returns the commercial proposal packet across completion, demo, acceptance, value, security, contract, onboarding, operations, analytics truthfulness, Figma review, review-process policy, packaging decision, and remaining follow-ups.
+- `/api/v1/commercial_purchase_approval_packets/latest` returns the commercial purchase approval packet across proposal, close, procurement, contract, value, security, onboarding, operations, analytics truthfulness, Figma review, review-process policy, packaging decision, and signature/budget authority follow-ups.
+- `/api/v1/commercial_due_diligence_rooms/latest` returns the commercial due diligence room across purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma review, review-process policy, packaging decision, and missing external artifacts.
+- `/api/v1/commercial_investment_committee_memos/latest` returns the commercial investment committee memo across due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma review, review-process policy, packaging decision, and external approval conditions.
 
 One fused orchestration loop:
 
@@ -205,7 +205,7 @@ One fused orchestration loop:
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
 - Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast; a provider's explicit tool-description size rejection is treated as a provider limit and can fail over. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
 
-See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
+See [docs/architecture.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/architecture.md) for the source-backed analysis.
 
 ## Observability & spend
 
@@ -308,7 +308,7 @@ is read from a **KV config store**, never `os.getenv`.
   repository split here.
 
 Grounding papers (LLM cost, routing, load balancing, evaluation) live in
-[docs/papers](docs/papers/README.md) with citations.
+[docs/papers](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/papers/README.md) with citations.
 
 ### NIM cost-quality benchmark (optional harness)
 
@@ -327,8 +327,7 @@ not import or mutate it. Deterministic `--dry-run` receives no network access or
 NVIDIA secret. Live execution resolves `NVIDIA_NIM_API_KEY` from the credential
 registry, pins HTTPS connections to validation-time public addresses, rejects
 redirects and proxy routing, and fails closed on missing/expired evidence. See
-[docs/nim_benchmark.md](docs/nim_benchmark.md) and the
-[engineering decision record](docs/doctoring/nim-benchmark-evidence-grade.md).
+[docs/nim_benchmark.md](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/nim_benchmark.md).
 
 ```bash
 python -m contextual_orchestrator nim-benchmark --dry-run \
@@ -336,50 +335,38 @@ python -m contextual_orchestrator nim-benchmark --dry-run \
   --output-dir benchmark_artifacts
 ```
 
-## Design Artifacts
+## Docs
 
-- [Library research](docs/library_research.md)
-- [Product planning](docs/product_planning.md)
-- [Screen design](docs/screen_design.md)
-- [User stories](docs/user_stories.md)
-- [REST API design](docs/rest_api_design.md)
-- [Code conventions](docs/code_conventions.md)
-- [Database conventions](docs/database_conventions.md)
-- [i18n design](docs/i18n_design.md)
-- [Plugin-driven design brief](docs/plugin_driven_design_brief.md)
-- [Plugin visual directions](docs/plugin_visual_directions.md)
-- [Analytics spec](docs/analytics_spec.md)
-- [Commercial readiness standard](docs/commercial_readiness.md)
-- [Commercial buyer diligence packet](docs/commercial_buyer_diligence_packet.md)
-- [Commercial buyer acceptance runbook](docs/commercial_buyer_acceptance_runbook.md)
-- [Commercial buyer evidence manifest](docs/commercial_buyer_evidence_manifest.md)
-- [Commercial buyer handoff bundle](docs/commercial_buyer_handoff_bundle.md)
-- [Commercial saleability decision](docs/commercial_saleability_decision.md)
-- [Commercial evidence export](docs/commercial_evidence_export.md)
-- [Commercial acceptance check](docs/commercial_acceptance_check.md)
-- [Commercial release candidate](docs/commercial_release_candidate.md)
-- [Commercial gap register](docs/commercial_gap_register.md)
-- [Commercial procurement readiness](docs/commercial_procurement_readiness.md)
-- [Commercial contract readiness](docs/commercial_contract_readiness.md)
-- [Commercial onboarding readiness](docs/commercial_onboarding_readiness.md)
-- [Commercial operations readiness](docs/commercial_operations_readiness.md)
-- [Commercial security attestation](docs/commercial_security_attestation.md)
-- [Commercial value readiness](docs/commercial_value_readiness.md)
-- [Commercial close readiness](docs/commercial_close_readiness.md)
-- [Commercial go-to-market readiness](docs/commercial_go_to_market_readiness.md)
-- [Commercial launch readiness](docs/commercial_launch_readiness.md)
-- [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
-- [Commercial demo scenarios](docs/commercial_demo_scenarios.md)
-- [Commercial proposal packet](docs/commercial_proposal_packet.md)
-- [Commercial purchase approval packet](docs/commercial_purchase_approval_packet.md)
-- [Commercial due diligence room](docs/commercial_due_diligence_room.md)
-- [Commercial investment committee memo](docs/commercial_investment_committee_memo.md)
-- [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
-- [Figma artifacts](docs/figma_artifacts.md)
-- [Fuzzing](docs/fuzzing.md)
-- [Product and technical gap baseline](docs/product-technical-gap-baseline.md)
-- [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
-- [Commercial plugin readiness plan](docs/superpowers/plans/2026-07-02-commercial-plugin-readiness.md)
+Public design and operations records (absolute links; only `LICENSE` and package
+sources ship in a distribution):
+
+- [Architecture](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/architecture.md)
+- [KV credentials](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/kv-credentials.md)
+- [ADRs](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/adr/README.md)
+- [Library research](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/library_research.md)
+- [Screen design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/screen_design.md)
+- [User stories](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/user_stories.md)
+- [Code conventions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/code_conventions.md)
+- [Database conventions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/database_conventions.md)
+- [i18n design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/i18n_design.md)
+- [Plugin-driven design brief](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/plugin_driven_design_brief.md)
+- [Plugin visual directions](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/plugin_visual_directions.md)
+- [Analytics spec](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/analytics_spec.md)
+- [Figma artifacts](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/figma_artifacts.md)
+- [Fuzzing](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/fuzzing.md)
+- [NIM benchmark](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/nim_benchmark.md)
+- [Papers](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/papers/README.md)
+- [Security policy](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/SECURITY.md)
+- [Changelog](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/CHANGELOG.md)
+
+## Project Status
+
+`contextual-orchestrator` is a stdlib Python lab and OpenAI-compatible control
+plane for routing, verification, and synthesis across a configurable worker
+pool. Releases are verified by the repository test suite (`make test`) and the
+Security and Quality workflow. Commercial readiness endpoints above return
+process-local evidence for operators; they do not encode a hard-coded monetary
+sale target in public documentation.
 
 ## Check
 

@@ -31,6 +31,12 @@ def test_readme_links_deepwiki_and_security_workflow_badges():
     ) in readme_text
 
 
+def test_readme_hides_internal_commercial_design_links():
+    readme_text = read_text("README.md")
+
+    assert "docs/rest_api_design.md" not in readme_text
+
+
 def test_security_workflow_covers_core_repository_security_process():
     """Assert the pinned runner image, required steps, and dedupe list."""
     workflow_text = read_text(".github/workflows/security.yml")
@@ -271,6 +277,7 @@ def test_security_tool_lockfile_uses_hash_pinning():
 
 if __name__ == "__main__":  # pragma: no cover
     test_readme_links_deepwiki_and_security_workflow_badges()
+    test_readme_hides_internal_commercial_design_links()
     test_security_workflow_covers_core_repository_security_process()
     test_dependabot_tracks_actions_and_python_dependencies()
     test_codeowners_requires_repository_owner_review()
