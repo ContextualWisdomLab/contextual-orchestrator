@@ -18,3 +18,8 @@ The 0.3.1 route contract now requires `terminal_reason` and constrains it to
 `served`, `fail_closed`, or `eligible_set_exhausted`. Receipts that omit the
 termination authority or invent an undocumented value fail schema validation
 instead of forcing a consumer-defined fallback interpretation.
+
+The route contract now also binds that terminal reason to the attempt evidence:
+`served` requires exactly one `served` attempt, while non-served termination
+reasons reject every `served` attempt. A self-contradictory receipt therefore
+fails schema validation instead of presenting two competing authorities.

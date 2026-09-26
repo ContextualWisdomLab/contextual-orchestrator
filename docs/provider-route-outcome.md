@@ -12,8 +12,10 @@ the route uses the same `OrchestrationRoute` and `OrchestrationRouteAttempt`
 schemas published by the OpenAPI 0.3.1 contract. The `attempted` entries are in
 execution order. `terminal_reason` is mandatory and has exactly three values:
 `served`, `eligible_set_exhausted`, or `fail_closed`; a missing or unknown value
-is not a valid receipt. The final `served` entry identifies the candidate that returned
-the completion; earlier entries describe failed candidates. The final frame is
+is not a valid receipt. A `served` reason requires exactly one `served` attempt,
+while either non-served reason forbids a `served` attempt. The final `served`
+entry identifies the candidate that returned the completion; earlier entries
+describe failed candidates. The final frame is
 the success receipt. If the connection ends before it, the caller has no
 authoritative served-candidate receipt and must treat the outcome as unknown.
 If eligible candidates fail before sending content, the terminal SSE error detail
