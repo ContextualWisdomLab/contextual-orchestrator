@@ -838,6 +838,13 @@ def test_free_model_advances_through_the_free_pool_on_retryable_5xx() -> None:
         "free_route_b",
         "free_route_c",
     ]
+    attempted = [
+        deployment_id.split(":", 1)[0]
+        for deployment_id in result["trace"][0]["selection_design"][
+            "attempted_deployment_ids"
+        ]
+    ]
+    assert attempted == calls
     assert "priced_worker" not in calls
 
 
