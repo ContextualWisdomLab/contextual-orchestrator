@@ -163,8 +163,7 @@ jobs:
       - name: Install Rust toolchain
         run: |
           set -euo pipefail
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+          rustup component add rustfmt clippy
           rustc --version
           cargo --version
 
