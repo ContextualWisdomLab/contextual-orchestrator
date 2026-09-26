@@ -258,6 +258,92 @@ def test_unknown_failure_cost_consumes_the_reserved_upper_bound() -> None:
     assert calls == ["failed"]
 
 
+def test_tenant_budget_reserves_across_concurrent_run_scopes() -> None:
+    """Separate runs sharing a store cannot spend the same tenant headroom."""
+    store = InMemorySpendLedgerStore()
+    guard = SpendGuard(price_book=_price_book(), store=store)
+    guard.set_tenant_budget("acme", max_budget_usd="3")
+    state = threading.Condition()
+    release = threading.Event()
+    provider_calls: list[str] = []
+    outcomes: list[object] = []
+
+    def provider_call() -> str:
+        with state:
+            provider_calls.append("openai")
+            state.notify_all()
+        release.wait()
+        return "answer"
+
+    def worker() -> None:
+        try:
+            with guard.tenant_context(tenant_id="acme"), guard.run_scope():
+                outcome: object = guarded_provider_call(
+                    PAID,
+                    PROMPT,
+                    provider_call,
+                    usage_reader=lambda: USAGE,
+                )
+        except Exception as exc:  # noqa: BLE001 - refusal is the observed outcome
+            outcome = exc
+        with state:
+            outcomes.append(outcome)
+            state.notify_all()
+
+    first = threading.Thread(target=worker)
+    first.start()
+    with state:
+        state.wait_for(lambda: len(provider_calls) == 1)
+    second = threading.Thread(target=worker)
+    second.start()
+    with state:
+        state.wait_for(lambda: len(provider_calls) == 2 or bool(outcomes))
+    release.set()
+    first.join()
+    second.join()
+
+    assert provider_calls == ["openai"]
+    assert sum(isinstance(item, BudgetExceededError) for item in outcomes) == 1
+
+
+def test_jsonl_unknown_outcome_reservation_survives_a_new_store_instance(
+    tmp_path: Path,
+) -> None:
+    """An unmeasured call remains budgeted after another process reloads the ledger."""
+    ledger_path = tmp_path / "ledger.jsonl"
+    first_guard = SpendGuard(
+        price_book=_price_book(),
+        store=JsonlSpendLedgerStore(ledger_path),
+    )
+    first_guard.set_tenant_budget("acme", max_budget_usd="3")
+
+    with first_guard.tenant_context(tenant_id="acme"), first_guard.run_scope():
+        with pytest.raises(RuntimeError, match="outcome unknown"):
+            guarded_provider_call(
+                PAID,
+                PROMPT,
+                lambda: (_ for _ in ()).throw(RuntimeError("provider outcome unknown")),
+                usage_reader=None,
+            )
+
+    second_guard = SpendGuard(
+        price_book=_price_book(),
+        store=JsonlSpendLedgerStore(ledger_path),
+    )
+    provider_calls: list[str] = []
+    with second_guard.tenant_context(tenant_id="acme"), second_guard.run_scope():
+        with pytest.raises(BudgetExceededError) as refused:
+            guarded_provider_call(
+                PAID,
+                PROMPT,
+                lambda: provider_calls.append("unexpected") or "answer",
+                usage_reader=lambda: USAGE,
+            )
+
+    assert refused.value.detail["reason"] == "insufficient_remaining_budget"
+    assert provider_calls == []
+
+
 def test_existing_spend_budget_check_consults_the_run_scope() -> None:
     """``_raise_if_spend_budget_exceeded`` is extended, not duplicated."""
     guard = SpendGuard(config=SpendGuardConfig.from_values(run_max_cost_usd=2), price_book=_price_book())
