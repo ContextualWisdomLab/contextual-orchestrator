@@ -49,6 +49,7 @@ from .chat_capability import (
 from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
 from .free_serving_evidence import (
+    credential_route_identity,
     free_serving_admitted,
     record_failed_call,
     record_provider_error,
@@ -1675,13 +1676,21 @@ def _request_header_pairs(request: object) -> list[tuple[str, str]]:
         return []
 
 
-def _free_serving_route_identity(agent: ModelAgent) -> str:
-    """Return the stable ledger identity shared by admission and observation."""
+def _free_serving_policy_provider(agent: ModelAgent) -> str:
+    """Return the provider whose policy classifies one agent's evidence."""
     provider_name = agent.provider_name.strip()
     if provider_name:
         return provider_name
     agent_id = agent.id.strip()
     return f"configured_agent:{agent_id}" if agent_id else ""
+
+
+def _free_serving_route_identity(agent: ModelAgent) -> str:
+    """Return the credential-and-endpoint ledger identity for one agent route."""
+    provider = _free_serving_policy_provider(agent)
+    if not agent.provider_name.strip():
+        return provider
+    return credential_route_identity(provider, agent.credential_name, agent.base_url)
 
 
 def _record_free_serving_evidence(
@@ -1698,11 +1707,12 @@ def _record_free_serving_evidence(
     try:
         usage = data.get("usage") if isinstance(data, dict) else None
         record_reported_cost(
-            _free_serving_route_identity(agent),
+            _free_serving_policy_provider(agent),
             agent.model,
             usage if isinstance(usage, dict) else None,
             headers,
             request_headers=_request_header_pairs(request),
+            route_identity=_free_serving_route_identity(agent),
         )
     except Exception:  # evidence is advisory for this response; never fail the call
         _LOGGER.debug("free serving cost evidence could not be recorded", exc_info=True)
@@ -1720,7 +1730,7 @@ def _record_free_serving_quota_error(
     readable for downstream classifiers.
     """
     try:
-        provider = _free_serving_route_identity(agent)
+        provider = _free_serving_policy_provider(agent)
         payload = _http_error_payload(error) if error.code == 429 else None
         record_provider_error(
             provider,
@@ -1728,6 +1738,7 @@ def _record_free_serving_quota_error(
             error.code,
             payload,
             request_headers=_request_header_pairs(request),
+            route_identity=_free_serving_route_identity(agent),
         )
     except Exception:  # evidence is advisory; the caller re-raises the HTTP error
         _LOGGER.debug("free serving quota evidence could not be recorded", exc_info=True)
@@ -1749,9 +1760,10 @@ def _record_free_serving_failure(
         return
     try:
         record_failed_call(
-            _free_serving_route_identity(agent),
+            _free_serving_policy_provider(agent),
             agent.model,
             request_headers=_request_header_pairs(request),
+            route_identity=_free_serving_route_identity(agent),
         )
     except Exception:  # evidence is advisory; never replace the original failure
         _LOGGER.debug("free serving failure evidence could not be recorded", exc_info=True)
@@ -10264,7 +10276,10 @@ class TaskOrchestrator:
         if not route_identity:
             return False
         return free_serving_admitted(
-            route_identity, agent.model, catalog_free=catalog_free
+            _free_serving_policy_provider(agent),
+            agent.model,
+            catalog_free=catalog_free,
+            route_identity=route_identity,
         )
 
     def _is_general_free_agent(
