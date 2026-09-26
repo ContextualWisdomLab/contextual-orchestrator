@@ -7159,3 +7159,23 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+
+## 2026-09-27 AnyIO security repair exposed stale fuzz-lock authority
+
+`contextual-orchestrator#1274` head `6fad1ed16e9aa62f4526d5061b74552570f06e8f`
+cleared the AnyIO advisories in hosted `Security and Quality` run
+`36239646056`: CodeQL, pip-audit, and SBOM completed successfully with
+AnyIO 4.14.2. The same exact-head run then failed before fuzzing because the
+runtime lock selected `typing-extensions==4.16.0` while both generated fuzz
+locks retained 4.15.0; `fuzz/requirements-property.in` independently pinned
+the stale version despite declaring `requirements.lock` as its constraint.
+
+The owner repair removes that duplicate source pin, regenerates both fuzz
+locks with their documented `uv pip compile` commands, and extends the
+repository security metadata contract from the Atheris lock alone to both
+fuzz locks. The pre-fix contract is RED with `4.15.0 != 4.16.0`; the repaired
+combined `pip --dry-run --require-hashes` resolves one 4.16.0 installation.
+The separate stale embedding import and missing Rust components remain owned
+by canonical prerequisite #1266 and are not duplicated here. Status remains
+`WAITING_DEPENDENCY`: exact-head hosted checks and an independent approval are
+required before this stacked PR can leave Draft/Proposed or merge.

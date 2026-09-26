@@ -128,20 +128,24 @@ def test_dependabot_tracks_actions_and_python_dependencies():
         assert re.search(r"(?m)^    cooldown:\n      default-days: 7$", entry)
 
 
-def test_atheris_lock_is_parseable_and_matches_shared_project_pins():
+def test_fuzz_locks_are_parseable_and_match_shared_project_pins():
     """The combined fuzz job needs one consistent, continuation-safe lock set."""
     project_lock = read_text("requirements.lock")
-    atheris_lock = read_text("fuzz/requirements-atheris.txt")
     pinned = re.compile(r"(?m)^([A-Za-z0-9_.-]+)==([^ ;\\]+)")
     project_versions = dict(pinned.findall(project_lock))
-    atheris_versions = dict(pinned.findall(atheris_lock))
 
-    for package_name in project_versions.keys() & atheris_versions.keys():
-        assert atheris_versions[package_name] == project_versions[package_name]
-    lines = atheris_lock.splitlines()
-    for line_number, line in enumerate(lines):
-        if line.lstrip().startswith("--hash="):
-            assert line_number > 0 and lines[line_number - 1].rstrip().endswith("\\")
+    for lock_path in (
+        "fuzz/requirements-atheris.txt",
+        "fuzz/requirements-property.txt",
+    ):
+        fuzz_lock = read_text(lock_path)
+        fuzz_versions = dict(pinned.findall(fuzz_lock))
+        for package_name in project_versions.keys() & fuzz_versions.keys():
+            assert fuzz_versions[package_name] == project_versions[package_name]
+        lines = fuzz_lock.splitlines()
+        for line_number, line in enumerate(lines):
+            if line.lstrip().startswith("--hash="):
+                assert line_number > 0 and lines[line_number - 1].rstrip().endswith("\\")
 
 
 def test_cryptography_pin_matches_every_install_path():
