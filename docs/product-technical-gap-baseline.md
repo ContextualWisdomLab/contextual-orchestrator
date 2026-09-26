@@ -7252,3 +7252,40 @@ deployment, independent approval, or production-cost telemetry.
 - **Action:** keep #1260 Ready/Proposed until fresh exact-head Security and
   Quality, CodeQL, SAST, Security Scan, and independent review complete; then
   use ordinary protected merge only.
+
+## 2026-09-26 Pre-send free-entitlement boundary
+
+**Status:** Proposed / Draft. This is exact-head PR evidence, not protected-main,
+release, deployment, independent approval, or production-cost authority.
+
+- **Gap / owner boundary:** `contextual-orchestrator#1260@d66a7768cfa40c891d9fce1aa64dfb65979c35aa`
+  sent a real request through `probe_free_candidates()` to learn the cost only
+  after the request. The source and PR accepted that one probe could be billed
+  when credits overflow was enabled. A previous `usage.cost == 0` observation
+  then admitted the next request, while an assumed daily reset,
+  `ALLOWANCE_RESET_SKEW_SECONDS = 300`, and caller `max_probes` changed
+  admission/probing decisions without authoritative pre-send entitlement.
+- **RED:** `d2da6baf199f4d0f887e8366a10a248a2ab42056` adds executable contracts
+  proving that a prior zero-cost response must not authorize the next request
+  and that the free-pool probe callback must never run. Against the predecessor
+  production both tests fail: admission returns `True` and the callback sees
+  `promotion-model`.
+- **GREEN:** `def10d1af449ec41b72676e3f09a805fce67f948` makes evidence-required
+  providers fail closed and turns `probe_free_candidates()` into a
+  side-effect-free zero-probe receipt. `dd673228cab54527c17140f9a3b06c721ce3d620`
+  removes automatic allowance-reset and skew authority: explicit
+  `PAID`/`EXHAUSTED` demotions persist until process-level reset.
+  `a6e48fe3426e466731376123dfed11da32d8d35b` replaces the superseded
+  calendar/probe-count tests with persistent-demotion, explicit-reset,
+  passive-evidence, and zero-callback contracts. `373518ff879f84143859838f6a146de79b16c047`
+  corrects the changelog.
+- **Evidence:** Experiential Labs documents settled cost on or after a request;
+  no authoritative pre-send entitlement proving that the next call is free was
+  found. Therefore promotion and passive cost observations remain useful for
+  telemetry/demotion but are not `orchestrator/free` admission authority.
+- **Verification:** predecessor exact source reproduced **2/2 RED failures**;
+  repaired exact source passed the focused contracts **2/2** and production/test
+  Python compilation **2/2**. Fresh exact-head hosted Security and Quality,
+  CodeQL, SAST, Security Scan, full tests, and independent review remain
+  mandatory. Keep PR #1260 Draft and do not reuse predecessor Checks.
+
