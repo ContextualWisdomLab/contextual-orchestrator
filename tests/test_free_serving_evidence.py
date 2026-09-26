@@ -648,7 +648,7 @@ def test_promotions_fetch_is_keyless_and_fails_closed(monkeypatch) -> None:
         assert model_discovery._experiential_free_promotion_slugs(timeout=1.0) == frozenset()
 
 
-def test_promotion_nominates_a_priced_row_but_only_evidence_admits_it() -> None:
+def test_promotion_nominates_but_never_admits_without_pre_send_authority() -> None:
     from contextual_orchestrator.model_discovery import apply_free_promotions
 
     rows = [
