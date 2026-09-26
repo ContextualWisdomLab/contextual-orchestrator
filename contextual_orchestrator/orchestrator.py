@@ -7948,6 +7948,7 @@ class TaskOrchestrator:
             text=text,
             answer=answer,
             served_id=agent.id,
+            served_deployment_id=self._psychometric_candidate_id(agent),
             latency_seconds=latency_seconds,
             usage=usage,
             free_only=free_only,
@@ -8484,6 +8485,7 @@ class TaskOrchestrator:
             text=prompt,
             answer=result["content"],
             served_id=agent.id,
+            served_deployment_id=self._psychometric_candidate_id(agent),
             latency_seconds=None,
             usage=result.get("usage"),
             free_only=False,
@@ -8768,6 +8770,7 @@ class TaskOrchestrator:
             updated_agents = [agent for agent in updated_candidates if not agent.disabled]
             self.candidates = updated_candidates
             self.agents = updated_agents
+            self._retain_psychometric_candidates()
             self._append_audit_event(
                 "model_timeout_policy_changed",
                 {
@@ -9053,6 +9056,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
+        self._retain_psychometric_candidates()
         for agent in effective_discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
@@ -9292,6 +9296,7 @@ class TaskOrchestrator:
                     text=text,
                     answer=answer,
                     served_id=served_id,
+                    served_deployment_id=selection_design[0]["selected_deployment_id"],
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
@@ -9347,6 +9352,7 @@ class TaskOrchestrator:
         text: str,
         answer: str,
         served_id: str,
+        served_deployment_id: str | None = None,
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
@@ -9376,6 +9382,7 @@ class TaskOrchestrator:
                 self._observe_contextual_quality(
                     prompt_context,
                     served_id,
+                    served_deployment_id=served_deployment_id,
                     accepted=accepted,
                     latency_seconds=latency_seconds,
                     output_tokens=output_tokens,
@@ -10188,6 +10195,7 @@ class TaskOrchestrator:
         prompt_context: str,
         served_id: str,
         *,
+        served_deployment_id: str | None = None,
         accepted: bool,
         latency_seconds: float | None,
         output_tokens: int | None,
@@ -10196,7 +10204,9 @@ class TaskOrchestrator:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
         with self._psychometric_persistence_lock:
-            candidate_id = self._psychometric_candidate_id(self._agent(served_id))
+            candidate_id = served_deployment_id or self._psychometric_candidate_id(self._agent(served_id))
+            if candidate_id not in self._psychometric_candidate_ids(self.candidates):
+                return
             self._psychometric_router.observe(
                 prompt_context, candidate_id, accepted,
                 self._embed_cached(prompt_context), irt_row,
@@ -11099,7 +11109,8 @@ class TaskOrchestrator:
                 )
                 if selection_design_sink is not None:
                     selection_design_sink(self._selection_design_receipt(
-                        candidates, race_members, self._agent(outcome.winner_endpoint_id)
+                        candidates, race_members,
+                        next(member for member in race_members if member.id == outcome.winner_endpoint_id),
                     ))
                 return output, served_id, served_model, usage
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
