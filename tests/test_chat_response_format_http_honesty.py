@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -127,6 +128,123 @@ def test_http_structured_synthesis_classifies_upstream_404() -> None:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_http_free_structured_synthesis_recovers_from_429_storm() -> None:
+    """A Noema-shaped HTTP request reaches the bounded synthesis retry path."""
+    agents = [
+        ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",)),
+        ModelAgent("second_agent", "second-model", "mock://second", tags=("cost:free",)),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents,
+        rate_limit_wait_seconds=1.0,
+        rate_limit_unknown_cooldown_seconds=0.01,
+    )
+    calls: list[str] = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        if len(calls) <= 2:
+            raise urllib.error.HTTPError(
+                "https://provider.synthetic.invalid/v1/chat/completions",
+                429,
+                "Too Many Requests",
+                {},
+                None,
+            )
+        return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
+
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with (
+            patch.object(orchestrator, "conduct", return_value={
+                "mode": "conduct", "answer": "evidence", "trace": [],
+                "verification": {}, "plan_source": "template",
+            }),
+            patch.object(orchestrator, "_select_agent", return_value=agents[0]),
+            patch.object(orchestrator, "_ranked_agents", return_value=agents),
+            patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        ):
+            status, body = _post(
+                server.server_address[1],
+                {
+                    "model": TaskOrchestrator.FREE_MODEL,
+                    "messages": [{"role": "user", "content": "review this diff"}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
+        assert status == 200, body
+        assert body["choices"][0]["message"]["content"] == '{"status":"ok"}'
+        assert len(calls) == 3
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+
+def test_http_free_structured_conduct_recovers_from_429_storm() -> None:
+    """A structured request recovers before synthesis when conduct hits quota limits."""
+    agents = [
+        ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",)),
+        ModelAgent("second_agent", "second-model", "mock://second", tags=("cost:free",)),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents, rate_limit_wait_seconds=1.0, rate_limit_unknown_cooldown_seconds=0.01,
+        tool_retry_attempts=0,
+    )
+    conduct_calls: list[str] = []
+
+    def chat(agent, _messages):
+        conduct_calls.append(agent.id)
+        if len(conduct_calls) <= 2:
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_rate_limited",
+                message="provider quota exhausted",
+                client_status=429,
+                provider_status=429,
+                retryable=True,
+                transport="chat",
+                extra_detail={"retry_after_seconds": 0.01},
+            )
+        return "evidence"
+
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with (
+            patch.object(orchestrator.client, "chat", side_effect=chat),
+            patch.object(orchestrator.client, "proxy_send_once", return_value={
+                "choices": [{"message": {"content": '{"status":"ok"}'}}]
+            }),
+        ):
+            status, body = _post(
+                server.server_address[1],
+                {
+                    "model": TaskOrchestrator.FREE_MODEL,
+                    "messages": [{"role": "user", "content": "review this diff"}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
+        assert status == 200, body
+        assert body["choices"][0]["message"]["content"] == '{"status":"ok"}'
+        assert set(conduct_calls[:2]) == {"first_agent", "second_agent"}
+        assert len(conduct_calls) >= 6
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
 
 
 def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() -> None:

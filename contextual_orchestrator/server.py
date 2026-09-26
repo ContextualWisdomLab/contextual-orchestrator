@@ -31,6 +31,14 @@ from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .decision_receipts import DecisionMeasurement, export_decision_receipts
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
+from .document_diff_review import (
+    DOCUMENT_DIFF_REVIEW_RESPONSE_FORMAT,
+    DocumentDiffReviewError,
+    document_diff_review_messages,
+    rule_findings,
+    validate_document_diff_envelope,
+    validate_document_diff_findings,
+)
 from .cost_router import (
     BatchModelSelectionError,
     CostRoutingCoordinator,
@@ -6652,6 +6660,49 @@ def build_server(
                     self._send(
                         {"session_status": "established"},
                         extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
+                    )
+                    return
+                if path == "/v1/document_diff_reviews":
+                    self._authorize("inference", state_changing=True)
+                    try:
+                        envelope = validate_document_diff_envelope(self._read_json())
+                    except DocumentDiffReviewError as exc:
+                        raise RequestError(exc.status, exc.code, str(exc)) from None
+                    review_messages = document_diff_review_messages(envelope)
+                    review_request = {
+                        "model": TaskOrchestrator.FREE_MODEL,
+                        "messages": review_messages,
+                        "response_format": DOCUMENT_DIFF_REVIEW_RESPONSE_FORMAT,
+                    }
+                    proxied = self._run(
+                        lambda: coordinator.complete(
+                            review_messages,
+                            # One fixed structured task; no conduct plan is needed.
+                            mode="route",
+                            attribution={
+                                "service": "document_diff_review",
+                                "model_name": TaskOrchestrator.FREE_MODEL,
+                            },
+                            model_name=TaskOrchestrator.FREE_MODEL,
+                            provider_request=review_request,
+                            zdr_only=envelope["zdr_only"],
+                        )
+                    )
+                    try:
+                        answer = proxied["choices"][0]["message"]["content"]
+                        findings = validate_document_diff_findings(answer, envelope)
+                    except DocumentDiffReviewError as exc:
+                        raise RequestError(exc.status, exc.code, str(exc)) from None
+                    except (KeyError, IndexError, TypeError):
+                        raise RequestError(
+                            502, "invalid_structured_output", "review model returned no message content"
+                        ) from None
+                    self._send(
+                        {
+                            key: envelope[key]
+                            for key in ("contract_version", "repo", "path", "base_blob", "head_blob", "extractor_version")
+                        }
+                        | {"model": proxied.get("model"), "findings": rule_findings(envelope) + findings}
                     )
                     return
                 if path == "/v1/files":

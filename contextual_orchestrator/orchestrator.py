@@ -6883,10 +6883,13 @@ class TaskOrchestrator:
                 f"provider {agent.id} returned no structured response content"
             )
 
-        def record_synthesis_failure(candidate: ModelAgent) -> None:
-            """Record the failed attempt in both ledgers before advancing or raising."""
+        def record_synthesis_failure(
+            candidate: ModelAgent, *, quota_limited: bool = False
+        ) -> None:
+            """Record failed group stability; quota cooldowns do not trip the circuit."""
             nonlocal synthesis_failure_recorded
-            self._record_failure(candidate.id)
+            if not quota_limited:
+                self._record_failure(candidate.id)
             if candidate.group_name or free_only:
                 self._group_router.observe_failure(candidate.id)
             synthesis_failure_recorded = True
@@ -6897,6 +6900,7 @@ class TaskOrchestrator:
             allow_cross_candidate_fallback: bool = True,
             require_output: bool = True,
             repair_mode: bool = False,
+            prior_attempts: list[dict[str, Any]] | None = None,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Advance on 413 and retryable transport; JSON repair lives outside."""
             nonlocal final_agent, synthesis_failure_recorded
@@ -6918,7 +6922,13 @@ class TaskOrchestrator:
                     ),
                 ]
             )
-            attempts: list[dict[str, Any]] = []
+            attempts: list[dict[str, Any]] = list(prior_attempts or ())
+            if prior_attempts:
+                ordered_candidates = [
+                    candidate
+                    for candidate in ordered_candidates
+                    if self._rate_limit_remaining(candidate.id) is None
+                ] or ordered_candidates
             eligible_agent_ids = [candidate.id for candidate in ordered_candidates]
 
             def route_evidence(*, terminal_reason: str) -> dict[str, Any]:
@@ -7039,6 +7049,16 @@ class TaskOrchestrator:
                                 transport="structured_synthesis",
                             )
                         )
+                        quota_limited = classified.provider_status in (429, 503)
+                        if quota_limited:
+                            self._record_rate_limit(
+                                candidate.id,
+                                classified.extra_detail.get("retry_after_seconds"),
+                                status=classified.provider_status,
+                            )
+                            quota_limited = (
+                                self._rate_limit_remaining(candidate.id) is not None
+                            )
                         attempts.append(
                             _typed_attempt_entry(
                                 candidate.id,
@@ -7090,7 +7110,9 @@ class TaskOrchestrator:
                                 continue
                             if not isinstance(classified, ProviderUpstreamError):
                                 raise classified from None
-                            record_synthesis_failure(candidate)
+                            record_synthesis_failure(
+                                candidate, quota_limited=quota_limited
+                            )
                             if virtual_model and classified.retryable:
                                 last_retryable_upstream_error = classified
                                 request_exclusions.add(candidate.id)
@@ -7232,11 +7254,58 @@ class TaskOrchestrator:
                 )
             return next_agent
 
+        synthesis_wait_deadline: float | None = None
+        prior_synthesis_attempts: list[dict[str, Any]] = []
         while True:
             synthesis_failure_recorded = False
             try:
-                raw, final_agent = send_synthesis(upstream)
+                raw, final_agent = send_synthesis(
+                    upstream, prior_attempts=prior_synthesis_attempts
+                )
             except Exception as exc:
+                if virtual_model and isinstance(exc, ProviderUpstreamError):
+                    route = exc.extra_detail.get("route")
+                    if isinstance(route, dict):
+                        attempted = route.get("attempted", [])
+                        eligible = route.get("eligible_agent_ids", [])
+                        current_attempts = attempted[len(prior_synthesis_attempts):]
+                        if (
+                            eligible
+                            and {entry.get("agent_id") for entry in current_attempts}
+                            == set(eligible)
+                            and all(
+                                entry.get("provider_status") in (429, 503)
+                                for entry in current_attempts
+                            )
+                        ):
+                            cooling = [
+                                candidate
+                                for candidate in synthesis_candidates
+                                if candidate.id in eligible
+                            ]
+                            if cooling and all(
+                                self._rate_limit_remaining(candidate.id) is not None
+                                for candidate in cooling
+                            ):
+                                if synthesis_wait_deadline is None:
+                                    synthesis_wait_deadline = (
+                                        time.monotonic()
+                                        + self._rate_limit_wait_budget(cooling[0])
+                                    )
+                                try:
+                                    recovered = self._await_rate_limit_recovery(
+                                        cooling,
+                                        deadline=synthesis_wait_deadline,
+                                        transport="structured_synthesis",
+                                        virtual_selector=True,
+                                    )
+                                except ProviderUpstreamError as storm:
+                                    storm.extra_detail["route"] = route
+                                    raise
+                                if recovered:
+                                    prior_synthesis_attempts = list(attempted)
+                                    request_exclusions.difference_update(eligible)
+                                    continue
                 if (
                     not _is_request_too_large_error(exc)
                     and not isinstance(exc, EffortProfileError)

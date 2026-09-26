@@ -434,6 +434,8 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [arXiv 2606.21228 DOI](https://doi.org/10.48550/arXiv.2606.21228)
 - [arXiv 2608.06867 DOI](https://doi.org/10.48550/arXiv.2608.06867)
 - [DOI 10.1214/aos/1176344552](https://doi.org/10.1214/aos/1176344552)
+- [DOI 10.1007/BF01840446](https://doi.org/10.1007/BF01840446) — Myers (1986), An O(ND) difference algorithm and its variations, *Algorithmica* 1, 251–266; cited by ADR 0136 for object-sequence diffing (not redistributed).
+- [DOI 10.1145/3394486.3403172](https://doi.org/10.1145/3394486.3403172) — Xu et al. (2020), LayoutLM: Pre-training of text and layout for document image understanding, KDD '20; cited by ADR 0136 for page/object document representation (not redistributed).
 - [DOI 10.1525/collabra.33267](https://doi.org/10.1525/collabra.33267)
 - [DOI 10.18653/v1/2026.findings-acl.1881](https://doi.org/10.18653/v1/2026.findings-acl.1881)
 - [NIST AI 100-1](https://doi.org/10.6028/NIST.AI.100-1)
