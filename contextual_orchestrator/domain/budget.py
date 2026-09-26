@@ -7,14 +7,11 @@ evaluated with the same semantics regardless of scope:
 * ``spent >= max`` refuses every further call (LiteLLM ``max_budget``
   semantics: an exhausted budget blocks, including zero-cost calls).
 * ``spent + estimate > max`` refuses a call whose pre-call cost estimate no
-  longer fits. The estimate is a lower bound (prompt side only), so an admitted
-  call can still overshoot by at most its own output cost.
+  longer fits. The estimate is supplied by the caller.
 * An unknown price for a billable call refuses under any active cost cap
   (fail closed; unknown is never zero).
-* Sampled baseline calls need extra headroom: they are admitted only while the
-  remaining budget after the call stays at or above
-  ``baseline_min_remaining_ratio`` of the cap, so baselines are the first work
-  skipped when a budget runs short. They are charged to the same limits.
+* A paid sampled baseline has no allocation authority merely because a hard
+  cap exists. It fails closed; evidence-backed zero-cost baselines still run.
 * ``soft_max`` never refuses; crossing it is reported so callers can alert.
 
 This module is pure: callers pass the current spend and ``now``.
@@ -29,9 +26,6 @@ import re
 from typing import Any, Iterable
 
 from .money import Money
-
-#: Default share of a cap that must remain for a sampled baseline call.
-DEFAULT_BASELINE_MIN_REMAINING_RATIO = Decimal("0.5")
 
 _DURATION = re.compile(r"^\s*([1-9][0-9]{0,6})\s*([smhd])\s*$")
 _DURATION_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -216,18 +210,17 @@ def decide_affordability(
     estimate: Money | None,
     now: int,
     purpose: CallPurpose = CallPurpose.PRIMARY,
-    baseline_min_remaining_ratio: Decimal = DEFAULT_BASELINE_MIN_REMAINING_RATIO,
+    unknown_estimate_reason: str = "price_unknown",
 ) -> AffordabilityDecision:
     """Admit or refuse one provider call against every active limit.
 
-    ``estimate`` is the pre-call cost lower bound; ``None`` means the call is
-    billable and its price is unknown. A known zero estimate is a free or local
-    call. When several limits refuse, the one with the least remaining budget
-    (the tightest) is reported; ties follow run, virtual key, tenant order.
+    ``estimate`` is a pre-call total-cost upper bound; ``None`` means the caller
+    cannot prove one. ``unknown_estimate_reason`` distinguishes an unknown
+    price from a known price whose total-token ceiling is unavailable. A known
+    zero estimate is a free or local call. When several limits refuse, the one
+    with the least remaining budget (the tightest) is reported; ties follow
+    run, virtual key, tenant order.
     """
-    ratio = Decimal(str(baseline_min_remaining_ratio))
-    if ratio < 0 or ratio > 1:
-        raise ValueError("baseline_min_remaining_ratio must be within [0, 1]")
     refusals: list[tuple[Decimal, int, AffordabilityDecision]] = []
     soft_crossed: list[str] = []
     for position in positions:
@@ -242,7 +235,9 @@ def decide_affordability(
             continue
         billable = estimate is None or estimate.amount > 0
         if estimate is None:
-            refusals.append(_refusal(position, "price_unknown", now, estimate, purpose))
+            refusals.append(
+                _refusal(position, unknown_estimate_reason, now, estimate, purpose)
+            )
             continue
         if billable and not position.measurement_complete:
             refusals.append(
@@ -255,12 +250,10 @@ def decide_affordability(
                 _refusal(position, "insufficient_remaining_budget", now, estimate, purpose)
             )
             continue
-        if purpose is CallPurpose.BASELINE:
-            remaining_after = maximum.minus_floor_zero(after_call)
-            if remaining_after < maximum.scaled(ratio):
-                refusals.append(
-                    _refusal(position, "baseline_headroom_exhausted", now, estimate, purpose)
-                )
+        if purpose is CallPurpose.BASELINE and billable:
+            refusals.append(
+                _refusal(position, "baseline_allocation_unavailable", now, estimate, purpose)
+            )
     if refusals:
         refusals.sort(key=lambda item: (item[0], item[1]))
         decision = refusals[0][2]
@@ -280,7 +273,6 @@ __all__ = [
     "BudgetExceededError",
     "BudgetScope",
     "CallPurpose",
-    "DEFAULT_BASELINE_MIN_REMAINING_RATIO",
     "SpendLimit",
     "SpendPosition",
     "decide_affordability",

@@ -27,7 +27,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from decimal import Decimal
 import logging
 import secrets
 import threading
@@ -38,7 +37,6 @@ from typing import Any, Callable, Iterator, TypeVar
 
 from .cost_ledger import CostLedger, PriceBook, UsageRecord
 from .domain.budget import (
-    DEFAULT_BASELINE_MIN_REMAINING_RATIO,
     AffordabilityDecision,
     BudgetScope,
     CallPurpose,
@@ -47,7 +45,7 @@ from .domain.budget import (
     decide_affordability,
     parse_budget_duration,
 )
-from .domain.money import Money, Price, Usage, provider_reported_cost, to_decimal
+from .domain.money import Money, Price, Usage, provider_reported_cost
 from .domain.pricing import effective_price, estimate_call_cost
 from .domain.provider_limits import (
     NOT_A_LIMIT,
@@ -66,7 +64,6 @@ from .domain.tenancy import (
 from .kv_config import InMemoryConfigStore
 from .provider_errors import ProviderUpstreamError, provider_limit_evidence
 from .spend_metering import MeteredUsage, SpendLedgerStore, spent_in_scope, summarize_run
-from .token_counting import estimate_lower_bound_tokens
 
 LOGGER = logging.getLogger(__name__)
 
@@ -106,45 +103,29 @@ class SpendGuardConfig:
     ``run_max_cost`` defaults to ``None``: no per-run cap, so existing
     deployments keep their behavior until an operator sets one (CLI
     ``--run-max-cost-usd`` or KV ``spend_guard_settings/run_max_cost_usd``).
-    ``baseline_min_remaining_ratio`` defaults to 0.5: sampled baseline calls
-    run only while at least half of every active cap would remain.
+    Paid sampled baselines fail closed under an active hard cap unless a
+    future versioned allocation authority is supplied; no numeric threshold
+    is inferred here.
     """
 
     run_max_cost: Money | None = None
-    baseline_min_remaining_ratio: Decimal = DEFAULT_BASELINE_MIN_REMAINING_RATIO
-
-    def __post_init__(self) -> None:
-        """Validate the ratio range."""
-        ratio = to_decimal(self.baseline_min_remaining_ratio)
-        if ratio > 1:
-            raise ValueError("baseline_min_remaining_ratio must be within [0, 1]")
-        object.__setattr__(self, "baseline_min_remaining_ratio", ratio)
 
     @classmethod
     def from_values(
         cls,
         *,
         run_max_cost_usd: object | None = None,
-        baseline_min_remaining_ratio: object | None = None,
     ) -> "SpendGuardConfig":
         """Build a config from plain numbers (``None`` keeps the default)."""
         return cls(
             run_max_cost=None if run_max_cost_usd is None else Money.usd(run_max_cost_usd),
-            baseline_min_remaining_ratio=(
-                DEFAULT_BASELINE_MIN_REMAINING_RATIO
-                if baseline_min_remaining_ratio is None
-                else to_decimal(baseline_min_remaining_ratio)
-            ),
         )
 
     @classmethod
     def from_config_store(cls, store: Any) -> "SpendGuardConfig":
-        """Read ``run_max_cost_usd`` and ``baseline_min_remaining_ratio`` from the KV store."""
+        """Read ``run_max_cost_usd`` from the KV store."""
         return cls.from_values(
             run_max_cost_usd=store.get(SPEND_GUARD_CONFIG_CATEGORY, "run_max_cost_usd", None),
-            baseline_min_remaining_ratio=store.get(
-                SPEND_GUARD_CONFIG_CATEGORY, "baseline_min_remaining_ratio", None
-            ),
         )
 
 
@@ -178,24 +159,6 @@ class _Identity:
     virtual_key: VirtualKey | None
 
 
-def _messages_text(messages: Any) -> str:
-    """Concatenate text content of chat messages for a lower-bound token estimate."""
-    parts: list[str] = []
-    if not isinstance(messages, list):
-        return ""
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    parts.append(part["text"])
-    return "\n".join(parts)
-
-
 def _error_status_and_evidence(exc: BaseException) -> tuple[int | None, dict[str, str]]:
     if isinstance(exc, ProviderUpstreamError):
         return exc.provider_status, dict(getattr(exc, "limit_evidence", {}) or {})
@@ -222,6 +185,7 @@ class RunSpendScope:
         self._lock = threading.RLock()
         currency = guard.config.run_max_cost.currency if guard.config.run_max_cost else "USD"
         self.spent = Money.zero(currency)
+        self.reserved = Money.zero(currency)
         self.measurement_complete = True
         self.dropped_providers: dict[str, str] = {}
         self.entries: list[MeteredUsage] = []
@@ -239,7 +203,7 @@ class RunSpendScope:
                 positions.append(
                     SpendPosition(
                         SpendLimit(BudgetScope.RUN, self.run_id, cap),
-                        self.spent,
+                        self.spent + self.reserved,
                         self.measurement_complete,
                     )
                 )
@@ -262,10 +226,18 @@ class RunSpendScope:
                 since=limit.window_start(now),
                 currency=currency,
             )
+            with self._lock:
+                spent = spent + self.reserved
             positions.append(SpendPosition(limit, spent, True))
         return positions
 
-    def decide(self, estimate: Money | None, purpose: CallPurpose) -> AffordabilityDecision:
+    def decide(
+        self,
+        estimate: Money | None,
+        purpose: CallPurpose,
+        *,
+        unknown_estimate_reason: str = "price_unknown",
+    ) -> AffordabilityDecision:
         """Check one prospective call against every active limit."""
         now = self.guard.now()
         decision = decide_affordability(
@@ -273,7 +245,7 @@ class RunSpendScope:
             estimate=estimate,
             now=now,
             purpose=purpose,
-            baseline_min_remaining_ratio=self.guard.config.baseline_min_remaining_ratio,
+            unknown_estimate_reason=unknown_estimate_reason,
         )
         for crossed in decision.soft_budget_crossed:
             if crossed not in self._soft_alerts:
@@ -289,8 +261,8 @@ class RunSpendScope:
         """Raise ``BudgetExceededError`` when any active budget is already exhausted."""
         self.decide(Money.zero(self.spent.currency), CallPurpose.PRIMARY).raise_if_refused()
 
-    def admit(self, agent: Any, messages: Any) -> Price | None:
-        """Refuse a dropped provider or an unaffordable call; return the call's price."""
+    def admit(self, agent: Any, messages: Any) -> tuple[Price | None, Money | None]:
+        """Atomically reserve an affordable call's cost ceiling and return it with price."""
         provider = str(getattr(agent, "provider_name", "") or "")
         with self._lock:
             reason = self.dropped_providers.get(provider) if provider else None
@@ -303,9 +275,33 @@ class RunSpendScope:
             base_url=str(getattr(agent, "base_url", "")),
             tags=tuple(getattr(agent, "tags", ()) or ()),
         )
-        estimate = estimate_call_cost(price, estimate_lower_bound_tokens(_messages_text(messages)))
+        total_token_ceiling = getattr(agent, "context_window", None)
+        if price is None:
+            estimate = None
+            unknown_estimate_reason = "price_unknown"
+        elif price.is_free:
+            estimate = Money.zero(price.currency)
+            unknown_estimate_reason = "price_unknown"
+        elif type(total_token_ceiling) is int and total_token_ceiling > 0:
+            estimate = estimate_call_cost(price, total_token_ceiling)
+            unknown_estimate_reason = "price_unknown"
+        else:
+            estimate = None
+            unknown_estimate_reason = "cost_upper_bound_unavailable"
         purpose = _CALL_PURPOSE.get()
-        decision = self.decide(estimate, purpose)
+        with self._lock:
+            has_hard_cap = any(
+                position.limit.max_cost is not None
+                for position in self.positions(self.guard.now())
+            )
+            decision = self.decide(
+                estimate,
+                purpose,
+                unknown_estimate_reason=unknown_estimate_reason,
+            )
+            reservation = estimate if decision.allowed and has_hard_cap else None
+            if reservation is not None:
+                self.reserved = self.reserved + reservation
         if not decision.allowed:
             detail = {
                 **decision.detail,
@@ -323,7 +319,7 @@ class RunSpendScope:
                 scope_id=decision.scope_id,
                 detail=detail,
             ).raise_if_refused()
-        return price
+        return price, reservation
 
     # -- provider limits ----------------------------------------------------
     def observe_failure(self, agent: Any, exc: BaseException) -> ProviderLimitSignal:
@@ -422,6 +418,7 @@ class RunSpendScope:
         call_status: str,
         limit_reason: str | None = None,
         known_zero_cost: bool = False,
+        reserved_cost: Money | None = None,
     ) -> MeteredUsage:
         """Record one provider call and charge its cost to the run.
 
@@ -464,12 +461,21 @@ class RunSpendScope:
             provider_limit_reason=limit_reason,
         )
         with self._lock:
+            if reserved_cost is not None:
+                self.reserved = self.reserved.minus_floor_zero(reserved_cost)
             self.entries.append(entry)
             if charged is not None and charged.currency == self.spent.currency:
                 self.spent = self.spent + charged
+            elif charged is None and reserved_cost is not None:
+                # The call crossed the provider boundary, but no authoritative
+                # charge came back. Consume the already-proved upper bound for
+                # admission and block later billable calls; never release the
+                # reservation as if the failed/unknown outcome were free.
+                self.spent = self.spent + reserved_cost
+                self.measurement_complete = False
             elif charged is None and call_status == "ok":
-                # A completed billable call whose cost cannot be measured:
-                # under a cost cap, further billable calls fail closed.
+                # Without a hard cap there is no reservation to consume, but
+                # retain the incomplete-measurement evidence in the receipt.
                 self.measurement_complete = False
         store = self.guard.store
         if store is not None:
@@ -490,14 +496,15 @@ class RunSpendScope:
             refusals = list(self.refusals)
             store_failures = self.store_failures
             spent = self.spent
+            reserved = self.reserved
             complete = self.measurement_complete
         cap = self.guard.config.run_max_cost
         budget = {
             "run_max_cost": cap.as_float() if cap is not None else None,
             "run_spent_cost": spent.as_float(),
+            "run_reserved_cost": reserved.as_float(),
             "currency": spent.currency,
             "measurement_complete": complete,
-            "baseline_min_remaining_ratio": float(self.guard.config.baseline_min_remaining_ratio),
             "limits": [
                 {
                     "scope": position.limit.scope.value,
@@ -740,7 +747,7 @@ def guarded_provider_call(
     scope = _ACTIVE_RUN.get()
     if scope is None:
         return call()
-    price = scope.admit(agent, messages)
+    price, reserved_cost = scope.admit(agent, messages)
     try:
         result = call()
     except Exception as exc:
@@ -753,6 +760,7 @@ def guarded_provider_call(
             call_status=_call_status(signal),
             limit_reason=signal.reason or None,
             known_zero_cost=_refused_before_billing(signal, exc),
+            reserved_cost=reserved_cost,
         )
         if signal.drops_provider:
             status, _evidence = _error_status_and_evidence(exc)
@@ -766,6 +774,7 @@ def guarded_provider_call(
         price=price,
         channel=channel,
         call_status="ok",
+        reserved_cost=reserved_cost,
     )
     return result
 
@@ -782,7 +791,7 @@ def guarded_provider_stream(
     if scope is None:
         yield from open_stream()
         return
-    price = scope.admit(agent, messages)
+    price, reserved_cost = scope.admit(agent, messages)
     settled = False
     try:
         yield from open_stream()
@@ -797,6 +806,7 @@ def guarded_provider_stream(
             call_status=_call_status(signal),
             limit_reason=signal.reason or None,
             known_zero_cost=_refused_before_billing(signal, exc),
+            reserved_cost=reserved_cost,
         )
         if signal.drops_provider:
             status, _evidence = _error_status_and_evidence(exc)
@@ -812,6 +822,7 @@ def guarded_provider_stream(
                 price=price,
                 channel="stream",
                 call_status="ok",
+                reserved_cost=reserved_cost,
             )
 
 

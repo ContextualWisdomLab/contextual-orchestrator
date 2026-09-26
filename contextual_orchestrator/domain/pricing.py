@@ -49,11 +49,19 @@ def effective_price(
     return None
 
 
-def estimate_call_cost(price: Price | None, prompt_tokens_lower_bound: int) -> Money | None:
-    """Lower-bound pre-call cost: prompt tokens only, since output is not known yet."""
+def estimate_call_cost(price: Price | None, total_token_ceiling: int) -> Money | None:
+    """Conservative cost ceiling for a provider-published total-token limit.
+
+    The context window bounds input plus output tokens but does not determine
+    their split. Pricing every token at the more expensive of the prompt and
+    completion rates therefore bounds every possible split without guessing.
+    """
     if price is None:
         return None
-    return price.cost_of(Usage(max(0, int(prompt_tokens_lower_bound)), 0, measured=False))
+    token_ceiling = max(0, int(total_token_ceiling))
+    prompt_only = price.cost_of(Usage(token_ceiling, 0, measured=False))
+    completion_only = price.cost_of(Usage(0, token_ceiling, measured=False))
+    return prompt_only if prompt_only >= completion_only else completion_only
 
 
 __all__ = [

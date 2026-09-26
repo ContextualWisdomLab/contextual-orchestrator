@@ -1090,9 +1090,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--run-max-cost-usd", type=float, default=None,
                         help="Per-run in-memory USD spend cap checked before every provider call "
                              "(default: no per-run cap; ADR 0138).")
-    parser.add_argument("--baseline-min-remaining-ratio", type=float, default=None,
-                        help="Skip sampled baseline comparisons unless this share of every active "
-                             "cap would remain (default 0.5; ADR 0138).")
     parser.add_argument("--tenant-id", default=None,
                         help="Trusted tenant id the CLI run is metered and budgeted under "
                              "(default: 'default').")
@@ -1162,7 +1159,6 @@ def main(argv: list[str] | None = None) -> None:
         spend_guard = SpendGuard(
             config=SpendGuardConfig.from_values(
                 run_max_cost_usd=args.run_max_cost_usd,
-                baseline_min_remaining_ratio=args.baseline_min_remaining_ratio,
             ),
             store=(
                 JsonlSpendLedgerStore(args.spend_ledger_path)

@@ -64,26 +64,40 @@ this guard, never by discovery.
 | Tenant budget (same fields) | `SpendLedgerStore` | none | same |
 
 Before every provider chat call (including `route_once`, streaming, and the
-sampled baseline) the guard estimates a **prompt-only lower bound** from the
-single PriceBook-backed catalogue and runs `decide_affordability` over every
-active limit. A call is refused, before it is sent, when for any limit:
+sampled baseline) the guard computes a conservative total-cost upper bound
+from the single PriceBook-backed catalogue and the selected route's configured
+total-token ceiling. Because input/output splits are unknown, every token is
+priced at the more expensive of the prompt and completion rates. Unknown or
+conflicting total-token ceilings fail closed under a hard cap; a prompt-only
+lower bound is never admission authority. `decide_affordability` evaluates the
+upper bound over every active limit. Admission and in-flight reservation occur
+under one run-scope lock, so concurrent branches cannot spend the same
+remaining headroom. A call is refused, before it is sent, when for any limit:
 
 - the limit is already spent (`budget_exhausted`);
 - the price is unknown for a billable endpoint (`price_unknown`, fail closed);
+- a priced route lacks an authoritative total-token ceiling
+  (`cost_upper_bound_unavailable`, fail closed);
 - an earlier paid call in this run finished without measurable cost
   (`measurement_unavailable`, fail closed; free and local calls still run);
-- the lower bound would cross the cap (`insufficient_remaining_budget`);
-- it is a sampled baseline and less than `baseline_min_remaining_ratio`
-  (default **0.5**) of the cap would remain (`baseline_headroom_exhausted`).
+- the reserved total-cost upper bound would cross the cap
+  (`insufficient_remaining_budget`);
+- it is a paid sampled baseline under a hard cap without a separate versioned
+  allocation authority (`baseline_allocation_unavailable`, fail closed).
+
+An unmeasured provider outcome consumes its in-flight upper-bound reservation
+for budget admission and marks measurement incomplete. The ledger still stores
+the charged cost as unknown; the reservation is not mislabeled as an actual
+provider charge.
 
 When several limits refuse, the one with the least remaining budget is reported;
 ties go run, then virtual key, then tenant. Soft budgets log a warning once per
 run and never block. A refusal raises the existing `BudgetExceededError`, which
 the server already maps to `429 budget_exceeded`.
 
-Configuration: CLI `--run-max-cost-usd`, `--baseline-min-remaining-ratio`, or
-the KV category `spend_guard_settings` (`run_max_cost_usd`,
-`baseline_min_remaining_ratio`) via `SpendGuardConfig.from_config_store`.
+Configuration: CLI `--run-max-cost-usd` or the KV category
+`spend_guard_settings` (`run_max_cost_usd`) via
+`SpendGuardConfig.from_config_store`. There is no numeric baseline threshold.
 
 The existing process-wide budget is extended, not duplicated:
 `_raise_if_spend_budget_exceeded` now also consults the active run scope.
@@ -95,7 +109,9 @@ baseline is skipped (not failed) when the scope says it is not admissible or
 when its call is refused. Skipped rows are reported as
 `{"skipped": true, "reason": "spend_budget"}`, averages use only compared rows,
 and `aggregate.baseline_skipped_count` counts the skips. Primary work keeps the
-remaining budget.
+remaining budget. Under a hard cap, a paid baseline requires a future explicit,
+versioned allocation authority; absent that authority it fails closed. A
+zero-cost baseline or a baseline with no active hard cap can still run.
 
 ### 3. Provider-limit exhaustion drops only that provider for the rest of the run
 
