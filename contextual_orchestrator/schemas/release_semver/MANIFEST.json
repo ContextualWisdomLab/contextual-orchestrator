@@ -6,15 +6,16 @@
   "schemas": {
     "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/evidence.schema.json": {
       "path": "v1/evidence.schema.json",
-      "sha256": "727300e57699cb091a5301b3a255f80c27f709f01fd05814a0018869a84d7405"
+      "sha256": "47a8ac9ea09a31d585847dab77527b282e57e424f0eacaaddf9d0874edaa248a"
     },
     "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json": {
       "path": "v1/observation.schema.json",
-      "sha256": "4264b462a24d472f5a1ee4c540116a61b5aa0bc9a25ef98d26c39b100049a091"
+      "sha256": "d6bdce42dcc9f32f788d307177248194e67dac4850baaceed039db25e1933d56"
     },
     "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json": {
       "path": "v1/receipt_envelope.schema.json",
-      "sha256": "2bda1460ceda96c4431bd73db59e2dbacc4569e43144ce29abaadd4af744fd42"
+      "sha256": "61ab4a625a6b0d7edb2f0fb899f003d37c4b6559415b1ae86aced39bab278ed6"
     }
-  }
+  },
+  "receipt_schema_id_allowlist": []
 }

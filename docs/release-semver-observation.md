@@ -63,6 +63,11 @@ Every pack the v1 schema accepts is also accepted by #2260's code at
   and rejected, exactly when Python's `str.strip()` would empty it.
 - Identifiers that are not part of #2260's pack (the evidence source commit
   and the digests) live in the envelope.
+- `commit_titles` and `pr_titles` hold every commit and PR title in the
+  release range (all commits, merges included, not first-parent), up to
+  32768 items each; the pack as a whole is capped at 4 MiB. A producer
+  never truncates or samples: if a pack would exceed any cap, it fails
+  closed with an error naming the member, the cap and the observed size.
 
 ## Citations
 
@@ -98,9 +103,19 @@ The schemas and `MANIFEST.json` ship in the wheel under
    Python `jsonschema`, pass an explicit `referencing.Registry` whose
    `retrieve` refuses unknown URIs;
 4. reject documents over the byte cap in each schema's `$comment` (evidence
-   4 MiB, observation 64 KiB, envelope 4 MiB).
+   4 MiB, observation 64 KiB, envelope 4 MiB);
+5. reject an envelope unless its `fast_mlsirm_receipt.schema_id` exactly
+   equals an entry of `receipt_schema_id_allowlist` in the installed
+   `MANIFEST.json`. The list is empty until fast-mlsirm publishes its
+   receipt identity (step 4), so every envelope is rejected until then.
+   Schema validation alone is never sufficient: the `schema_id` pattern
+   accepts a URI or a fast-mlsirm identifier
+   (`fast-mlsirm.<name>.v<N>` or `fast-mlsirm-<name>-v<N>`) and cannot stop
+   a verdict-looking URI.
 
 v1 files are immutable. A change is published as `v2/` with new `$id`s.
+There is no backward-compatible v1.x change: loosening a rule also needs a
+new version, new digests, a new release and a consumer re-pin.
 `.gitattributes` disables end-of-line conversion for the schemas and their
 fixtures, so the digests hold on `core.autocrlf` clones and Windows builds.
 Patterns avoid `\s`, `\d` and `\w` and guard against Python's
@@ -126,7 +141,7 @@ These are unresolved; see ADR 0137:
 - the 0.x breaking-change rule;
 - the first release with no tags versus the declared `0.2.0`;
 - the timeout policy versus the null default;
-- rater count and independence;
-- the inputs #2260 accepts and v1 rejects;
-- the Co-ordinator defaults (size caps, multi-line citation,
-  `recorded_unavailable` coverage).
+- rater count and independence.
+
+The inputs #2260 accepts and v1 rejects, and the size-cap, citation and
+coverage defaults, were decided in review round 4 (2026-09-26).

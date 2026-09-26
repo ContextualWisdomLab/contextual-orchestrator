@@ -116,11 +116,12 @@
       "maxItems": 1024
     },
     "titles": {
+      "description": "Every commit title (commit_titles) or pull-request title (pr_titles) in the release range: all commits, merge commits included, not first-parent only. A producer never truncates or samples: if a list would exceed maxItems, an item would exceed maxLength, or the pack would exceed the 4194304-byte document cap, the producer fails closed with an error naming the member, the cap and the observed size (ADR 0137).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/item"
       },
-      "maxItems": 4096
+      "maxItems": 32768
     }
   }
 }
