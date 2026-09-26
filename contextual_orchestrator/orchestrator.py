@@ -1675,6 +1675,15 @@ def _request_header_pairs(request: object) -> list[tuple[str, str]]:
         return []
 
 
+def _free_serving_route_identity(agent: ModelAgent) -> str:
+    """Return the stable ledger identity shared by admission and observation."""
+    provider_name = agent.provider_name.strip()
+    if provider_name:
+        return provider_name
+    agent_id = agent.id.strip()
+    return f"configured_agent:{agent_id}" if agent_id else ""
+
+
 def _record_free_serving_evidence(
     agent: ModelAgent, data: object, headers: object = None, request: object = None
 ) -> None:
@@ -1689,8 +1698,8 @@ def _record_free_serving_evidence(
     try:
         usage = data.get("usage") if isinstance(data, dict) else None
         record_reported_cost(
-            getattr(agent, "provider_name", None),
-            getattr(agent, "model", None),
+            _free_serving_route_identity(agent),
+            agent.model,
             usage if isinstance(usage, dict) else None,
             headers,
             request_headers=_request_header_pairs(request),
@@ -1711,7 +1720,7 @@ def _record_free_serving_quota_error(
     readable for downstream classifiers.
     """
     try:
-        provider = getattr(agent, "provider_name", None)
+        provider = _free_serving_route_identity(agent)
         payload = _http_error_payload(error) if error.code == 429 else None
         record_provider_error(
             provider,
@@ -1740,8 +1749,8 @@ def _record_free_serving_failure(
         return
     try:
         record_failed_call(
-            getattr(agent, "provider_name", None),
-            getattr(agent, "model", None),
+            _free_serving_route_identity(agent),
+            agent.model,
             request_headers=_request_header_pairs(request),
         )
     except Exception:  # evidence is advisory; never replace the original failure
@@ -10251,8 +10260,11 @@ class TaskOrchestrator:
             catalog_free = self.price_per_million.get(agent.model) == 0 and sum(
                 candidate.model == agent.model for candidate in self.candidates
             ) == 1
+        route_identity = _free_serving_route_identity(agent)
+        if not route_identity:
+            return False
         return free_serving_admitted(
-            agent.provider_name, agent.model, catalog_free=catalog_free
+            route_identity, agent.model, catalog_free=catalog_free
         )
 
     def _is_general_free_agent(
