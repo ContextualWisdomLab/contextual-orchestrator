@@ -21,6 +21,18 @@ idempotent quota authority 1/1. Test-name successor
 idempotent cost evidence is skipped while explicit quota authority remains.
 No credential value is read or exposed.
 
+A current-head review then found the executable fixtures still wrote and read
+provider/model keys while production used the credential-route fingerprint.
+At `0185f48a5088f3da7273a6e34902b3b3dbe8c05d`, recording `PAID` on the
+provider key left the actual route admitted (**RED 1/1**). Test-only GREEN
+`2f8b1fc96dae2a99613fb854945ba17ed01fa279` makes discovery and runtime
+fixtures use the same production route identity for record, verdict, and
+demotion checks. The exact test source parses, 18 runtime identity reads and
+five discovery identity references are present, the three stale provider-key
+runtime patterns are absent, and a direct production-module probe denies a
+route-qualified `PAID` observation (**GREEN 1/1**). This repairs test authority;
+it does not change production source.
+
 This is source-level GREEN only. Exact-head hosted Checks, independent approval,
 protected-main integration, immutable release, and production-cost evidence
 remain unverified; status stays Proposed.
