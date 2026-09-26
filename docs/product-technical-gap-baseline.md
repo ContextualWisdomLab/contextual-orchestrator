@@ -7267,3 +7267,19 @@ remote AST parsing passed for all five Python paths. Draft-triggered runs
 #1231 CHANGES_REQUESTED review tied to `b267f897`/run 36086231637 was dismissed
 because it explicitly contained no source-backed finding; fresh non-skipped
 checks and independent approval remain required. Status stays Proposed.
+
+
+### Typed terminal-reason authority — Proposed
+
+Exact head `1d514871` published OpenAPI 0.3.1 documentation and production
+receipts that treated `terminal_reason` as the routing-termination authority,
+but the schema neither required the field nor constrained its value. A consumer
+could therefore validate a receipt with no termination semantics or an
+undocumented reason and would have to invent its own fallback interpretation.
+
+RED `7a0183d8` records both invalid cases. GREEN `f1af21d7` makes
+`terminal_reason` required and restricts it to the three production values:
+`served`, `fail_closed`, and `eligible_set_exhausted`. Focused route-schema
+tests pass 4/4; the wider API/stream/error suite and exact-head hosted checks
+remain required. This is PR-head evidence only; protected-main integration,
+independent approval, immutable release, and consumer bump remain outstanding.
