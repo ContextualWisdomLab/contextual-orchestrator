@@ -3,7 +3,7 @@
   "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json",
   "title": "Release SemVer receipt envelope (v1)",
   "description": "Transport envelope that binds one evidence pack, the independent rater observations collected through orchestrator/free, and an unmodified fast-mlsirm calibrated release-decision receipt. contextual-orchestrator never produces or interprets a release decision: the only decision authority is fast_mlsirm_receipt.document, which is carried unchanged and bound by schema_id and sha256. The envelope deliberately has no outcome, decision or version field of its own.",
-  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 1048576 UTF-8 bytes.",
+  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 4194304 UTF-8 bytes. Patterns avoid \\s and guard the end of string explicitly, so ECMA-262 and Python re validators agree (Python's $ also matches before a final newline).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -69,7 +69,10 @@
           "description": "Version of the installed contextual-orchestrator release that produced this envelope (producer identity, not a release decision).",
           "type": "string",
           "maxLength": 64,
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+          "not": {
+            "pattern": "\\n"
+          }
         },
         "source_commit": {
           "$ref": "#/$defs/commit"
@@ -94,7 +97,7 @@
             "$ref": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json"
           },
           "served_route": {
-            "description": "Route identity reported by the gateway for this observation. route must be orchestrator/free; agent_id, model and provider are recorded for audit only and are never a caller selection.",
+            "description": "Route identity reported by the gateway for this observation, never by the model. route must be orchestrator/free; agent_id, model and provider are recorded for audit only and are never a caller selection. Step 2 checks them against the gateway's route report and the free-pool catalogue.",
             "type": "object",
             "additionalProperties": false,
             "required": [
@@ -108,13 +111,13 @@
                 "const": "orchestrator/free"
               },
               "agent_id": {
-                "$ref": "#/$defs/bounded_identifier"
+                "$ref": "#/$defs/gateway_identifier"
               },
               "model": {
-                "$ref": "#/$defs/bounded_identifier"
+                "$ref": "#/$defs/gateway_identifier"
               },
               "provider": {
-                "$ref": "#/$defs/bounded_identifier"
+                "$ref": "#/$defs/provider_name"
               }
             }
           },
@@ -148,10 +151,14 @@
       ],
       "properties": {
         "schema_id": {
+          "description": "fast-mlsirm's receipt schema identifier: a URI (RFC 3986 characters only). Step 4 pins the exact value once fast-mlsirm publishes it.",
           "type": "string",
-          "minLength": 1,
+          "minLength": 3,
           "maxLength": 512,
-          "pattern": "^[^\\s]+$"
+          "pattern": "^[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$",
+          "not": {
+            "pattern": "\\n"
+          }
         },
         "sha256": {
           "$ref": "#/$defs/sha256"
@@ -165,8 +172,9 @@
   },
   "$defs": {
     "sha256": {
-      "description": "Lowercase hex SHA-256. Degenerate repeated-digit values (for example all zeros) are rejected.",
+      "description": "Lowercase hex SHA-256. Repeated-digit placeholders (for example all zeros) are rejected; this is cosmetic, and integrity comes from the step 2 digest checks.",
       "type": "string",
+      "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$",
       "not": {
         "enum": [
@@ -192,6 +200,7 @@
     "commit": {
       "description": "Exact 40-character lowercase Git commit id. Degenerate repeated-digit values are rejected.",
       "type": "string",
+      "maxLength": 40,
       "pattern": "^[0-9a-f]{40}$",
       "not": {
         "enum": [
@@ -214,11 +223,25 @@
         ]
       }
     },
-    "bounded_identifier": {
+    "gateway_identifier": {
+      "description": "Identifier reported by the gateway: letters, digits and . _ : / @ + - only, so key=value or sentence text does not fit. Step 2 checks it against the gateway's route report and the free-pool catalogue.",
       "type": "string",
       "minLength": 1,
-      "maxLength": 256,
-      "pattern": "^[^\\s]+$"
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$",
+      "not": {
+        "pattern": "\\n"
+      }
+    },
+    "provider_name": {
+      "description": "Provider name reported by the gateway, such as openrouter or nvidia_nim: lowercase letters, digits and . _ - only (no model path, no :variant).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "not": {
+        "pattern": "\\n"
+      }
     }
   }
 }

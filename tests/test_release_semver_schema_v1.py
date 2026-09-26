@@ -9,9 +9,11 @@ nothing resolves a schema over the network.
 from __future__ import annotations
 
 import copy
-import fnmatch
 import hashlib
 import json
+import re
+import shutil
+import subprocess
 import tomllib
 from collections.abc import Iterator
 from pathlib import Path
@@ -38,9 +40,9 @@ ID_PREFIX = "https://github.com/ContextualWisdomLab/contextual-orchestrator/sche
 # these files must fail here. A schema change is a new ``v2/`` directory with
 # its own MANIFEST entries, never an edit to these bytes or to this table.
 PINNED_V1_SHA256 = {
-    "v1/evidence.schema.json": "9c6768602e4322ac0320d60e484fdfc56b26de3ce0c461e98a2911cc26f71736",
-    "v1/observation.schema.json": "836ff74c10427f7023fc416ee0f843040a992160b9615f31411c03ee8f728146",
-    "v1/receipt_envelope.schema.json": "5b14f3c9fcb8773f32db07360ac9b7fdaa4cda23f2b6df2a01ec7d7e382f35cb",
+    "v1/evidence.schema.json": "727300e57699cb091a5301b3a255f80c27f709f01fd05814a0018869a84d7405",
+    "v1/observation.schema.json": "4264b462a24d472f5a1ee4c540116a61b5aa0bc9a25ef98d26c39b100049a091",
+    "v1/receipt_envelope.schema.json": "2bda1460ceda96c4431bd73db59e2dbacc4569e43144ce29abaadd4af744fd42",
 }
 
 # The .github#2260 evidence-pack member names (tests/fixtures/noema_semver at
@@ -68,7 +70,7 @@ FORBIDDEN_PROPERTY_NAMES = frozenset(
     {"release_version", "next_version", "outcome", "decision"}
 )
 FORBIDDEN_OBSERVATION_PROPERTY_NAMES = FORBIDDEN_PROPERTY_NAMES | frozenset(
-    {"confidence", "probability", "score", "bump", "reason"}
+    {"confidence", "probability", "score", "bump", "reason", "status", "detail"}
 )
 REASON_CODES_BY_CLASS = {
     "major": {
@@ -81,6 +83,38 @@ REASON_CODES_BY_CLASS = {
     "patch": {"fix_only", "docs_or_internal_only"},
     "abstain": {"insufficient_evidence", "conflicting_evidence"},
 }
+# #2260 builds text refs as ``prefix + item.strip()``; these are the prefixes of
+# its detected_breaking_refs (API lists) and recorded fixtures, plus v1's own.
+TEXT_REF_PREFIXES = {
+    "changelog_fragments": "changelog:",
+    "removed_public_symbols": "api:removed:",
+    "renamed_public_symbols": "api:renamed:",
+    "required_arg_promotions": "api:required-arg:",
+    "deprecated_alias_only": "api:deprecated-alias:",
+    "commit_titles": "commit:",
+    "pr_titles": "pr:",
+}
+# Every character Python's str.isspace() accepts, i.e. what str.strip() removes.
+PYTHON_STRIP_WHITESPACE = "".join(
+    character for character in map(chr, range(0x110000)) if character.isspace()
+)
+# Co-ordinator defaults pending the owner's decision (ADR 0137): list caps.
+LIST_CAPS = {
+    "changelog_fragments": (1024, 16384),
+    "removed_public_symbols": (1024, 2000),
+    "renamed_public_symbols": (1024, 2000),
+    "required_arg_promotions": (1024, 2000),
+    "deprecated_alias_only": (1024, 2000),
+    "commit_titles": (4096, 2000),
+    "pr_titles": (4096, 2000),
+}
+ADR_PATH = (
+    ROOT_DIR
+    / "docs"
+    / "planning"
+    / "adrs"
+    / "0137-release-semver-observation-schema.md"
+)
 GITATTRIBUTES_LINES = (
     "contextual_orchestrator/schemas/** -text",
     "tests/fixtures/release_semver_v1_conformance.json -text",
@@ -222,6 +256,56 @@ def _github_2260_files(role: str) -> list[str]:
     return sorted(name for name, entry in files.items() if entry["role"] == role)
 
 
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    """Translate a gitattributes/setuptools glob; ``*`` never crosses ``/``, ``**`` does."""
+    parts = []
+    index = 0
+    while index < len(pattern):
+        if pattern.startswith("**/", index):
+            parts.append("(?:[^/]+/)*")
+            index += 3
+        elif pattern.startswith("/**", index) and index + 3 == len(pattern):
+            parts.append("/.+")
+            index += 3
+        elif pattern.startswith("**", index):
+            parts.append(".*")
+            index += 2
+        elif pattern[index] == "*":
+            parts.append("[^/]*")
+            index += 1
+        elif pattern[index] == "?":
+            parts.append("[^/]")
+            index += 1
+        else:
+            parts.append(re.escape(pattern[index]))
+            index += 1
+    return re.compile("".join(parts))
+
+
+def _glob_matches(path: str, pattern: str) -> bool:
+    """Return whether a POSIX relative ``path`` matches a path glob exactly."""
+    return _glob_regex(pattern).fullmatch(path) is not None
+
+
+def _ref_validator() -> Draft202012Validator:
+    """Validator for a single observation evidence ref (with the schema's $defs)."""
+    observation = _schema_documents()["observation"]
+    return Draft202012Validator(
+        {"$defs": observation["$defs"], "$ref": "#/$defs/evidence_ref"}
+    )
+
+
+def _schema_nodes(node: Any) -> Iterator[dict[str, Any]]:
+    """Yield every object node of a schema tree."""
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _schema_nodes(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _schema_nodes(value)
+
+
 def _hash_pinned_files() -> list[Path]:
     """Every file whose exact bytes the manifest, pins, or provenance depend on."""
     return sorted(
@@ -317,9 +401,58 @@ def test_gitattributes_disables_eol_conversion_for_hash_pinned_files() -> None:
     patterns = [line.split()[0] for line in GITATTRIBUTES_LINES]
     for path in _hash_pinned_files():
         relative = path.relative_to(ROOT_DIR).as_posix()
-        assert any(fnmatch.fnmatchcase(relative, pattern) for pattern in patterns), (
-            relative
-        )
+        assert any(_glob_matches(relative, pattern) for pattern in patterns), relative
+
+
+def test_git_check_attr_confirms_eol_conversion_is_disabled() -> None:
+    """Git itself reports ``text`` unset for every hash-pinned file."""
+    git = shutil.which("git")
+    if git is None or not (ROOT_DIR / ".git").exists():
+        pytest.skip("not a git work tree")
+    relative = [path.relative_to(ROOT_DIR).as_posix() for path in _hash_pinned_files()]
+    result = subprocess.run(
+        [git, "-C", str(ROOT_DIR), "check-attr", "text", "--", *relative],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = result.stdout.splitlines()
+    assert len(lines) == len(relative)
+    for line in lines:
+        assert line.endswith(": text: unset"), line
+
+
+@pytest.mark.parametrize(
+    ("path", "pattern", "expected"),
+    [
+        (
+            "contextual_orchestrator/schemas/release_semver/v1/a.json",
+            "contextual_orchestrator/schemas/**",
+            True,
+        ),
+        (
+            "schemas/release_semver/v1/a.schema.json",
+            "schemas/release_semver/v1/*.schema.json",
+            True,
+        ),
+        (
+            "schemas/release_semver/v1/x/a.schema.json",
+            "schemas/release_semver/v1/*.schema.json",
+            False,
+        ),
+        ("schemas/release_semver/MANIFEST.json", "schemas/*.json", False),
+        (
+            "tests/fixtures/github_2260_noema_semver/a.json",
+            "tests/fixtures/github_2260_noema_semver/**",
+            True,
+        ),
+    ],
+)
+def test_path_glob_matching_does_not_cross_directories(
+    path: str, pattern: str, expected: bool
+) -> None:
+    """``*`` stays inside one path segment, unlike fnmatch; ``**`` spans segments."""
+    assert _glob_matches(path, pattern) is expected
 
 
 def test_no_schema_declares_a_version_or_decision_field() -> None:
@@ -440,8 +573,7 @@ def test_github_2260_recorded_verdicts_are_not_observations(name: str) -> None:
 @pytest.mark.parametrize("name", _github_2260_files("recorded_verdict"))
 def test_github_2260_evidence_ref_format_is_accepted(name: str) -> None:
     """Refs in #2260's recorded fixtures (changelog:, api:...:) use the v1 ref format."""
-    evidence_ref = _schema_documents()["observation"]["$defs"]["evidence_ref"]
-    validator = Draft202012Validator(evidence_ref)
+    validator = _ref_validator()
     recorded = json.loads((GITHUB_2260_DIR / name).read_text(encoding="utf-8"))
     for ref in recorded["verdict"]["evidence_refs"]:
         assert validator.is_valid(ref), ref
@@ -539,17 +671,25 @@ def test_refs_resolve_from_the_local_registry_only() -> None:
     [
         (
             "evidence",
-            lambda d: d.__setitem__("commit_titles", [d["commit_titles"][0]] * 513),
+            lambda d: d.__setitem__("commit_titles", [d["commit_titles"][0]] * 4097),
         ),
         (
             "evidence",
-            lambda d: d.__setitem__("pr_titles", [d["pr_titles"][0]] * 257),
+            lambda d: d.__setitem__("pr_titles", [d["pr_titles"][0]] * 4097),
         ),
         (
             "evidence",
             lambda d: d.__setitem__(
-                "changelog_fragments", [d["changelog_fragments"][0]] * 257
+                "changelog_fragments", [d["changelog_fragments"][0]] * 1025
             ),
+        ),
+        (
+            "evidence",
+            lambda d: d.__setitem__("removed_public_symbols", ["pkg.symbol"] * 1025),
+        ),
+        (
+            "evidence",
+            lambda d: d["changelog_fragments"].__setitem__(0, "x" * 16385),
         ),
         (
             "evidence",
@@ -563,9 +703,9 @@ def test_refs_resolve_from_the_local_registry_only() -> None:
         ),
         (
             "observation",
-            lambda d: d.__setitem__("evidence_refs", ["changelog:" + "a" * 2039]),
+            lambda d: d.__setitem__("evidence_refs", ["changelog:" + "a" * 16396]),
         ),
-        ("observation", lambda d: d.__setitem__("assignment_ref", "r" * 129)),
+        ("observation", lambda d: d.__setitem__("assignment_ref", "a" * 33)),
         (
             "receipt_envelope",
             lambda d: d.__setitem__(
@@ -604,6 +744,155 @@ def test_package_data_ships_every_schema_family_file() -> None:
     shipped = [MANIFEST_PATH, *FAMILY_DIR.rglob("*.schema.json")]
     for path in shipped:
         relative = path.relative_to(PACKAGE_DIR).as_posix()
-        assert any(fnmatch.fnmatchcase(relative, pattern) for pattern in patterns), (
-            relative
-        )
+        assert any(_glob_matches(relative, pattern) for pattern in patterns), relative
+
+
+@pytest.mark.parametrize("member", sorted(LIST_CAPS))
+def test_list_caps_accept_realistic_sizes(member: str) -> None:
+    """Each list accepts exactly its cap (items and item length) and rejects one more."""
+    max_items, max_length = LIST_CAPS[member]
+    validator = _validator("evidence")
+    document = _valid_document("evidence")
+    document[member] = [f"item {index}" for index in range(max_items)]
+    assert list(validator.iter_errors(document)) == []
+    document[member].append("one too many")
+    assert list(validator.iter_errors(document))
+    document = _valid_document("evidence")
+    document[member] = ["x" * max_length]
+    assert list(validator.iter_errors(document)) == []
+    document[member] = ["x" * (max_length + 1)]
+    assert list(validator.iter_errors(document))
+
+
+def test_this_repository_first_release_pack_fits() -> None:
+    """A 7728-character multi-line fragment and 2296 untagged commits validate."""
+    fragment = "\n".join(
+        ["- Message count provenance:"] + ["\t" + "x" * 1100 for _ in range(7)]
+    )
+    assert len(fragment) >= 7728
+    document = _valid_document("evidence")
+    document["changelog_fragments"] = [fragment] * 46
+    document["commit_titles"] = [f"fix: commit {index}" for index in range(2296)]
+    document["pr_titles"] = [f"#{index} change" for index in range(1257)]
+    assert list(_validator("evidence").iter_errors(document)) == []
+
+
+def test_item_blankness_mirrors_python_strip() -> None:
+    """An item is blank exactly when #2260's ``item.strip()`` would be empty."""
+    validator = _validator("evidence")
+    base = _valid_document("evidence")
+    for character in PYTHON_STRIP_WHITESPACE:
+        blank = dict(base, commit_titles=[character * 3])
+        assert list(validator.iter_errors(blank)), repr(character)
+        inner = dict(base, commit_titles=[f"a{character}b"])
+        assert list(validator.iter_errors(inner)) == [], repr(character)
+    for character in ("\ufeff", "\x00", "\x07", "\u200b"):
+        assert not character.isspace()
+        content = dict(base, commit_titles=[character])
+        assert list(validator.iter_errors(content)) == [], repr(character)
+
+
+def test_github_2260_generated_text_refs_are_accepted() -> None:
+    """``prefix + item.strip()`` is accepted for any item #2260 accepts."""
+    validator = _ref_validator()
+    items = [
+        "fast_mlsirm.a\tb",
+        "breaking: drop /v1\n\nMigrate to /v2.",
+        "  padded symbol\n",
+        "bell \x07 inside",
+        "\ufeffbom-led",
+        "a->b",
+        "f.x",
+        *(f"a{character}b" for character in PYTHON_STRIP_WHITESPACE),
+    ]
+    for name in _github_2260_files("evidence_pack"):
+        pack = json.loads((GITHUB_2260_DIR / name).read_text(encoding="utf-8"))
+        for member in TEXT_REF_PREFIXES:
+            items.extend(pack[member])
+    for prefix in TEXT_REF_PREFIXES.values():
+        for item in items:
+            ref = prefix + item.strip()
+            assert validator.is_valid(ref), repr(ref)
+        for character in PYTHON_STRIP_WHITESPACE:
+            assert not validator.is_valid(f"{prefix}item{character}"), repr(character)
+            assert not validator.is_valid(f"{prefix}{character}item"), repr(character)
+
+
+@pytest.mark.parametrize("member", sorted(LIST_CAPS))
+def test_every_pack_item_is_citable_by_index(member: str) -> None:
+    """RFC 6901 index refs cite any item, whatever characters it contains."""
+    validator = _ref_validator()
+    max_items, _ = LIST_CAPS[member]
+    for index in (0, 1, 9, 10, max_items - 1):
+        assert validator.is_valid(f"#/{member}/{index}"), index
+    assert not validator.is_valid(f"#/{member}/-1")
+    assert not validator.is_valid(f"#/{member}/00")
+    assert not validator.is_valid(f"#/{member}/0/")
+
+
+def test_no_pattern_uses_engine_dependent_classes() -> None:
+    """``\\s``, ``\\d`` and ``\\w`` differ between ECMA-262 and Python re; none is used."""
+    for name, document in _schema_documents().items():
+        for node in _schema_nodes(document):
+            pattern = node.get("pattern")
+            if isinstance(pattern, str):
+                assert not re.search(r"\\[sSdDwWbB]", pattern), (name, pattern)
+
+
+def test_every_end_anchored_pattern_rejects_a_trailing_newline() -> None:
+    """Python's ``$`` also matches before a final newline, so each ``$`` is guarded.
+
+    Patterns inside ``not`` are exempt: there the quirk can only reject more.
+    """
+    for name, document in _schema_documents().items():
+        negated = [
+            id(node["not"])
+            for node in _schema_nodes(document)
+            if isinstance(node.get("not"), dict)
+        ]
+        for node in _schema_nodes(document):
+            pattern = node.get("pattern")
+            if not isinstance(pattern, str) or not pattern.endswith("$"):
+                continue
+            if id(node) in negated:
+                continue
+            fixed = re.fullmatch(r"\^\[[^\]]+\]\{(\d+)\}\$", pattern)
+            guarded = node.get("not") == {"pattern": "\\n"} or (
+                fixed is not None and node.get("maxLength") == int(fixed.group(1))
+            )
+            assert guarded, (name, pattern)
+
+
+def test_github_2260_unavailable_status_is_not_representable() -> None:
+    """A transport failure is not an observation (not even abstain) and not an envelope."""
+    (name,) = _github_2260_files("recorded_unavailable")
+    recorded = json.loads((GITHUB_2260_DIR / name).read_text(encoding="utf-8"))
+    assert recorded["status"] == "unavailable"
+    for schema in ("evidence", "observation", "receipt_envelope"):
+        assert list(_validator(schema).iter_errors(recorded)), schema
+    abstain = dict(
+        _valid_document("observation"),
+        observed_class="abstain",
+        reason_code="insufficient_evidence",
+        evidence_refs=[],
+    )
+    assert list(_validator("observation").iter_errors(abstain)) == []
+    for key, value in recorded.items():
+        smuggled = dict(abstain, **{key: value})
+        assert list(_validator("observation").iter_errors(smuggled)), key
+
+
+def test_schema_gap_cases_name_a_step_2_check_listed_in_the_adr() -> None:
+    """Valid fixtures that only step 2 can reject name a check the ADR lists."""
+    adr = ADR_PATH.read_text(encoding="utf-8")
+    section = adr.split("## Step 2 validator cross-checks", 1)[1].split("\n## ", 1)[0]
+    listed = set(re.findall(r"^\d+\. \*\*`([a-z_0-9]+)`", section, flags=re.MULTILINE))
+    gap_cases = [case for case in _conformance()["cases"] if "step_2_check" in case]
+    assert gap_cases
+    for case in gap_cases:
+        assert case["valid"] is True, case["name"]
+        assert case["step_2_check"] in listed, case["name"]
+    for check in ("receipt_digest", "evidence_digest", "schema_digests"):
+        assert check in listed
+    assert "citation_membership" in listed
+    assert "class_vs_breaking_evidence" in listed

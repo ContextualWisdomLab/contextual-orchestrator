@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/evidence.schema.json",
   "title": "Release SemVer evidence pack (v1)",
-  "description": "The .github#2260 (ADR-0033) release evidence pack as normalised by its reusable release-tag workflow at dccacc77: the same member names, arrays of plain strings, previous_version, and the api_surface_inspected rule, closed and size-bounded. It carries no identifiers of its own and no version decision; the receipt envelope binds it by evidence_sha256, the SHA-256 of its RFC 8785 canonical JSON form (v1 packs contain no JSON numbers).",
-  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 262144 UTF-8 bytes.",
+  "description": "A strict subset of the release evidence packs that .github#2260 (ADR-0033) accepts at dccacc77: #2260's nine member names, arrays of strings, previous_version and its api_surface_inspected rule, but closed, with every member required, a canonical previous_version, string-only items and size caps. ADR 0137 lists every input #2260 accepts and v1 rejects. The pack carries no identifiers of its own and no version decision; the receipt envelope binds it by evidence_sha256, the SHA-256 of its RFC 8785 canonical JSON form (v1 packs contain no JSON numbers).",
+  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 4194304 UTF-8 bytes. Patterns avoid \\s and guard the end of string explicitly, so ECMA-262 and Python re validators agree (Python's $ also matches before a final newline).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,38 +19,42 @@
   ],
   "properties": {
     "previous_version": {
-      "description": "Canonical three-component SemVer of the previous release without a v prefix. #2260 derives it from the latest tag and falls back to 0.0.0 when no tag exists; how that fallback is treated is an unresolved owner decision (ADR 0137).",
+      "description": "Canonical X.Y.Z of the previous release (no v prefix, no whitespace). This is the only previous version the raters see. #2260 keeps a non-empty pack value as-is and fills a missing or empty one from `git describe --tags --abbrev=0` minus one leading v (0.0.0 without a tag), then passes that git-derived value as --previous-version, which overrides the pack for version arithmetic. The v1 producer writes that same git-derived value here, and step 2 rejects a mismatch (ADR 0137).",
       "type": "string",
       "maxLength": 64,
-      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "not": {
+        "pattern": "\\n"
+      }
     },
     "changelog_fragments": {
-      "$ref": "#/$defs/items_256"
-    },
-    "removed_public_symbols": {
-      "$ref": "#/$defs/items_256"
-    },
-    "renamed_public_symbols": {
-      "$ref": "#/$defs/items_256"
-    },
-    "required_arg_promotions": {
-      "$ref": "#/$defs/items_256"
-    },
-    "deprecated_alias_only": {
-      "$ref": "#/$defs/items_256"
-    },
-    "commit_titles": {
+      "description": "Changelog fragment texts. Multi-line text (newlines, tabs) is allowed; observations can always cite an item by index.",
       "type": "array",
       "items": {
-        "$ref": "#/$defs/item"
+        "$ref": "#/$defs/fragment"
       },
-      "maxItems": 512
+      "maxItems": 1024
+    },
+    "removed_public_symbols": {
+      "$ref": "#/$defs/api_findings"
+    },
+    "renamed_public_symbols": {
+      "$ref": "#/$defs/api_findings"
+    },
+    "required_arg_promotions": {
+      "$ref": "#/$defs/api_findings"
+    },
+    "deprecated_alias_only": {
+      "$ref": "#/$defs/api_findings"
+    },
+    "commit_titles": {
+      "$ref": "#/$defs/titles"
     },
     "pr_titles": {
-      "$ref": "#/$defs/items_256"
+      "$ref": "#/$defs/titles"
     },
     "api_surface_inspected": {
-      "description": "True only when the public API surface was actually inspected. As in #2260, a pack that is not marked inspected must carry at least one removed/renamed/required-arg finding.",
+      "description": "JSON true only when the public API surface was actually inspected (#2260 tests `is True`). As in #2260, a pack that is not marked inspected must carry at least one removed/renamed/required-arg finding.",
       "type": "boolean"
     }
   },
@@ -90,19 +94,33 @@
     ]
   },
   "$defs": {
+    "fragment": {
+      "description": "One evidence string. Like #2260's non-empty check (item.strip()), it must contain a character that Python's str.strip() keeps. Any other character, including newlines and tabs, is allowed.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "[^\\t\\n\\x0b\\x0c\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+    },
     "item": {
-      "description": "One evidence string. Like #2260's API lists, it must contain a non-whitespace character.",
+      "description": "One evidence string. Like #2260's non-empty check (item.strip()), it must contain a character that Python's str.strip() keeps. Any other character, including newlines and tabs, is allowed.",
       "type": "string",
       "minLength": 1,
       "maxLength": 2000,
-      "pattern": "\\S"
+      "pattern": "[^\\t\\n\\x0b\\x0c\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
     },
-    "items_256": {
+    "api_findings": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/item"
       },
-      "maxItems": 256
+      "maxItems": 1024
+    },
+    "titles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      },
+      "maxItems": 4096
     }
   }
 }
