@@ -151,11 +151,11 @@
       ],
       "properties": {
         "schema_id": {
-          "description": "fast-mlsirm's receipt schema identifier, in one of three forms: a URI (RFC 3986 characters only), fast-mlsirm's dotted form (fast-mlsirm.<name>.v<N>, as in fast-mlsirm.sampling-design.v1) or its hyphenated form (fast-mlsirm-<name>-v<N>). Names are lowercase letters and digits joined by - or _ (dotted) or - (hyphenated), so spaces, =, ; and other free text do not fit the fast-mlsirm forms. The pattern does not stop verdict-looking URIs; step 2 check receipt_schema_id admits only an identity listed in the installed MANIFEST.json receipt_schema_id_allowlist, which stays empty until step 4, so every envelope is rejected until fast-mlsirm publishes its receipt identity.",
+          "description": "fast-mlsirm's receipt schema identifier, in one of two forms: a URI (RFC 3986 characters only) or fast-mlsirm's dotted form (fast-mlsirm.<name>.v<N>, as in fast-mlsirm.sampling-design.v1). Names are lowercase letters and digits joined by - or _, so spaces, =, ; and other free text do not fit the dotted form. The hyphenated form (fast-mlsirm-<name>-v<N>) is intentionally not accepted in v1. The pattern does not stop verdict-looking URIs; step 2 check receipt_schema_id admits only an identity listed in the installed MANIFEST.json receipt_schema_id_allowlist, which stays empty until step 4, so every envelope is rejected until fast-mlsirm publishes its receipt identity.",
           "type": "string",
           "minLength": 3,
           "maxLength": 512,
-          "pattern": "^(?:[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+|fast-mlsirm(?:\\.[a-z0-9]+(?:[_-][a-z0-9]+)*)+\\.v[1-9][0-9]*|fast-mlsirm(?:-[a-z0-9]+)+-v[1-9][0-9]*)$",
+          "pattern": "^(?:[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+|fast-mlsirm(?:\\.[a-z0-9]+(?:[_-][a-z0-9]+)*)+\\.v[1-9][0-9]*)$",
           "not": {
             "pattern": "\\n"
           }

@@ -14,7 +14,7 @@
     },
     "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json": {
       "path": "v1/receipt_envelope.schema.json",
-      "sha256": "61ab4a625a6b0d7edb2f0fb899f003d37c4b6559415b1ae86aced39bab278ed6"
+      "sha256": "01f653375a935a016f217e5a856f0b7eb07569062ac5662f4af3990a241b1250"
     }
   },
   "receipt_schema_id_allowlist": []

@@ -109,9 +109,9 @@ The schemas and `MANIFEST.json` ship in the wheel under
    `MANIFEST.json`. The list is empty until fast-mlsirm publishes its
    receipt identity (step 4), so every envelope is rejected until then.
    Schema validation alone is never sufficient: the `schema_id` pattern
-   accepts a URI or a fast-mlsirm identifier
-   (`fast-mlsirm.<name>.v<N>` or `fast-mlsirm-<name>-v<N>`) and cannot stop
-   a verdict-looking URI.
+   accepts a URI or a dotted fast-mlsirm identifier
+   (`fast-mlsirm.<name>.v<N>`; the hyphenated `fast-mlsirm-<name>-v<N>` form
+   is not accepted in v1) and cannot stop a verdict-looking URI.
 
 v1 files are immutable. A change is published as `v2/` with new `$id`s.
 There is no backward-compatible v1.x change: loosening a rule also needs a
