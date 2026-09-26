@@ -27,12 +27,16 @@ tested, let alone achieved.
 | --- | --- | --- | --- |
 | `domain/candidates.py` | `CandidateAnswer`, `CandidateSet`, `CombinationOutcome` value objects | — | — |
 | `domain/combination.py` `RankedFirst` | Today's route semantics as a strategy | — | — |
-| `domain/combination.py` `PluralityVote` | Vote over extracted final answers; agreement share reported as `support` | Wang et al. (2023), arXiv:2203.11171 §2, §3.5 | Voters are different workers, not samples of one model. `min_support` abstention and rank tie-break are repository choices. |
-| `domain/combination.py` `ScoredBestOfN` | Pick the highest score from an external scorer port | — | Wang et al. (2024) find an LLM ranker weaker than MoA aggregation (§3.3); kept as a baseline arm. |
+| `domain/combination.py` `PluralityVote` | Vote over extracted final answers; agreement share reported as `support` | Wang et al. (2023), arXiv:2203.11171 §2, §3.5 | Voters are different workers, not samples of one model. Only a unique plurality is selected; a tied plurality abstains (`plurality_tie`). No support threshold is applied. |
+| `domain/combination.py` `ScoredBestOfN` | Pick the unique highest score from an external scorer port; an exact top-score tie abstains (`score_tie`) | — | Wang et al. (2024) find an LLM ranker weaker than MoA aggregation (§3.3); kept as a baseline arm. |
 | `domain/moa.py` | Aggregate-and-Synthesize aggregator messages | Wang et al. (2024), arXiv:2406.04692 Table 1, Eq. 1 | One proposer layer (MoA-Lite depth). Proposers anonymised. "open-source models" → "models". |
-| `application/fan_out.py` | Bounded parallel fan-out through a completion port; MoA runner | — | Deadline is wall-clock for the proposer layer only. |
+| `application/fan_out.py` | Bounded parallel fan-out through a completion port; MoA runner | — | `deadline_seconds` defaults to `None` (no cutoff; upstream completion owns termination, per the default-null model timeout contract). An explicit administrative cap applies to the proposer layer only. |
 
 Fail-closed rules, consistent with planning ADR 0001:
+
+- No heuristic decides between answers: prior rank never breaks a vote or
+  score tie; ties abstain. Rank only picks the representative text among
+  candidates that already agree on the same extracted answer.
 
 - A strategy that lacks evidence abstains (`selected is None`); it never
   invents or silently substitutes an answer.
