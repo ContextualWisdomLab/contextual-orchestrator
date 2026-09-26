@@ -14,6 +14,7 @@ import sys
 import threading
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -829,12 +830,12 @@ def test_free_model_advances_through_the_free_pool_on_retryable_5xx() -> None:
 
     assert result["answer"] == "[free_route_c] answer"
     assert result["trace"][0]["served_agent_id"] == "free_route_c"
-    # tool_retry_attempts=1 gives each failing free route one same-agent retry
-    # before advancing — the request-time-failure retry budget from point 2.
+    # tool_retry_attempts=1 gives the 502 route one same-agent retry before
+    # advancing — the request-time-failure retry budget from point 2. An
+    # explicit 503 availability rejection advances without that replay.
     assert calls == [
         "free_route_a",
         "free_route_a",
-        "free_route_b",
         "free_route_b",
         "free_route_c",
     ]
@@ -1252,6 +1253,243 @@ def test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_age
         "stack underneath _invoke's own retry-then-failover decision"
     )
     assert "priced_worker" not in send_calls
+
+
+def test_free_model_advances_after_503_without_replaying_the_same_candidate() -> None:
+    """A 503 is an availability rejection: advance at once, keep circuit evidence.
+
+    The default same-agent retry budget used to replay the rejected candidate
+    first, so a pool of 503/429 routes spent roughly two provider calls per
+    candidate and could run out of caller deadline before reaching the tail of
+    the candidate list.
+    """
+    calls: list[str] = []
+
+    class UnavailablePrimary(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(_http_error(503), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        UnavailablePrimary(), free_ids=("free_route_a", "free_route_b", "free_route_c")
+    )
+    orchestrator.tool_retry_attempts = 2
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert calls == ["free_route_a", "free_route_b"]
+    # Unlike a 429, a 503 remains a real availability signal for the breaker.
+    assert orchestrator._circuit["free_route_a"]["failures"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("statuses", "final_status", "last_calls"),
+    [
+        ((503, 429, 503, 429), 429, 1),
+        # A 503 on the LAST candidate keeps the bounded same-candidate retry
+        # (tool_retry_attempts=2 -> three calls): nothing is left to advance to.
+        ((429, 503, 429, 503), 503, 3),
+        ((503, 503, 503, 503), 503, 3),
+    ],
+)
+def test_free_model_tries_every_candidate_once_when_all_return_429_or_503(
+    statuses: tuple[int, ...], final_status: int, last_calls: int
+) -> None:
+    """Every non-last free candidate is attempted exactly once before the final error.
+
+    No candidate with a successor is replayed immediately, the priced worker is
+    never promoted, and the caller receives the last candidate's classified
+    upstream status. Only the last candidate's 503 keeps the bounded retry.
+    """
+    free_ids = ("free_route_a", "free_route_b", "free_route_c", "free_route_d")
+    status_by_agent = dict(zip(free_ids, statuses))
+    calls: list[str] = []
+
+    class RejectingFreeTier(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            calls.append(agent.id)
+            raise classify_provider_failure(
+                _http_error(status_by_agent.get(agent.id, 500)),
+                agent_id=agent.id,
+                model=agent.model,
+            )
+
+    orchestrator = _free_pool_orchestrator(RejectingFreeTier(), free_ids=free_ids)
+    orchestrator.tool_retry_attempts = 2
+    # No storm wait: a mixed 429/503 set is not a genuine storm, and a 503
+    # without Retry-After records no cooldown, so the route must end after
+    # one pass over the candidate list.
+    orchestrator.rate_limit_wait_seconds = 0.0
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert calls == [*free_ids[:-1], *([free_ids[-1]] * last_calls)]
+    assert "priced_worker" not in calls
+    assert excinfo.value.provider_status == final_status
+    assert excinfo.value.retryable is True
+
+
+def _http_error_with_retry_after(code: int, retry_after: str) -> urllib.error.HTTPError:
+    headers = Message()
+    headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        "https://provider.example/chat/completions", code, "err", headers, None
+    )
+
+
+class _ScriptedStatusClient(ModelClient):
+    """Raises the next scripted classified failure for an agent, then answers."""
+
+    def __init__(self, script: dict[str, list[urllib.error.HTTPError]]) -> None:
+        super().__init__()
+        self.script = {agent_id: list(errors) for agent_id, errors in script.items()}
+        self.calls: list[str] = []
+
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        del messages, temperature
+        self.calls.append(agent.id)
+        pending = self.script.get(agent.id)
+        if pending:
+            raise classify_provider_failure(pending.pop(0), agent_id=agent.id, model=agent.model)
+        return f"[{agent.id}] answer"
+
+
+def test_single_candidate_retries_one_503_then_succeeds() -> None:
+    """With nothing to advance to, a lone candidate keeps its bounded 503 retry."""
+    client = _ScriptedStatusClient({"solo_worker": [_http_error(503)]})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("solo_worker", "mock-solo", tags=("reasoning",))],
+        client=client,
+        tool_retry_backoff_seconds=0.0,
+    )
+    orchestrator._triage_fn = lambda text: False
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+
+    assert result["answer"] == "[solo_worker] answer"
+    assert client.calls == ["solo_worker", "solo_worker"]
+
+
+def test_last_free_candidate_retries_503_after_the_pool_advanced() -> None:
+    """Earlier 503s advance at once; the last free candidate still gets its retry."""
+    client = _ScriptedStatusClient(
+        {"free_route_a": [_http_error(503)], "free_route_b": [_http_error(503)]}
+    )
+    orchestrator = _free_pool_orchestrator(client, free_ids=("free_route_a", "free_route_b"))
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert client.calls == ["free_route_a", "free_route_b", "free_route_b"]
+    assert "priced_worker" not in client.calls
+
+
+def test_last_candidate_503_retry_waits_for_stated_retry_after() -> None:
+    """A stated 503 Retry-After is a floor for the last candidate's retry delay."""
+    client = _ScriptedStatusClient(
+        {
+            "free_route_a": [_http_error_with_retry_after(503, "7")],
+            "free_route_b": [_http_error_with_retry_after(503, "2")],
+        }
+    )
+    orchestrator = _free_pool_orchestrator(client, free_ids=("free_route_a", "free_route_b"))
+    slept: list[float] = []
+    orchestrator._tool_retry_sleep = slept.append
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    # The non-last 503 advanced without waiting out its 7 s; only the last
+    # candidate's retry waited, and for its own stated 2 s.
+    assert client.calls == ["free_route_a", "free_route_b", "free_route_b"]
+    assert slept == [2.0]
+
+
+def test_last_candidate_skips_inline_retry_when_retry_after_exceeds_ceiling() -> None:
+    """A Retry-After beyond the inline ceiling is not slept on the request thread."""
+    client = _ScriptedStatusClient(
+        {"solo_worker": [_http_error_with_retry_after(503, "120")]}
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("solo_worker", "mock-solo", tags=("reasoning",))],
+        client=client,
+        tool_retry_backoff_seconds=0.0,
+        rate_limit_wait_seconds=0.0,
+    )
+    orchestrator._triage_fn = lambda text: False
+    slept: list[float] = []
+    orchestrator._tool_retry_sleep = slept.append
+    orchestrator._rate_limit_sleep = slept.append
+
+    with pytest.raises(ProviderUpstreamError):
+        orchestrator.route_once([{"role": "user", "content": "route this"}])
+
+    assert client.calls == ["solo_worker"]
+    assert slept == []
+
+
+def test_non_standard_529_keeps_bounded_same_candidate_retry() -> None:
+    """529 is not treated as an explicit 503 rejection; it keeps the bounded retry."""
+    client = _ScriptedStatusClient(
+        {"free_route_a": [_http_error(529), _http_error(529)]}
+    )
+    orchestrator = _free_pool_orchestrator(client, free_ids=("free_route_a", "free_route_b"))
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    # tool_retry_attempts=1: one same-candidate replay before advancing.
+    assert client.calls == ["free_route_a", "free_route_a", "free_route_b"]
+
+
+def test_mid_stream_503_surfaces_without_advancing() -> None:
+    """Bytes already streamed cannot be recalled, so a mid-stream 503 is terminal."""
+    calls: list[str] = []
+
+    class PartialThenUnavailable(ModelClient):
+        def stream_chat(self, agent: ModelAgent, messages: list, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            calls.append(agent.id)
+            yield f"[{agent.id}] partial"
+            raise classify_provider_failure(
+                _http_error(503), agent_id=agent.id, model=agent.model, transport="stream"
+            )
+
+    orchestrator = _free_pool_orchestrator(
+        PartialThenUnavailable(), free_ids=("free_route_a", "free_route_b")
+    )
+    received: list[str] = []
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        for delta in orchestrator.stream_route(
+            [{"role": "user", "content": "stream this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        ):
+            received.append(delta)
+
+    assert received == ["[free_route_a] partial"]
+    assert calls == ["free_route_a"]
+    assert excinfo.value.provider_status == 503
 
 
 if __name__ == "__main__":
