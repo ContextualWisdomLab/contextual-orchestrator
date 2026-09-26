@@ -123,14 +123,14 @@ def test_ledger_ignores_unknown_for_providers_that_do_not_report_cost() -> None:
     }
 
 
-def test_admission_requires_free_evidence_for_experiential_only() -> None:
+def test_admission_requires_pre_send_authority_for_experiential() -> None:
     ledger = FreeServingLedger()
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is True
     assert free_serving_admitted("openrouter", "m", catalog_free=False, ledger=ledger) is False
 
     ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is True
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is False
     ledger.record(EXPERIENTIAL, "m", CostVerdict.PAID)
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
 
@@ -165,7 +165,7 @@ def test_discovery_and_serving_selectors_share_the_signal() -> None:
     assert _free_now() == (["openrouter"], ["openrouter"])
 
     record_reported_cost(EXPERIENTIAL, "promo-model", {"cost": 0, "is_byok": False})
-    assert _free_now() == ([EXPERIENTIAL, "openrouter"], [EXPERIENTIAL, "openrouter"])
+    assert _free_now() == (["openrouter"], ["openrouter"])
 
     # Free allowance exhausted and credits overflow billed the call: demote at once.
     record_reported_cost(EXPERIENTIAL, "promo-model", {"cost": 0.0021, "is_byok": False})
@@ -218,19 +218,17 @@ def test_model_client_records_evidence_from_every_completed_call(monkeypatch) ->
 
     assert client._send(agent, payload) == "OK"
     assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, "promo-model") is CostVerdict.FREE
-    assert TaskOrchestrator([agent])._is_free_agent(agent) is True
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
     assert client._send(agent, payload) == "OK"
     assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, "promo-model") is CostVerdict.PAID
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
-# --- Round-2 decisions: promotions nomination, 429 demotion, UTC reset, idempotency ---
+# --- Promotions nomination, persistent demotion, idempotency ----------------
 
 _UTC_2026_09_26_1000 = 1790416800.0  # 2026-09-26T10:00:00Z (19:00 KST)
-_UTC_2026_09_27_0000 = 1790467200.0  # 2026-09-27T00:00:00Z (09:00 KST), provider reset
-_SKEW = evidence.ALLOWANCE_RESET_SKEW_SECONDS
-_NEXT_RESET = _UTC_2026_09_27_0000 + _SKEW  # 00:05 UTC: the ledger's skew-safe boundary
+_UTC_2026_09_27_0000 = 1790467200.0
 
 
 def _quota_body(code: str) -> dict[str, object]:
@@ -245,15 +243,9 @@ class _Clock:
         return self.now
 
 
-def test_utc_reset_boundary_is_midnight_utc_plus_a_skew_margin() -> None:
-    assert _SKEW == 300
-    previous = _NEXT_RESET - 86400
-    assert evidence.last_allowance_reset(_UTC_2026_09_26_1000) == previous
-    # 00:00-00:05 UTC on the host clock still belongs to the previous allowance day.
-    assert evidence.last_allowance_reset(_UTC_2026_09_27_0000) == previous
-    assert evidence.last_allowance_reset(_NEXT_RESET - 1) == previous
-    assert evidence.last_allowance_reset(_NEXT_RESET) == _NEXT_RESET
-    assert evidence.last_allowance_reset(_UTC_2026_09_27_0000 - 1) == previous
+def test_ledger_has_no_automatic_calendar_reset_authority() -> None:
+    assert not hasattr(evidence, "ALLOWANCE_RESET_SKEW_SECONDS")
+    assert not hasattr(evidence, "last_allowance_reset")
 
 
 @pytest.mark.parametrize(
@@ -277,11 +269,11 @@ def test_free_quota_exhaustion_is_a_429_with_a_documented_marker(status, payload
     assert evidence.is_free_quota_exhausted_error(status, payload) is expected
 
 
-def test_quota_exhaustion_demotes_until_the_next_utc_reset_and_needs_a_free_probe() -> None:
+def test_quota_exhaustion_persists_until_explicit_process_reset() -> None:
     clock = _Clock(_UTC_2026_09_26_1000)
     ledger = FreeServingLedger(clock=clock)
     record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is True
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     assert ledger.probe_due(EXPERIENTIAL, "m") is False
 
     assert (
@@ -293,29 +285,26 @@ def test_quota_exhaustion_demotes_until_the_next_utc_reset_and_needs_a_free_prob
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     assert ledger.probe_due(EXPERIENTIAL, "m") is False
 
-    # A zero-cost reply before the reset (and inside the skew margin) cannot undo it.
-    for before_reset in (_UTC_2026_09_27_0000 - 1, _UTC_2026_09_27_0000 + 1, _NEXT_RESET - 1):
-        clock.now = before_reset
-        record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
-        assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.EXHAUSTED
-        assert ledger.probe_due(EXPERIENTIAL, "m") is False
-
-    # After 00:05 UTC the route is probe-due but still not free until evidence.
-    clock.now = _NEXT_RESET + 1
-    assert ledger.probe_due(EXPERIENTIAL, "m") is True
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+    clock.now = _UTC_2026_09_27_0000 + 86400
     record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is True
+    assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.EXHAUSTED
+    assert ledger.probe_due(EXPERIENTIAL, "m") is False
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+    ledger.reset()
+    assert ledger.demoted(EXPERIENTIAL, "m") is False
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
 
 
-def test_paid_demotion_also_holds_until_the_reset_for_catalog_free_providers() -> None:
+def test_paid_demotion_persists_for_catalog_free_providers() -> None:
     clock = _Clock(_UTC_2026_09_26_1000)
     ledger = FreeServingLedger(clock=clock)
     record_reported_cost("openrouter", "m:free", {"cost": 0.2, "is_byok": False}, ledger=ledger)
     record_reported_cost("openrouter", "m:free", {"cost": 0, "is_byok": False}, ledger=ledger)
     assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is False
-    clock.now = _NEXT_RESET + 60
+    clock.now = _UTC_2026_09_27_0000 + 86400
     record_reported_cost("openrouter", "m:free", {"cost": 0, "is_byok": False}, ledger=ledger)
+    assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is False
+    ledger.reset()
     assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is True
 
 
@@ -342,7 +331,7 @@ def test_provider_errors_never_leave_an_evidence_required_route_free() -> None:
     assert ledger.verdict("openrouter", "m:free") is CostVerdict.FREE
 
 
-def test_http_402_demotes_an_evidence_required_route_until_the_reset() -> None:
+def test_http_402_persistently_demotes_an_evidence_required_route() -> None:
     clock = _Clock(_UTC_2026_09_26_1000)
     ledger = FreeServingLedger(clock=clock)
     record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
@@ -355,14 +344,13 @@ def test_http_402_demotes_an_evidence_required_route_until_the_reset() -> None:
     assert ledger.demoted(EXPERIENTIAL, "m") is True
     record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
-    clock.now = _NEXT_RESET
-    assert ledger.demoted(EXPERIENTIAL, "m") is False
-    assert ledger.probe_due(EXPERIENTIAL, "m") is True
+    clock.now = _UTC_2026_09_27_0000 + 86400
+    assert ledger.demoted(EXPERIENTIAL, "m") is True
+    assert ledger.probe_due(EXPERIENTIAL, "m") is False
 
 
 @pytest.mark.parametrize("demotion", [CostVerdict.PAID, CostVerdict.EXHAUSTED])
-def test_a_demotion_holds_through_later_unknown_verdicts_until_the_reset(demotion) -> None:
-    """PAID/EXHAUSTED, UNKNOWN, FREE on one UTC day must end NOT admitted (R1)."""
+def test_a_demotion_holds_through_later_unknown_and_free_verdicts(demotion) -> None:
     clock = _Clock(_UTC_2026_09_26_1000)
     ledger = FreeServingLedger(clock=clock)
     ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
@@ -377,94 +365,63 @@ def test_a_demotion_holds_through_later_unknown_verdicts_until_the_reset(demotio
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     assert ledger.probe_due(EXPERIENTIAL, "m") is False
 
-    # Still held just before the skew-safe boundary...
-    clock.now = _NEXT_RESET - 1
+    clock.now = _UTC_2026_09_27_0000 + 86400
+    assert ledger.probe_due(EXPERIENTIAL, "m") is False
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     assert ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE) is False
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
-    # ...and lifted after it, but only fresh FREE evidence re-admits the route.
-    clock.now = _NEXT_RESET + 1
-    assert ledger.probe_due(EXPERIENTIAL, "m") is True
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
-    assert ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE) is True
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is True
 
 
-def test_concurrent_probe_callers_claim_each_route_at_most_once() -> None:
-    """Concurrent schedulers cannot double-probe and double-bill one route."""
-    clock = _Clock(_UTC_2026_09_26_1000)
-    ledger = FreeServingLedger(clock=clock)
+def test_concurrent_probe_callers_never_invoke_the_network_callback() -> None:
+    ledger = FreeServingLedger()
     model = _discovered(EXPERIENTIAL, "m")
-    first_probe_entered = threading.Event()
-    release_first_probe = threading.Event()
-    duplicate_probe = threading.Event()
+    called = threading.Event()
 
-    def blocking_probe(_model: object) -> None:
-        if not first_probe_entered.is_set():
-            first_probe_entered.set()
-            assert release_first_probe.wait(timeout=2)
-            return
-        duplicate_probe.set()
+    def probe(_model: object) -> None:
+        called.set()
 
-    first = threading.Thread(
-        target=lambda: evidence.probe_free_candidates(
-            [model], probe=blocking_probe, max_probes=1, ledger=ledger
-        )
-    )
-    first.start()
-    assert first_probe_entered.wait(timeout=2)
-
-    second = evidence.probe_free_candidates(
-        [model], probe=blocking_probe, max_probes=1, ledger=ledger
-    )
-    release_first_probe.set()
-    first.join(timeout=2)
-
-    assert first.is_alive() is False
-    assert second == {"probes": 0, "probed": []}
-    assert duplicate_probe.is_set() is False
+    receipts = [
+        evidence.probe_free_candidates([model], probe=probe, max_probes=1, ledger=ledger)
+        for _ in range(2)
+    ]
+    assert receipts == [
+        {"probes": 0, "probed": []},
+        {"probes": 0, "probed": []},
+    ]
+    assert called.is_set() is False
 
 
-def test_catalog_free_providers_also_keep_the_demotion_hold() -> None:
-    clock = _Clock(_UTC_2026_09_26_1000)
-    ledger = FreeServingLedger(clock=clock)
+def test_catalog_free_providers_keep_demotion_until_explicit_reset() -> None:
+    ledger = FreeServingLedger()
     ledger.record("openrouter", "m:free", CostVerdict.PAID)
     assert ledger.record("openrouter", "m:free", CostVerdict.FREE) is False
-    assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is False
-    clock.now = _NEXT_RESET + 1
-    # No fresh evidence: the last verdict is still PAID, so it stays out.
-    assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is False
-    assert ledger.record("openrouter", "m:free", CostVerdict.FREE) is True
+    assert (
+        free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger)
+        is False
+    )
+    ledger.reset()
     assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is True
 
 
-def test_a_demotion_inside_the_skew_window_lifts_at_the_boundary() -> None:
-    """Documented trade-off of the 5-minute margin."""
-    clock = _Clock(_UTC_2026_09_27_0000 + 120)  # 00:02 UTC, host clock
+def test_calendar_time_cannot_lift_a_demotion() -> None:
+    clock = _Clock(_UTC_2026_09_26_1000)
     ledger = FreeServingLedger(clock=clock)
     ledger.record(EXPERIENTIAL, "m", CostVerdict.PAID)
     assert ledger.demoted(EXPERIENTIAL, "m") is True
-    clock.now = _NEXT_RESET
-    assert ledger.demoted(EXPERIENTIAL, "m") is False
-    assert ledger.probe_due(EXPERIENTIAL, "m") is True
+    clock.now += 10 * 365 * 24 * 60 * 60
+    assert ledger.demoted(EXPERIENTIAL, "m") is True
+    assert ledger.probe_due(EXPERIENTIAL, "m") is False
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
 
 
-def test_free_evidence_expires_at_the_next_reset() -> None:
-    """An idle route cannot stay FREE across an allowance reset."""
+def test_passive_free_evidence_never_admits_an_evidence_required_route() -> None:
     clock = _Clock(_UTC_2026_09_26_1000)
     ledger = FreeServingLedger(clock=clock)
     ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is True
-    assert ledger.probe_due(EXPERIENTIAL, "m") is False
-    clock.now = _NEXT_RESET - 1
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is True
-    clock.now = _NEXT_RESET
     assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.FREE
-    assert ledger.free_now(EXPERIENTIAL, "m") is False
+    assert ledger.free_now(EXPERIENTIAL, "m") is True
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
-    assert ledger.probe_due(EXPERIENTIAL, "m") is True
-    ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
-    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is True
+    clock.now += 10 * 365 * 24 * 60 * 60
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is False
 
 
 @pytest.mark.parametrize(
@@ -571,7 +528,7 @@ def test_model_client_demotes_a_route_on_a_served_429_free_quota_error(monkeypat
     agent = _agent()
     client = ModelClient()
     record_reported_cost(EXPERIENTIAL, agent.model, {"cost": 0, "is_byok": False})
-    assert TaskOrchestrator([agent])._is_free_agent(agent) is True
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
     error = _http_error(429, _quota_body("insufficient_quota"))
 
@@ -708,14 +665,12 @@ def test_promotion_nominates_a_priced_row_but_only_evidence_admits_it() -> None:
 
     assert general_free_serving_candidates(marked) == []
     record_reported_cost(EXPERIENTIAL, "promo-model", {"cost": 0, "is_byok": False})
-    assert [
-        (row.provider_name, row.model_id) for row in general_free_serving_candidates(marked)
-    ] == [(EXPERIENTIAL, "promo-model")]
+    assert general_free_serving_candidates(marked) == []
     record_reported_cost(EXPERIENTIAL, "other-model", {"cost": 0, "is_byok": False})
-    assert [row.model_id for row in general_free_serving_candidates(marked)] == ["promo-model"]
+    assert general_free_serving_candidates(marked) == []
 
 
-def test_probe_free_candidates_probes_only_nominated_due_evidence_routes() -> None:
+def test_probe_free_candidates_never_sends_a_post_hoc_cost_request() -> None:
     from dataclasses import replace
 
     clock = _Clock(_UTC_2026_09_26_1000)
@@ -733,46 +688,11 @@ def test_probe_free_candidates_probes_only_nominated_due_evidence_routes() -> No
 
     def _probe(model) -> None:
         seen.append(model.model_id)
-        if model.model_id == "free-now":
-            record_reported_cost(
-                EXPERIENTIAL, model.model_id, {"cost": 0, "is_byok": False}, ledger=ledger
-            )
-        elif model.model_id == "exhausted":
-            evidence.record_provider_error(
-                EXPERIENTIAL, model.model_id, 429, _quota_body("free_limit_reached"), ledger=ledger
-            )
-        elif model.model_id == "raises":
-            raise RuntimeError("transport failed")
 
     result = evidence.probe_free_candidates(rows, probe=_probe, max_probes=4, ledger=ledger)
-    assert seen == ["free-now", "exhausted", "raises", "silent"]
-    assert result == {
-        "probes": 4,
-        "probed": [f"{EXPERIENTIAL}/{name}" for name in seen],
-    }
-    assert ledger.snapshot() == {
-        f"{EXPERIENTIAL}/exhausted": "exhausted",
-        f"{EXPERIENTIAL}/free-now": "free",
-        f"{EXPERIENTIAL}/raises": "unknown",
-        f"{EXPERIENTIAL}/silent": "unknown",
-    }
-
-    # Same UTC day: nothing is due again except the never-probed row.
-    seen.clear()
-    evidence.probe_free_candidates(rows, probe=_probe, max_probes=4, ledger=ledger)
-    assert seen == ["over-budget"]
-
-    # Inside the 5-minute skew margin nothing is due yet.
-    seen.clear()
-    clock.now = _UTC_2026_09_27_0000 + 5
-    evidence.probe_free_candidates(rows, probe=_probe, max_probes=10, ledger=ledger)
     assert seen == []
-
-    # After the 00:05 UTC boundary every route is due again, including the FREE
-    # one: its evidence expired at the reset.
-    clock.now = _NEXT_RESET + 5
-    evidence.probe_free_candidates(rows, probe=_probe, max_probes=10, ledger=ledger)
-    assert seen == ["free-now", "exhausted", "raises", "silent", "over-budget"]
+    assert result == {"probes": 0, "probed": []}
+    assert ledger.snapshot() == {}
 
 
 # --- R2/R3: every chat transport records evidence, including failures ---------
@@ -822,7 +742,7 @@ def _sse(usage: dict[str, object] | None) -> list[bytes]:
 def _free_route(agent: ModelAgent) -> None:
     FREE_SERVING_LEDGER.reset()
     record_reported_cost(agent.provider_name, agent.model, {"cost": 0, "is_byok": False})
-    assert TaskOrchestrator([agent])._is_free_agent(agent) is True
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
 def _open_returning(client, monkeypatch, factory) -> None:
