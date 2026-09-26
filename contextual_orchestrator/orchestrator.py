@@ -5269,19 +5269,19 @@ class _StateStore:
             phases = []
             diagnostics = []
             if request_ids:
-                placeholders = ",".join("?" for _ in request_ids)
+                request_ids_json = json.dumps(request_ids)
                 phases = self._conn.execute(
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('initial_decision', 'decision_receipt') "
-                    "AND key IN (" + placeholders + ") "
+                    "AND key IN (SELECT value FROM json_each(?)) "
                     "ORDER BY seq DESC LIMIT ?",
-                    (*request_ids, 2 * limit + 1),
+                    (request_ids_json, 2 * limit + 1),
                 ).fetchall()
                 diagnostics = self._conn.execute(
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
-                    "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
-                    (*request_ids, 8 * limit + 1),
+                    "AND key IN (SELECT value FROM json_each(?)) ORDER BY seq DESC LIMIT ?",
+                    (request_ids_json, 8 * limit + 1),
                 ).fetchall()
             diagnostic_truncated = len(diagnostics) > 8 * limit
             diagnostics = list(reversed(diagnostics[:8 * limit]))
