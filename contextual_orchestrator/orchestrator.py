@@ -2574,7 +2574,7 @@ class ModelClient:
                 centered = [(value / 255.0) * 2.0 - 1.0 for value in raw]
                 vectors.append(centered)
             return vectors, None
-        destination = self._validate_provider(agent)  # pragma: no cover
+        destination = self._validated_destination(agent, transport="embedding")  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
         response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
@@ -3262,7 +3262,7 @@ class ModelClient:
                 yield answer[start : start + 24]
             return
 
-        destination = self._validate_provider(agent)  # pragma: no cover
+        destination = self._validated_destination(agent, transport="stream")  # pragma: no cover
         settings = self.request_settings_snapshot()
         payload = {  # pragma: no cover
             "model": agent.model,
@@ -3654,7 +3654,7 @@ class ModelClient:
             method="POST",
         )
         try:
-            with self._open_model_provider(request, self._validate_provider(agent), agent) as response:  # pragma: no cover
+            with self._open_model_provider(request, self._validated_destination(agent, transport="passthrough"), agent) as response:  # pragma: no cover
                 return self._read_bounded_response(
                     response, MAX_PROVIDER_RESPONSE_BYTES
                 ), response.headers.get_content_type()
@@ -3680,7 +3680,7 @@ class ModelClient:
             agent,
             "GET",
             f"/{endpoint.lstrip('/')}",
-            destination=self._validate_provider(agent),
+            destination=self._validated_destination(agent, transport="passthrough"),
             max_response_bytes=max_response_bytes,
         )
 
@@ -3692,7 +3692,7 @@ class ModelClient:
             agent,
             "DELETE",
             f"/{endpoint.lstrip('/')}",
-            destination=self._validate_provider(agent),
+            destination=self._validated_destination(agent, transport="passthrough"),
             max_response_bytes=max_response_bytes,
         )
 
@@ -3710,7 +3710,7 @@ class ModelClient:
             method="GET",
         )
         with self._open_model_provider(  # pragma: no cover
-            request, self._validate_provider(agent), agent
+            request, self._validated_destination(agent, transport="passthrough"), agent
         ) as response:
             return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
 
@@ -3747,7 +3747,7 @@ class ModelClient:
             method="POST",
         )
         with self._open_model_provider(  # pragma: no cover
-            request, self._validate_provider(agent), agent
+            request, self._validated_destination(agent, transport="passthrough"), agent
         ) as response:
             result = json.loads(
                 self._read_bounded_response(response, max_response_bytes).decode("utf-8")
@@ -3919,6 +3919,15 @@ class ModelClient:
             "echo": echoed,
         }
 
+    def _validated_destination(self, agent: ModelAgent, *, transport: str) -> ProviderDestination:
+        """Preserve the caller's transport without changing provider overrides."""
+        try:
+            return self._validate_provider(agent)
+        except ProviderUpstreamError as exc:
+            raise classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport=transport
+            ) from None
+
     def _validate_provider(self, agent: ModelAgent) -> ProviderDestination:
         """Reject unsafe model endpoints and return the exact address to connect to."""
         # Runtime secret must be resolvable from the KV — never an env var name,
@@ -4048,7 +4057,7 @@ class ModelClient:
         elif _is_local_provider_url(agent.base_url):
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
-            destination = self._validate_provider(agent)  # pragma: no cover
+            destination = self._validated_destination(agent, transport="batch")  # pragma: no cover
             batch_error: ProviderUpstreamError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
