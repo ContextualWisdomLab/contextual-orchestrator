@@ -62,15 +62,16 @@ def test_security_workflow_covers_core_repository_security_process():
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "uv pip install --python .venv/bin/python --require-hashes -r requirements-opencode-review-ci.txt",
         "uv pip install --python .venv/bin/python --require-hashes -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt",
-        "python -m pip_audit --path .venv/lib/python3.12/site-packages",
-        "cyclonedx-py environment .venv/bin/python",
-        "uv build --wheel --out-dir dist",
+        "python -m pip install --require-hashes -r requirements.lock",
+        "python -m pip_audit -r requirements.lock",
+        "cyclonedx-py environment --output-format json",
+        "uv build --wheel --no-build-isolation --out-dir dist",
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
     for expected_token in expected_tokens:
         assert expected_token in workflow_text
-    assert "pip install --require-hashes -r requirements.lock" not in workflow_text
+    assert "pip_audit --path .venv" not in workflow_text
 
     removed_duplicate_scanners = [
         "actions/dependency-review-action@",
