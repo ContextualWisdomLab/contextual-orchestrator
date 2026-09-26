@@ -151,7 +151,10 @@ def test_provider_error_isolated_when_two_credentials_share_provider_name() -> N
 
         assert report.providers_with_errors == ("shared",)
         assert report.last_known_good_model_count == 1
-        assert set(report.selected_agent_ids) == {"shared_second_new", "shared_first_live"}
+        assert set(report.selected_agent_ids) == {
+            agent_id_for(_model(second, "second-new")),
+            agent_id_for(_model(first, "first-live")),
+        }
     finally:
         set_backend(None)
 
