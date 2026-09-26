@@ -255,18 +255,53 @@ def test_conduct_template_without_verifier_requirement_returns_synthesis(accepte
     import dataclasses
 
     orch.policy = dataclasses.replace(orch.policy, verifier_required=False)
-    verdict = {"accepted": accepted, "reason": "stub verdict", "judge": "model"}
-    with patch.object(
-        orch,
-        "_model_judge_verification",
-        side_effect=lambda _task, fallback, **_kw: {**verdict, "verifier_output": fallback["verifier_output"]},
-    ):
-        result = orch.conduct([{"role": "user", "content": "draft it"}])
-    assert result["plan_source"] == "template"
-    outputs = {row["role"]: row["output"] for row in result["trace"] if "role" in row and "output" in row}
-    assert set(outputs) >= {"thinker", "worker", "verifier", "synthesizer"}
+    result = _conduct_template_with_verdict(orch, accepted)
+    outputs = _template_role_outputs(result)
     assert result["answer"] != outputs["verifier"]
     assert result["answer"] == outputs["synthesizer"]
+
+
+@pytest.mark.parametrize(("accepted", "answer_role"), [(True, "synthesizer"), (False, "worker")])
+def test_conduct_template_with_verifier_requirement_gates_on_verdict(
+    accepted: bool, answer_role: str
+) -> None:
+    """Default ``verifier_required=True``: accepted -> synthesis, rejected -> worker output."""
+    agents = [
+        _agent("planner_agent"),
+        _agent("builder_agent"),
+        _agent("verifier_agent"),
+        _agent("synth_agent"),
+    ]
+    orch = _orch(*agents)
+    assert orch.policy.verifier_required is True
+    result = _conduct_template_with_verdict(orch, accepted)
+    outputs = _template_role_outputs(result)
+    assert result["verification"]["accepted"] is accepted
+    assert result["answer"] == outputs[answer_role]
+    assert result["answer"] != outputs["verifier"]
+
+
+def _conduct_template_with_verdict(orch: TaskOrchestrator, accepted: bool) -> dict:
+    """Run template conduct with a stubbed model-judge verdict."""
+    verdict = {"accepted": accepted, "reason": "stub verdict", "judge": "model"}
+
+    def judge(_task, fallback, **_kw):
+        return {**verdict, "verifier_output": fallback["verifier_output"]}
+
+    with patch.object(orch, "_model_judge_verification", side_effect=judge):
+        result = orch.conduct([{"role": "user", "content": "draft it"}])
+    assert result["plan_source"] == "template"
+    return result
+
+
+def _template_role_outputs(result: dict) -> dict[str, str]:
+    outputs = {
+        row["role"]: row["output"]
+        for row in result["trace"]
+        if "role" in row and "output" in row
+    }
+    assert set(outputs) >= {"thinker", "worker", "verifier", "synthesizer"}
+    return outputs
 
 
 def test_conduct_template_fallback_when_generation_fails() -> None:
