@@ -253,3 +253,42 @@ def test_stream_cleanup_failure_preserves_safe_provider_error(monkeypatch, tool_
         assert "private cleanup diagnostic" not in str(captured.value)
     finally:
         original_close()
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_virtual_proxy_closes_consumed_error_before_failover(monkeypatch, cleanup_fails):
+    """The virtual caller owns raw responses transferred by proxy_send_once."""
+    from test_rate_limit_aware_admission import SequencedRateLimitClient, _two_agent_pool
+
+    response = urllib.error.HTTPError(
+        "https://provider.example/v1", 429, "rate limited", {"Retry-After": "30"}, io.BytesIO(b"{}")
+    )
+    original_close = response.close
+    if cleanup_fails:
+        def failing_close():
+            original_close()
+            raise OSError("cleanup failed")
+        monkeypatch.setattr(response, "close", failing_close)
+    client = SequencedRateLimitClient({
+        "primary_agent": [response], "fallback_agent": [{"id": "served", "choices": []}],
+    })
+    send_once = client.proxy_send_once
+
+    def checked_send(agent, endpoint, payload):
+        if agent.id == "fallback_agent":
+            assert response.closed
+        return send_once(agent, endpoint, payload)
+
+    client.proxy_send_once = checked_send
+    orchestrator = _two_agent_pool(client)
+    try:
+        result = orchestrator.proxy_completion({
+            "model": "orchestrator/auto", "messages": [{"role": "user", "content": "hello"}],
+        })
+        assert result["id"] == "served"
+        assert response.closed
+        assert client.calls == ["primary_agent", "fallback_agent"]
+        assert orchestrator._circuit == {}
+    finally:
+        original_close()
+        orchestrator.close()

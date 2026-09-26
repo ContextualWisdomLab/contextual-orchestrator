@@ -310,6 +310,46 @@ def test_idempotent_timeout_retries_same_agent_before_failover() -> None:
     assert orchestrator._circuit == {}
 
 
+def test_same_agent_retry_records_failed_and_served_attempts() -> None:
+    """A successful same-agent retry preserves both actual attempts in order."""
+    timeout = ToolExecutionError(
+        "read timed out",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    client = _ScriptedToolClient(
+        {
+            "primary_worker": [timeout, "primary recovered"],
+            "backup_worker": ["unused"],
+        }
+    )
+    orchestrator = _orchestrator(client, tool_retry_attempts=1)
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "inspect repository"}]
+    )
+
+    assert result["answer"] == "primary recovered"
+    assert client.calls == ["primary_worker", "primary_worker"]
+    route = result["route"]
+    assert route["terminal_reason"] == "served"
+    assert [row["agent_id"] for row in route["attempted"]] == [
+        "primary_worker",
+        "primary_worker",
+    ]
+    assert [row["outcome"] for row in route["attempted"]] == [
+        "retryable_transport",
+        "served",
+    ]
+    retry = route["attempted"][0]
+    assert retry["retryable"] is True
+    assert retry["transport"] == "chat"
+    assert "error_code" not in retry
+    assert "provider_status" not in retry
+    orchestrator.close()
+
+
 def test_exhausted_safe_retry_then_fails_over_once() -> None:
     timeout = ToolExecutionError(
         "read timed out",
