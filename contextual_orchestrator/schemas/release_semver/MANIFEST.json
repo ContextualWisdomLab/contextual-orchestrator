@@ -1,0 +1,21 @@
+{
+  "manifest_version": 1,
+  "family": "release_semver",
+  "digest_algorithm": "sha256",
+  "digest_input": "exact schema file bytes",
+  "schemas": {
+    "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/evidence.schema.json": {
+      "path": "v1/evidence.schema.json",
+      "sha256": "47a8ac9ea09a31d585847dab77527b282e57e424f0eacaaddf9d0874edaa248a"
+    },
+    "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json": {
+      "path": "v1/observation.schema.json",
+      "sha256": "d6bdce42dcc9f32f788d307177248194e67dac4850baaceed039db25e1933d56"
+    },
+    "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json": {
+      "path": "v1/receipt_envelope.schema.json",
+      "sha256": "01f653375a935a016f217e5a856f0b7eb07569062ac5662f4af3990a241b1250"
+    }
+  },
+  "receipt_schema_id_allowlist": []
+}

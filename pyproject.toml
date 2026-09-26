@@ -49,6 +49,14 @@ object_name_pattern = "two_or_more_words_snake_case"
 [tool.setuptools.packages.find]
 include = ["contextual_orchestrator*"]
 
+# Versioned, hash-pinned JSON Schemas ship inside the wheel so consumers can
+# verify them against the released package (docs/release-semver-observation.md).
+[tool.setuptools.package-data]
+contextual_orchestrator = [
+  "schemas/release_semver/MANIFEST.json",
+  "schemas/release_semver/v1/*.schema.json",
+]
+
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
 

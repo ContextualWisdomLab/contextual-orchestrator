@@ -1,0 +1,19 @@
+{
+  "previous_version": "0.11.2",
+  "changelog_fragments": [
+    "feat: add moderated slopes API"
+  ],
+  "removed_public_symbols": [],
+  "renamed_public_symbols": [],
+  "required_arg_promotions": [],
+  "deprecated_alias_only": [
+    "fast_mlsirm.dif.mantel_haenszel"
+  ],
+  "commit_titles": [
+    "feat: moderated slopes"
+  ],
+  "pr_titles": [
+    "#2001 moderated slopes"
+  ],
+  "api_surface_inspected": true
+}

@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json",
+  "title": "Release SemVer receipt envelope (v1)",
+  "description": "Transport envelope that binds one evidence pack, the independent rater observations collected through orchestrator/free, and an unmodified fast-mlsirm calibrated release-decision receipt. contextual-orchestrator never produces or interprets a release decision: the only decision authority is fast_mlsirm_receipt.document, which is carried unchanged and bound by schema_id and sha256. The envelope deliberately has no outcome, decision or version field of its own.",
+  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 4194304 UTF-8 bytes. Patterns avoid \\s and guard the end of string explicitly, so ECMA-262 and Python re validators agree (Python's $ also matches before a final newline).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_sha256",
+    "evidence_sha256",
+    "evidence_source_commit",
+    "gateway_contract",
+    "model_pool",
+    "producer",
+    "observations",
+    "fast_mlsirm_receipt"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "cwl_release_semver_receipt_envelope/v1"
+    },
+    "schema_sha256": {
+      "description": "SHA-256 of the exact evidence and observation schema file bytes used, as listed in MANIFEST.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence",
+        "observation"
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observation": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evidence_sha256": {
+      "description": "SHA-256 of the RFC 8785 canonical JSON form of the evidence pack.",
+      "$ref": "#/$defs/sha256"
+    },
+    "evidence_source_commit": {
+      "description": "Source commit the evidence pack was collected at. Kept here, not in the #2260-shaped pack.",
+      "$ref": "#/$defs/commit"
+    },
+    "gateway_contract": {
+      "const": "contextual-orchestrator-contract-v1"
+    },
+    "model_pool": {
+      "description": "The only admissible pool. No provider, model, or group selection is representable.",
+      "const": "orchestrator/free"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package",
+        "package_version",
+        "source_commit"
+      ],
+      "properties": {
+        "package": {
+          "const": "contextual-orchestrator"
+        },
+        "package_version": {
+          "description": "Version of the installed contextual-orchestrator release that produced this envelope (producer identity, not a release decision).",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+          "not": {
+            "pattern": "\\n"
+          }
+        },
+        "source_commit": {
+          "$ref": "#/$defs/commit"
+        }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "observation",
+          "served_route",
+          "transport"
+        ],
+        "properties": {
+          "observation": {
+            "$ref": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json"
+          },
+          "served_route": {
+            "description": "Route identity reported by the gateway for this observation, never by the model. route must be orchestrator/free; agent_id, model and provider are recorded for audit only and are never a caller selection. Step 2 checks them against the gateway's route report and the free-pool catalogue.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "route",
+              "agent_id",
+              "model",
+              "provider"
+            ],
+            "properties": {
+              "route": {
+                "const": "orchestrator/free"
+              },
+              "agent_id": {
+                "$ref": "#/$defs/gateway_identifier"
+              },
+              "model": {
+                "$ref": "#/$defs/gateway_identifier"
+              },
+              "provider": {
+                "$ref": "#/$defs/provider_name"
+              }
+            }
+          },
+          "transport": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "api_surface",
+              "response_format"
+            ],
+            "properties": {
+              "api_surface": {
+                "const": "chat.completions"
+              },
+              "response_format": {
+                "const": "json_schema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "fast_mlsirm_receipt": {
+      "description": "The fast-mlsirm calibrated release-decision receipt, carried unchanged and never interpreted by contextual-orchestrator. document is the sole decision authority; sha256 is the SHA-256 of its RFC 8785 canonical JSON form, which consumers must recompute.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_id",
+        "sha256",
+        "document"
+      ],
+      "properties": {
+        "schema_id": {
+          "description": "fast-mlsirm's receipt schema identifier, in one of two forms: a URI (RFC 3986 characters only) or fast-mlsirm's dotted form (fast-mlsirm.<name>.v<N>, as in fast-mlsirm.sampling-design.v1). Names are lowercase letters and digits joined by - or _, so spaces, =, ; and other free text do not fit the dotted form. The hyphenated form (fast-mlsirm-<name>-v<N>) is intentionally not accepted in v1. The pattern does not stop verdict-looking URIs; step 2 check receipt_schema_id admits only an identity listed in the installed MANIFEST.json receipt_schema_id_allowlist, which stays empty until step 4, so every envelope is rejected until fast-mlsirm publishes its receipt identity.",
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 512,
+          "pattern": "^(?:[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+|fast-mlsirm(?:\\.[a-z0-9]+(?:[_-][a-z0-9]+)*)+\\.v[1-9][0-9]*)$",
+          "not": {
+            "pattern": "\\n"
+          }
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document": {
+          "type": "object",
+          "minProperties": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "description": "Lowercase hex SHA-256. Repeated-digit placeholders (for example all zeros) are rejected; this is cosmetic, and integrity comes from the step 2 digest checks.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "enum": [
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444",
+          "5555555555555555555555555555555555555555555555555555555555555555",
+          "6666666666666666666666666666666666666666666666666666666666666666",
+          "7777777777777777777777777777777777777777777777777777777777777777",
+          "8888888888888888888888888888888888888888888888888888888888888888",
+          "9999999999999999999999999999999999999999999999999999999999999999",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        ]
+      }
+    },
+    "commit": {
+      "description": "Exact 40-character lowercase Git commit id. Degenerate repeated-digit values are rejected.",
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^[0-9a-f]{40}$",
+      "not": {
+        "enum": [
+          "0000000000000000000000000000000000000000",
+          "1111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444",
+          "5555555555555555555555555555555555555555",
+          "6666666666666666666666666666666666666666",
+          "7777777777777777777777777777777777777777",
+          "8888888888888888888888888888888888888888",
+          "9999999999999999999999999999999999999999",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccc",
+          "dddddddddddddddddddddddddddddddddddddddd",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "ffffffffffffffffffffffffffffffffffffffff"
+        ]
+      }
+    },
+    "gateway_identifier": {
+      "description": "Identifier reported by the gateway: letters, digits and . _ : / @ + - only, so key=value or sentence text does not fit. Step 2 checks it against the gateway's route report and the free-pool catalogue.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$",
+      "not": {
+        "pattern": "\\n"
+      }
+    },
+    "provider_name": {
+      "description": "Provider name reported by the gateway, such as openrouter or nvidia_nim: lowercase letters, digits and . _ - only (no model path, no :variant).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "not": {
+        "pattern": "\\n"
+      }
+    }
+  }
+}

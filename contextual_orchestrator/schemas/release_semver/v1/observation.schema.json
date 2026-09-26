@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json",
+  "title": "Release SemVer rater observation (v1)",
+  "description": "One independent rater's bare observation over exactly one evidence pack: the SemVer change class it observes, the evidence it cites, and an enumerated reason tied to the .github#2260 detectors. It is observation evidence for a calibrated fast-mlsirm estimator, not a release decision. It has no confidence, probability or score field, no free text, and no output version.",
+  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 65536 UTF-8 bytes. Patterns avoid \\s and guard the end of string explicitly, so ECMA-262 and Python re validators agree (Python's $ also matches before a final newline).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "evidence_sha256",
+    "assignment_ref",
+    "observed_class",
+    "evidence_refs",
+    "breaking_change_refs",
+    "reason_code"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "cwl_release_semver_observation/v1"
+    },
+    "evidence_sha256": {
+      "description": "Echo of the evidence pack digest the rater was given. A mismatch invalidates the observation.",
+      "$ref": "#/$defs/sha256"
+    },
+    "assignment_ref": {
+      "description": "Caller-issued random 128-bit assignment nonce (32 lowercase hex digits), echoed unchanged. It is opaque, so no verdict or confidence text fits in it; step 2 checks it against the issued assignment.",
+      "type": "string",
+      "maxLength": 32,
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "observed_class": {
+      "description": "The SemVer 2.0.0 change class observed in the evidence (major = backward-incompatible public API change), or abstain. The labels follow #2260's bump classes; how a class maps to a bump under 0.x is an unresolved owner decision (ADR 0137).",
+      "enum": [
+        "major",
+        "minor",
+        "patch",
+        "abstain"
+      ]
+    },
+    "evidence_refs": {
+      "description": "Evidence-pack items that support the observed class, cited by index or by #2260 text ref.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_ref"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
+    "breaking_change_refs": {
+      "description": "Evidence-pack items this rater considers backward-incompatible, cited by index or by #2260 text ref. Must be empty for minor and patch.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_ref"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
+    "reason_code": {
+      "description": "Enumerated reason, consistent with observed_class: major takes a breaking reason, minor deprecated_alias_only or feature_addition, patch fix_only or docs_or_internal_only, abstain insufficient_evidence or conflicting_evidence. Detector reasons must cite the matching #2260 list.",
+      "enum": [
+        "removed_public_symbol",
+        "renamed_public_symbol",
+        "required_arg_promotion",
+        "other_breaking_change",
+        "deprecated_alias_only",
+        "feature_addition",
+        "fix_only",
+        "docs_or_internal_only",
+        "insufficient_evidence",
+        "conflicting_evidence"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "observed_class": {
+            "const": "abstain"
+          }
+        },
+        "required": [
+          "observed_class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "enum": [
+              "insufficient_evidence",
+              "conflicting_evidence"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "evidence_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "observed_class": {
+            "const": "major"
+          }
+        },
+        "required": [
+          "observed_class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "enum": [
+              "removed_public_symbol",
+              "renamed_public_symbol",
+              "required_arg_promotion",
+              "other_breaking_change"
+            ]
+          },
+          "breaking_change_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "observed_class": {
+            "const": "minor"
+          }
+        },
+        "required": [
+          "observed_class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "enum": [
+              "deprecated_alias_only",
+              "feature_addition"
+            ]
+          },
+          "breaking_change_refs": {
+            "maxItems": 0
+          },
+          "evidence_refs": {
+            "not": {
+              "contains": {
+                "pattern": "^(?:api:(?:removed|renamed|required-arg):|#/(?:removed_public_symbols|renamed_public_symbols|required_arg_promotions)/)"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "observed_class": {
+            "const": "patch"
+          }
+        },
+        "required": [
+          "observed_class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "enum": [
+              "fix_only",
+              "docs_or_internal_only"
+            ]
+          },
+          "breaking_change_refs": {
+            "maxItems": 0
+          },
+          "evidence_refs": {
+            "not": {
+              "contains": {
+                "pattern": "^(?:api:(?:removed|renamed|required-arg):|#/(?:removed_public_symbols|renamed_public_symbols|required_arg_promotions)/)"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason_code": {
+            "const": "removed_public_symbol"
+          }
+        },
+        "required": [
+          "reason_code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "breaking_change_refs": {
+            "contains": {
+              "pattern": "^(?:api:removed:|#/removed_public_symbols/)"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason_code": {
+            "const": "renamed_public_symbol"
+          }
+        },
+        "required": [
+          "reason_code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "breaking_change_refs": {
+            "contains": {
+              "pattern": "^(?:api:renamed:|#/renamed_public_symbols/)"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason_code": {
+            "const": "required_arg_promotion"
+          }
+        },
+        "required": [
+          "reason_code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "breaking_change_refs": {
+            "contains": {
+              "pattern": "^(?:api:required-arg:|#/required_arg_promotions/)"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason_code": {
+            "const": "deprecated_alias_only"
+          }
+        },
+        "required": [
+          "reason_code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "evidence_refs": {
+            "contains": {
+              "pattern": "^(?:api:deprecated-alias:|#/deprecated_alias_only/)"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "description": "Lowercase hex SHA-256. Repeated-digit placeholders (for example all zeros) are rejected; this is cosmetic, and integrity comes from the step 2 digest checks.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "enum": [
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444",
+          "5555555555555555555555555555555555555555555555555555555555555555",
+          "6666666666666666666666666666666666666666666666666666666666666666",
+          "7777777777777777777777777777777777777777777777777777777777777777",
+          "8888888888888888888888888888888888888888888888888888888888888888",
+          "9999999999999999999999999999999999999999999999999999999999999999",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        ]
+      }
+    },
+    "evidence_ref": {
+      "description": "Citation of one evidence-pack item, in one of two forms. An index ref is an RFC 6901 JSON Pointer fragment into the pack (#/<list>/<index>, 0-based) and can cite any item, whatever characters it contains. A text ref is a #2260 prefix plus the item text with Python str.strip() whitespace removed, which is exactly how #2260's detected_breaking_refs builds api:removed:, api:renamed: and api:required-arg: refs; changelog: and api:deprecated-alias: follow #2260's recorded fixtures, and commit: and pr: cite commit_titles and pr_titles. Internal newlines, tabs and other characters are kept. Membership in the pack is checked in step 2.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/index_ref"
+        },
+        {
+          "$ref": "#/$defs/text_ref"
+        }
+      ]
+    },
+    "index_ref": {
+      "type": "string",
+      "maxLength": 32,
+      "pattern": "^#/(?:changelog_fragments|removed_public_symbols|renamed_public_symbols|required_arg_promotions|deprecated_alias_only|commit_titles|pr_titles)/(?:0|[1-9][0-9]{0,4})$",
+      "not": {
+        "pattern": "\\n"
+      }
+    },
+    "text_ref": {
+      "type": "string",
+      "maxLength": 16405,
+      "pattern": "^(?:changelog|api:removed|api:renamed|api:required-arg|api:deprecated-alias|commit|pr):[^\\t\\n\\x0b\\x0c\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
+      "not": {
+        "pattern": "[\\t\\n\\x0b\\x0c\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]$"
+      }
+    }
+  }
+}
