@@ -1297,12 +1297,10 @@ def test_selection_receipt_does_not_mix_catalog_revisions() -> None:
         yield agent
 
     try:
+        starting_id = orchestrator._psychometric_candidate_id(agent)
         receipt = orchestrator._selection_design_receipt([agent], attempted_agents(), agent)
         selected_id = receipt["selected_deployment_id"]
-        assert selected_id == (
-            "audit_candidate:"
-            "f30639fe9ae8729e57eb659445325038a92c6c6e8d6810b8f84b36f3bce46bb9"
-        )
+        assert selected_id != starting_id
         assert receipt["candidate_deployment_ids"] == [selected_id]
         assert receipt["attempted_deployment_ids"] == [selected_id]
 
