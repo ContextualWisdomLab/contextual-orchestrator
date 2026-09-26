@@ -8,7 +8,10 @@ immutable release, uses a SHA-pinned uploader with least privilege, installs
 nothing (the `twine check --strict` metadata gate runs in the read-only
 `verify` job on the same bytes), scopes the read-only GH_TOKEN to one step,
 references the PyPI secret exactly once, and is idempotent on re-run while
-refusing a PyPI version that already holds different files.
+refusing a PyPI version that already holds different files. They also pin the
+`verify` guard that refuses to release, before any tag or GitHub Release
+exists, unless the `pypi` environment is protected by required reviewers and a
+deployment branch policy, and the hash-locked, token-free twine install.
 
 Plain text assertions plus real execution of the job's own shell/Python step
 bodies against stubbed `gh` and PyPI responses, matching this repository's
@@ -169,18 +172,39 @@ def test_twine_check_strict_runs_in_verify_on_the_exact_publish_input() -> None:
     assert "id-token: write" not in verify
     assert "secrets." not in verify
     twine = _verify_steps()[_TWINE_STEP]
-    assert "twine==7.0.0" in twine
-    assert "--only-binary=:all:" in twine
-    assert '--constraint "${constraints}"' in twine
+    assert "--require-hashes --only-binary=:all: -r requirements-release-twine.txt" in twine
+    assert "--constraint" not in twine
     assert 'distributions=("${check_dir}"/*.whl "${check_dir}"/*.tar.gz)' in twine
     assert 'twine" check --strict "${distributions[@]}"' in twine
     # Digests are captured before third-party code runs and re-checked after.
     assert twine.index('wheel_digest="$(sha256sum "${wheel}")"') < twine.index("pip install")
     assert twine.index("pip install") < twine.index('!= "${wheel_digest}"')
-    pins = twine.split("<<'PINS'\n", 1)[1].split("\n          PINS\n", 1)[0]
-    for line in pins.splitlines():
-        assert re.fullmatch(r"          [a-z0-9-]+==[0-9][0-9A-Za-z.]*", line), line
 
+
+def test_twine_step_gets_no_github_token() -> None:
+    """The step running third-party code overrides the job-level GH_TOKEN."""
+    twine = _verify_steps()[_TWINE_STEP]
+    header = twine.split("        run: |\n", 1)[0]
+    assert '        env:\n' in header
+    assert re.search(r'(?m)^          GH_TOKEN: ""$', header), header
+    assert "github.token" not in twine
+
+
+def test_twine_lock_is_fully_hash_pinned() -> None:
+    """Every requirement in the twine lock is exact-pinned with sha256 hashes."""
+    source = (REPOSITORY_ROOT / "requirements-release-twine.in").read_text(encoding="utf-8")
+    assert source.split() == ["twine"]
+    lock = (REPOSITORY_ROOT / "requirements-release-twine.txt").read_text(encoding="utf-8")
+    assert "--generate-hashes" in lock.split("\n", 3)[1]
+    entries = re.split(r"(?m)^(?=[a-z0-9])", lock)[1:]
+    names = []
+    for entry in entries:
+        requirement = entry.split(" \\\n", 1)[0]
+        assert re.fullmatch(r"[a-z0-9-]+==[0-9][0-9A-Za-z.]*", requirement), requirement
+        assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), requirement
+        names.append(requirement.split("==", 1)[0])
+    assert "twine" in names
+    assert len(names) == len(set(names))
 
 def test_publish_pypi_installs_nothing() -> None:
     job = _pypi_job()
@@ -482,3 +506,154 @@ def test_post_upload_check_requires_exactly_the_verified_files(
     assert (result.returncode == 0) is success, result.stdout + result.stderr
     if not success:
         assert "::error::" in result.stdout + result.stderr
+
+
+# --- Guard: a protected `pypi` environment must exist before any tag/release --
+
+_ENV_GUARD_STEP = "Require a protected pypi environment before any tag or release exists"
+
+_STUB_GH_ENVIRONMENT = """#!/usr/bin/env bash
+# Mimics `gh api` for GET repos/<repo>/environments/pypi per FAKE_ENV_SCENARIO.
+set -euo pipefail
+printf '%s\\n' "$*" >> "${GH_CALLS}"
+printf '%s\\n' "${GH_TOKEN:-<unset>}" >> "${GH_TOKENS}"
+[ "$1" = "api" ] || { echo "unexpected gh call: $*" >&2; exit 98; }
+case "${FAKE_ENV_SCENARIO}" in
+    missing)
+        echo '{"message":"Not Found","status":"404"}'
+        echo "gh: Not Found (HTTP 404)" >&2
+        exit 1 ;;
+    server-error)
+        echo "gh: Server Error (HTTP 500)" >&2
+        exit 1 ;;
+    *)
+        cat "${FAKE_ENV_JSON}" ;;
+esac
+"""
+
+_REVIEWERS_RULE = {
+    "id": 1,
+    "type": "required_reviewers",
+    "prevent_self_review": True,
+    "reviewers": [{"type": "User", "reviewer": {"login": "maintainer"}}],
+}
+_BRANCH_RULE = {"id": 2, "type": "branch_policy"}
+_MAIN_ONLY = {"protected_branches": False, "custom_branch_policies": True}
+
+
+def _environment(protection_rules: list, deployment_branch_policy: object) -> dict:
+    return {
+        "id": 7,
+        "name": "pypi",
+        "protection_rules": protection_rules,
+        "deployment_branch_policy": deployment_branch_policy,
+    }
+
+
+def test_environment_guard_is_in_verify_before_any_tag_or_release() -> None:
+    workflow = _workflow_text()
+    verify_names = list(_verify_steps())
+    guard = verify_names.index(_ENV_GUARD_STEP)
+    # Early in the read-only job: right after the checks gate, before the
+    # expensive build/test steps.
+    assert guard == verify_names.index(
+        "Verify every check reported for this commit is complete and green"
+    ) + 1
+    assert guard < verify_names.index("Build the installable package for this exact commit")
+    # Every tag/release mutation lives in `publish`, which needs `verify`, so
+    # the guard failing means no tag and no GitHub Release are ever created.
+    verify = _job_block(workflow, "verify")
+    for mutation in ("git tag", "git push", "gh release create", "gh release upload", "gh release edit"):
+        assert mutation not in verify, mutation
+    publish = _job_block(workflow, "publish")
+    assert "\n    needs: verify\n" in publish
+    assert "git tag -a" in publish and "gh release create" in publish
+
+
+def test_environment_guard_checks_reviewers_and_branch_policy_and_fails_closed() -> None:
+    step = _verify_steps()[_ENV_GUARD_STEP]
+    body = _run_body(step)
+    assert body.startswith("set -euo pipefail\n")
+    assert 'gh api "repos/${GITHUB_REPOSITORY}/environments/pypi"' in body
+    assert 'select(.type == "required_reviewers"' in body
+    assert ".deployment_branch_policy != null" in body
+    assert "HTTP 404" in body
+    # Every failure path exits non-zero and points at the checklist.
+    assert body.count("exit 1") == 4
+    assert body.count("docs/RELEASING.md") == 4
+    assert "continue-on-error" not in step
+
+
+def test_environment_guard_token_is_step_scoped_and_read_only() -> None:
+    step = _verify_steps()[_ENV_GUARD_STEP]
+    header = step.split("        run: |\n", 1)[0]
+    assert "        env:\n" in header
+    assert "GH_TOKEN: ${{ github.token }}" in header
+    # GET .../environments/{name} needs only Actions: read for GITHUB_TOKEN,
+    # which `verify` already holds; no write scope is added anywhere.
+    verify = _job_block(_workflow_text(), "verify")
+    permissions = verify.split("\n    permissions:\n", 1)[1].split("\n    env:\n", 1)[0]
+    assert permissions.split() == ["contents:", "read", "actions:", "read", "checks:", "read"]
+
+
+@pytest.mark.parametrize(
+    "scenario,environment,success,message",
+    [
+        ("ok", _environment([_REVIEWERS_RULE, _BRANCH_RULE], _MAIN_ONLY), True, "::notice::"),
+        (
+            "ok-protected-branches",
+            _environment([_REVIEWERS_RULE], {"protected_branches": True, "custom_branch_policies": False}),
+            True,
+            "::notice::",
+        ),
+        ("missing", None, False, "does not exist"),
+        ("server-error", None, False, "NOT confirmed"),
+        ("no-rules", _environment([], _MAIN_ONLY), False, "no required_reviewers"),
+        ("rules-absent", {"id": 7, "name": "pypi", "deployment_branch_policy": _MAIN_ONLY}, False, "no required_reviewers"),
+        ("only-wait-timer", _environment([{"id": 3, "type": "wait_timer", "wait_timer": 5}], _MAIN_ONLY), False, "no required_reviewers"),
+        ("reviewers-empty", _environment([{**_REVIEWERS_RULE, "reviewers": []}], _MAIN_ONLY), False, "no required_reviewers"),
+        ("any-branch", _environment([_REVIEWERS_RULE], None), False, "deployment_branch_policy is null"),
+        ("not-json", "<html>oops</html>", False, "no required_reviewers"),
+    ],
+)
+def test_environment_guard_executes(
+    tmp_path: Path, scenario: str, environment: object, success: bool, message: str
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(bin_dir / "gh", _STUB_GH_ENVIRONMENT)
+    env_json = tmp_path / "environment.json"
+    env_json.write_text(
+        environment if isinstance(environment, str) else json.dumps(environment),
+        encoding="utf-8",
+    )
+    calls = tmp_path / "gh-calls"
+    tokens = tmp_path / "gh-tokens"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/contextual-orchestrator",
+        "GH_TOKEN": "step-scoped-token",
+        "FAKE_ENV_SCENARIO": scenario,
+        "FAKE_ENV_JSON": str(env_json),
+        "GH_CALLS": str(calls),
+        "GH_TOKENS": str(tokens),
+    }
+    result = subprocess.run(
+        ["bash", "-c", _run_body(_verify_steps()[_ENV_GUARD_STEP])],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    output = result.stdout + result.stderr
+    assert (result.returncode == 0) is success, output
+    assert message in output
+    if not success:
+        assert "::error::" in result.stderr
+        assert "docs/RELEASING.md" in result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "api repos/ContextualWisdomLab/contextual-orchestrator/environments/pypi"
+    ]
+    assert tokens.read_text(encoding="utf-8").splitlines() == ["step-scoped-token"]

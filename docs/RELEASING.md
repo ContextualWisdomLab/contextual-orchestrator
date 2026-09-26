@@ -127,7 +127,10 @@ check those contracts separately before replacing a source pin.
 After `publish` succeeds, the `publish-pypi` job in the same run uploads the
 verified wheel to PyPI as `contextual-orchestrator`. It never rebuilds and
 installs nothing. `verify` has already run `twine check --strict` on the exact
-wheel, holding its digest in memory across the check. `publish-pypi` downloads
+wheel, holding its digest in memory across the check. twine and its
+dependencies come from the hash-locked `requirements-release-twine.txt`
+(regenerate with the command in its header), and that step gets no GitHub
+token. `publish-pypi` downloads
 the `release-publish-inputs` artifact, re-checks `SHA256SUMS`, and requires
 that manifest to equal the one attached to the immutable GitHub Release. It
 then runs a stdlib-only PyPI pre-check, uploads with
@@ -141,6 +144,17 @@ wheel is uploaded; no sdist is built or published.
 protected, and the organization `PIPY_TOKEN` secret is visible to every
 repository on its access list. Before merging the PyPI job:
 
+Items 1 to 3 are enforced. Early in the read-only `verify` job, before any
+tag or GitHub Release exists, the step "Require a protected pypi environment
+before any tag or release exists" reads
+`GET /repos/{owner}/{repo}/environments/pypi` with the job's read-only token.
+It fails the run unless the environment exists, has a `required_reviewers`
+protection rule with at least one reviewer, and has a non-null
+`deployment_branch_policy`. Any other lookup error also fails the run. For
+`GITHUB_TOKEN`, that endpoint needs only `actions: read`, which `verify`
+already has. Until the environment is set up, every release stops there,
+before anything is published.
+
 1. Create the `pypi` GitHub environment in contextual-orchestrator.
 2. Restrict its deployment branches to `main`.
 3. Add required reviewers, so each PyPI upload needs a human approval.
@@ -150,11 +164,21 @@ repository on its access list. Before merging the PyPI job:
      workflow `release.yml` and environment `pypi`. For the first upload of a
      new project this is a PyPI "pending publisher". Then leave the token
      unavailable to this repository.
-   - **API token.** Store it as a `pypi` *environment* secret named
-     `PIPY_TOKEN` (an environment secret overrides the organization secret of
-     the same name), or restrict the organization secret's repository access
-     list to the repositories that need it. The workflow references the secret
-     in exactly one place, the upload step's `password:` input.
+   - **API token.** Do **both** of the following:
+     - Store the token as a `pypi` *environment* secret named `PIPY_TOKEN`.
+       Only jobs that deploy to `pypi` can read it, which means after a
+       required reviewer approves and only from `main`.
+     - **And** restrict the organization `PIPY_TOKEN` secret's repository
+       access list. Remove contextual-orchestrator, or at least every
+       repository that does not publish with it. An environment secret only
+       *overrides* the same-named organization secret inside the `pypi` job.
+       Every other job and workflow in the repository still resolves
+       `secrets.PIPY_TOKEN` to the organization secret, with no reviewer and
+       from any branch, unless the organization secret's access is
+       restricted.
+
+     The workflow references the secret in exactly one place, the upload
+     step's `password:` input.
 
 If the first publication reports an empty password or a Trusted Publishing
 exchange failure, neither credential is available to this repository.

@@ -235,6 +235,41 @@ jobs:
       - name: Verify every check reported for this commit is complete and green
         run: bash scripts/ci/release_checks_gate.sh
 
+      - name: Require a protected pypi environment before any tag or release exists
+        env:
+          # Read-only token for this one API read. GET .../environments/{name}
+          # needs only the `actions: read` this job already holds.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # `publish-pypi` uploads under `environment: pypi`. That environment
+          # is the human approval gate for the PyPI credential, so a missing
+          # or unprotected environment must stop the release HERE, in the
+          # read-only job, before `publish` pushes a tag or creates a GitHub
+          # Release that a later PyPI job could not complete safely.
+          # Only a confirmed 404 means "absent"; any other lookup failure is
+          # also fatal (fail closed), but reported as such.
+          if ! environment="$(gh api "repos/${GITHUB_REPOSITORY}/environments/pypi" 2>&1)"; then
+            if printf '%s' "${environment}" | grep -q "HTTP 404"; then
+              echo "::error::The 'pypi' GitHub environment does not exist in ${GITHUB_REPOSITORY}. Create it with required reviewers and a deployment branch policy (see the pre-merge checklist in docs/RELEASING.md) before releasing." >&2
+              exit 1
+            fi
+            echo "::error::Could not read the 'pypi' GitHub environment, so its protection is NOT confirmed. Failing closed; see docs/RELEASING.md. Raw error: ${environment}" >&2
+            exit 1
+          fi
+          if ! jq -e '
+            [.protection_rules[]? | select(.type == "required_reviewers" and ((.reviewers // []) | length) > 0)]
+            | length > 0
+          ' <<<"${environment}" >/dev/null; then
+            echo "::error::The 'pypi' GitHub environment has no required_reviewers protection rule with at least one reviewer; a PyPI upload must need human approval. See the pre-merge checklist in docs/RELEASING.md." >&2
+            exit 1
+          fi
+          if ! jq -e '.deployment_branch_policy != null' <<<"${environment}" >/dev/null; then
+            echo "::error::The 'pypi' GitHub environment allows deployments from any branch (deployment_branch_policy is null); restrict it to main. See the pre-merge checklist in docs/RELEASING.md." >&2
+            exit 1
+          fi
+          echo "::notice::The 'pypi' GitHub environment exists with required reviewers and a deployment branch policy."
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
         with:
@@ -323,15 +358,19 @@ jobs:
           PY
 
       - name: Check the exact wheel's metadata with twine check --strict
+        env:
+          # This step runs third-party code (twine and its dependencies); it
+          # gets no GitHub token at all, overriding the job-level GH_TOKEN.
+          GH_TOKEN: ""
         run: |
           set -euo pipefail
           # Runs here, in the read-only `verify` job (no id-token, no PyPI
           # secret, no write token), on the exact wheel that becomes the
           # publish input; `publish-pypi` installs nothing. Stand-in for the
-          # organization's shared package-description gate. Exact pins,
-          # binary wheels only, in an isolated virtualenv. Regenerate with:
-          #   uv pip compile --python-version 3.12 \
-          #     --python-platform x86_64-manylinux_2_28 <(echo twine)
+          # organization's shared package-description gate. twine and every
+          # dependency are installed from the hash-locked
+          # requirements-release-twine.txt (binary wheels only) into an
+          # isolated virtualenv.
           wheel="dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
           # Digests are held in this shell's memory before any third-party
           # code runs and re-checked afterwards, so the twine install cannot
@@ -341,39 +380,9 @@ jobs:
           check_dir="${RUNNER_TEMP}/twine-check"
           mkdir -p "${check_dir}"
           cp "${wheel}" "${check_dir}/"
-          constraints="${RUNNER_TEMP}/twine-constraints.txt"
-          cat > "${constraints}" <<'PINS'
-          certifi==2026.7.22
-          cffi==2.1.1
-          charset-normalizer==3.5.1
-          cryptography==50.0.1
-          docutils==0.23
-          id==1.6.1
-          idna==3.20
-          jaraco-classes==3.4.0
-          jaraco-context==6.1.2
-          jaraco-functools==4.6.0
-          jeepney==0.9.0
-          keyring==25.7.0
-          markdown-it-py==4.2.0
-          mdurl==0.1.2
-          more-itertools==11.1.0
-          nh3==0.3.7
-          packaging==26.3
-          pycparser==3.0
-          pygments==2.21.0
-          readme-renderer==46.0
-          requests==2.34.2
-          requests-toolbelt==1.0.0
-          rfc3986==2.0.0
-          rich==15.0.0
-          secretstorage==3.5.0
-          twine==7.0.0
-          urllib3==2.8.0
-          PINS
           python -m venv "${RUNNER_TEMP}/twine-venv"
           "${RUNNER_TEMP}/twine-venv/bin/python" -m pip install --quiet --disable-pip-version-check \
-            --only-binary=:all: --constraint "${constraints}" twine
+            --require-hashes --only-binary=:all: -r requirements-release-twine.txt
           # Every sdist and wheel staged for publication is checked; today
           # that is the single verified wheel.
           shopt -s nullglob
