@@ -3972,13 +3972,33 @@ class ModelClient:
         try:
             validated = validate_egress_url_details(agent.base_url, policy=policy)
         except EgressNotAllowedError as exc:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted") from exc
+            raise self._provider_host_not_allowlisted(agent) from exc
         if validated is None:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+            raise self._provider_host_not_allowlisted(agent)
         # Reuse EgressWeave's already-validated, already-resolved addresses
         # directly rather than re-resolving — re-resolving here would reopen
         # the validate-then-connect DNS-rebinding gap EgressWeave closes.
         return self._egress_address_to_destination(validated.addresses[0], validated.port)
+
+    @staticmethod
+    def _provider_host_not_allowlisted(agent: ModelAgent) -> ProviderUpstreamError:
+        """Classify an allowlist miss as a typed, non-retryable upstream 502.
+
+        A plain ``RuntimeError`` here escaped ``_invoke``'s provider failover
+        and surfaced as HTTP 500 once a free pool was exhausted (d26fa132).
+        The message names the agent, never the rejected host. Passthrough
+        callers relabel ``transport`` via ``classify_provider_failure``.
+        """
+        return ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="provider_connection_error",
+            message=f"{agent.id} provider host is not allowlisted",
+            client_status=502,
+            provider_status=None,
+            retryable=False,
+            transport="chat",
+        )
 
     @staticmethod
     def _egress_address_to_destination(address: str, port: int) -> ProviderDestination:
