@@ -440,6 +440,27 @@ class FreeServingLedger:
                 return False
             return observation.observed_at < last_allowance_reset(now)
 
+    def claim_probe(self, provider_name: str, model_id: str) -> bool:
+        """Atomically reserve one route\'s probe slot for the current allowance day.
+
+        The reservation is an UNKNOWN observation made before network I/O.
+        Concurrent schedulers therefore cannot both pass a separate
+        probe_due check and issue duplicate, potentially billed probes.
+        """
+        if not provider_name or not model_id:
+            return False
+        with self._lock:
+            now = self.now()
+            key = (provider_name, model_id)
+            observation = self._observations.get(key)
+            if observation is not None:
+                if self._demotion_active(key, now):
+                    return False
+                if observation.observed_at >= last_allowance_reset(now):
+                    return False
+            self._observations[key] = CostObservation(CostVerdict.UNKNOWN, now)
+            return True
+
     def snapshot(self) -> dict[str, str]:
         """Return a JSON-safe ``"provider/model" -> verdict`` view for evidence files."""
         with self._lock:
@@ -597,7 +618,7 @@ def probe_free_candidates(
         if (
             provider not in COST_EVIDENCE_REQUIRED_PROVIDERS
             or not is_free_nominated(model)
-            or not store.probe_due(provider, model_id)
+            or not store.claim_probe(provider, model_id)
         ):
             continue
         probed.append(f"{provider}/{model_id}")
