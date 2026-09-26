@@ -65,9 +65,13 @@ Every pack the v1 schema accepts is also accepted by #2260's code at
   and the digests) live in the envelope.
 - `commit_titles` and `pr_titles` hold every commit and PR title in the
   release range (all commits, merges included, not first-parent), up to
-  32768 items each; the pack as a whole is capped at 4 MiB. A producer
-  never truncates or samples: if a pack would exceed any cap, it fails
-  closed with an error naming the member, the cap and the observed size.
+  32768 items each; the pack as a whole is capped at 4 MiB. The byte cap
+  can bind before either list reaches 32768 items (both lists full of
+  60-character titles are about 4.19 MB, just over 4 MiB), so the
+  fail-closed error may come from the byte cap. A producer never truncates
+  or samples: if a pack would exceed any cap, it fails closed with an error
+  naming the member (or the document, for the byte cap), the cap and the
+  observed size.
 
 ## Citations
 
@@ -110,8 +114,8 @@ The schemas and `MANIFEST.json` ship in the wheel under
    receipt identity (step 4), so every envelope is rejected until then.
    Schema validation alone is never sufficient: the `schema_id` pattern
    accepts a URI or a dotted fast-mlsirm identifier
-   (`fast-mlsirm.<name>.v<N>`; the hyphenated `fast-mlsirm-<name>-v<N>` form
-   is not accepted in v1) and cannot stop a verdict-looking URI.
+   (`fast-mlsirm.<name>.v<N>`) only, and cannot stop a verdict-looking
+   URI.
 
 v1 files are immutable. A change is published as `v2/` with new `$id`s.
 There is no backward-compatible v1.x change: loosening a rule also needs a

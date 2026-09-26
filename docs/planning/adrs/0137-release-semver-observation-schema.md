@@ -204,8 +204,8 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
        and so on) with no model path or `:variant`.
    - It carries the opaque receipt, whose `schema_id` must be a URI or a
      fast-mlsirm identifier in fast-mlsirm's dotted form
-     (`fast-mlsirm.<name>.v<N>`); the hyphenated form is intentionally not
-     accepted (see "Receipt identity format"). The pattern does not stop
+     (`fast-mlsirm.<name>.v<N>`), as fast-mlsirm's Rust core uses (see
+     "Receipt identity format"). The pattern does not stop
      verdict-looking URIs; step-2 check 10 admits only an allowlisted
      identity and fails closed until step 4. Identical observation entries
      are rejected.
@@ -342,11 +342,15 @@ them, with the title caps raised:
 
    - The document caps are unchanged: 4 MiB for evidence, 64 KiB per
      observation and 4 MiB per envelope. The 4 MiB evidence cap remains the
-     denial-of-service bound; 32768 titles of 106 characters are about
-     3.6 MB (tested). Text refs may be up to 16405 characters (the
-     longest prefix plus 16384); long items are best cited by index, and
-     index refs accept up to five digits so every title position is
-     citable.
+     denial-of-service bound; one list of 32768 titles of 106 characters
+     is about 3.6 MB (tested). The byte cap can bind before either list
+     reaches 32768 items: both lists full of 60-character titles already
+     come to about 4.19 MB (4,194,586 bytes), just over the 4 MiB
+     (4,194,304-byte) cap (tested), so the producer's fail-closed error may
+     come from the byte cap rather than a list cap. Text refs may be up to
+     16405 characters (the longest prefix plus 16384); long items are best
+     cited by index, and index refs accept up to five digits so every title
+     position is citable.
    - **Selection: all commits.** `commit_titles` holds the title of every
      commit in the release range (`<previous tag>..HEAD`, or the whole
      history when there is no tag), merge commits included. It is not
@@ -393,8 +397,10 @@ fast-mlsirm, so that the real receipt cannot force a v2.
     [`fast-mlsirm.lineage_channel_weight_evidence.v1`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/crates/mlsirm-core/src/lineage_channel_weight.rs#L20-L21),
     and `fast-mlsirm.sampling-design.v2` as a
     [rejected-version test input](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/tests/test_sampling_design.py#L175);
-  - hyphenated, in the Python rubric only:
-    [`fast-mlsirm-item-bank-report-v2`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/python/fast_mlsirm/rubric/item_bank_report.py#L31);
+  - not a receipt identity:
+    [`fast-mlsirm-item-bank-report-v2`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/python/fast_mlsirm/rubric/item_bank_report.py#L31)
+    is the Python item-bank report's `schema_version` value
+    (`_REPORT_SCHEMA_VERSION`, `item_bank_report.py:31`);
   - one URI `$id`:
     [`https://contextualwisdomlab.github.io/fast-mlsirm/contracts/tepp-lineage-pair-criterion-posterior-v2.schema.json`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/contracts/tepp-lineage-pair-criterion-posterior-v2.schema.json#L3);
   - bare version strings such as `"1.0"` and `"1.1"`, which are versions,
@@ -412,13 +418,14 @@ fast-mlsirm, so that the real receipt cannot force a v2.
   `<N>` starts at 1. Spaces, `=`, `;`, upper case and other free text do not
   fit the dotted form. Bare versions such as `"1.0"` stay rejected. The URI
   and dotted identities listed above are accepted (tested).
-- **The hyphenated form is intentionally not accepted in v1** (review
-  round 4). The Python rubric's `fast-mlsirm-item-bank-report-v2` exists,
-  but nothing needs a hyphenated receipt identity today, and loosening
-  beyond what is needed waits until it is needed. It and
+- **Only these two forms** (review round 4). The Rust core's identities
+  are dotted (`sampling_design.rs:15,21`), and
+  `fast-mlsirm-item-bank-report-v2` is a report `schema_version`, not a
+  receipt identity, so no pattern for it is added before one is needed.
+  `fast-mlsirm-item-bank-report-v2` and
   `fast-mlsirm-release-decision-receipt-v1` are rejected fixture cases. If
-  #2035 publishes a hyphenated identity, or one in yet another form, v1
-  cannot carry it and a new schema version is needed (Decision 7).
+  #2035 publishes an identity in any other form, v1 cannot carry it and a
+  new schema version is needed (Decision 7).
 - The pattern is not the guard against verdict text; check 10 is.
 
 ## Step 2 validator cross-checks
