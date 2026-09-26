@@ -7245,3 +7245,25 @@ plus the reviewed one-line change. This receipt restores the full baseline
 directly from exact `ca5efdc0` authority. No force push or history rewrite was
 used. Exact-head hosted execution, independent approval, protected-main
 integration, and immutable release remain required; status stays Proposed.
+
+
+## 2026-09-27 Streaming receipt stack authority repair — Proposed
+
+PR #1231 previously targeted protected `main@5665b0ad`; hosted Security and
+Quality run 36238352288 therefore reproduced three unrelated foundation
+failures whose canonical owner is PR #1266: the missing embedding lease
+constant, an unhashable VCS requirement under `--require-hashes`, and pinned
+Rust 1.97.1 without rustfmt. The dependent PR #1273 inherited that stale base.
+
+The stack is repaired without force. PR #1231 now targets
+`fix/test-drift-main-red`; exact successor
+`1d51487111992c14bbce5922968eb857f0399921` has #1266 exact
+`ea48d4ec13be241ae85850d3d83a48edb3d28bf6` as an ancestor and preserves only
+the five-path streaming-receipt delta (`+159/-2`, ahead 8/behind 0). PR #1273
+exact `6e012a62586f798809186e36201cbb7e2f5c9124` remains open, mergeable, and
+retains its sole `tests/test_decision_receipts.py` delta (`+72/-0`). Exact
+remote AST parsing passed for all five Python paths. Draft-triggered runs
+36274940061 and 36275008940 were SKIPPED and are not GREEN evidence. The stale
+#1231 CHANGES_REQUESTED review tied to `b267f897`/run 36086231637 was dismissed
+because it explicitly contained no source-backed finding; fresh non-skipped
+checks and independent approval remain required. Status stays Proposed.
