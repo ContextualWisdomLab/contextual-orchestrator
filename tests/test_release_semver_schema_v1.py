@@ -129,8 +129,8 @@ FAST_MLSIRM_OBSERVED_SCHEMA_IDS = (
         "tepp-lineage-pair-criterion-posterior-v2.schema.json"
     ),
 )
-# The hyphenated form fast-mlsirm uses in its Python rubric is intentionally
-# not accepted in v1 (review round 4): nothing needs it yet.
+# Not accepted in v1 (review round 4). fast-mlsirm-item-bank-report-v2 is the
+# item-bank report's schema_version (item_bank_report.py:31), not a receipt id.
 FAST_MLSIRM_REJECTED_SCHEMA_IDS = (
     "fast-mlsirm-item-bank-report-v2",
     "fast-mlsirm-release-decision-receipt-v1",
@@ -990,7 +990,11 @@ def test_hyphenated_fast_mlsirm_identity_is_rejected(schema_id: str) -> None:
 
 
 def test_title_cap_fits_inside_the_document_byte_cap() -> None:
-    """32768 realistic titles per list stay under 4 MiB, so the byte cap stays a DoS bound."""
+    """One full list of 32768 realistic titles stays under 4 MiB.
+
+    Both lists full need not: the byte cap can bind first, so a producer's
+    fail-closed error may come from the document cap rather than a list cap.
+    """
     document = _valid_document("evidence")
     document["commit_titles"] = [
         f"fix(router): commit {index:05d} " + "x" * 80 for index in range(32768)
@@ -998,6 +1002,17 @@ def test_title_cap_fits_inside_the_document_byte_cap() -> None:
     assert list(_validator("evidence").iter_errors(document)) == []
     encoded = json.dumps(document, ensure_ascii=False).encode("utf-8")
     assert len(encoded) < EVIDENCE_BYTE_CAP
+
+
+def test_both_full_title_lists_can_exceed_the_byte_cap() -> None:
+    """Two full lists of 60-character titles are schema-valid but over 4 MiB."""
+    document = _valid_document("evidence")
+    titles = ["x" * 60] * 32768
+    document["commit_titles"] = titles
+    document["pr_titles"] = titles
+    assert list(_validator("evidence").iter_errors(document)) == []
+    encoded = json.dumps(document, ensure_ascii=False).encode("utf-8")
+    assert len(encoded) > EVIDENCE_BYTE_CAP
 
 
 def test_index_refs_reach_the_last_title() -> None:
@@ -1014,3 +1029,4 @@ def test_adr_states_producers_never_truncate() -> None:
     assert "never truncates" in adr
     assert "fails closed" in adr
     assert "32768" in adr
+    assert "byte cap can bind before either list" in adr
