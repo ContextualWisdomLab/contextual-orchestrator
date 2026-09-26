@@ -3244,9 +3244,9 @@ class ModelClient:
     ) -> Any:
         """Open one model request using the resolved per-model wait, or none.
 
-        Free-now cost evidence (including failures and 429/402 demotions) is
-        recorded by the chat call sites (``_send``, ``_send_raw``,
-        ``stream_chat``), which see the whole call through to a parsed cost.
+        Cost telemetry and demotion evidence (including failures and 429/402
+        demotions) are recorded by the chat call sites (``_send``,
+        ``_send_raw``, ``stream_chat``), which see the whole call.
         """
         resolved = self._resolved_model_timeout(agent, timeout)
         if resolved is None:
@@ -10236,17 +10236,15 @@ class TaskOrchestrator:
         its own capability's free route. See :meth:`_is_general_free_agent`
         for the stricter, blind-general-chat variant.
 
-        Catalog price only nominates a route. Whether it is servable free
-        *now* comes from per-call cost evidence recorded by
-        :class:`ModelClient` (see
-        :func:`contextual_orchestrator.free_serving_evidence.free_serving_admitted`,
-        shared with ``model_discovery.general_free_serving_candidates``): a
-        route that reported a positive cost is demoted immediately, and a
-        provider whose promotional free tier can overflow into paid credits
-        (Experiential Labs) is free only after a response proved a zero,
-        non-BYOK charge. Missing or unparseable evidence counts as paid for
-        those providers. This protects durable agents and capability-scoped
-        routes that predate the discovery guard.
+        Catalog price only nominates a route. The shared
+        :func:`contextual_orchestrator.free_serving_evidence.free_serving_admitted`
+        predicate also protects
+        ``model_discovery.general_free_serving_candidates``: evidence-required
+        providers remain closed until authoritative pre-send entitlement proves
+        the next request is free. Provider-reported cost is passive telemetry
+        that can demote a route immediately; it cannot re-admit one. This
+        protects durable agents and capability-scoped routes that predate the
+        discovery guard.
         """
         catalog_free = "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0
         if not catalog_free:
