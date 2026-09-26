@@ -44,8 +44,19 @@ def test_cli_wires_guard_tenant_ledger_and_summary(tmp_path: Path) -> None:
 
 def test_cli_rejects_missing_virtual_key_credential() -> None:
     """A named but unconfigured KV credential is an operator error, not a silent default."""
-    with pytest.raises(SystemExit):
+    with (
+        patch("contextual_orchestrator.__main__.get_credential", return_value=None),
+        pytest.raises(SystemExit),
+    ):
         main(["--virtual-key-credential", "SPEND_GUARD_TEST_ABSENT_VIRTUAL_KEY", "hello"])
+
+
+def test_cli_reports_an_unusable_spend_ledger_path_as_argument_error(
+    tmp_path: Path,
+) -> None:
+    """Ledger open failures use argparse's operator-facing error surface."""
+    with pytest.raises(SystemExit):
+        main(["--spend-ledger-path", str(tmp_path), "hello"])
 
 
 def test_cli_rejects_removed_heuristic_baseline_ratio_option() -> None:

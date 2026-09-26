@@ -13,7 +13,10 @@ from contextual_orchestrator.domain.provider_limits import (
     classify_provider_limit,
     limit_evidence_from_payload,
 )
-from contextual_orchestrator.provider_errors import classify_provider_failure
+from contextual_orchestrator.provider_errors import (
+    classify_provider_failure,
+    provider_limit_evidence,
+)
 
 DROP = ProviderLimitAction.DROP_PROVIDER
 NONE = ProviderLimitAction.NONE
@@ -152,3 +155,16 @@ def test_http_error_carries_limit_evidence_through_classification() -> None:
     assert "limit_evidence" not in error.detail
     rewrapped = classify_provider_failure(error, agent_id="a", model="m", transport="stream")
     assert rewrapped.limit_evidence == error.limit_evidence
+
+
+def test_deeply_nested_provider_json_cannot_abort_limit_classification() -> None:
+    """A recursive untrusted JSON body degrades to no limit evidence."""
+    body = b"[" * 10_000 + b"0" + b"]" * 10_000
+    exc = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions",
+        429,
+        "Too Many Requests",
+        {},
+        io.BytesIO(body),
+    )
+    assert provider_limit_evidence(exc) == {}

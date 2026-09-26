@@ -32,6 +32,7 @@ from contextual_orchestrator.spend_guard import (
     SpendGuardConfig,
     VirtualKeyError,
     guarded_provider_call,
+    metered_passthrough_call,
     raise_if_stream_limit_event,
 )
 from contextual_orchestrator.spend_metering import InMemorySpendLedgerStore, JsonlSpendLedgerStore
@@ -441,6 +442,28 @@ def test_jsonl_without_file_lock_refuses_shared_hard_budget(
             )
 
     assert refused.value.detail["reason"] == "reservation_authority_unavailable"
+
+
+def test_unknown_shared_usage_blocks_later_billable_admission() -> None:
+    """An unpriced tenant entry makes its shared hard-budget position incomplete."""
+    provider_calls: list[str] = []
+    guard = SpendGuard(price_book=_price_book(), store=InMemorySpendLedgerStore())
+    guard.set_tenant_budget("acme", max_budget_usd="10")
+
+    with guard.tenant_context(tenant_id="acme"), guard.run_scope():
+        metered_passthrough_call(PAID, lambda: "answer")
+
+    with guard.tenant_context(tenant_id="acme"), guard.run_scope():
+        with pytest.raises(BudgetExceededError) as refused:
+            guarded_provider_call(
+                PAID,
+                PROMPT,
+                lambda: provider_calls.append("unexpected") or "answer",
+                usage_reader=lambda: USAGE,
+            )
+
+    assert refused.value.detail["reason"] == "measurement_unavailable"
+    assert provider_calls == []
 
 
 def test_existing_spend_budget_check_consults_the_run_scope() -> None:

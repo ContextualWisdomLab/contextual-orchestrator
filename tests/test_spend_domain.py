@@ -126,6 +126,16 @@ def test_unknown_price_fails_closed_under_a_cap() -> None:
     assert decision.reason == "price_unknown"
 
 
+def test_price_currency_mismatch_fails_closed_under_a_cap() -> None:
+    """A price in another currency cannot be combined with a USD budget."""
+    decision = decide_affordability(
+        [_position(BudgetScope.RUN, "1", "0")],
+        estimate=Money("0.1", "EUR"),
+        now=0,
+    )
+    assert decision.reason == "price_currency_mismatch"
+
+
 def test_insufficient_remaining_budget() -> None:
     """A call whose lower bound would cross the cap is refused before it is sent."""
     decision = decide_affordability(
