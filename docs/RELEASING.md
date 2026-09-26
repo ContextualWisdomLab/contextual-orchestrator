@@ -122,6 +122,93 @@ check those contracts separately before replacing a source pin.
    tag/commit, immutable state, wheel digest, SBOM and signed asset attestations. Do not admit
    a release merely because it appears in the GitHub Releases list.
 
+## PyPI publication
+
+After `publish` succeeds, the `publish-pypi` job in the same run uploads the
+verified wheel to PyPI as `contextual-orchestrator`. It never rebuilds and
+installs nothing. `verify` has already run `twine check --strict` on the exact
+wheel, holding its digest in memory across the check. twine and its
+dependencies come from the hash-locked `requirements-release-twine.txt`
+(regenerate with the command in its header), and that step gets no GitHub
+token. `publish-pypi` downloads
+the `release-publish-inputs` artifact, re-checks `SHA256SUMS`, and requires
+that manifest to equal the one attached to the immutable GitHub Release. It
+then runs a stdlib-only PyPI pre-check, uploads with
+`pypa/gh-action-pypi-publish` pinned to a full commit SHA, and finally
+requires PyPI's file list for the version to equal the manifest. Only the
+wheel is uploaded; no sdist is built or published.
+
+### Pre-merge checklist (repository and PyPI owners)
+
+`environment: pypi` is only a real gate once the environment exists and is
+protected, and the organization `PIPY_TOKEN` secret is visible to every
+repository on its access list. Before merging the PyPI job:
+
+Items 1 to 3 are enforced. Early in the read-only `verify` job, before any
+tag or GitHub Release exists, the step "Require a protected pypi environment
+before any tag or release exists" reads
+`GET /repos/{owner}/{repo}/environments/pypi` with the job's read-only token.
+It fails the run unless the environment exists, has a `required_reviewers`
+protection rule with at least one reviewer, and has a non-null
+`deployment_branch_policy`. Any other lookup error also fails the run. For
+`GITHUB_TOKEN`, that endpoint needs only `actions: read`, which `verify`
+already has. Until the environment is set up, every release stops there,
+before anything is published.
+
+1. Create the `pypi` GitHub environment in contextual-orchestrator.
+2. Restrict its deployment branches to `main`.
+3. Add required reviewers, so each PyPI upload needs a human approval.
+4. Credentials, preferred first:
+   - **Trusted Publishing (preferred).** Register a PyPI Trusted Publisher
+     with owner `ContextualWisdomLab`, repository `contextual-orchestrator`,
+     workflow `release.yml` and environment `pypi`. For the first upload of a
+     new project this is a PyPI "pending publisher". Then leave the token
+     unavailable to this repository.
+   - **API token.** Do **both** of the following:
+     - Store the token as a `pypi` *environment* secret named `PIPY_TOKEN`.
+       Only jobs that deploy to `pypi` can read it, which means after a
+       required reviewer approves and only from `main`.
+     - **And** restrict the organization `PIPY_TOKEN` secret's repository
+       access list. Remove contextual-orchestrator, or at least every
+       repository that does not publish with it. An environment secret only
+       *overrides* the same-named organization secret inside the `pypi` job.
+       Every other job and workflow in the repository still resolves
+       `secrets.PIPY_TOKEN` to the organization secret, with no reviewer and
+       from any branch, unless the organization secret's access is
+       restricted.
+
+     The workflow references the secret in exactly one place, the upload
+     step's `password:` input.
+
+If the first publication reports an empty password or a Trusted Publishing
+exchange failure, neither credential is available to this repository.
+
+The project `contextual-orchestrator` does not exist on PyPI yet. A
+project-scoped API token cannot be created before the project exists, so the
+very first upload needs either a pending Trusted Publisher or an
+account-scoped token. Replace an account-scoped token with a project-scoped
+one right after the first upload.
+
+### Re-running and known limitations
+
+Re-running is safe. `skip-existing: true` makes an already-uploaded, identical
+wheel a no-op. A PyPI version that already holds any file whose name or
+SHA-256 is not in the verified manifest fails the job before upload. PyPI
+never allows a file to be replaced or a version to be reused, so such a
+mismatch needs a new version, never a retry.
+
+- The `release-publish-inputs` artifact is kept for one day
+  (`retention-days: 1`), so "re-run failed jobs" for `publish-pypi` only works
+  within that day. After that, re-dispatch the same version. The run
+  rebuilds the wheel, `publish` verifies it byte-for-byte against the
+  immutable release asset, and `publish-pypi` then retries the upload.
+- That byte-for-byte comparison relies on the wheel build being reproducible.
+  `pyproject.toml` declares no `[build-system]`, so `uv build` uses the
+  default setuptools backend at whatever version is current. A setuptools
+  release between the original run and a re-dispatch can change the wheel
+  bytes and make the resume fail closed. Pinning `[build-system]` would
+  remove that risk.
+
 ## Recovery and known limitations
 
 An interrupted Draft is recoverable without deleting it or moving its tag.
