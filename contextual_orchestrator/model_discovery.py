@@ -14,6 +14,7 @@ registering a subset of the declared provider keys still works. Stdlib only
 from __future__ import annotations
 
 from decimal import Decimal
+from types import MappingProxyType
 import hashlib
 import json
 import logging
@@ -89,15 +90,95 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
-# The live Go catalog exposes only id/object/created/owned_by. Keep the one
-# serving allowlist to the official Chat Completions table; every other row is
-# retained as evidence-only until the API reports a protocol or an adapter exists.
-_OPENCODE_GO_CHAT_MODELS = frozenset({
-    "glm-5.3-flash", "glm-5.3", "glm-5.2", "glm-5.1", "kimi-k3",
-    "kimi-k2.7-code", "kimi-k2.6", "longcat-2.0", "deepseek-v4-pro",
-    "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "mimo-v2.5",
-    "mimo-v2.5-pro", "hy4-preview", "hy3",
+# The live Go catalog exposes only id/object/created/owned_by, so the wire
+# protocol per model comes from the official endpoint table at
+# https://opencode.ai/docs/go/#endpoints (checked 2026-09-26). Only
+# ``chat/completions`` rows are served today; ``responses`` and ``messages``
+# rows stay evidence-only until an adapter for that protocol exists. A model
+# the live catalog lists but the table does not name has no known protocol and
+# also stays evidence-only.
+OPENCODE_GO_MODEL_ENDPOINTS: Mapping[str, str] = MappingProxyType({
+    "grok-4.7": "responses",
+    "grok-4.6": "responses",
+    "gpt-6-luna": "responses",
+    "gpt-5.6-luna": "responses",
+    "muse-spark-1.3-contributor": "responses",
+    "muse-spark-1.2-contributor": "responses",
+    "glm-5.3-flash": "chat/completions",
+    "glm-5.3": "chat/completions",
+    "glm-5.2": "chat/completions",
+    "glm-5.1": "chat/completions",
+    "kimi-k3": "chat/completions",
+    "kimi-k2.7-code": "chat/completions",
+    "kimi-k2.6": "chat/completions",
+    "longcat-2.0": "chat/completions",
+    "deepseek-v4.1-flash": "chat/completions",
+    "deepseek-v4-pro": "chat/completions",
+    "deepseek-v4-flash": "chat/completions",
+    "deepseek-v4-flash-vision-exp": "chat/completions",
+    "mimo-v2.6-flash": "chat/completions",
+    "mimo-v2.6-pro": "chat/completions",
+    "mimo-v2.5": "chat/completions",
+    "mimo-v2.5-pro": "chat/completions",
+    "hy4-preview": "chat/completions",
+    "hy3": "chat/completions",
+    "space-bunny-free": "chat/completions",
+    "minimax-m3": "messages",
+    "minimax-m2.7": "messages",
+    "minimax-m2.5": "messages",
+    "qwen3.8-max": "messages",
+    "qwen3.8-flash": "messages",
+    "qwen3.7-max": "messages",
+    "qwen3.7-plus": "messages",
+    "qwen3.6-plus": "messages",
 })
+_OPENCODE_GO_CHAT_MODELS = frozenset(
+    model_id
+    for model_id, endpoint in OPENCODE_GO_MODEL_ENDPOINTS.items()
+    if endpoint == "chat/completions"
+)
+
+
+def opencode_go_model_endpoint(model_id: str) -> str | None:
+    """Return the documented OpenCode Go endpoint path for one model, if known."""
+    return OPENCODE_GO_MODEL_ENDPOINTS.get(model_id)
+
+
+# Deployments have used three spellings for the Experiential Labs key. The KV
+# label stays ``EXPERIENTAL_LABS_API_KEY`` (existing stored secrets and pool
+# policy use it), while bootstrap reads the environment in this order: the
+# correct spelling first, then the historical typo, then the provider's own
+# documented ``EXPLABS_API_KEY``.
+CREDENTIAL_ENV_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "EXPERIENTAL_LABS_API_KEY": (
+        "EXPERIENTIAL_LABS_API_KEY",
+        "EXPERIENTAL_LABS_API_KEY",
+        "EXPLABS_API_KEY",
+    ),
+})
+
+
+def credential_env_names(credential_name: str) -> tuple[str, ...]:
+    """Return the environment names that may carry one KV credential, in order."""
+    return CREDENTIAL_ENV_ALIASES.get(credential_name, (credential_name,))
+
+
+def bootstrap_credential_value(
+    environ: Mapping[str, str], credential_name: str
+) -> str:
+    """Return the first non-blank environment value for one KV credential.
+
+    Only trailing CR/LF bytes from mounted secret files are removed; every
+    other byte is preserved. Returns ``""`` when no spelling is set.
+    """
+    for env_name in credential_env_names(credential_name):
+        raw = environ.get(env_name, "")
+        value = raw.rstrip("\r\n") if isinstance(raw, str) else ""
+        if value and value.strip():
+            return value
+    return ""
+
+
 DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
 DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
 
@@ -1730,6 +1811,43 @@ def _discover_bytez_task_catalog(
         )
         if discovered:
             return discovered
+    # Last resort: Bytez has answered HTTP 500 to both task-filtered list calls
+    # while the key was valid (an invalid key answers 401). Ask once for the
+    # unfiltered catalog and keep only rows whose own ``task`` field names one
+    # of the chat-compatible tasks above, so no non-chat model slips in.
+    payload, failure = _fetch_provider_json_with_retry(
+        fetch,
+        source.list_url,
+        timeout=timeout,
+        fetch_kwargs=fetch_kwargs,
+    )
+    if failure is not None:
+        last_exc = failure
+        _LOGGER.info(
+            "discovery_task_result account=%s task=unfiltered outcome=failed error_code=%s",
+            source.provider_name,
+            _provider_discovery_error_code(failure),
+        )
+    else:
+        allowed_tasks = {task for task in task_filters if task}
+        rows = payload.get("output") if isinstance(payload, dict) else None
+        filtered_payload = {
+            "output": [
+                row
+                for row in (rows if isinstance(rows, list) else [])
+                if isinstance(row, dict) and row.get("task") in allowed_tasks
+            ]
+        }
+        discovered = _parse_bytez(filtered_payload, source)
+        _LOGGER.info(
+            "discovery_task_result account=%s task=unfiltered outcome=%s model_count=%d",
+            source.provider_name,
+            "succeeded" if discovered else "empty",
+            len(discovered),
+        )
+        if discovered:
+            return discovered
+        last_exc = None
     if last_exc is not None:
         raise ProviderDiscoveryError(
             source.provider_name,
