@@ -342,7 +342,6 @@ sources ship in a distribution):
 
 - [Architecture](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/architecture.md)
 - [KV credentials](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/kv-credentials.md)
-- [REST API design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/rest_api_design.md)
 - [ADRs](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/adr/README.md)
 - [Library research](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/library_research.md)
 - [Screen design](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/5665b0ad1e07ffb5e9f8c59e44b6b2a785298013/docs/screen_design.md)
