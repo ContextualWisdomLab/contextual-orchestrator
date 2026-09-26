@@ -362,6 +362,34 @@ def test_orchestration_route_schema_requires_a_known_terminal_reason(
         validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
 
 
+@pytest.mark.parametrize(
+    ("terminal_reason", "attempt_outcome"),
+    [
+        ("served", "retryable_transport"),
+        ("eligible_set_exhausted", "served"),
+    ],
+)
+def test_orchestration_route_schema_rejects_contradictory_terminal_evidence(
+    terminal_reason: str,
+    attempt_outcome: str,
+) -> None:
+    """A route receipt cannot contradict its own terminal authority."""
+    route = {
+        "eligible_agent_ids": ["candidate_worker"],
+        "attempted": [
+            {
+                "agent_id": "candidate_worker",
+                "model": "candidate-model",
+                "outcome": attempt_outcome,
+            }
+        ],
+        "terminal_reason": terminal_reason,
+    }
+    schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
+    with pytest.raises(ValidationError):
+        validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+
+
 def test_orchestration_route_attempt_schema_validates_streaming_fallback() -> None:
     """A real streaming single-worker failover's typed attempt matches the contract."""
     orchestrator = TaskOrchestrator(_stream_failover_agents(), client=_StreamFailThenServeClient())
