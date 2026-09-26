@@ -122,6 +122,41 @@ check those contracts separately before replacing a source pin.
    tag/commit, immutable state, wheel digest, SBOM and signed asset attestations. Do not admit
    a release merely because it appears in the GitHub Releases list.
 
+## PyPI publication
+
+After `publish` succeeds, the `publish-pypi` job in the same run uploads the
+verified wheel to PyPI as `contextual-orchestrator`. It never rebuilds: it
+downloads the `release-publish-inputs` artifact, re-checks `SHA256SUMS`,
+requires that manifest to equal the one attached to the immutable GitHub
+Release, runs `twine check --strict`, uploads with
+`pypa/gh-action-pypi-publish` pinned to a full commit SHA, and finally
+requires PyPI's file list for the version to equal the manifest.
+
+One-time setup (either is sufficient; the token path is used when present):
+
+- **API token.** The organization secret `PIPY_TOKEN` (the spelling is
+  intentional and shared with the organization's other package repositories)
+  must be available to `contextual-orchestrator`. If the first publication
+  reports an empty password or a Trusted Publishing exchange failure, add this
+  repository to that organization secret's repository access list. The
+  workflow references the secret in exactly one place, the upload step's
+  `password:` input.
+- **Trusted Publishing.** Register a PyPI Trusted Publisher with owner
+  `ContextualWisdomLab`, repository `contextual-orchestrator`, workflow
+  `release.yml` and environment `pypi`. For the first upload of a new project
+  this is a PyPI "pending publisher".
+
+Also create the `pypi` GitHub environment (add required reviewers there if a
+human approval should gate the PyPI upload).
+
+Re-running is safe. `skip-existing: true` makes an already-uploaded, identical
+wheel a no-op, so a failed PyPI step can be retried by re-running the failed
+job, or by re-dispatching the same version once its GitHub Release is already
+immutable. A PyPI version that already holds any file whose name or SHA-256 is
+not in the verified manifest fails the job before upload. PyPI never allows a
+file to be replaced or a version to be reused, so such a mismatch requires a
+new version, never a retry.
+
 ## Recovery and known limitations
 
 An interrupted Draft is recoverable without deleting it or moving its tag.

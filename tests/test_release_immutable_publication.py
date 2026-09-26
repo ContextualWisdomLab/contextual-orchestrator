@@ -115,6 +115,9 @@ def _steps() -> list[tuple[str, str, str]]:
     """Extract bounded publish steps without adding a YAML dependency."""
     text = (_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     publish = text.split("\n  publish:\n", 1)[1]
+    # Stop at the next top-level job (e.g. `publish-pypi`), so only the
+    # GitHub Release publisher's own steps are simulated here.
+    publish = re.split(r"(?m)^  [A-Za-z0-9_-]+:\n", publish, maxsplit=1)[0]
     result = []
     for block in re.split(r"(?m)^      - name: ", publish)[1:]:
         name = block.splitlines()[0]

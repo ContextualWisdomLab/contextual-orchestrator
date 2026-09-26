@@ -516,3 +516,273 @@ jobs:
             --repo "${GITHUB_REPOSITORY}"
           gh release verify-asset "v${RELEASE_VERSION}" dist/SHA256SUMS \
             --repo "${GITHUB_REPOSITORY}"
+
+  # Publishes the SAME wheel bytes the `publish` job just attached to the
+  # immutable GitHub Release to PyPI. One small, self-contained job, so it can
+  # later be swapped for a call to the organization's shared
+  # publish-package.yml without touching `verify` or `publish`.
+  #
+  # It never rebuilds: its only input is the `release-publish-inputs` artifact
+  # that `verify` built twice, compared byte-for-byte and hashed into
+  # SHA256SUMS, and that `publish` then compared against the release assets. A
+  # rebuild here could silently diverge from the attested GitHub Release asset.
+  #
+  # Ordering: `needs: [verify, publish]` plus the implicit success() status
+  # check means PyPI is touched only after the tag, the GitHub Release and its
+  # signed asset attestations all verified. A failed PyPI upload therefore
+  # never leaves a PyPI file without a matching immutable GitHub Release.
+  #
+  # Credentials: the PyPI secret is referenced in exactly ONE place, the
+  # upload step's `password:` input (renaming it is a one-line change). It is
+  # the organization PyPI API token secret; its unusual spelling is
+  # intentional and shared with the organization's other package
+  # repositories. It is scoped to that one step, so no other step (including
+  # the twine metadata check) ever sees it.
+  #   - When the secret is non-empty, pypa/gh-action-pypi-publish uploads
+  #     with it. A token scoped to the `contextual-orchestrator` project is
+  #     enough.
+  #   - When it is empty for this repository (for example the organization
+  #     secret's repository access list does not include
+  #     contextual-orchestrator), the action falls back to PyPI Trusted
+  #     Publishing: it exchanges this job's GitHub OIDC token (`id-token:
+  #     write` below) for a short-lived upload token. That works only if a
+  #     Trusted Publisher is registered on PyPI for owner ContextualWisdomLab,
+  #     repository contextual-orchestrator, workflow release.yml, environment
+  #     pypi.
+  #   - If neither path is configured the upload step fails, and "Explain a
+  #     PyPI upload failure" turns that into an explicit, actionable error.
+  #     This job never reports success without PyPI serving the verified
+  #     wheel: its last step re-reads PyPI and compares SHA-256 digests.
+  #
+  # Idempotency and resume: PyPI never lets a filename be re-uploaded with
+  # different bytes, and a version cannot be reused once a file was uploaded.
+  #   - `skip-existing: true` makes a re-run (re-run failed jobs, or a new
+  #     dispatch that resumes an already-immutable GitHub Release) a no-op for
+  #     a wheel PyPI already has -- the same retry approach as fast-mlsirm's
+  #     publish-pypi.yml;
+  #   - the pre-upload check fails closed when PyPI already has ANY file for
+  #     this version whose name or SHA-256 is not in the verified manifest,
+  #     because skip-existing alone skips by filename and would hide that;
+  #   - the post-upload check requires PyPI's file list for this version to
+  #     equal the verified manifest exactly.
+  # A genuine mismatch cannot be repaired by re-running: publish a new version.
+  publish-pypi:
+    name: Publish verified wheel to PyPI
+    needs: [verify, publish]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      PYPI_PROJECT: contextual-orchestrator
+    steps:
+      - name: Download the verified release inputs produced by verify
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # actions/download-artifact@v5
+        with:
+          name: release-publish-inputs
+          path: release-publish-inputs
+
+      - name: Stage exactly the verified wheel and re-verify SHA256SUMS
+        run: |
+          set -euo pipefail
+          wheel="contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
+          inputs="release-publish-inputs/dist"
+          test -s "${inputs}/${wheel}"
+          test -s "${inputs}/SHA256SUMS"
+          (cd "${inputs}" && sha256sum --strict -c SHA256SUMS)
+          # The manifest must name exactly the one verified wheel, so nothing
+          # else can ride along into the upload directory.
+          listed="$(awk '{ sub(/^\*/, "", $2); print $2 }' "${inputs}/SHA256SUMS")"
+          if [ "${listed}" != "${wheel}" ]; then
+            echo "::error::SHA256SUMS must list exactly ${wheel}; found: ${listed}. Refusing to publish to PyPI." >&2
+            exit 1
+          fi
+          # The manifest must also equal the one attached to the published,
+          # immutable GitHub Release, so PyPI receives the attested bytes.
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${RELEASE_VERSION}")"
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" '
+            .tag_name == $tag and .draft == false and
+            .prerelease == false and .immutable == true
+          ' <<<"${release}" >/dev/null; then
+            echo "::error::v${RELEASE_VERSION} is not a published immutable GitHub Release; refusing to publish to PyPI." >&2
+            exit 1
+          fi
+          remote_dir="$(mktemp -d)"
+          if ! gh release download "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --pattern SHA256SUMS --dir "${remote_dir}"; then
+            echo "::error::Cannot retrieve SHA256SUMS from the v${RELEASE_VERSION} GitHub Release; refusing to publish to PyPI." >&2
+            exit 1
+          fi
+          if ! cmp -s "${inputs}/SHA256SUMS" "${remote_dir}/SHA256SUMS"; then
+            echo "::error::The verified SHA256SUMS differs from the one attached to the immutable v${RELEASE_VERSION} GitHub Release; refusing to publish to PyPI." >&2
+            exit 1
+          fi
+          mkdir dist
+          cp "${inputs}/${wheel}" dist/
+          cp "${inputs}/SHA256SUMS" "${RUNNER_TEMP}/SHA256SUMS"
+          (cd dist && sha256sum --strict -c "${RUNNER_TEMP}/SHA256SUMS")
+          staged="$(find dist -mindepth 1 -printf '%f\n')"
+          if [ "${staged}" != "${wheel}" ]; then
+            echo "::error::dist/ must contain only ${wheel}; found: ${staged}." >&2
+            exit 1
+          fi
+
+      - name: Check distribution metadata with twine check --strict
+        run: |
+          set -euo pipefail
+          # Stand-in for the organization's shared package-description gate.
+          # Exact pins, binary wheels only, in an isolated virtualenv; this
+          # step never sees the PyPI secret. Regenerate the pins with:
+          #   uv pip compile --python-version 3.12 \
+          #     --python-platform x86_64-manylinux_2_28 <(echo twine)
+          constraints="${RUNNER_TEMP}/twine-constraints.txt"
+          cat > "${constraints}" <<'PINS'
+          certifi==2026.7.22
+          cffi==2.1.1
+          charset-normalizer==3.5.1
+          cryptography==50.0.1
+          docutils==0.23
+          id==1.6.1
+          idna==3.20
+          jaraco-classes==3.4.0
+          jaraco-context==6.1.2
+          jaraco-functools==4.6.0
+          jeepney==0.9.0
+          keyring==25.7.0
+          markdown-it-py==4.2.0
+          mdurl==0.1.2
+          more-itertools==11.1.0
+          nh3==0.3.7
+          packaging==26.3
+          pycparser==3.0
+          pygments==2.21.0
+          readme-renderer==46.0
+          requests==2.34.2
+          requests-toolbelt==1.0.0
+          rfc3986==2.0.0
+          rich==15.0.0
+          secretstorage==3.5.0
+          twine==7.0.0
+          urllib3==2.8.0
+          PINS
+          python3 -m venv "${RUNNER_TEMP}/twine-venv"
+          "${RUNNER_TEMP}/twine-venv/bin/python" -m pip install --quiet --disable-pip-version-check \
+            --only-binary=:all: --constraint "${constraints}" twine
+          # Every sdist and wheel staged for upload is checked; today that is
+          # the single verified wheel.
+          shopt -s nullglob
+          distributions=(dist/*.whl dist/*.tar.gz)
+          if [ "${#distributions[@]}" -eq 0 ]; then
+            echo "::error::No distributions staged in dist/ for twine check." >&2
+            exit 1
+          fi
+          if ! "${RUNNER_TEMP}/twine-venv/bin/twine" check --strict "${distributions[@]}"; then
+            echo "::error::twine check --strict rejected the distribution metadata; refusing to publish to PyPI." >&2
+            exit 1
+          fi
+
+      - name: Refuse a PyPI version that already holds different files
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          project = os.environ["PYPI_PROJECT"]
+          manifest = {}
+          for line in Path(os.environ["RUNNER_TEMP"], "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+              digest, name = line.split(maxsplit=1)
+              manifest[name.lstrip("*")] = digest
+          url = f"https://pypi.org/pypi/{project}/{version}/json"
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  files = json.load(response)["urls"]
+          except urllib.error.HTTPError as error:
+              if error.code == 404:
+                  print(f"::notice::PyPI has no {project} {version} yet (confirmed 404); this is a fresh upload.")
+                  raise SystemExit(0)
+              raise SystemExit(f"::error::PyPI lookup for {project} {version} failed with HTTP {error.code}; absence is NOT confirmed. Failing closed.")
+          remote = {item["filename"]: item["digests"]["sha256"] for item in files}
+          foreign = sorted(name for name, digest in remote.items() if manifest.get(name) != digest)
+          if foreign:
+              raise SystemExit(
+                  f"::error::PyPI already has {project} {version} files that are not the verified artifacts: {foreign}. "
+                  "PyPI never allows replacing a file or reusing a version; publish a new version instead."
+              )
+          print(f"::notice::PyPI already has {sorted(remote)} for {version} with matching SHA-256; skip-existing makes the upload a no-op for them.")
+          PY
+
+      - name: Publish the verified wheel to PyPI
+        id: pypi_upload
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          packages-dir: dist/
+          # The ONLY reference to the PyPI secret (see the job comment). Empty
+          # => the action falls back to Trusted Publishing (OIDC).
+          password: ${{ secrets.PIPY_TOKEN }}
+          # PEP 740 attestations need Trusted Publishing and are ignored with a
+          # token; the wheel's provenance is the immutable GitHub Release asset
+          # attestation verified by `publish`. Same setting as fast-mlsirm.
+          attestations: false
+          # A re-run after a partial or completed upload must not fail on a
+          # filename PyPI already has. Content equality is enforced by the
+          # checks before and after this step, not by skip-existing.
+          skip-existing: true
+          print-hash: true
+
+      - name: Explain a PyPI upload failure
+        if: failure() && steps.pypi_upload.outcome == 'failure'
+        run: |
+          echo "::error::PyPI upload failed. If the upload log above reports a Trusted Publishing exchange failure or an empty password, the organization PyPI token secret is not available to this repository and no Trusted Publisher is configured. Fix one of: (1) add contextual-orchestrator to that organization secret's repository access list, or (2) register a PyPI Trusted Publisher for owner ContextualWisdomLab, repository contextual-orchestrator, workflow release.yml, environment pypi. If it reports an invalid or non-permitted token, replace the token with one allowed to upload contextual-orchestrator. Then re-run this job; the immutable GitHub Release is already complete and is not modified." >&2
+          exit 1
+
+      - name: Verify PyPI serves exactly the verified wheel
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          project = os.environ["PYPI_PROJECT"]
+          manifest = {}
+          for line in Path(os.environ["RUNNER_TEMP"], "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+              digest, name = line.split(maxsplit=1)
+              manifest[name.lstrip("*")] = digest
+          url = f"https://pypi.org/pypi/{project}/{version}/json"
+          remote = None
+          # PyPI's JSON API is CDN-cached, so a just-uploaded file can take a
+          # short while to appear. Bounded retries only; never a pass on timeout.
+          for attempt in range(12):
+              try:
+                  request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      files = json.load(response)["urls"]
+                  remote = {item["filename"]: item["digests"]["sha256"] for item in files}
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise SystemExit(f"::error::PyPI lookup failed with HTTP {error.code}; cannot confirm publication.")
+                  remote = {}
+              if remote == manifest:
+                  print(f"::notice::PyPI serves exactly the verified files for {project} {version}: {sorted(remote)}.")
+                  raise SystemExit(0)
+              if any(manifest.get(name) != digest for name, digest in remote.items()):
+                  break
+              time.sleep(20)
+          raise SystemExit(
+              f"::error::PyPI files for {project} {version} do not equal the verified SHA256SUMS. "
+              f"Expected {manifest}, PyPI reports {remote}."
+          )
+          PY
