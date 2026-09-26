@@ -125,37 +125,65 @@ check those contracts separately before replacing a source pin.
 ## PyPI publication
 
 After `publish` succeeds, the `publish-pypi` job in the same run uploads the
-verified wheel to PyPI as `contextual-orchestrator`. It never rebuilds: it
-downloads the `release-publish-inputs` artifact, re-checks `SHA256SUMS`,
-requires that manifest to equal the one attached to the immutable GitHub
-Release, runs `twine check --strict`, uploads with
+verified wheel to PyPI as `contextual-orchestrator`. It never rebuilds and
+installs nothing. `verify` has already run `twine check --strict` on the exact
+wheel, holding its digest in memory across the check. `publish-pypi` downloads
+the `release-publish-inputs` artifact, re-checks `SHA256SUMS`, and requires
+that manifest to equal the one attached to the immutable GitHub Release. It
+then runs a stdlib-only PyPI pre-check, uploads with
 `pypa/gh-action-pypi-publish` pinned to a full commit SHA, and finally
-requires PyPI's file list for the version to equal the manifest.
+requires PyPI's file list for the version to equal the manifest. Only the
+wheel is uploaded; no sdist is built or published.
 
-One-time setup (either is sufficient; the token path is used when present):
+### Pre-merge checklist (repository and PyPI owners)
 
-- **API token.** The organization secret `PIPY_TOKEN` (the spelling is
-  intentional and shared with the organization's other package repositories)
-  must be available to `contextual-orchestrator`. If the first publication
-  reports an empty password or a Trusted Publishing exchange failure, add this
-  repository to that organization secret's repository access list. The
-  workflow references the secret in exactly one place, the upload step's
-  `password:` input.
-- **Trusted Publishing.** Register a PyPI Trusted Publisher with owner
-  `ContextualWisdomLab`, repository `contextual-orchestrator`, workflow
-  `release.yml` and environment `pypi`. For the first upload of a new project
-  this is a PyPI "pending publisher".
+`environment: pypi` is only a real gate once the environment exists and is
+protected, and the organization `PIPY_TOKEN` secret is visible to every
+repository on its access list. Before merging the PyPI job:
 
-Also create the `pypi` GitHub environment (add required reviewers there if a
-human approval should gate the PyPI upload).
+1. Create the `pypi` GitHub environment in contextual-orchestrator.
+2. Restrict its deployment branches to `main`.
+3. Add required reviewers, so each PyPI upload needs a human approval.
+4. Credentials, preferred first:
+   - **Trusted Publishing (preferred).** Register a PyPI Trusted Publisher
+     with owner `ContextualWisdomLab`, repository `contextual-orchestrator`,
+     workflow `release.yml` and environment `pypi`. For the first upload of a
+     new project this is a PyPI "pending publisher". Then leave the token
+     unavailable to this repository.
+   - **API token.** Store it as a `pypi` *environment* secret named
+     `PIPY_TOKEN` (an environment secret overrides the organization secret of
+     the same name), or restrict the organization secret's repository access
+     list to the repositories that need it. The workflow references the secret
+     in exactly one place, the upload step's `password:` input.
+
+If the first publication reports an empty password or a Trusted Publishing
+exchange failure, neither credential is available to this repository.
+
+The project `contextual-orchestrator` does not exist on PyPI yet. A
+project-scoped API token cannot be created before the project exists, so the
+very first upload needs either a pending Trusted Publisher or an
+account-scoped token. Replace an account-scoped token with a project-scoped
+one right after the first upload.
+
+### Re-running and known limitations
 
 Re-running is safe. `skip-existing: true` makes an already-uploaded, identical
-wheel a no-op, so a failed PyPI step can be retried by re-running the failed
-job, or by re-dispatching the same version once its GitHub Release is already
-immutable. A PyPI version that already holds any file whose name or SHA-256 is
-not in the verified manifest fails the job before upload. PyPI never allows a
-file to be replaced or a version to be reused, so such a mismatch requires a
-new version, never a retry.
+wheel a no-op. A PyPI version that already holds any file whose name or
+SHA-256 is not in the verified manifest fails the job before upload. PyPI
+never allows a file to be replaced or a version to be reused, so such a
+mismatch needs a new version, never a retry.
+
+- The `release-publish-inputs` artifact is kept for one day
+  (`retention-days: 1`), so "re-run failed jobs" for `publish-pypi` only works
+  within that day. After that, re-dispatch the same version. The run
+  rebuilds the wheel, `publish` verifies it byte-for-byte against the
+  immutable release asset, and `publish-pypi` then retries the upload.
+- That byte-for-byte comparison relies on the wheel build being reproducible.
+  `pyproject.toml` declares no `[build-system]`, so `uv build` uses the
+  default setuptools backend at whatever version is current. A setuptools
+  release between the original run and a re-dispatch can change the wheel
+  bytes and make the resume fail closed. Pinning `[build-system]` would
+  remove that risk.
 
 ## Recovery and known limitations
 

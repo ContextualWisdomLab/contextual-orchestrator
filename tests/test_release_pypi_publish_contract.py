@@ -4,10 +4,11 @@
 `verify` built twice and `publish` attached to the immutable GitHub Release.
 These tests pin the properties that make that safe: it runs only after the
 GitHub Release job succeeds, never rebuilds, re-verifies SHA256SUMS against the
-immutable release, checks metadata with `twine check --strict`, uses a
-SHA-pinned uploader with least privilege, references the PyPI secret exactly
-once, and is idempotent on re-run while refusing a PyPI version that already
-holds different files.
+immutable release, uses a SHA-pinned uploader with least privilege, installs
+nothing (the `twine check --strict` metadata gate runs in the read-only
+`verify` job on the same bytes), scopes the read-only GH_TOKEN to one step,
+references the PyPI secret exactly once, and is idempotent on re-run while
+refusing a PyPI version that already holds different files.
 
 Plain text assertions plus real execution of the job's own shell/Python step
 bodies against stubbed `gh` and PyPI responses, matching this repository's
@@ -34,11 +35,11 @@ _PYPI_PUBLISH_VERSION = "v1.14.2"
 _SECRET_NAME = "PIPY_TOKEN"
 _VERSION = "0.2.0"
 _WHEEL = f"contextual_orchestrator-{_VERSION}-py3-none-any.whl"
+_TWINE_STEP = "Check the exact wheel's metadata with twine check --strict"
 
 _STEP_ORDER = (
     "Download the verified release inputs produced by verify",
     "Stage exactly the verified wheel and re-verify SHA256SUMS",
-    "Check distribution metadata with twine check --strict",
     "Refuse a PyPI version that already holds different files",
     "Publish the verified wheel to PyPI",
     "Explain a PyPI upload failure",
@@ -153,17 +154,122 @@ def test_checksums_are_reverified_against_the_immutable_release_before_upload() 
     assert '(cd dist && sha256sum --strict -c "${RUNNER_TEMP}/SHA256SUMS")' in stage
 
 
-def test_twine_check_strict_gates_every_staged_distribution() -> None:
-    twine = _steps(_pypi_job())[_STEP_ORDER[2]]
+def _verify_steps() -> dict[str, str]:
+    return _steps(_job_block(_workflow_text(), "verify"))
+
+
+def test_twine_check_strict_runs_in_verify_on_the_exact_publish_input() -> None:
+    workflow = _workflow_text()
+    verify = _job_block(workflow, "verify")
+    names = list(_verify_steps())
+    build = names.index("Build the installable package for this exact commit")
+    twine_index = names.index(_TWINE_STEP)
+    upload = names.index("Upload rendered notes and SBOM for the publish job")
+    assert build < twine_index < upload
+    assert "id-token: write" not in verify
+    assert "secrets." not in verify
+    twine = _verify_steps()[_TWINE_STEP]
     assert "twine==7.0.0" in twine
     assert "--only-binary=:all:" in twine
     assert '--constraint "${constraints}"' in twine
-    assert "distributions=(dist/*.whl dist/*.tar.gz)" in twine
+    assert 'distributions=("${check_dir}"/*.whl "${check_dir}"/*.tar.gz)' in twine
     assert 'twine" check --strict "${distributions[@]}"' in twine
+    # Digests are captured before third-party code runs and re-checked after.
+    assert twine.index('wheel_digest="$(sha256sum "${wheel}")"') < twine.index("pip install")
+    assert twine.index("pip install") < twine.index('!= "${wheel_digest}"')
     pins = twine.split("<<'PINS'\n", 1)[1].split("\n          PINS\n", 1)[0]
     for line in pins.splitlines():
         assert re.fullmatch(r"          [a-z0-9-]+==[0-9][0-9A-Za-z.]*", line), line
-    assert "secrets." not in twine
+
+
+def test_publish_pypi_installs_nothing() -> None:
+    job = _pypi_job()
+    for forbidden in (
+        "pip install",
+        "pip3 install",
+        "uv pip",
+        "uv tool",
+        "uvx",
+        "pipx",
+        "python -m venv",
+        "python3 -m venv",
+        "actions/setup-python",
+        "twine",
+    ):
+        assert forbidden not in job, forbidden
+
+
+def test_gh_token_is_scoped_to_the_staging_step_only() -> None:
+    job = _pypi_job()
+    job_env = job.split("\n    env:\n", 1)[1].split("\n    steps:\n", 1)[0]
+    assert "GH_TOKEN" not in job_env
+    assert job.count("GH_TOKEN: ${{ github.token }}") == 1
+    stage = _steps(job)[_STEP_ORDER[1]]
+    assert "        env:\n" in stage.split("        run: |\n", 1)[0]
+    assert "GH_TOKEN: ${{ github.token }}" in stage
+
+
+_FAKE_PYTHON = """#!/usr/bin/env bash
+# `python -m venv DIR` creates a fake venv whose pip is a no-op and whose twine
+# behaves per FAKE_TWINE: pass | reject | tamper-wheel | tamper-sums.
+set -euo pipefail
+if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
+    mkdir -p "$3/bin"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$3/bin/python"
+    cat > "$3/bin/twine" <<'TW'
+#!/usr/bin/env bash
+case "${FAKE_TWINE}" in
+    pass) exit 0 ;;
+    reject) echo "ERROR long_description has syntax errors" >&2; exit 1 ;;
+    tamper-wheel) printf 'evil' > "${WORKDIR}/dist/${WHEEL}"; exit 0 ;;
+    tamper-sums) printf 'evil' > "${WORKDIR}/dist/${WHEEL}"; (cd "${WORKDIR}/dist" && sha256sum "${WHEEL}" > SHA256SUMS); exit 0 ;;
+esac
+exit 99
+TW
+    chmod +x "$3/bin/python" "$3/bin/twine"
+    exit 0
+fi
+echo "unexpected python call: $*" >&2
+exit 98
+"""
+
+
+@pytest.mark.parametrize(
+    "mode,success",
+    [("pass", True), ("reject", False), ("tamper-wheel", False), ("tamper-sums", False)],
+)
+def test_verify_twine_step_executes_and_detects_rejection_or_tampering(
+    tmp_path: Path, mode: str, success: bool
+) -> None:
+    work = tmp_path / "work"
+    dist = work / "dist"
+    dist.mkdir(parents=True)
+    (dist / _WHEEL).write_bytes(b"verified wheel bytes")
+    subprocess.run(
+        ["bash", "-c", f"sha256sum {_WHEEL} > SHA256SUMS"], cwd=dist, check=True
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(bin_dir / "python", _FAKE_PYTHON)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "RELEASE_VERSION": _VERSION,
+        "RUNNER_TEMP": str(runner_temp),
+        "FAKE_TWINE": mode,
+        "WORKDIR": str(work),
+        "WHEEL": _WHEEL,
+    }
+    script = _run_body(_verify_steps()[_TWINE_STEP])
+    result = subprocess.run(
+        ["bash", "-c", script], cwd=work, env=env, text=True, capture_output=True, timeout=30
+    )
+    assert (result.returncode == 0) is success, result.stdout + result.stderr
+    if not success:
+        assert "::error::" in result.stderr
+    assert (runner_temp / "twine-check" / _WHEEL).is_file()
 
 
 def test_secret_is_referenced_exactly_once_on_the_upload_step() -> None:
@@ -171,19 +277,19 @@ def test_secret_is_referenced_exactly_once_on_the_upload_step() -> None:
     assert workflow.count(_SECRET_NAME) == 1
     assert workflow.count("secrets.") == 1
     assert "PYPI_API_TOKEN" not in workflow
-    upload = _steps(_pypi_job())[_STEP_ORDER[4]]
+    upload = _steps(_pypi_job())[_STEP_ORDER[3]]
     assert f"password: ${{{{ secrets.{_SECRET_NAME} }}}}" in upload
 
 
 def test_upload_is_idempotent_and_failure_is_explained() -> None:
     steps = _steps(_pypi_job())
-    upload = steps[_STEP_ORDER[4]]
+    upload = steps[_STEP_ORDER[3]]
     assert "id: pypi_upload" in upload
     assert "packages-dir: dist/" in upload
     assert "skip-existing: true" in upload
     assert "attestations: false" in upload
     assert "verify-metadata: false" not in upload
-    explain = steps[_STEP_ORDER[5]]
+    explain = steps[_STEP_ORDER[4]]
     assert "if: failure() && steps.pypi_upload.outcome == 'failure'" in explain
     assert "repository access list" in explain
     assert "workflow release.yml, environment pypi" in explain
@@ -352,7 +458,7 @@ def _run_pypi_check(tmp_path: Path, step_name: str, responses: list) -> subproce
     ],
 )
 def test_pre_upload_check_refuses_foreign_files(tmp_path: Path, responses: list, success: bool) -> None:
-    result = _run_pypi_check(tmp_path, _STEP_ORDER[3], responses)
+    result = _run_pypi_check(tmp_path, _STEP_ORDER[2], responses)
     assert (result.returncode == 0) is success, result.stdout + result.stderr
     if not success:
         assert "::error::" in result.stdout + result.stderr
@@ -372,7 +478,7 @@ def test_pre_upload_check_refuses_foreign_files(tmp_path: Path, responses: list,
 def test_post_upload_check_requires_exactly_the_verified_files(
     tmp_path: Path, responses: list, success: bool
 ) -> None:
-    result = _run_pypi_check(tmp_path, _STEP_ORDER[6], responses)
+    result = _run_pypi_check(tmp_path, _STEP_ORDER[5], responses)
     assert (result.returncode == 0) is success, result.stdout + result.stderr
     if not success:
         assert "::error::" in result.stdout + result.stderr

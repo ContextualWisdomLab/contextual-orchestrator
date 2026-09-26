@@ -322,6 +322,76 @@ jobs:
           assert (site / "contextual_orchestrator/__init__.py").is_file()
           PY
 
+      - name: Check the exact wheel's metadata with twine check --strict
+        run: |
+          set -euo pipefail
+          # Runs here, in the read-only `verify` job (no id-token, no PyPI
+          # secret, no write token), on the exact wheel that becomes the
+          # publish input; `publish-pypi` installs nothing. Stand-in for the
+          # organization's shared package-description gate. Exact pins,
+          # binary wheels only, in an isolated virtualenv. Regenerate with:
+          #   uv pip compile --python-version 3.12 \
+          #     --python-platform x86_64-manylinux_2_28 <(echo twine)
+          wheel="dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
+          # Digests are held in this shell's memory before any third-party
+          # code runs and re-checked afterwards, so the twine install cannot
+          # silently swap the wheel or its manifest before the upload below.
+          wheel_digest="$(sha256sum "${wheel}")"
+          manifest="$(cat dist/SHA256SUMS)"
+          check_dir="${RUNNER_TEMP}/twine-check"
+          mkdir -p "${check_dir}"
+          cp "${wheel}" "${check_dir}/"
+          constraints="${RUNNER_TEMP}/twine-constraints.txt"
+          cat > "${constraints}" <<'PINS'
+          certifi==2026.7.22
+          cffi==2.1.1
+          charset-normalizer==3.5.1
+          cryptography==50.0.1
+          docutils==0.23
+          id==1.6.1
+          idna==3.20
+          jaraco-classes==3.4.0
+          jaraco-context==6.1.2
+          jaraco-functools==4.6.0
+          jeepney==0.9.0
+          keyring==25.7.0
+          markdown-it-py==4.2.0
+          mdurl==0.1.2
+          more-itertools==11.1.0
+          nh3==0.3.7
+          packaging==26.3
+          pycparser==3.0
+          pygments==2.21.0
+          readme-renderer==46.0
+          requests==2.34.2
+          requests-toolbelt==1.0.0
+          rfc3986==2.0.0
+          rich==15.0.0
+          secretstorage==3.5.0
+          twine==7.0.0
+          urllib3==2.8.0
+          PINS
+          python -m venv "${RUNNER_TEMP}/twine-venv"
+          "${RUNNER_TEMP}/twine-venv/bin/python" -m pip install --quiet --disable-pip-version-check \
+            --only-binary=:all: --constraint "${constraints}" twine
+          # Every sdist and wheel staged for publication is checked; today
+          # that is the single verified wheel.
+          shopt -s nullglob
+          distributions=("${check_dir}"/*.whl "${check_dir}"/*.tar.gz)
+          if [ "${#distributions[@]}" -eq 0 ]; then
+            echo "::error::No distributions staged for twine check." >&2
+            exit 1
+          fi
+          if ! "${RUNNER_TEMP}/twine-venv/bin/twine" check --strict "${distributions[@]}"; then
+            echo "::error::twine check --strict rejected the wheel's metadata; refusing to prepare it for publication." >&2
+            exit 1
+          fi
+          if [ "$(sha256sum "${wheel}")" != "${wheel_digest}" ] || [ "$(cat dist/SHA256SUMS)" != "${manifest}" ]; then
+            echo "::error::dist/ changed while twine check ran; refusing to publish." >&2
+            exit 1
+          fi
+          (cd dist && sha256sum --strict -c SHA256SUMS)
+
       - name: Upload rendered notes and SBOM for the publish job
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
         with:
@@ -532,12 +602,19 @@ jobs:
   # signed asset attestations all verified. A failed PyPI upload therefore
   # never leaves a PyPI file without a matching immutable GitHub Release.
   #
+  # This job installs nothing: `twine check --strict` already ran in the
+  # read-only `verify` job on the same bytes, and every step here is either a
+  # SHA-pinned action or stdlib-only shell/Python. The read-only GH_TOKEN is
+  # scoped to the one step that reads the GitHub Release.
+  #
   # Credentials: the PyPI secret is referenced in exactly ONE place, the
   # upload step's `password:` input (renaming it is a one-line change). It is
   # the organization PyPI API token secret; its unusual spelling is
   # intentional and shared with the organization's other package
-  # repositories. It is scoped to that one step, so no other step (including
-  # the twine metadata check) ever sees it.
+  # repositories. It is scoped to that one step, so no other step ever sees
+  # it. `environment: pypi` is where deployment protection belongs (see the
+  # pre-merge checklist in docs/RELEASING.md); until that environment exists
+  # with required reviewers and a main-only deployment rule, it adds no gate.
   #   - When the secret is non-empty, pypa/gh-action-pypi-publish uploads
   #     with it. A token scoped to the `contextual-orchestrator` project is
   #     enough.
@@ -577,7 +654,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.version }}
       PYPI_PROJECT: contextual-orchestrator
     steps:
@@ -588,6 +664,10 @@ jobs:
           path: release-publish-inputs
 
       - name: Stage exactly the verified wheel and re-verify SHA256SUMS
+        env:
+          # Read-only token, scoped to the one step that reads the GitHub
+          # Release; no other step in this job sees it.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           wheel="contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
@@ -628,60 +708,6 @@ jobs:
           staged="$(find dist -mindepth 1 -printf '%f\n')"
           if [ "${staged}" != "${wheel}" ]; then
             echo "::error::dist/ must contain only ${wheel}; found: ${staged}." >&2
-            exit 1
-          fi
-
-      - name: Check distribution metadata with twine check --strict
-        run: |
-          set -euo pipefail
-          # Stand-in for the organization's shared package-description gate.
-          # Exact pins, binary wheels only, in an isolated virtualenv; this
-          # step never sees the PyPI secret. Regenerate the pins with:
-          #   uv pip compile --python-version 3.12 \
-          #     --python-platform x86_64-manylinux_2_28 <(echo twine)
-          constraints="${RUNNER_TEMP}/twine-constraints.txt"
-          cat > "${constraints}" <<'PINS'
-          certifi==2026.7.22
-          cffi==2.1.1
-          charset-normalizer==3.5.1
-          cryptography==50.0.1
-          docutils==0.23
-          id==1.6.1
-          idna==3.20
-          jaraco-classes==3.4.0
-          jaraco-context==6.1.2
-          jaraco-functools==4.6.0
-          jeepney==0.9.0
-          keyring==25.7.0
-          markdown-it-py==4.2.0
-          mdurl==0.1.2
-          more-itertools==11.1.0
-          nh3==0.3.7
-          packaging==26.3
-          pycparser==3.0
-          pygments==2.21.0
-          readme-renderer==46.0
-          requests==2.34.2
-          requests-toolbelt==1.0.0
-          rfc3986==2.0.0
-          rich==15.0.0
-          secretstorage==3.5.0
-          twine==7.0.0
-          urllib3==2.8.0
-          PINS
-          python3 -m venv "${RUNNER_TEMP}/twine-venv"
-          "${RUNNER_TEMP}/twine-venv/bin/python" -m pip install --quiet --disable-pip-version-check \
-            --only-binary=:all: --constraint "${constraints}" twine
-          # Every sdist and wheel staged for upload is checked; today that is
-          # the single verified wheel.
-          shopt -s nullglob
-          distributions=(dist/*.whl dist/*.tar.gz)
-          if [ "${#distributions[@]}" -eq 0 ]; then
-            echo "::error::No distributions staged in dist/ for twine check." >&2
-            exit 1
-          fi
-          if ! "${RUNNER_TEMP}/twine-venv/bin/twine" check --strict "${distributions[@]}"; then
-            echo "::error::twine check --strict rejected the distribution metadata; refusing to publish to PyPI." >&2
             exit 1
           fi
 
