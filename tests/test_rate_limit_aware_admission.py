@@ -18,7 +18,6 @@ import email.utils
 import http.client
 import io
 import json
-import math
 import threading
 import time
 import urllib.error
@@ -161,16 +160,25 @@ def test_currently_cooled_down_candidate_is_skipped_and_recorded_as_evidence() -
     assert result["orchestration"]["rate_limited_skipped"] == ["primary_agent"]
 
 
-def test_unknown_retry_after_has_no_synthetic_retry_deadline() -> None:
-    """A 429 without provider timing evidence remains unavailable, not guessed."""
+def test_unknown_retry_after_assumes_a_short_cooldown_instead_of_recording_nothing() -> None:
+    """A 429/503 with no Retry-After/x-ratelimit-reset* must still count as cooling.
+
+    Recording nothing for an unknown duration was the original defect: a
+    candidate whose provider omitted the header (RFC 9110 permits this, and
+    NIM/OpenRouter routinely do it) was never marked rate-limited, so an
+    all-omitted-header storm looked identical to "nothing is rate-limited"
+    and failed exactly as if this feature did not exist.
+    """
     client = SequencedRateLimitClient(
         {"fallback_agent": [{"id": "chatcmpl_1", "choices": []}]}
     )
     orchestrator = _two_agent_pool(client)
     orchestrator._record_rate_limit("primary_agent", None)
 
-    assert math.isinf(orchestrator._rate_limit_remaining("primary_agent"))
-    assert orchestrator._rate_limit_cooldown_source("primary_agent") == "unavailable"
+    assert orchestrator._rate_limit_remaining("primary_agent") == pytest.approx(
+        orchestrator.rate_limit_unknown_cooldown_seconds, abs=0.5
+    )
+    assert orchestrator._rate_limit_cooldown_source("primary_agent") == "assumed"
 
     result = orchestrator.proxy_completion(
         {"model": "orchestrator/auto", "messages": [{"role": "user", "content": "hi"}]}
