@@ -391,8 +391,11 @@ def test_checks_gate_script_content() -> None:
     script = _CHECKS_GATE_SCRIPT_PATH.read_text(encoding="utf-8")
     assert 'repos/${GITHUB_REPOSITORY}/commits/${TARGET_SHA}/check-runs' in script
     assert '.status != "completed"' in script
-    assert '["success","skipped","neutral"]' in script
-    assert 'if [ "${not_ready_count}" != "0" ]' in script
+    # Only the allowlisted required checks are evaluated; there is no longer
+    # a catch-all "every other check must be terminal" filter (see
+    # tests/test_release_checks_required_allowlist.py).
+    assert '["success","skipped","neutral"]' not in script
+    assert 'if [ "${required_not_success_count}" != "0" ]' in script
     assert "exit 1" in script
     # Excludes this release run's own check-runs -- otherwise a
     # workflow_dispatch run would always find itself unfinished and deadlock.
@@ -420,17 +423,17 @@ def test_expected_push_checks_are_unique_after_central_workflow_migration() -> N
 
 def test_checks_gate_requires_expected_checks_before_checking_they_are_green() -> None:
     """The shared script must reference the expected-checks env var and
-    compute `missing_checks`/`missing_count` *before* the pre-existing
-    `not_ready`/`not_ready_count` gate -- registration must be confirmed
+    compute `missing_checks`/`missing_count` *before* the success-only
+    `required_not_success` gate -- registration must be confirmed
     before conclusions are even inspected. One script, one order, used by
     both jobs -- see `test_both_jobs_checks_green_step_calls_the_shared_script`."""
     script = _CHECKS_GATE_SCRIPT_PATH.read_text(encoding="utf-8")
     assert "RELEASE_EXPECTED_PUSH_CHECKS" in script
     missing_index = script.index("missing_checks=")
     missing_count_index = script.index('if [ "${missing_count}" != "0" ]')
-    not_ready_index = script.index("not_ready=")
-    not_ready_count_index = script.index('if [ "${not_ready_count}" != "0" ]')
-    assert missing_index < missing_count_index < not_ready_index < not_ready_count_index
+    not_success_index = script.index("required_not_success=")
+    not_success_count_index = script.index('if [ "${required_not_success_count}" != "0" ]')
+    assert missing_index < missing_count_index < not_success_index < not_success_count_index
 
 
 def test_checks_gate_zero_registered_checks_fails_closed(tmp_path: Path) -> None:

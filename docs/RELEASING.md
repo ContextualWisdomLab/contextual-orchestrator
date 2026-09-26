@@ -38,12 +38,15 @@ LifeOS and other consumers must verify their specific owner contracts too.
    tags, unsupported tag objects and unrelated histories fail closed. Never
    replace, promote, move or reuse a tag to make publication succeed.
 4. The exact commit has passing required checks. The workflow rechecks
-   registered push-triggered jobs and the reported check rollup through
-   `scripts/ci/release_checks_gate.sh`, and runs the full test suite fresh.
-   Its existing check policy accepts terminal success, skipped or neutral
-   conclusions; this is not permission to treat a skipped required semantic
-   security action as actual review evidence. Protected integration still
-   requires all applicable organization gates and reviews.
+   them through `scripts/ci/release_checks_gate.sh`, and runs the full test
+   suite fresh. The gate evaluates only the four required `security.yml`
+   jobs named in `RELEASE_EXPECTED_PUSH_CHECKS` (an explicit allowlist):
+   each must be registered for the commit and every check-run with that name
+   must conclude `success`. All other check-runs on the commit, including the
+   scheduled `opencode-hourly-loop.yml` and `provider-catalog-sync.yml`
+   maintenance runs, are ignored: they neither block nor certify a release.
+   Protected integration still requires all applicable organization gates
+   and reviews.
    A newly merged commit whose expected push checks have not yet registered
    is not ready. Re-dispatch after the genuine required evidence exists;
    do not weaken the expected check inventory.
