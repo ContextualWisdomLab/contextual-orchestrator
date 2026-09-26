@@ -7283,3 +7283,21 @@ RED `7a0183d8` records both invalid cases. GREEN `f1af21d7` makes
 tests pass 4/4; the wider API/stream/error suite and exact-head hosted checks
 remain required. This is PR-head evidence only; protected-main integration,
 independent approval, immutable release, and consumer bump remain outstanding.
+
+
+#### Cross-field terminal evidence authority — Proposed
+
+The 0.3.1 schema at exact `741f3602` constrained `terminal_reason` and
+`attempted[].outcome` separately but did not bind them. It therefore validated
+both a `served` termination with no served attempt and an
+`eligible_set_exhausted` termination containing a served attempt. Those
+receipts expose contradictory authorities to every consumer.
+
+RED `716311fb` records both contradictions through the real
+`jsonschema.validate` boundary; both failed because validation unexpectedly
+succeeded. GREEN `27496cb5` requires exactly one served attempt for a served
+termination and forbids served attempts for either non-served termination.
+Exact remote AST parsing passed for production and test files; two valid
+receipts passed and both contradictory receipts were rejected. Hosted exact-head
+checks, independent approval, protected-main integration, immutable release, and
+consumer bump remain required. Status stays Proposed.
