@@ -48,7 +48,11 @@ from .chat_capability import (
 )
 from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
-from .free_serving_evidence import free_serving_admitted, record_reported_cost
+from .free_serving_evidence import (
+    free_serving_admitted,
+    record_provider_error,
+    record_reported_cost,
+)
 from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
@@ -1659,14 +1663,26 @@ def _responses_text_format_to_chat_response_format(
     }
 
 
+def _request_header_pairs(request: object) -> list[tuple[str, str]]:
+    """Return an outbound urllib request's headers as ``(name, value)`` pairs."""
+    header_items = getattr(request, "header_items", None)
+    if not callable(header_items):
+        return []
+    try:
+        return [(str(name), str(value)) for name, value in header_items()]
+    except (TypeError, ValueError):  # pragma: no cover - defensive; urllib always supports this
+        return []
+
+
 def _record_free_serving_evidence(
-    agent: ModelAgent, data: object, headers: object = None
+    agent: ModelAgent, data: object, headers: object = None, request: object = None
 ) -> None:
     """Record one completed response's reported cost for the free-now ledger.
 
     Never raises: cost evidence must not turn a successful provider response
     into a failure. A missing or malformed cost is recorded as ``UNKNOWN``
-    (fail-closed for evidence-required providers, ignored for the rest); see
+    (fail-closed for evidence-required providers, ignored for the rest); an
+    ``Idempotency-Key`` request is skipped. See
     :mod:`contextual_orchestrator.free_serving_evidence`.
     """
     try:
@@ -1676,9 +1692,28 @@ def _record_free_serving_evidence(
             getattr(agent, "model", None),
             usage if isinstance(usage, dict) else None,
             headers,
+            request_headers=_request_header_pairs(request),
         )
     except Exception:  # evidence is advisory for this response; never fail the call
         _LOGGER.debug("free serving cost evidence could not be recorded", exc_info=True)
+
+
+def _record_free_serving_quota_error(
+    agent: ModelAgent, error: urllib.error.HTTPError, request: object = None
+) -> None:
+    """Demote a route on a 429 free-quota error; never replaces the original error."""
+    try:
+        if error.code != 429:
+            return
+        record_provider_error(
+            getattr(agent, "provider_name", None),
+            getattr(agent, "model", None),
+            error.code,
+            _http_error_payload(error),
+            request_headers=_request_header_pairs(request),
+        )
+    except Exception:  # evidence is advisory; the caller re-raises the HTTP error
+        _LOGGER.debug("free serving quota evidence could not be recorded", exc_info=True)
 
 
 def _canonical_provider_usage(
@@ -2992,7 +3027,7 @@ class ModelClient:
             )
             response_headers = getattr(response, "headers", None)
         _record_provider_response_telemetry(data, started)
-        _record_free_serving_evidence(agent, data, response_headers)
+        _record_free_serving_evidence(agent, data, response_headers, request)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -3170,11 +3205,19 @@ class ModelClient:
         agent: ModelAgent,
         timeout: float | None = None,
     ) -> Any:
-        """Open one model request using the resolved per-model wait, or none."""
+        """Open one model request using the resolved per-model wait, or none.
+
+        A 429 free-quota error (``insufficient_quota`` / ``free_limit_reached``)
+        demotes the route in the free-now ledger before the error propagates.
+        """
         resolved = self._resolved_model_timeout(agent, timeout)
-        if resolved is None:
-            return self._open_provider(request, destination)
-        return self._open_provider(request, destination, timeout=resolved)
+        try:
+            if resolved is None:
+                return self._open_provider(request, destination)
+            return self._open_provider(request, destination, timeout=resolved)
+        except urllib.error.HTTPError as exc:
+            _record_free_serving_quota_error(agent, exc, request)
+            raise
 
     def _open_provider(
         self,
@@ -3454,7 +3497,7 @@ class ModelClient:
                 started,
             )
             _record_free_serving_evidence(
-                agent, {"usage": stream_usage}, getattr(response, "headers", None)
+                agent, {"usage": stream_usage}, getattr(response, "headers", None), request
             )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
             try:
@@ -3885,7 +3928,7 @@ class ModelClient:
             )
             response_headers = getattr(response, "headers", None)
         _record_provider_response_telemetry(data, started)
-        _record_free_serving_evidence(agent, data, response_headers)
+        _record_free_serving_evidence(agent, data, response_headers, request)
         return data
 
     def _mock_raw(
