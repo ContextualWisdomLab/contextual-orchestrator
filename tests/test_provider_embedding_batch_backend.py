@@ -20,9 +20,7 @@ from contextual_orchestrator.batch_routing import (
     ProviderEmbeddingBatchBackend,
     _DaemonWorkerPool,
 )
-from contextual_orchestrator.cost_router import (
-    _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS,
-)
+from contextual_orchestrator.cost_router import _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
@@ -417,13 +415,15 @@ def test_server_shutdown_closes_embedding_workers() -> None:
         coordinator=coordinator,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread.start()
 
-    server.shutdown()
-    thread.join(timeout=1)
-    server.server_close()
+        server.shutdown()
+        thread.join(timeout=1)
 
-    assert backend.closed is True
+        assert backend.closed is True
+    finally:
+        server.server_close()
 
 
 def test_server_close_closes_embedding_workers_after_abnormal_exit() -> None:
@@ -596,10 +596,7 @@ def test_durable_provider_embedding_backend_survives_unbounded_client_timeout() 
     coordinator = CostRoutingCoordinator(orchestrator, job_registry=registry)
 
     backend = coordinator._embedding_backends["provider"]
-    assert (
-        backend._claim_lease_seconds
-        == _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
-    )
+    assert backend._claim_lease_seconds == _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
     backend.close()
 
 
