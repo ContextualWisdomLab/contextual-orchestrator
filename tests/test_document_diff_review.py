@@ -27,6 +27,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.document_diff_review import DocumentDiffReviewError, validate_document_diff_findings  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -268,6 +269,8 @@ def _mutated(**changes) -> dict:
         (_mutated(participant_material=True), 422, "participant_material"),
         (_mutated(raw_document="UEsDBA=="), 400, "unknown_field"),
         (_mutated(**{"objects.0.object_hash_head": ENVELOPE["objects"][0]["object_hash_base"]}), 400, "inconsistent_change"),
+        (_mutated(**{"objects.0.object_kind": []}), 400, "invalid_object_kind"),
+        (_mutated(**{"objects.0.change": {}}), 400, "invalid_change"),
         (_mutated(head_blob=ENVELOPE["base_blob"]), 400, "inconsistent_change"),
         (_mutated(path="manuscript/paper.txt"), 400, "unsupported_document"),
     ],
@@ -282,6 +285,8 @@ def _mutated(**changes) -> dict:
         "participant_attestation",
         "unknown_field",
         "modified_same_hash",
+        "non_string_object_kind",
+        "non_string_change",
         "same_blob",
         "text_file",
     ],
@@ -314,6 +319,26 @@ def test_figure_finding_without_any_quote_is_rejected(gateway) -> None:
     status, body = post(ENVELOPE)
 
     assert (status, body["error"]["code"]) == (502, "unsupported_evidence"), body
+
+
+@pytest.mark.parametrize(("field", "value"), [("category", []), ("severity", {})])
+def test_non_string_model_finding_fields_are_rejected(field, value) -> None:
+    finding = {
+        "category": "body",
+        "severity": "minor",
+        "object_index": 0,
+        "evidence_base": None,
+        "evidence_head": "118 participants",
+        "related_object_index": None,
+        "related_evidence": None,
+        "explanation": "Sample size changed.",
+    }
+    finding[field] = value
+
+    with pytest.raises(DocumentDiffReviewError) as error:
+        validate_document_diff_findings(json.dumps({"findings": [finding]}), ENVELOPE)
+
+    assert (error.value.status, error.value.code) == (502, "invalid_structured_output")
 
 
 @pytest.mark.parametrize("gateway", [[_RETAINING_REVIEWER]], indirect=True)

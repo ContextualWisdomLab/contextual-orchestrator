@@ -189,10 +189,10 @@ def _validate_object(value: Any, index: int) -> dict[str, Any]:
     if page is not None and (type(page) is not int or page < 1):
         raise _reject("invalid_page", f"{field}.page must be a positive integer or null")
     kind = item["object_kind"]
-    if kind not in OBJECT_KINDS:
+    if type(kind) is not str or kind not in OBJECT_KINDS:
         raise _reject("invalid_object_kind", f"{field}.object_kind is not supported")
     change = item["change"]
-    if change not in CHANGE_KINDS:
+    if type(change) is not str or change not in CHANGE_KINDS:
         raise _reject("invalid_change", f"{field}.change must be added, removed, modified, or unchanged")
     base_hash = _optional_hash(item["object_hash_base"], f"{field}.object_hash_base")
     head_hash = _optional_hash(item["object_hash_head"], f"{field}.object_hash_head")
@@ -379,7 +379,8 @@ def validate_document_diff_findings(answer: Any, envelope: Mapping[str, Any]) ->
         field = f"findings[{position}]"
         if type(raw) is not dict or set(raw) != _FINDING_FIELDS:
             raise _reject("invalid_structured_output", f"{field} has the wrong fields", 502)
-        if raw["category"] not in FINDING_CATEGORIES or raw["severity"] not in FINDING_SEVERITIES:
+        if (type(raw["category"]) is not str or raw["category"] not in FINDING_CATEGORIES
+                or type(raw["severity"]) is not str or raw["severity"] not in FINDING_SEVERITIES):
             raise _reject("invalid_structured_output", f"{field} has an unknown category or severity", 502)
         index = raw["object_index"]
         if type(index) is not int or not 0 <= index < len(objects):
