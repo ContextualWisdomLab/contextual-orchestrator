@@ -234,6 +234,41 @@ def test_conduct_generated_plan_without_verifier_requirement_keeps_synthesis() -
     assert result["answer"].startswith("[synth_agent:synthesizer]")
 
 
+@pytest.mark.parametrize("accepted", [True, False])
+def test_conduct_template_without_verifier_requirement_returns_synthesis(accepted: bool) -> None:
+    """``verifier_required=False`` must not turn the verifier's report into the answer.
+
+    The template's verifier step is instructed to "Find concrete errors, gaps,
+    and unsupported claims" -- its output is a review report, not an answer.
+    Turning the requirement off only means a rejected verdict no longer forces
+    the worker fallback; the synthesizer (final step) still produces the answer,
+    exactly as the generated-plan path already does (see
+    ``test_conduct_generated_plan_without_verifier_requirement_keeps_synthesis``).
+    """
+    agents = [
+        _agent("planner_agent"),
+        _agent("builder_agent"),
+        _agent("verifier_agent"),
+        _agent("synth_agent"),
+    ]
+    orch = _orch(*agents)
+    import dataclasses
+
+    orch.policy = dataclasses.replace(orch.policy, verifier_required=False)
+    verdict = {"accepted": accepted, "reason": "stub verdict", "judge": "model"}
+    with patch.object(
+        orch,
+        "_model_judge_verification",
+        side_effect=lambda _task, fallback, **_kw: {**verdict, "verifier_output": fallback["verifier_output"]},
+    ):
+        result = orch.conduct([{"role": "user", "content": "draft it"}])
+    assert result["plan_source"] == "template"
+    outputs = {row["role"]: row["output"] for row in result["trace"] if "role" in row and "output" in row}
+    assert set(outputs) >= {"thinker", "worker", "verifier", "synthesizer"}
+    assert result["answer"] != outputs["verifier"]
+    assert result["answer"] == outputs["synthesizer"]
+
+
 def test_conduct_template_fallback_when_generation_fails() -> None:
     agents = [_agent(), _agent("builder_agent")]
     orch = _orch(*agents)
