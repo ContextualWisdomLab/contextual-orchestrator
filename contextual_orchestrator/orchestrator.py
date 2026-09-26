@@ -5269,19 +5269,21 @@ class _StateStore:
             phases = []
             diagnostics = []
             if request_ids:
-                placeholders = ",".join("?" for _ in request_ids)
+                # One JSON-array parameter expanded by SQLite's json_each keeps
+                # the statement text constant (no SQL string concatenation).
+                request_id_array = json.dumps(request_ids)
                 phases = self._conn.execute(
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('initial_decision', 'decision_receipt') "
-                    "AND key IN (" + placeholders + ") "
+                    "AND key IN (SELECT value FROM json_each(?)) "
                     "ORDER BY seq DESC LIMIT ?",
-                    (*request_ids, 2 * limit + 1),
+                    (request_id_array, 2 * limit + 1),
                 ).fetchall()
                 diagnostics = self._conn.execute(
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
-                    "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
-                    (*request_ids, 8 * limit + 1),
+                    "AND key IN (SELECT value FROM json_each(?)) ORDER BY seq DESC LIMIT ?",
+                    (request_id_array, 8 * limit + 1),
                 ).fetchall()
             diagnostic_truncated = len(diagnostics) > 8 * limit
             diagnostics = list(reversed(diagnostics[:8 * limit]))
