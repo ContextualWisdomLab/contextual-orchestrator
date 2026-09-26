@@ -846,7 +846,7 @@ def test_contextual_fast_mlsirm_evidence_precedes_static_coldstart_order(monkeyp
         orchestrator._psychometric_router,
         "ranked_evidence",
         lambda agent_ids, prompt, vector: [
-            (next(agent_id for agent_id in agent_ids if agent_id == "quality_first"), 0.91)
+            (next(agent_id for agent_id in agent_ids if agent_id.partition(":")[0] == "quality_first"), 0.91)
         ],
     )
     monkeypatch.setattr(orchestrator._psychometric_router, "has_observations", lambda: True)
@@ -903,7 +903,7 @@ def test_contextual_fast_mlsirm_evidence_orders_every_post_413_candidate(monkeyp
         orchestrator._psychometric_router,
         "ranked_evidence",
         lambda agent_ids, prompt, vector: [
-            (next(agent_id for agent_id in agent_ids if agent_id == "quality_backup"), 0.88)
+            (next(agent_id for agent_id in agent_ids if agent_id.partition(":")[0] == "quality_backup"), 0.88)
         ],
     )
     monkeypatch.setattr(orchestrator._psychometric_router, "has_observations", lambda: True)
