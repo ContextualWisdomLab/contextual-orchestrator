@@ -7159,3 +7159,39 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+
+## 2026-09-26 Free-serving cost evidence SAST closure
+
+**Status:** Proposed. This is exact-head PR evidence, not protected-main, release,
+deployment, independent approval, or production-cost authority.
+
+- **Gap:** the central SAST generation for
+  `contextual-orchestrator#1260@25b896c97f6e011876f934cb09775217486381bd`
+  found two Medium+ SQL-construction results at `orchestrator.py:5400` and
+  `:5407`. Request identifiers were bound values, but the SQL supplied to
+  `sqlite3.Connection.execute()` still concatenated a request-count-derived
+  placeholder list. The fail-closed gate therefore rejected the exact head.
+- **RCA / RED:** hosted
+  [SAST run 36224067708](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36224067708)
+  is the immutable failure receipt. RED
+  `50a45b74df401eb257d41d864c6687e718c10b8f` adds an executable hostile-identifier
+  case that requires the two decision-window queries to keep constant SQL text
+  and bind the identifier set through SQLite JSON. At that RED head the test
+  requires `json_each(` while production still has both dynamic
+  `"AND key IN (" + placeholders + ")"` expressions.
+- **Smallest GREEN:** `c35ca2b7b4f2df3f65d8ed7caabe582961416e50`
+  replaces only those two expressions with
+  `key IN (SELECT value FROM json_each(?))`, binding one canonical JSON array
+  plus the existing bounded row limit. The hostile identifier remains data,
+  and the existing `orchestration_records_kind_key_seq` index is retained by
+  the observed SQLite query plan.
+- **Verification:** the exact remote source/test pair proves
+  `RED: requires json_each=true, source json_each=false, dynamic placeholder=true`
+  and `GREEN: requires json_each=true, source json_each=true, dynamic placeholder=false`.
+  A direct SQLite probe returns four expected phase rows, preserves
+  `request?' OR 1=1 --` as one identifier, executes one `json_each` query,
+  and uses the `kind=? AND key=?` composite index. Fresh exact-head Security
+  and Quality, CodeQL, SAST, and Security Scan remain required before merge.
+- **Action:** keep PR #1260 Ready/Proposed; accept neither the earlier failed SAST
+  nor the focused probe as hosted GREEN. Merge only after every required exact-head
+  gate is terminal-success and review protection permits an ordinary merge.
