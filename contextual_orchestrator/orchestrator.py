@@ -9593,7 +9593,10 @@ class TaskOrchestrator:
                     allowed_agent_ids=judge_agent_ids,
                     excluded_agent_ids=_excluded_agent_ids,
                 )
-            answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            # The verifier step (steps[2]) writes a review report, never the answer; the
+            # synthesizer's final step answers regardless of ``verifier_required``, matching
+            # the generated-plan branch above. The flag only controls the worker fallback.
+            answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
