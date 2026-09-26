@@ -337,6 +337,31 @@ def test_orchestration_route_schema_validates_structured_synthesis_fallback() ->
     assert outcomes == ["retryable_transport", "served"]
 
 
+@pytest.mark.parametrize(
+    "terminal_reason",
+    [None, "undocumented_reason"],
+)
+def test_orchestration_route_schema_requires_a_known_terminal_reason(
+    terminal_reason: str | None,
+) -> None:
+    """A route receipt cannot leave termination semantics to the consumer."""
+    route = {
+        "eligible_agent_ids": ["served_worker"],
+        "attempted": [
+            {
+                "agent_id": "served_worker",
+                "model": "served-model",
+                "outcome": "served",
+            }
+        ],
+    }
+    if terminal_reason is not None:
+        route["terminal_reason"] = terminal_reason
+    schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
+    with pytest.raises(ValidationError):
+        validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+
+
 def test_orchestration_route_attempt_schema_validates_streaming_fallback() -> None:
     """A real streaming single-worker failover's typed attempt matches the contract."""
     orchestrator = TaskOrchestrator(_stream_failover_agents(), client=_StreamFailThenServeClient())
