@@ -233,6 +233,27 @@ def test_provider_batch_wait_survives_infinite_deadline() -> None:
     backend.close()
 
 
+def test_provider_batch_wait_survives_finite_timeout_above_threading_limit() -> None:
+    """A large caller deadline must not overflow the platform wait limit."""
+    release = threading.Event()
+
+    def runner(requests):
+        release.wait(timeout=1)
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    request = EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")
+    job = backend.submit([request])
+    timer = threading.Timer(0.02, release.set)
+    timer.start()
+    try:
+        assert backend.wait(job, timeout=threading.TIMEOUT_MAX * 2)["status"] == "completed"
+    finally:
+        release.set()
+        timer.join(timeout=1)
+        backend.close()
+
+
 def test_queued_document_exposes_backend_poll_and_registry_retention_contract() -> None:
     """Queued HTTP documents carry owned cadence/retention, not caller guesses."""
     release = threading.Event()

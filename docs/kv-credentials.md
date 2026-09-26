@@ -334,7 +334,7 @@ from `os.getenv`):
 OpenCode Go reuses `OPENCODE_ZEN_API_KEY`. Registering that one credential
 discovers both `https://opencode.ai/zen/v1` and `https://opencode.ai/zen/go/v1`;
 the two catalogs stay separate provider accounts. The trusted review sidecar
-admits honest-free rows from those catalogs into `orchestrator/free` when that
+admits honest-free Zen rows into `orchestrator/free` when that
 credential is present; `OPENAI_API_KEY` stays out of that pool.
 Only models.dev rows assigned to the OpenAI-compatible protocol enter Go's chat
 endpoint; Responses- and Anthropic-protocol rows are excluded. Go requires a

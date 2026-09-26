@@ -981,6 +981,45 @@ def test_shared_credential_rolls_back_only_when_every_sharing_source_fails() -> 
         set_backend(None)
 
 
+def test_shared_credential_ignores_evidence_only_go_rows_when_zen_rejects_key() -> None:
+    """A non-serving Go listing cannot keep a rejected shared key active."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        zen = _source("opencode_zen", "OPENCODE_ZEN_API_KEY")
+        go = _source("opencode_go", "OPENCODE_ZEN_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        old_environ = {**_environment(), "OPENCODE_ZEN_API_KEY": "old-zen-key"}
+        bootstrap_provider_catalog_runtime(
+            environ=old_environ,
+            catalog_store=store,
+            sources=(openai, zen, go),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live"), _model(zen, "zen-live")],
+                [ProviderDiscoveryError("opencode_go", "http_status_401")],
+            ),
+        )
+
+        report = bootstrap_provider_catalog_runtime(
+            environ={**old_environ, "OPENCODE_ZEN_API_KEY": "rejected-new-key"},
+            catalog_store=store,
+            sources=(openai, zen, go),
+            discovery=lambda _sources: (
+                [
+                    _model(openai, "gpt-live"),
+                    replace(_model(go, "go-evidence"), evidence_only=True),
+                ],
+                [ProviderDiscoveryError("opencode_zen", "http_status_401")],
+            ),
+        )
+
+        assert report.restored_credentials == ("OPENCODE_ZEN_API_KEY",)
+        assert get_credential("OPENCODE_ZEN_API_KEY") == "old-zen-key"
+        assert agent_id_for(_model(zen, "zen-live")) in report.selected_agent_ids
+    finally:
+        set_backend(None)
+
+
 def test_inventory_verdict_judges_every_source_sharing_one_credential() -> None:
     """Rollback evidence is matched against all sources sharing the credential."""
     zen = _source("opencode_zen", "OPENCODE_ZEN_API_KEY")

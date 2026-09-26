@@ -710,7 +710,11 @@ def bootstrap_provider_catalog_runtime(
             for error in errors
             if error.credential_name is None
         }
-        live_accounts = {_model_key(model) for model in live_models}
+        live_accounts = {
+            _model_key(model)
+            for model in live_models
+            if is_chat_serving_candidate(model)
+        }
         # One credential can back more than one provider source: OpenCode Zen
         # and the optional OpenCode Go subscription both authenticate with
         # OPENCODE_ZEN_API_KEY. A source failing is evidence about *that
