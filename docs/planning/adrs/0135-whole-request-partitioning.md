@@ -1,4 +1,10 @@
-# Whole-request partitioning outside model coordination
+---
+id: "0135"
+status: proposed
+date: 2026-09-10
+---
+
+# ADR 0135: Whole-request partitioning outside model coordination
 
 Status: Proposed. The kernel and its focused tests are implemented; default HTTP admission, live-provider adapters, and organizational rollout are not complete.
 
@@ -11,6 +17,15 @@ The central OpenCode launcher, blob `80f57d1d43cfa176af8936296a7b4ae532a5131e`, 
 ## Decision and ownership
 
 `contextual_orchestrator.request_partitioning` owns a single inference request's evidence inventory, capacity packing, bounded map/reduce, and restart checkpoints. It sits before the existing route/conduct invocation adapter. It does not own Noema's general agent runtime, workflow scheduler, tools, approvals, or recovery authority. It does not choose providers or duplicate Fugu/TRINITY/Conductor selection policy.
+
+## Consequences
+
+The caller can account for every supplied unit and resume completed children after interruption. It must supply semantic units and an effective-payload counter; a unit that cannot fit fails admission. Uncertain external calls require reconciliation, and inner gateway calls still need shared cost admission before production rollout.
+
+## Alternatives considered
+
+- Truncating the inline evidence would lose unreviewed middle units.
+- Placing this work in Noema's general scheduler would mix request capacity and checkpoint ownership with review workflow policy.
 
 The caller supplies immutable semantic units, including any cross-file relationship obligations. Each unit appears once in the map inventory; reductions carry complete lineage outside model prompts. A single unit that does not fit is rejected rather than sliced as arbitrary characters or truncated. The caller must refine that unit semantically. Native tool transcripts, system/user boundaries and multimodal payloads are not silently split by this text protocol.
 
