@@ -7129,6 +7129,14 @@ class TaskOrchestrator:
                                 last_model_not_found = classified
                                 request_exclusions.add(candidate.id)
                                 continue
+                            if (
+                                virtual_model
+                                and classified.provider_status == 400
+                                and rate_limited_candidates
+                                and not retried_rate_limit
+                            ):
+                                request_exclusions.add(candidate.id)
+                                continue
                             raise attach_route(
                                 classified, terminal_reason="fail_closed"
                             ) from None
