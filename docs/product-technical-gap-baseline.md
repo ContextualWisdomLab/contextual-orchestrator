@@ -7148,6 +7148,27 @@ suite: 3663 passed, 1 skipped, 5 known local-only failures (the openai SDK
 `python -m interrogate -v contextual_orchestrator/` remains 100% (no production
 code touched).
 
+## 2026-09-27 Proposed multi-model selection authority repair — PR #1267
+
+**Observed exact-head gap.** PR #1267 head `a4183535` added a new decision
+surface whose documentation explicitly described plurality `min_support` and
+rank tie-breaking as repository choices rather than results of its cited
+self-consistency algorithm. `ScoredBestOfN` also used rank when the scorer's
+maximum tied. The fan-out API required every caller to supply a finite
+wall-clock deadline, contradicting the default-null upstream-completion
+boundary. These affect answer admission, model selection, and termination, so
+they cannot remain uncalibrated policy controls.
+
+**Action and evidence.** RED `e34a038b` records 12 focused failures for the
+missing contracts. GREEN `0940e654` removes `min_support`, selects only a
+unique plurality mode, abstains on equal maximum scores, and makes
+`deadline_seconds=None` the default. A finite proposer deadline remains an
+explicit administrative input; the completion port owns actual upstream
+cancellation. Focused combination/fan-out tests are 58/58 GREEN and the four
+changed Python files compile. Status remains **Proposed / PR-head only** until
+exact-head hosted Security and Quality checks and an independent approval are
+terminal GREEN; no merge or release claim follows from local evidence.
+
 ## 2026-09-14 Generated-plan step bound origin (section 3.1 / 5.1 fidelity)
 
 `OrchestrationPolicy.max_workflow_steps = 6` bounded generated Conductor plans
