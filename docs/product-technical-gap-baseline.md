@@ -27,10 +27,26 @@ failed before formatting or linting. GREEN source
 `rust-toolchain.toml`. This is configuration evidence only until its fresh
 exact-head hosted Rust gate completes.
 
-Status remains **Proposed**. Missing #1074 production carryover, typed EgressWeave
-allowlist errors, ADR/citation inventory repairs, and replacement of the
-unhashable fast-mlsirm VCS dependency remain separate causal gates. Protected
-integration, immutable release, and consumer pins have not occurred.
+Follow-up source at `f882ee7b12e805bd5924a28d3a23999d7e76f160`
+integrates the previously dropped #1074 request-policy/effort snapshots,
+psychometric deployment identities and selection-design receipts; restores typed
+EgressWeave allowlist failures; repairs the planning ADR filename and paper
+inventory; and moves affected CI installs to the exact `uv.lock` environment.
+These source deltas supersede the earlier “not fixed” bucket descriptions; their
+hosted verification remains pending.
+
+Current-head review found the OpenRouter telemetry fetch still used unbounded
+`response.read()`. RED `e76d3b3954de37c293a98339aefadbdd016e0d90`
+read the full oversized payload (requested size `-1`) and returned a parsed
+99.5 value. GREEN `9cf335ab8021923cf4e301f951e4e37a5bae01fb`
+reads only the shared 8 MiB provider-response bound plus one byte and rejects an
+oversized payload before JSON parsing. Exact source/test AST parsing passed; the
+direct behavior probe rejected the oversized response with one 65-byte read
+under a test-injected 64-byte bound and preserved a valid 99.5 response.
+
+Status remains **Proposed**. Fresh exact-head hosted tests, independent approval,
+protected integration, an immutable fast-mlsirm release instead of VCS
+consumption, and consumer pins remain unverified.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
