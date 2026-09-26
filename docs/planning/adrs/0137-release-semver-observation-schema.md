@@ -202,13 +202,17 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
        checked against the route report only;
      - `provider` is a lowercase provider name (`openrouter`, `nvidia_nim`,
        and so on) with no model path or `:variant`.
-   - It carries the opaque receipt, whose `schema_id` must be a URI. The
-     URI pattern does not stop verdict-looking text (see step-2 check 10).
-     Identical observation entries are rejected.
+   - It carries the opaque receipt, whose `schema_id` must be a URI or a
+     fast-mlsirm identifier in fast-mlsirm's dotted
+     (`fast-mlsirm.<name>.v<N>`) or hyphenated (`fast-mlsirm-<name>-v<N>`)
+     form (see "Receipt identity format"). The pattern does not stop
+     verdict-looking URIs; step-2 check 10 admits only an allowlisted
+     identity and fails closed until step 4. Identical observation entries
+     are rejected.
 6. **Closed, bounded, portable.**
    - Every object schema sets `additionalProperties: false`.
-   - Arrays, strings and identifiers have explicit maximums (see the
-     Co-ordinator defaults for the list caps).
+   - Arrays, strings and identifiers have explicit maximums (see "Size
+     caps, citation and coverage" for the list caps).
    - The per-document byte caps are recorded in each schema's `$comment`
      for the step 2 consumer to enforce: evidence 4 MiB, observation
      64 KiB, envelope 4 MiB.
@@ -226,6 +230,14 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
      bytes.
    - A test pins the v1 digests separately and fails if a v1 file is edited
      or deleted. Any change is a new `v2/` directory with new `$id`s.
+   - **There is no backward-compatible v1.x change.** Once v1 is released,
+     loosening a rejection costs the same as tightening one: a new `vN/`
+     directory with new `$id`s, new `MANIFEST.json` digests, a new
+     contextual-orchestrator release and a `.github` re-pin (step 5; step-2
+     check `schema_digests` requires exact digest equality). Loosening keeps
+     old documents valid under the new version, but it is still a new
+     version. Until v1 is released, v1 files may still be edited in this PR,
+     with every digest and pin recomputed.
    - `.gitattributes` sets `-text` on the schema directory and the schema
      test fixtures. Tests assert that the files contain no CR bytes and that
      `git check-attr` reports `text` unset, so the digests survive
@@ -245,8 +257,11 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
 
 ## Inputs #2260 accepts and v1 rejects (owner decisions)
 
-Each item below is proposed, not decided. The owner may accept it, or ask
-for a v1 change before release:
+Status (review round 4, 2026-09-26): items 1-8 and 12 stay rejections in
+v1; items 10 and 11 ship as designed; item 9 keeps rejecting oversized packs,
+with the title caps raised (see below). Changing any of these after v1 is
+released needs a new schema version (Decision 7), whether it loosens or
+tightens:
 
 1. **Unknown keys.** #2260 ignores unknown keys, including `$schema`; v1's
    pack is closed. Reason: unknown keys would reach raters without a
@@ -285,8 +300,11 @@ for a v1 change before release:
    `:144`; passed at `release-tag.yml:274`). v1 has no override. The raters
    see the pack value, the producer writes the git-derived value, and step 2
    rejects a mismatch (Decision 3).
-9. **Oversized packs.** #2260 has no size limits. v1 caps them (see the
-   Co-ordinator defaults below).
+9. **Oversized packs.** #2260 has no size limits. v1 caps them (see "Size
+   caps, citation and coverage" below). The `commit_titles`/`pr_titles`
+   item cap is 32768, raised from 4096 in round 4 so that this repository's
+   untagged first release keeps every commit. A producer **never
+   truncates**: an oversized pack fails closed with an error.
 10. **v1-only citation forms.** #2260 defines no `commit:`/`pr:` prefix and
     no index refs. v1 accepts both in addition to every #2260 text ref.
 11. **The reason-code set and its class mapping** are ours, tied to #2260's
@@ -299,29 +317,48 @@ for a v1 change before release:
     raises `UnicodeEncodeError` on them. v1 rejects them in step 2
     (`ijson_text`).
 
-## Co-ordinator defaults pending 성호's decision
+## Size caps, citation and coverage
 
 The Co-ordinator chose these after the second review, from realistic inputs
-that the earlier draft wrongly rejected. They are implemented in v1 as
-defaults and still need 성호's decision:
+that the earlier draft wrongly rejected. Review round 4 (2026-09-26) kept
+them, with the title caps raised:
 
 1. **Size caps from realistic sizes.**
-   - This repository has no release tag, about 2,296 commits and 46
-     `CHANGELOG.d` fragments. The largest fragment is 7,728 characters, and
-     two exceed 2,000. A first-release pack with every commit and PR title
-     is about 270 KB.
+   - This repository has no release tag, about 2,296 commits (1,881
+     non-merge, 415 merges) and 46 `CHANGELOG.d` fragments. The largest
+     fragment is 7,728 characters, and two exceed 2,000. A first-release
+     pack with every commit and PR title is about 270 KB. 1,705 of the
+     commits landed in the 21 days from 2026-08-30 to 2026-09-19, so the
+     earlier 4096-title cap could have rejected the first real pack before
+     steps 2-5 land.
    - The caps are:
 
      | List | Max items | Max item length (characters) |
      |---|---|---|
      | `changelog_fragments` | 1024 | 16384 |
-     | `commit_titles` | 4096 | 2000 |
-     | `pr_titles` | 4096 | 2000 |
+     | `commit_titles` | 32768 | 2000 |
+     | `pr_titles` | 32768 | 2000 |
      | each API list and `deprecated_alias_only` | 1024 | 2000 |
 
-   - The document caps are 4 MiB for evidence, 64 KiB per observation and
-     4 MiB per envelope. Text refs may be up to 16405 characters (the
-     longest prefix plus 16384); long items are best cited by index.
+   - The document caps are unchanged: 4 MiB for evidence, 64 KiB per
+     observation and 4 MiB per envelope. The 4 MiB evidence cap remains the
+     denial-of-service bound; 32768 titles of 106 characters are about
+     3.6 MB (tested). Text refs may be up to 16405 characters (the
+     longest prefix plus 16384); long items are best cited by index, and
+     index refs accept up to five digits so every title position is
+     citable.
+   - **Selection: all commits.** `commit_titles` holds the title of every
+     commit in the release range (`<previous tag>..HEAD`, or the whole
+     history when there is no tag), merge commits included. It is not
+     restricted to first-parent or merge subjects. `pr_titles` holds every
+     pull-request title in the same range.
+   - **Producers never truncate.** The producer (step 3) never truncates,
+     samples or drops items to fit a cap. If a list would exceed its item
+     cap, an item its length cap, or the pack the 4 MiB document cap, the
+     producer fails closed before any model call, with an error that names
+     the member, the cap and the observed size. A truncated list would
+     bring back the "not collected versus none" ambiguity that items 2 and
+     3 remove, and would silently hide evidence from the raters.
    - Blank items stay rejected.
 2. **Multi-line text stays citable.**
    - Changelog fragments (25 of the 46 here are multi-line) may contain
@@ -334,6 +371,51 @@ defaults and still need 성호's decision:
    copied byte for byte and recorded in `PROVENANCE.json`. Tests show it is
    not an observation, envelope or evidence pack, and that its
    `status`/`detail` cannot be attached to an `abstain` observation.
+
+## Receipt identity format (fast-mlsirm#2035 check, 2026-09-26)
+
+Before v1 ships, the receipt `schema_id` rule was checked against
+fast-mlsirm, so that the real receipt cannot force a v2.
+
+- [fast-mlsirm#2035](https://github.com/ContextualWisdomLab/fast-mlsirm/issues/2035)
+  is an open issue (opened 2026-09-19 22:11 KST). On 2026-09-26 it had no
+  comments and no linked pull request, and it publishes no receipt schema
+  identity. It requires a Rust-first, versioned API/schema with
+  "immutable identities for input evidence, estimator/model version,
+  calibration dataset/version, parameters, generated receipt, and producing
+  release", but does not fix their format.
+- fast-mlsirm `main` at
+  [`00f5cb91`](https://github.com/ContextualWisdomLab/fast-mlsirm/tree/00f5cb91b417e40102036eb31ab8a4b843c76076)
+  uses these schema identities:
+  - dotted, in the Rust core:
+    [`fast-mlsirm.sampling-design.v1`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/crates/mlsirm-core/src/sampling_design.rs#L15),
+    [`fast-mlsirm.achieved-proportion.v1`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/crates/mlsirm-core/src/sampling_design.rs#L21),
+    [`fast-mlsirm.lineage_channel_weight_evidence.v1`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/crates/mlsirm-core/src/lineage_channel_weight.rs#L20-L21),
+    and `fast-mlsirm.sampling-design.v2` as a
+    [rejected-version test input](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/tests/test_sampling_design.py#L175);
+  - hyphenated, in the Python rubric:
+    [`fast-mlsirm-item-bank-report-v2`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/python/fast_mlsirm/rubric/item_bank_report.py#L31);
+  - one URI `$id`:
+    [`https://contextualwisdomlab.github.io/fast-mlsirm/contracts/tepp-lineage-pair-criterion-posterior-v2.schema.json`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/contracts/tepp-lineage-pair-criterion-posterior-v2.schema.json#L3);
+  - bare version strings such as `"1.0"` and `"1.1"`, which are versions,
+    not identities.
+- **Finding:** the earlier v1 rule accepted only URIs, so it would have
+  rejected every dotted or hyphenated identity above. #2035 is Rust-first,
+  and the Rust core uses the dotted form, so a receipt identity such as
+  `fast-mlsirm.release-decision-receipt.v1` was the likely outcome and would
+  have forced a v2.
+- **Decision:** before release, v1 accepts three forms:
+  - a URI, as before;
+  - the dotted form `fast-mlsirm(\.<name>)+\.v<N>`, where each `<name>` is
+    lowercase letters and digits joined by `-` or `_`;
+  - the hyphenated form `fast-mlsirm(-<name>)+-v<N>`.
+
+  `<N>` starts at 1. Spaces, `=`, `;`, upper case and other free text do not
+  fit the fast-mlsirm forms. Bare versions such as `"1.0"` stay rejected.
+  Every identity listed above is accepted (tested). If #2035 publishes an
+  identity in yet another form, v1 cannot carry it and a new schema version
+  is needed.
+- The pattern is not the guard against verdict text; check 10 is.
 
 ## Step 2 validator cross-checks
 
@@ -378,11 +460,18 @@ and a test ties each mark to this list.
 9. **`producer_identity`**: `producer.package_version` and
    `producer.source_commit` match the installed release, and
    `evidence_source_commit` is the release commit.
-10. **`receipt_schema_id`**: `fast_mlsirm_receipt.schema_id` equals the
-    identity fast-mlsirm publishes (step 4). Until then, a verdict-looking
-    `schema_id` such as `verdict:major;confidence=0.99` passes the v1 URI
-    pattern and is not covered by `route_provenance`, so nothing blocks it
-    until this check pins the receipt schema id.
+10. **`receipt_schema_id`**: fail closed by allowlist.
+    `fast_mlsirm_receipt.schema_id` must exactly equal an entry of
+    `receipt_schema_id_allowlist` in the installed release's
+    `MANIFEST.json`.
+    - The allowlist ships **empty** and stays empty until step 4 adds the
+      identity fast-mlsirm publishes. With an empty or malformed allowlist
+      the check rejects every envelope, so a late step 4 blocks every pack
+      instead of letting everything through.
+    - A verdict-looking `schema_id` such as `verdict:major;confidence=0.99`
+      passes the schema pattern and is not covered by `route_provenance`.
+      The fixture case marked `receipt_schema_id` carries it, and tests show
+      that no exact-identity allowlist admits it.
 11. **`byte_caps`**: each document is within its `$comment` byte cap before
     parsing.
 12. **`ijson_text`**: every string (member names and values, in the pack,
@@ -391,9 +480,9 @@ and a test ties each mark to this list.
     digest is computed, because RFC 8785 requires I-JSON and the Decision 9
     formula raises `UnicodeEncodeError` on such a string.
 
-**Step 2 TODO: fixture coverage.** Five of these checks have no
+**Step 2 TODO: fixture coverage.** Four of these checks have no
 `step_2_check` fixture case yet: `previous_version_source`,
-`producer_identity`, `receipt_schema_id`, `byte_caps` and `ijson_text`.
+`producer_identity`, `byte_caps` and `ijson_text`.
 Step 2 must add accept/reject cases for them together with the validator.
 The test that ties fixture marks to this list only requires every mark to
 name a listed check, so these entries are listed ahead of their fixtures.
@@ -420,8 +509,11 @@ answer, and later steps wait for the owner:
    accounts, provider families, blinding), is expected to follow from the
    fast-mlsirm#2035 estimator. The envelope allows 1 to 32 observations
    only as a bound, not as a required count.
-5. **The twelve inputs #2260 accepts and v1 rejects** (listed above).
-6. **The three Co-ordinator defaults** (listed above).
+
+Decided in review round 4 (2026-09-26), no longer open: the twelve inputs
+#2260 accepts and v1 rejects (items 1-8 and 12 rejected, items 10 and 11
+as designed, item 9 with 32768-title caps), and the size-cap, citation and
+coverage defaults above.
 
 ## Planned steps (each waits on the owner and fast-mlsirm#2035)
 
@@ -443,6 +535,9 @@ answer, and later steps wait for the owner:
 - Nothing changes at runtime. `release.yml`, `release_checks_gate.sh` and
   the human version-bump path are untouched.
 - A released v1 file can never be edited; mistakes are fixed with v2.
+  That applies to loosening as much as tightening: there is no
+  backward-compatible v1.x schema change.
+- Until step 4, step-2 check `receipt_schema_id` rejects every envelope.
 
 ## Alternatives considered
 
