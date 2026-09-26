@@ -133,8 +133,12 @@ Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
 
 `experiential_labs` is an optional provider. Bootstrap accepts the organization
 Secret name `EXPERIENTAL_LABS_API_KEY` exactly as registered; the spelling is
-intentional. The catalog-sync workflow transports it into the existing encrypted
-KV. Runtime discovery reads that KV name and sends Bearer authentication to
+intentional. Provider bootstrap, the review gateway and the seeded CI gateway
+read only that name: `EXPERIENTIAL_LABS_API_KEY`, `EXPLABS_API_KEY` or any
+other spelling in the environment is ignored, so a different key in a developer
+shell cannot be picked up and spend that account's credits. The catalog-sync
+workflow transports it into the existing encrypted KV. Runtime discovery reads
+that KV name and sends Bearer authentication to
 `https://api.experientiallabs.ai/v1/models`; chat uses the same `/v1` base.
 Existing deployments do not need this additional credential.
 

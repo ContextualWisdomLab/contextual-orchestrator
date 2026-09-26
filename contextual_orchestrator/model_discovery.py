@@ -14,6 +14,7 @@ registering a subset of the declared provider keys still works. Stdlib only
 from __future__ import annotations
 
 from decimal import Decimal
+from types import MappingProxyType
 import hashlib
 import json
 import logging
@@ -89,15 +90,81 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
-# The live Go catalog exposes only id/object/created/owned_by. Keep the one
-# serving allowlist to the official Chat Completions table; every other row is
-# retained as evidence-only until the API reports a protocol or an adapter exists.
-_OPENCODE_GO_CHAT_MODELS = frozenset({
-    "glm-5.3-flash", "glm-5.3", "glm-5.2", "glm-5.1", "kimi-k3",
-    "kimi-k2.7-code", "kimi-k2.6", "longcat-2.0", "deepseek-v4-pro",
-    "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "mimo-v2.5",
-    "mimo-v2.5-pro", "hy4-preview", "hy3",
+# The live Go catalog exposes only id/object/created/owned_by, so the wire
+# protocol per model comes from the official endpoint table at
+# https://opencode.ai/docs/go/#endpoints (checked 2026-09-26). Only
+# ``chat/completions`` rows are served today; ``responses`` and ``messages``
+# rows stay evidence-only until an adapter for that protocol exists. A model
+# the live catalog lists but the table does not name has no known protocol and
+# also stays evidence-only.
+OPENCODE_GO_MODEL_ENDPOINTS: Mapping[str, str] = MappingProxyType({
+    "grok-4.7": "responses",
+    "grok-4.6": "responses",
+    "gpt-6-luna": "responses",
+    "gpt-5.6-luna": "responses",
+    "muse-spark-1.3-contributor": "responses",
+    "muse-spark-1.2-contributor": "responses",
+    "glm-5.3-flash": "chat/completions",
+    "glm-5.3": "chat/completions",
+    "glm-5.2": "chat/completions",
+    "glm-5.1": "chat/completions",
+    "kimi-k3": "chat/completions",
+    "kimi-k2.7-code": "chat/completions",
+    "kimi-k2.6": "chat/completions",
+    "longcat-2.0": "chat/completions",
+    "deepseek-v4.1-flash": "chat/completions",
+    "deepseek-v4-pro": "chat/completions",
+    "deepseek-v4-flash": "chat/completions",
+    "deepseek-v4-flash-vision-exp": "chat/completions",
+    "mimo-v2.6-flash": "chat/completions",
+    "mimo-v2.6-pro": "chat/completions",
+    "mimo-v2.5": "chat/completions",
+    "mimo-v2.5-pro": "chat/completions",
+    "hy4-preview": "chat/completions",
+    "hy3": "chat/completions",
+    "space-bunny-free": "chat/completions",
+    "minimax-m3": "messages",
+    "minimax-m2.7": "messages",
+    "minimax-m2.5": "messages",
+    "qwen3.8-max": "messages",
+    "qwen3.8-flash": "messages",
+    "qwen3.7-max": "messages",
+    "qwen3.7-plus": "messages",
+    "qwen3.6-plus": "messages",
 })
+_OPENCODE_GO_CHAT_MODELS = frozenset(
+    model_id
+    for model_id, endpoint in OPENCODE_GO_MODEL_ENDPOINTS.items()
+    if endpoint == "chat/completions"
+)
+
+
+def opencode_go_model_endpoint(model_id: str) -> str | None:
+    """Return the documented OpenCode Go endpoint path for one model, if known."""
+    return OPENCODE_GO_MODEL_ENDPOINTS.get(model_id)
+
+
+def bootstrap_credential_value(
+    environ: Mapping[str, str], credential_name: str
+) -> str:
+    """Return the non-blank bootstrap environment value for one KV credential.
+
+    Only the exact registered name is read -- no alternate spelling. For
+    Experiential Labs that is ``EXPERIENTAL_LABS_API_KEY``, the organization
+    Secret name as registered (see
+    ``docs/doctoring/current-main-provider-bootstrap.md``); reading another
+    spelling first could pick up a different key from a developer shell and
+    spend that account's paid credits. Only trailing CR/LF bytes from mounted
+    secret files are removed; every other byte is preserved. Returns ``""``
+    when the name is unset or blank.
+    """
+    raw = environ.get(credential_name, "")
+    value = raw.rstrip("\r\n") if isinstance(raw, str) else ""
+    if value and value.strip():
+        return value
+    return ""
+
+
 DISCOVERY_TOOL_CALL_SINGLE_TAG = "discovery:tool_call:single"
 DISCOVERY_TOOL_CALL_MULTI_TAG = "discovery:tool_call:multi"
 
@@ -1656,6 +1723,11 @@ def _url_with_task_filter(url: str, task_filter: str) -> str:
     )
 
 
+# Bytez answers an invalid or unauthorized key with one of these; retrying the
+# same key against the unfiltered catalog cannot succeed.
+_BYTEZ_AUTH_FAILURE_STATUSES = frozenset({401, 403})
+
+
 def _fetch_provider_json_with_retry(
     fetch: Callable[..., Any],
     url: str,
@@ -1702,6 +1774,12 @@ def _discover_bytez_task_catalog(
         dict.fromkeys((source.task_filter, *source.fallback_task_filters))
     )
     last_exc: Exception | None = None
+    # The first HTTP failure from a task-filtered call is the error this
+    # provider reports if nothing is discovered: the unfiltered fallback below
+    # must never replace a real ``http_status_500`` with its own timeout,
+    # oversized/invalid body, different status, or empty result.
+    first_http_failure: urllib.error.HTTPError | None = None
+    auth_rejected = False
     for task_filter in task_filters:
         if not task_filter:
             continue
@@ -1713,6 +1791,11 @@ def _discover_bytez_task_catalog(
         )
         if failure is not None:
             last_exc = failure
+            if isinstance(failure, urllib.error.HTTPError):
+                if first_http_failure is None:
+                    first_http_failure = failure
+                if failure.code in _BYTEZ_AUTH_FAILURE_STATUSES:
+                    auth_rejected = True
             _LOGGER.info(
                 "discovery_task_result account=%s task=%s outcome=failed error_code=%s",
                 source.provider_name,
@@ -1730,10 +1813,60 @@ def _discover_bytez_task_catalog(
         )
         if discovered:
             return discovered
-    if last_exc is not None:
+    if not auth_rejected:
+        # Last resort: Bytez has answered HTTP 500 to both task-filtered list
+        # calls while the key was valid. Ask once for the unfiltered catalog
+        # and keep only rows whose own ``task`` field is one of the
+        # chat-compatible tasks above, so no non-chat model slips in. A
+        # 401/403 means the key itself was refused, so the fallback is
+        # skipped rather than spending another call on the same key. The
+        # unfiltered catalog is large and may exceed
+        # MAX_DISCOVERY_RESPONSE_BYTES; that surfaces as a fallback failure
+        # and the original filtered-call error is still reported.
+        payload, failure = _fetch_provider_json_with_retry(
+            fetch,
+            source.list_url,
+            timeout=timeout,
+            fetch_kwargs=fetch_kwargs,
+        )
+        if failure is not None:
+            if last_exc is None:
+                last_exc = failure
+            _LOGGER.info(
+                "discovery_task_result account=%s task=unfiltered outcome=failed error_code=%s",
+                source.provider_name,
+                _provider_discovery_error_code(failure),
+            )
+        else:
+            allowed_tasks = {task for task in task_filters if task}
+            rows = payload.get("output") if isinstance(payload, dict) else None
+            filtered_payload = {
+                "output": [
+                    row
+                    for row in (rows if isinstance(rows, list) else [])
+                    # A list/dict ``task`` is unhashable; the ``str`` check
+                    # keeps the set lookup from raising TypeError, which is
+                    # not a ProviderDiscoveryError and would abort discovery
+                    # for every provider.
+                    if isinstance(row, dict)
+                    and isinstance(row.get("task"), str)
+                    and row["task"] in allowed_tasks
+                ]
+            }
+            discovered = _parse_bytez(filtered_payload, source)
+            _LOGGER.info(
+                "discovery_task_result account=%s task=unfiltered outcome=%s model_count=%d",
+                source.provider_name,
+                "succeeded" if discovered else "empty",
+                len(discovered),
+            )
+            if discovered:
+                return discovered
+    reported_exc = first_http_failure if first_http_failure is not None else last_exc
+    if reported_exc is not None:
         raise ProviderDiscoveryError(
             source.provider_name,
-            _provider_discovery_error_code(last_exc),
+            _provider_discovery_error_code(reported_exc),
             source.credential_name,
         ) from None
     raise ProviderDiscoveryError(
