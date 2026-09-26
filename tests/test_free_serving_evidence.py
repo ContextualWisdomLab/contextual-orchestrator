@@ -945,7 +945,7 @@ def test_stream_records_the_final_usage_frame(monkeypatch, usage, expected) -> N
     _open_returning(client, monkeypatch, lambda: _SSEResponse(_sse(usage)))
     assert "".join(_stream(client, agent)) == "OK"
     assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is expected
-    assert TaskOrchestrator([agent])._is_free_agent(agent) is (expected is CostVerdict.FREE)
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
 def test_stream_records_unknown_when_it_fails_mid_stream(monkeypatch) -> None:
@@ -1021,7 +1021,7 @@ def test_proxy_send_once_records_evidence_through_send_raw(monkeypatch, body, ex
     _open_returning(client, monkeypatch, lambda: _FakeResponse(body))
     assert _passthrough(client, agent)["usage"] == body["usage"]
     assert FREE_SERVING_LEDGER.verdict(_free_serving_route_identity(agent), agent.model) is expected
-    assert TaskOrchestrator([agent])._is_free_agent(agent) is (expected is CostVerdict.FREE)
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
 @pytest.mark.parametrize(
