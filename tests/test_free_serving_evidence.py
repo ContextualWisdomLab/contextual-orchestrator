@@ -1031,3 +1031,49 @@ def test_failure_recording_never_masks_the_provider_error(monkeypatch) -> None:
         _open_raising(client, monkeypatch, error)
         with pytest.raises(type(error)):
             client._send(agent, {"model": agent.model, "messages": []})
+
+# --- Fail-closed pre-send authority -----------------------------------------
+
+
+def test_reported_free_cost_does_not_authorize_the_next_request() -> None:
+    """Post-response cost evidence cannot prove that the next call is free."""
+
+    ledger = FreeServingLedger()
+    ledger.record(EXPERIENTIAL, "promotion-model", CostVerdict.FREE)
+
+    assert (
+        free_serving_admitted(
+            EXPERIENTIAL,
+            "promotion-model",
+            catalog_free=True,
+            ledger=ledger,
+        )
+        is False
+    )
+
+
+def test_free_pool_never_sends_a_post_hoc_cost_probe() -> None:
+    """A possibly billed request cannot be used to decide free admission."""
+
+    from types import SimpleNamespace
+
+    model = SimpleNamespace(
+        provider_name=EXPERIENTIAL,
+        model_id="promotion-model",
+        is_free=False,
+        free_promotion=True,
+    )
+    calls: list[str] = []
+
+    def _probe(candidate) -> None:
+        calls.append(candidate.model_id)
+
+    result = evidence.probe_free_candidates(
+        [model],
+        probe=_probe,
+        max_probes=1,
+        ledger=FreeServingLedger(),
+    )
+
+    assert calls == []
+    assert result == {"probes": 0, "probed": []}
