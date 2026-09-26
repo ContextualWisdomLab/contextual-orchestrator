@@ -11,25 +11,21 @@ from __future__ import annotations
 
 import io
 import json
-import sys
 import threading
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.credentials import (  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TOKEN = "image_request_storm_wait_token"  # noqa: S105
 _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
