@@ -30,7 +30,8 @@ This module replaces that rule with evidence from real responses:
   because their authority does not depend on ``usage.cost``
   (:func:`request_has_idempotency_key`).
 * **Ledger.** :data:`FREE_SERVING_LEDGER` keeps the last verdict per
-  ``(provider, model)`` for this process. ``PAID`` and ``EXHAUSTED`` demote
+  ``(credential route, model)`` for this process. The credential name and
+  endpoint are fingerprinted without reading or exposing the secret value. ``PAID`` and ``EXHAUSTED`` demote
   the route out of every free selector immediately. A provider calendar is
   not pre-send entitlement evidence, so the demotion persists until an
   explicit process-level reset; later ``UNKNOWN`` or ``FREE`` observations
@@ -357,7 +358,7 @@ class FreeServingLedger:
         *,
         route_identity: str | None = None,
     ) -> bool:
-        """Record one verdict and return whether it was stored.
+        """Record one verdict for a policy provider and return whether it was stored.
 
         ``UNKNOWN`` is kept only for evidence-required providers: a provider
         that never reports per-call cost would otherwise overwrite a
@@ -423,7 +424,7 @@ class FreeServingLedger:
         return False
 
     def snapshot(self) -> dict[str, str]:
-        """Return a JSON-safe ``"provider/model" -> verdict`` view for evidence files."""
+        """Return a JSON-safe ``"route/model" -> verdict`` view for evidence files."""
         with self._lock:
             return {
                 f"{provider}/{model}": observation.verdict.value
