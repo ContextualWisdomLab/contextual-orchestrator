@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-25 mixed 429 recovery and review-sidecar adoption (proposed)
+
+Noema run 36024200990 on PR #1209 used the central review sidecar pinned to
+`767e67fbc6b881a452761f32abb69b9971b9b03b`, not this PR's HEAD. Its
+sanitized log shows several provider attempts, then two OpenRouter 429s and a
+terminal HTTP 429. It does not prove that the current source failed to route.
+The current source's virtual passthrough path did have a separate reproducible
+gap: after a mixed uncertain transport failure and explicit 429, cooldown
+recovery called the uncertain candidate again. A `FREE_MODEL` regression was
+RED before the fix and GREEN after it; recovery now revisits only candidates
+that explicitly returned a cooling 429/503 or were already cooling before any
+send. The earlier unknown outcome remains recorded and is never replayed.
+The focused rate-limit, passthrough, and provider-error suites pass locally
+(180 tests). This source result does not establish Noema approval or deployed
+review capacity. Central sidecar pin adoption, current-HEAD hosted gates and
+independent review remain separate acceptance steps.
+
 ## 2026-09-20 route evidence ownership repair (proposed)
 
 Exact-head review at PR #1205 commit

@@ -1,5 +1,7 @@
 ## Fixed
 
+- A virtual free-pool request can wait out a provider 429 after another
+  candidate's uncertain failure without replaying that earlier candidate.
 - Protected-main CI now installs rustfmt and clippy for the repository-pinned Rust
   1.97.1 toolchain, follows the renamed provider embedding claim-lease constant,
   and locks anyio 4.14.2 to remove CVE-2026-63374, CVE-2026-64847, and
