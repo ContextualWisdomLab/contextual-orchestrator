@@ -30,34 +30,23 @@ This module replaces that rule with evidence from real responses:
   because their authority does not depend on ``usage.cost``
   (:func:`request_has_idempotency_key`).
 * **Ledger.** :data:`FREE_SERVING_LEDGER` keeps the last verdict per
-  ``(provider, model)`` for this process, plus the time of the last demotion
-  as a separate field. ``PAID`` and ``EXHAUSTED`` demote the route out of
-  every free selector immediately, and the demotion holds until the next
-  allowance reset after it, whatever is recorded in between (a later
-  ``UNKNOWN`` cannot clear it and a ``FREE`` is rejected). A ``FREE`` verdict
-  also expires at the next reset, so an idle route never stays free across
-  resets without fresh evidence.
-* **Reset.** The allowance resets at 00:00 UTC (09:00 KST). The ledger places
-  the boundary :data:`ALLOWANCE_RESET_SKEW_SECONDS` (5 minutes) later, at
-  00:05 UTC, so a few minutes of clock skew between this host and the
-  provider cannot lift a demotion (or admit a probe) before the provider
-  actually reset (:func:`last_allowance_reset`).
+  ``(provider, model)`` for this process. ``PAID`` and ``EXHAUSTED`` demote
+  the route out of every free selector immediately. A provider calendar is
+  not pre-send entitlement evidence, so the demotion persists until an
+  explicit process-level reset; later ``UNKNOWN`` or ``FREE`` observations
+  cannot clear it.
 * **Admission.** :func:`free_serving_admitted` is the one predicate
   discovery-time selection (``model_discovery.general_free_serving_candidates``)
   and serving-time selection (``TaskOrchestrator._is_free_agent``) share, so
   the two cannot disagree and leave a dead route occupying a free slot.
   Providers in :data:`COST_EVIDENCE_REQUIRED_PROVIDERS` are fail-closed:
-  without a ``FREE`` verdict they are paid, whatever the catalog says. Other
-  providers keep catalog-price admission and are only demoted by explicit
+  post-response cost cannot prove the next call is free, so they remain paid
+  until an authoritative pre-send entitlement exists. Other providers keep
+  catalog-price admission and are only demoted by explicit
   ``PAID``/``EXHAUSTED`` evidence.
-* **Re-admission.** A route whose last observation predates the latest
-  reset (demoted, unknown, or a stale ``FREE``) becomes *probe-due*
-  (:meth:`FreeServingLedger.probe_due`). It is re-admitted only by fresh
-  ``FREE`` evidence from that probe, never assumed free
-  (:func:`probe_free_candidates`). A probe can be billed once when the free
-  allowance is already used up and the organization has credits overflow on;
-  that single billed call demotes the route until the next reset and is an
-  accepted trade-off.
+* **No paid probe.** :func:`probe_free_candidates` preserves its public return
+  shape but sends no request. A possibly billed request cannot establish the
+  precondition that the request is free.
 
 Where the cost is read (documented; retrieved 2026-09-26): Experiential Labs
 stamps the settled USD cost on the response body as ``usage.cost`` for every
@@ -73,11 +62,9 @@ live response. No public document names a per-call cost *response header*;
 :data:`REPORTED_COST_HEADER` stays ``None`` as an optional slot, and when set,
 header and body must agree or the call is ``UNKNOWN``.
 
-Known limitations (documented follow-ups): an hourly-allowance 429 holds the
-route until the next *daily* reset (conservative); nothing inside the
-orchestrator calls :func:`probe_free_candidates` yet (the review launcher
-does); admission and dispatch are not atomic, so a call admitted just before
-a concurrent demotion is still sent.
+Known limitation: the provider currently exposes cost only after a request.
+Evidence-required routes therefore stay outside ``orchestrator/free`` until
+the provider publishes an authoritative pre-send entitlement API.
 """
 
 from __future__ import annotations
@@ -93,10 +80,10 @@ from decimal import Decimal
 from typing import Any
 
 COST_EVIDENCE_REQUIRED_PROVIDERS: frozenset[str] = frozenset({"experiential_labs"})
-"""Providers whose free status is decided only by per-call cost evidence.
+"""Providers requiring authoritative pre-send evidence for free admission.
 
-Their catalog price (promotional or otherwise) never admits them to a free
-selector on its own; see the module docstring.
+Post-response cost and catalog promotions are observational only; neither
+proves that the next request is free.
 """
 
 REPORTED_COST_USAGE_FIELD = "cost"
@@ -352,9 +339,8 @@ class FreeServingLedger:
         meaningful ``PAID`` demotion with noise. For evidence-required
         providers ``UNKNOWN`` replaces an earlier ``FREE`` (fail-closed).
 
-        A ``PAID``/``EXHAUSTED`` demotion holds until the next allowance reset
-        after it (:func:`last_allowance_reset`): until then a ``FREE`` verdict
-        is rejected, however many other verdicts were recorded in between.
+        A ``PAID``/``EXHAUSTED`` demotion persists until an explicit
+        process-level reset. A later ``FREE`` verdict is rejected.
         """
         if not provider_name or not model_id:
             return False
@@ -384,12 +370,15 @@ class FreeServingLedger:
         return observation.verdict if observation is not None else None
 
     def demoted(self, provider_name: str, model_id: str) -> bool:
-        """Return whether a ``PAID``/``EXHAUSTED`` demotion holds for the route now."""
+        """Return whether a ``PAID``/``EXHAUSTED`` demotion remains uncleared."""
         with self._lock:
             return self._demotion_active((provider_name, model_id))
 
     def free_now(self, provider_name: str, model_id: str) -> bool:
-        """Return whether fresh ``FREE`` evidence (since the latest reset) admits the route."""
+        """Return whether the last observation is FREE and no demotion persists.
+
+        This is an observational query, not pre-send admission authority.
+        """
         with self._lock:
             key = (provider_name, model_id)
             observation = self._observations.get(key)
@@ -400,25 +389,11 @@ class FreeServingLedger:
             )
 
     def probe_due(self, provider_name: str, model_id: str) -> bool:
-        """Return whether a fresh cost probe may run for this route now.
-
-        Never-observed routes are due. Otherwise a route is due only when its
-        last observation predates the latest allowance reset: that covers a
-        demotion or ``UNKNOWN`` from an earlier allowance day and a ``FREE``
-        verdict that expired at the reset. A route observed since the reset is
-        not due (a ``FREE`` one keeps being re-checked by served traffic; a
-        demoted or unknown one waits for the next reset, so a route is probed
-        at most once per allowance day).
-        """
+        """Return False because post-hoc cost probes are not free-pool authority."""
         return False
 
     def claim_probe(self, provider_name: str, model_id: str) -> bool:
-        """Atomically reserve one route\'s probe slot for the current allowance day.
-
-        The reservation is an UNKNOWN observation made before network I/O.
-        Concurrent schedulers therefore cannot both pass a separate
-        probe_due check and issue duplicate, potentially billed probes.
-        """
+        """Return False because the free pool never sends a cost probe."""
         return False
 
     def snapshot(self) -> dict[str, str]:
@@ -532,10 +507,9 @@ def free_serving_admitted(
 ) -> bool:
     """Return whether a route may serve a free selector right now.
 
-    * Evidence-required providers: only a ``FREE`` verdict recorded since the
-      latest allowance reset, with no demotion held since then.
-    * Every other provider: catalog-free, last verdict not ``PAID``/``EXHAUSTED``,
-      and no demotion held since the latest reset.
+    Evidence-required providers remain closed until an authoritative pre-send
+    entitlement exists. Every other provider is catalog-free, has no demoting
+    verdict, and has no persistent demotion.
     """
     store = ledger or FREE_SERVING_LEDGER
     provider = provider_name or ""
@@ -563,16 +537,11 @@ def probe_free_candidates(
     max_probes: int,
     ledger: FreeServingLedger | None = None,
 ) -> dict[str, object]:
-    """Send at most ``max_probes`` cost probes to nominated, probe-due routes.
+    """Return a zero-probe receipt without invoking the network callback.
 
-    Only evidence-required providers are probed (other providers are admitted
-    from catalog price). ``probe`` must send one real request through
-    :class:`~contextual_orchestrator.orchestrator.ModelClient`, which records
-    the response's verdict (or ``EXHAUSTED`` for a 429 free-quota error). A
-    probe that fails without recording anything records ``UNKNOWN``.
-
-    Returns:
-        ``{"probes": n, "probed": ["provider/model", ...]}``.
+    Post-response cost cannot authorize the request that produced it. The
+    parameters remain for API compatibility until a versioned pre-send
+    entitlement contract replaces this function.
     """
     del models, probe, max_probes, ledger
     return {"probes": 0, "probed": []}
