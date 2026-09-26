@@ -617,6 +617,43 @@ def test_invoke_serves_candidate_whose_cooldown_expired_while_skipped(monkeypatc
     assert len(slept) == 1
 
 
+def test_invoke_retries_same_agent_for_provider_authorized_zero_delay() -> None:
+    """Retry-After: 0 authorizes the bounded same-agent retry immediately."""
+
+    class ImmediateRetryThenSuccess(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls += 1
+            if self.calls == 1:
+                with _http_error(429, headers={"Retry-After": "0"}) as response_error:
+                    raise classify_provider_failure(
+                        response_error, agent_id=agent.id, model=agent.model
+                    )
+            return "recovered immediately"
+
+    client = ImmediateRetryThenSuccess()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("solo_worker", "mock-a", tags=("reasoning",))],
+        client=client,
+        tool_retry_attempts=1,
+    )
+    orchestrator._triage_fn = lambda text: False
+    try:
+        result = orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+    finally:
+        orchestrator.close()
+
+    assert result["answer"] == "recovered immediately"
+    assert client.calls == 2
+    assert orchestrator._circuit == {}
+
+
 def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> None:
     """A classified auth failure advances to the backup without repeating it."""
 
