@@ -12,6 +12,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- `orchestrator/free` JSON-schema final synthesis now waits within the
+  configured request budget when every eligible route returns HTTP 429, then
+  retries only final synthesis on a ready route. After HTTP 413 retires one
+  route, another rate-limited route can still recover. This repair changes
+  retry timing, not the Chat Completions JSON-schema request or response
+  fields; explicit model pins and expired budgets remain fail-closed.
 - Removed a shadowed benchmark validation helper so the required benchmark
   branch coverage gate reaches 100% on the current code.
 - Safe same-agent retries now preserve every failed attempt before retrying and the eventual served attempt in the typed route receipt, without misclassifying tool failures as provider API errors.
