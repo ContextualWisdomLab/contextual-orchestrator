@@ -1320,7 +1320,7 @@ def test_unavailable_judge_verdict_is_marked_distinct_from_a_judged_rejection() 
     empty = orchestrator._model_judge_verification("task", {"verifier_output": ""})
 
     assert unavailable["accepted"] is False
-    assert unavailable["judge_status"] == "unavailable"
+    assert unavailable["judge_status"] == "misconfigured"
     # An empty answer is a real (fail-closed) rejection of the answer itself.
     assert empty["accepted"] is False
     assert "judge_status" not in empty
@@ -1341,7 +1341,7 @@ def test_conduct_with_unavailable_judge_keeps_adr_0001_worker_fallback() -> None
         result = orchestrator.conduct(MESSAGES)
 
     assert result["verification"]["accepted"] is False
-    assert result["verification"]["judge_status"] == "unavailable"
+    assert result["verification"]["judge_status"] == "misconfigured"
     worker_row = next(row for row in result["trace"] if row.get("role") == "worker")
     assert result["answer"] == worker_row["output"]
 

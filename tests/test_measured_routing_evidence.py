@@ -341,7 +341,7 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
 
 
 class _JudgeCallFails:
-    """fast-mlsirm components whose judge construction raises (provider/adapter outage)."""
+    """fast-mlsirm components whose judge construction raises (version/contract skew)."""
 
     format_error = ValueError
 
@@ -362,22 +362,26 @@ class _JudgeCallFails:
             {"side_effect": RuntimeError("broken fast-mlsirm import")},
             "fast-mlsirm judge could not be loaded; verification failed closed",
         ),
-        ({"return_value": _JudgeCallFails()}, "model judge unavailable; verification failed closed"),
+        (
+            {"return_value": _JudgeCallFails()},
+            "fast-mlsirm judge could not be constructed; verification failed closed",
+        ),
     ],
-    ids=["not-installed", "import-broken", "judge-call-failed"],
+    ids=["not-installed", "import-broken", "judge-construction-failed"],
 )
 def test_route_once_unavailable_judge_stays_fail_closed_without_cascade_or_ledger_penalty(
     monkeypatch: pytest.MonkeyPatch, resolve_patch: dict, reason: str
 ) -> None:
-    """An unavailable judge produced no verdict about the worker answer.
+    """A judge that cannot run produced no verdict about the worker answer.
 
     ADR 0001 keeps the verdict fail-closed (``accepted`` stays ``False``), but a
     missing judge is not evidence that a candidate answered badly: it must not
     record a quality-ledger/psychometric failure for every candidate, and it
     must not spend another provider call on a lower-ranked candidate that will
     meet the same missing judge. The primary answer is returned, marked
-    ``judge_status == "unavailable"`` so callers can tell it apart from a
-    judged rejection.
+    ``judge_status == "misconfigured"`` so callers can tell it apart from a
+    judged rejection. Transient judge-call outages (``"unavailable"``) and
+    candidate-caused judge failures are covered in test_judge_status_split.py.
     """
     from unittest.mock import patch
 
@@ -406,8 +410,8 @@ def test_route_once_unavailable_judge_stays_fail_closed_without_cascade_or_ledge
 
     assert result["verification"]["accepted"] is False
     assert result["verification"]["reason"] == reason
-    assert result["verification"]["judge_status"] == "unavailable"
-    assert result["trace"][-1]["realtime_judge"]["judge_status"] == "unavailable"
+    assert result["verification"]["judge_status"] == "misconfigured"
+    assert result["trace"][-1]["realtime_judge"]["judge_status"] == "misconfigured"
     assert invoked == ["primary_worker"]
     assert result["answer"] == "primary_worker answer"
     for member in ("primary_worker", "backup_worker"):
