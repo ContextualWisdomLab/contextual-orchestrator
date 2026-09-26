@@ -257,6 +257,39 @@ def test_unnamed_configured_agent_keeps_paid_evidence_on_its_stable_identity(mon
     assert TaskOrchestrator([agent])._is_free_agent(agent) is False
 
 
+def test_credential_routes_keep_independent_free_serving_evidence() -> None:
+    """A billed account must not demote a sibling credential route."""
+    account_a = ModelAgent(
+        id="gateway_account_a",
+        model="shared-model",
+        base_url="https://gateway.example/v1",
+        credential_key="KEY_A",
+        provider_name="gateway",
+        tags=("chat", "cost:free"),
+    )
+    account_b = ModelAgent(
+        id="gateway_account_b",
+        model="shared-model",
+        base_url="https://gateway.example/v1",
+        credential_key="KEY_B",
+        provider_name="gateway",
+        tags=("chat", "cost:free"),
+    )
+    orchestrator = TaskOrchestrator([account_a, account_b])
+    assert orchestrator._is_free_agent(account_a) is True
+    assert orchestrator._is_free_agent(account_b) is True
+
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    orchestrator_module._record_free_serving_evidence(
+        account_a,
+        {"usage": {"cost": 0.003, "is_byok": False}},
+    )
+
+    assert orchestrator._is_free_agent(account_a) is False
+    assert orchestrator._is_free_agent(account_b) is True
+
+
 # --- Promotions nomination, persistent demotion, idempotency ----------------
 
 _UTC_2026_09_26_1000 = 1790416800.0  # 2026-09-26T10:00:00Z (19:00 KST)
@@ -621,7 +654,7 @@ def test_serving_hooks_skip_idempotency_key_requests() -> None:
     orchestrator_module._record_free_serving_quota_error(
         agent, _http_error(429, _quota_body("free_limit_reached")), request
     )
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is None
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.EXHAUSTED
 
 
 @pytest.mark.parametrize(
