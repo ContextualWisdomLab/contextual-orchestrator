@@ -39,12 +39,17 @@ LifeOS and other consumers must verify their specific owner contracts too.
    replace, promote, move or reuse a tag to make publication succeed.
 4. The exact commit has passing required checks. The workflow rechecks
    them through `scripts/ci/release_checks_gate.sh`, and runs the full test
-   suite fresh. The gate evaluates only the four required `security.yml`
-   jobs named in `RELEASE_EXPECTED_PUSH_CHECKS` (an explicit allowlist):
-   each must be registered for the commit and every check-run with that name
-   must conclude `success`. All other check-runs on the commit, including the
-   scheduled `opencode-hourly-loop.yml` and `provider-catalog-sync.yml`
-   maintenance runs, are ignored: they neither block nor certify a release.
+   suite fresh. The gate selects the newest push-triggered
+   `.github/workflows/security.yml` run on `main` for exactly that commit
+   (highest run id, then highest `run_attempt`, so a re-run replaces a red
+   attempt) and evaluates only that run's jobs (`filter=latest`) against the
+   four required names in `RELEASE_EXPECTED_PUSH_CHECKS` (an explicit
+   allowlist). No such run, an unfinished run, or a required job that is
+   missing or not `success` fails the gate. Everything else on the commit is
+   ignored: scheduled `security.yml` runs (whose jobs are skipped on
+   `schedule`), the hourly `opencode-hourly-loop.yml` and
+   `provider-catalog-sync.yml` runs, and this release run itself. Both release
+   jobs therefore need `actions: read`.
    Protected integration still requires all applicable organization gates
    and reviews.
    A newly merged commit whose expected push checks have not yet registered
