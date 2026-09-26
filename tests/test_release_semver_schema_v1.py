@@ -42,7 +42,7 @@ ID_PREFIX = "https://github.com/ContextualWisdomLab/contextual-orchestrator/sche
 PINNED_V1_SHA256 = {
     "v1/evidence.schema.json": "47a8ac9ea09a31d585847dab77527b282e57e424f0eacaaddf9d0874edaa248a",
     "v1/observation.schema.json": "d6bdce42dcc9f32f788d307177248194e67dac4850baaceed039db25e1933d56",
-    "v1/receipt_envelope.schema.json": "61ab4a625a6b0d7edb2f0fb899f003d37c4b6559415b1ae86aced39bab278ed6",
+    "v1/receipt_envelope.schema.json": "01f653375a935a016f217e5a856f0b7eb07569062ac5662f4af3990a241b1250",
 }
 
 # The .github#2260 evidence-pack member names (tests/fixtures/noema_semver at
@@ -124,11 +124,16 @@ FAST_MLSIRM_OBSERVED_SCHEMA_IDS = (
     "fast-mlsirm.sampling-design.v2",
     "fast-mlsirm.achieved-proportion.v1",
     "fast-mlsirm.lineage_channel_weight_evidence.v1",
-    "fast-mlsirm-item-bank-report-v2",
     (
         "https://contextualwisdomlab.github.io/fast-mlsirm/contracts/"
         "tepp-lineage-pair-criterion-posterior-v2.schema.json"
     ),
+)
+# The hyphenated form fast-mlsirm uses in its Python rubric is intentionally
+# not accepted in v1 (review round 4): nothing needs it yet.
+FAST_MLSIRM_REJECTED_SCHEMA_IDS = (
+    "fast-mlsirm-item-bank-report-v2",
+    "fast-mlsirm-release-decision-receipt-v1",
 )
 GITATTRIBUTES_LINES = (
     "contextual_orchestrator/schemas/** -text",
@@ -970,10 +975,18 @@ def test_verdict_looking_receipt_schema_id_is_never_admitted() -> None:
 
 @pytest.mark.parametrize("schema_id", FAST_MLSIRM_OBSERVED_SCHEMA_IDS)
 def test_fast_mlsirm_identity_forms_pass_the_schema_id_pattern(schema_id: str) -> None:
-    """Every identity form fast-mlsirm uses today fits, so #2035 cannot force v2."""
+    """The URI and dotted identity forms fast-mlsirm uses today fit the pattern."""
     envelope = _valid_document("receipt_envelope")
     envelope["fast_mlsirm_receipt"]["schema_id"] = schema_id
     assert list(_validator("receipt_envelope").iter_errors(envelope)) == []
+
+
+@pytest.mark.parametrize("schema_id", FAST_MLSIRM_REJECTED_SCHEMA_IDS)
+def test_hyphenated_fast_mlsirm_identity_is_rejected(schema_id: str) -> None:
+    """The hyphenated fast-mlsirm form is intentionally not accepted in v1."""
+    envelope = _valid_document("receipt_envelope")
+    envelope["fast_mlsirm_receipt"]["schema_id"] = schema_id
+    assert list(_validator("receipt_envelope").iter_errors(envelope))
 
 
 def test_title_cap_fits_inside_the_document_byte_cap() -> None:
