@@ -7221,3 +7221,34 @@ deployment, or billing telemetry.
   Quality, CodeQL, SAST, Security Scan, and independent review complete; then
   use ordinary protected merge only.
 
+
+
+## 2026-09-26 Idempotency error-authority separation
+
+**Status:** Proposed. This is exact-head PR evidence, not protected-main, release,
+deployment, independent approval, or production-cost telemetry.
+
+- **Gap / causal context:** Experiential's Cost API documents that an
+  `Idempotency-Key` suppresses `usage.cost` annotation so original and replay
+  bytes remain identical. Its machine-readable reference separately specifies
+  free-tier exhaustion as HTTP 429 `insufficient_quota`. The implementation
+  returned before classifying every idempotent error, so an explicit
+  `free_limit_reached` / `insufficient_quota` 429 or an evidence-required
+  provider's HTTP 402 could leave a route recorded `FREE`.
+- **RED:** `79ef8ca36b5c3dc23fed7b28c0cc314a404c6c92` replaces the vacuous
+  "neither promote nor demote" assumption with executable cases that preserve
+  the documented cost-annotation skip but require explicit quota/payment
+  errors to demote. The exact-source probe returns `result=None`,
+  `verdict=free`, then fails the `EXHAUSTED` assertion.
+- **Smallest GREEN:** `28ee3672e5041b4981674c1d8131725d193aea0d` changes only
+  `record_provider_error` branch order and its contract text. Explicit quota
+  429 and evidence-required 402 are classified before the idempotency skip;
+  successful cost evidence and generic failures from idempotent requests
+  remain skipped. No provider/model/payment fallback or admission rule widens.
+- **Verification:** exact remote module execution keeps idempotent success-cost
+  and generic-500 evidence skipped, while quota-code 429, quota-message 429,
+  and payment 402 each record `EXHAUSTED` and deny free admission. The focused
+  test source compiles.
+- **Action:** keep #1260 Ready/Proposed until fresh exact-head Security and
+  Quality, CodeQL, SAST, Security Scan, and independent review complete; then
+  use ordinary protected merge only.
