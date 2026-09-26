@@ -33,6 +33,14 @@ runtime patterns are absent, and a direct production-module probe denies a
 route-qualified `PAID` observation (**GREEN 1/1**). This repairs test authority;
 it does not change production source.
 
+The exact-head full test file at
+`72eb26426caa7a5384d06661354399d3045c4ce2` then exposed two stale
+assertions: a post-call `FREE` observation still expected the evidence-required
+provider to be admitted on the next request (**RED: 2 failed, 94 passed**).
+Test-only GREEN `9c2b9df6215b3a8f8b6aa7ba8b94b3f271232e6e` keeps the recorded
+cost verdict but requires pre-send admission to remain closed on streaming and
+proxy paths; the full file passes 96 tests. Production source is unchanged.
+
 This is source-level GREEN only. Exact-head hosted Checks, independent approval,
 protected-main integration, immutable release, and production-cost evidence
 remain unverified; status stays Proposed.
