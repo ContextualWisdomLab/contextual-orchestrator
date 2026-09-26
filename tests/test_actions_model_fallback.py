@@ -905,6 +905,74 @@ def test_http_virtual_free_response_format_reselects_after_retryable_502(
     )
 
 
+def test_http_virtual_free_structured_retries_429_after_400(monkeypatch) -> None:
+    """A real structured HTTP request completes after a rejected cooldown."""
+    client = _StructuredFailThenServeClient()
+    orchestrator = TaskOrchestrator(
+        _free_agents(), client=client, rate_limit_wait_seconds=0.2,
+        rate_limit_unknown_cooldown_seconds=0.001,
+    )
+    calls: list[str] = []
+
+    def send(
+        agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        del endpoint, payload
+        calls.append(agent.id)
+        if len(calls) == 3:
+            return {
+                "choices": [{"message": {"content": '{"ok": true}'}}],
+                "model": agent.model,
+            }
+        status = 429 if len(calls) == 1 else 400
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="rate_limit_exceeded" if status == 429 else "invalid_request_error",
+            message="upstream rejected request",
+            client_status=status,
+            provider_status=status,
+            retryable=status == 429,
+            transport="structured_synthesis",
+        )
+
+    monkeypatch.setattr(client, "proxy_send_once", send)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body, _content_type = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "return a json verdict"}],
+                "response_format": _JSON_SCHEMA,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert status == 200, body
+    assert client.tool_payloads  # The conduct stages ran before synthesis.
+    assert calls == [
+        "primary_free_agent", "fallback_free_agent", "primary_free_agent"
+    ]
+    assert isinstance(body, dict)
+    route = body["orchestration"]["route"]
+    assert [entry["provider_status"] for entry in route["attempted"][:2]] == [429, 400]
+    assert route["attempted"][-1]["outcome"] == "served"
+    assert orchestrator._group_router.member_report("primary_free_agent")[
+        "failure_count"
+    ] == 1
+    assert orchestrator._group_router.member_report("fallback_free_agent")[
+        "failure_count"
+    ] == 1
+
+
 def test_http_named_model_response_format_stays_sticky_on_502() -> None:
     """A concrete model pin does not switch after a synthesizer 502."""
     client = _StructuredFailThenServeClient()
