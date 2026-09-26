@@ -25,8 +25,10 @@ retryable without ever moving the tag or double-publishing:
   fails the step closed instead of risking a wrong fresh-create attempt
   against unconfirmed state. See the real bash+stub-`gh` simulation near
   the end of this file for end-to-end coverage beyond text assertions.
-- `actions: read` is granted at the `verify` job's scope for the mandatory
-  exact-commit SBOM lookup and nowhere else.
+- `actions: read` is granted at job scope only: on `verify` for the
+  mandatory exact-commit SBOM lookup and the checks-green gate, and on
+  `publish` for the checks-green recheck (which reads the security.yml push
+  run through the Actions API). The workflow default stays `contents: read`.
 - The two-job least-privilege split: `verify` (read-only, no persisted git
   credential) executes all repository-controlled code -- the fresh test
   suite and note rendering -- before `publish` (the only job holding
@@ -735,15 +737,19 @@ def test_simulated_release_already_exists_resumes_asset_attach(tmp_path: Path) -
 # --- `actions: read` scoping (Devin finding 2) -------------------------------
 
 
-def test_actions_read_is_granted_only_on_the_verify_job() -> None:
-    """`actions: read` (needed for `gh run list`/`gh run download`) belongs
-    on `verify`, which performs the SBOM lookup, and nowhere else -- the
-    write-scoped `publish` job never needs Actions API access."""
+def test_actions_read_is_job_scoped_and_read_only() -> None:
+    """`actions: read` is needed on `verify` (`gh run list`/`gh run download`
+    for the SBOM, plus the checks-green gate) and on `publish` (the
+    checks-green recheck reads the security.yml push run and its jobs). It is
+    never granted workflow-wide, and `actions: write` is never granted."""
     workflow = _workflow_text()
     verify_block = _job_block(workflow, "verify")
     publish_block = _job_block(workflow, "publish")
+    jobs_start = workflow.index("\njobs:\n")
     assert "actions: read" in verify_block
-    assert "actions: read" not in publish_block
+    assert "actions: read" in publish_block
+    assert "actions:" not in workflow[:jobs_start]
+    assert "actions: write" not in workflow
 
 
 def test_sbom_step_is_the_one_step_needing_actions_read() -> None:

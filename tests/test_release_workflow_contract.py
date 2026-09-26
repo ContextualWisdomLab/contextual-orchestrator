@@ -89,21 +89,27 @@ def _expected_push_checks_json(workflow: str) -> str:
     return workflow[start:end]
 
 
-_STUB_GH_CHECK_RUNS = """#!/usr/bin/env bash
-# Stub gh CLI: answers the checks-green gate's one gh call --
-# `gh api repos/.../commits/$TARGET_SHA/check-runs?... --paginate --slurp`
-# -- with the canned response file named by GH_STUB_CHECKS_JSON, so the
-# gate's real jq filters run against deliberately-crafted scenarios instead
-# of a live GitHub API. Requires the endpoint to actually name TARGET_SHA
-# (not, say, a leftover GITHUB_SHA) so a regression back to gating on the
-# wrong commit fails this stub rather than passing silently.
+_STUB_GH_WORKFLOW_RUNS = """#!/usr/bin/env bash
+# Stub gh CLI for the checks-green gate's two API reads:
+#   1. `gh api repos/.../actions/runs?head_sha=$TARGET_SHA&event=push&per_page=100
+#      --paginate --slurp` -> ${GH_STUB_DIR}/runs.json
+#   2. `gh api repos/.../actions/runs/<id>/jobs?filter=latest&per_page=100
+#      --paginate --slurp` -> ${GH_STUB_DIR}/jobs-<id>.json
+# Any other call (including a jobs read without the explicit filter=latest,
+# or a runs query naming a different commit than TARGET_SHA) fails, so the
+# gate's real jq filters run against crafted scenarios and a regression to
+# the wrong endpoint or commit fails loudly.
 set -euo pipefail
 if [ "$1" = "api" ]; then
-    for arg in "$@"; do
-        case "$arg" in
-            *"commits/${TARGET_SHA}/check-runs"*) cat "${GH_STUB_CHECKS_JSON}"; exit 0 ;;
-        esac
-    done
+    case " $* " in *" --paginate --slurp "*) ;; *) echo "missing --paginate --slurp: $*" >&2; exit 97 ;; esac
+    prefix="repos/${GITHUB_REPOSITORY}/actions/runs"
+    case "$2" in
+        "${prefix}?head_sha=${TARGET_SHA}&event=push&per_page=100")
+            cat "${GH_STUB_DIR}/runs.json"; exit 0 ;;
+        "${prefix}/"*"/jobs?filter=latest&per_page=100")
+            run_id="${2#"${prefix}/"}"; run_id="${run_id%%/*}"
+            if [ -f "${GH_STUB_DIR}/jobs-${run_id}.json" ]; then cat "${GH_STUB_DIR}/jobs-${run_id}.json"; exit 0; fi ;;
+    esac
 fi
 echo "unhandled stub gh invocation: $*" >&2
 exit 98
@@ -117,20 +123,45 @@ def _run_checks_gate_script(
     the one script both `verify` and `publish` invoke -- against stubbed
     gh/data.
 
-    Builds the same environment GitHub Actions would provide
-    (`GITHUB_REPOSITORY`, `TARGET_SHA`, `GITHUB_RUN_ID`,
-    `RELEASE_EXPECTED_PUSH_CHECKS`) plus a stub `gh` on `PATH`, then runs the
-    shared script file directly -- never a hand-copied stand-in that could
-    silently drift from what the workflow actually executes.
+    `checks_json` groups job entries by the workflow run that produced them
+    (see `_check_runs_response`). Entries from `_SIM_PRIOR_RUN_ID` become
+    the jobs of a completed push-triggered security.yml run on main for
+    TARGET_SHA; entries from any other run id (e.g. this release run's own
+    `_SIM_RUN_ID`) become jobs of an unrelated workflow_dispatch release.yml
+    run, which the gate must ignore. Runs the shared script file directly --
+    never a hand-copied stand-in that could drift from the workflow.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh_stub = bin_dir / "gh"
-    gh_stub.write_text(_STUB_GH_CHECK_RUNS, encoding="utf-8")
+    gh_stub.write_text(_STUB_GH_WORKFLOW_RUNS, encoding="utf-8")
     gh_stub.chmod(0o755)
 
-    checks_file = tmp_path / "checks.json"
-    checks_file.write_text(checks_json, encoding="utf-8")
+    stub_dir = tmp_path / "gh-stub"
+    stub_dir.mkdir()
+    grouped: dict[str, list[dict]] = json.loads(checks_json)
+    grouped.setdefault(_SIM_PRIOR_RUN_ID, [])
+    runs = []
+    for workflow_run_id, jobs in grouped.items():
+        security = workflow_run_id == _SIM_PRIOR_RUN_ID
+        runs.append(
+            {
+                "id": int(workflow_run_id),
+                "run_attempt": 1,
+                "path": ".github/workflows/security.yml" if security else ".github/workflows/release.yml",
+                "event": "push" if security else "workflow_dispatch",
+                "head_branch": "main",
+                "head_sha": target_sha,
+                "status": "completed" if security else "in_progress",
+                "html_url": f"https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/{workflow_run_id}",
+            }
+        )
+        (stub_dir / f"jobs-{workflow_run_id}.json").write_text(
+            json.dumps([{"total_count": len(jobs), "jobs": jobs}]), encoding="utf-8"
+        )
+    (stub_dir / "runs.json").write_text(
+        json.dumps([{"total_count": len(runs), "workflow_runs": runs}]), encoding="utf-8"
+    )
 
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -138,7 +169,7 @@ def _run_checks_gate_script(
     env["TARGET_SHA"] = target_sha
     env["GITHUB_RUN_ID"] = run_id
     env["RELEASE_EXPECTED_PUSH_CHECKS"] = expected_json
-    env["GH_STUB_CHECKS_JSON"] = str(checks_file)
+    env["GH_STUB_DIR"] = str(stub_dir)
 
     return subprocess.run(
         ["bash", str(_CHECKS_GATE_SCRIPT_PATH)],
@@ -150,18 +181,17 @@ def _run_checks_gate_script(
 
 
 def _check_run(name: str, *, status: str = "completed", conclusion: str | None = "success", run_id: str = _SIM_PRIOR_RUN_ID, job: int = 1) -> dict:
-    """Build one check-run entry for a stubbed `check-runs` response page."""
-    return {
-        "name": name,
-        "status": status,
-        "conclusion": conclusion,
-        "details_url": f"https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/{run_id}/jobs/{job}",
-    }
+    """Build one job entry, tagged with the workflow run that produced it."""
+    return {"name": name, "status": status, "conclusion": conclusion, "id": job, "_run_id": run_id}
 
 
 def _check_runs_response(entries: list[dict]) -> str:
-    """Render entries as one `--paginate --slurp` page, matching the real API shape."""
-    return json.dumps([{"total_count": len(entries), "check_runs": entries}])
+    """Group job entries by workflow run id for `_run_checks_gate_script`."""
+    grouped: dict[str, list[dict]] = {}
+    for entry in entries:
+        job = {key: value for key, value in entry.items() if key != "_run_id"}
+        grouped.setdefault(entry["_run_id"], []).append(job)
+    return json.dumps(grouped)
 
 
 def test_release_workflow_file_exists() -> None:
@@ -389,14 +419,18 @@ def test_checks_gate_script_content() -> None:
     """The shared script itself carries the real jq filters and fail-closed
     structure -- pinned here once instead of duplicated per job."""
     script = _CHECKS_GATE_SCRIPT_PATH.read_text(encoding="utf-8")
-    assert 'repos/${GITHUB_REPOSITORY}/commits/${TARGET_SHA}/check-runs' in script
+    assert 'actions/runs?head_sha=${TARGET_SHA}&event=push&per_page=100' in script
+    assert 'actions/runs/${run_id}/jobs?filter=latest&per_page=100' in script
+    assert 'readonly required_workflow_path=".github/workflows/security.yml"' in script
     assert '.status != "completed"' in script
-    assert '["success","skipped","neutral"]' in script
-    assert 'if [ "${not_ready_count}" != "0" ]' in script
+    # Only the allowlisted required jobs of one security.yml push run are
+    # evaluated; there is no catch-all "every other check must be terminal"
+    # filter and no check-runs listing (see
+    # tests/test_release_checks_required_allowlist.py).
+    assert '["success","skipped","neutral"]' not in script
+    assert "/check-runs" not in script
+    assert 'if [ "${required_not_success_count}" != "0" ]' in script
     assert "exit 1" in script
-    # Excludes this release run's own check-runs -- otherwise a
-    # workflow_dispatch run would always find itself unfinished and deadlock.
-    assert "GITHUB_RUN_ID" in script
 
 
 def test_expected_push_checks_are_unique_after_central_workflow_migration() -> None:
@@ -420,17 +454,17 @@ def test_expected_push_checks_are_unique_after_central_workflow_migration() -> N
 
 def test_checks_gate_requires_expected_checks_before_checking_they_are_green() -> None:
     """The shared script must reference the expected-checks env var and
-    compute `missing_checks`/`missing_count` *before* the pre-existing
-    `not_ready`/`not_ready_count` gate -- registration must be confirmed
+    compute `missing_checks`/`missing_count` *before* the success-only
+    `required_not_success` gate -- registration must be confirmed
     before conclusions are even inspected. One script, one order, used by
     both jobs -- see `test_both_jobs_checks_green_step_calls_the_shared_script`."""
     script = _CHECKS_GATE_SCRIPT_PATH.read_text(encoding="utf-8")
     assert "RELEASE_EXPECTED_PUSH_CHECKS" in script
     missing_index = script.index("missing_checks=")
     missing_count_index = script.index('if [ "${missing_count}" != "0" ]')
-    not_ready_index = script.index("not_ready=")
-    not_ready_count_index = script.index('if [ "${not_ready_count}" != "0" ]')
-    assert missing_index < missing_count_index < not_ready_index < not_ready_count_index
+    not_success_index = script.index("required_not_success=")
+    not_success_count_index = script.index('if [ "${required_not_success_count}" != "0" ]')
+    assert missing_index < missing_count_index < not_success_index < not_success_count_index
 
 
 def test_checks_gate_zero_registered_checks_fails_closed(tmp_path: Path) -> None:
@@ -473,8 +507,8 @@ def test_checks_gate_some_but_not_all_expected_checks_green_fails_closed(tmp_pat
 
 def test_checks_gate_all_expected_checks_registered_and_green_passes(tmp_path: Path) -> None:
     """All expected push-triggered checks are registered and green (plus
-    this release run's own still-in-flight check-runs, correctly excluded
-    via GITHUB_RUN_ID) -- the gate must pass."""
+    this release run's own still-in-flight jobs, which belong to a different
+    workflow run and are therefore ignored) -- the gate must pass."""
     workflow = _workflow_text()
     expected_json = _expected_push_checks_json(workflow)
     expected_names = json.loads(expected_json)
