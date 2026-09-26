@@ -110,17 +110,23 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
    - The pack carries no identifiers of ours. The evidence source commit,
      schema digests and evidence digest live in the envelope.
    - **`previous_version`: what the rater sees.**
-     - #2260 keeps a non-empty pack value as-is. It fills the value only
-       when it is missing or empty (`release-tag.yml:246-247`), using
+     - #2260 never parses or validates the pack's `previous_version`. Its
+       inline check fills the value only when it is falsy (missing, `null`,
+       `""`, and also `0`, `false`, `[]` or `{}`), using
        `git describe --tags --abbrev=0` minus one leading `v`, or `0.0.0`
-       without a tag (lines 225-229).
-     - #2260's `parse_core_semver` strips surrounding whitespace and every
-       leading `v` (`noema_semver_bump.py:28`).
+       without a tag (`release-tag.yml:225-229`, `:246-247`). Any other
+       value, string or not, is kept as-is and written back unparsed.
      - The workflow always passes that git-derived value as
        `--previous-version` (`release-tag.yml:274`). The flag overrides
-       `evidence.previous_version` (`noema_semver_bump.py:110`) and is what
-       reaches the decision (`:144`). So in #2260, the pack text and the
-       version used for arithmetic can differ.
+       `evidence.previous_version` (`noema_semver_bump.py:110`) and is the
+       only previous version forwarded to the decision (`:144`). So in
+       #2260 the pack text can differ from the version used for arithmetic.
+     - `parse_core_semver` (`noema_semver_bump.py:26-34`; `:28` strips
+       surrounding whitespace and every leading `v`) is reached only through
+       `apply_bump` (`:41`), i.e. the arithmetic on the
+       `--previous-version`/git value. It is never applied to the pack
+       value; at `dccacc77` `decide_release_version` is fail-closed
+       (`:83-95`) and does not call it at all.
      - In v1 the raters see only the pack, so they see the pack's
        `previous_version`, which must be canonical `X.Y.Z`. The producer
        writes the git-derived value there, and step 2 rejects a mismatch
@@ -186,8 +192,12 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
      `orchestrator/free`. The gateway reports the other fields; they are
      audit-only and never come from model output:
      - `agent_id` and `model` use a gateway-identifier character set
-       (letters, digits and `. _ : / @ + -`), so `key=value` or sentence text
-       does not fit;
+       (letters, digits and `. _ : / @ + -`). This only partly limits
+       smuggling: `=`, `;`, `,` and spaces are excluded, so
+       `release_version=1.0.0` pairs and sentences do not fit, but
+       verdict-looking tokens such as `confidence:0.97` or `major` still
+       match. Step 2 (`route_provenance`) catches them, because the value
+       must equal the gateway's route report and the free-pool catalogue;
      - `provider` is a lowercase provider name (`openrouter`, `nvidia_nim`,
        and so on) with no model path or `:variant`.
    - It carries the opaque receipt, whose `schema_id` must be a URI.
@@ -257,9 +267,16 @@ for a v1 change before release:
    v1 requires strings in every list.
 6. **Blank items outside the API lists.** #2260 checks blankness only for
    the three API lists. v1 rejects any item that `str.strip()` would empty.
-7. **Non-canonical `previous_version`.** #2260 keeps a non-empty pack
-   value, and `parse_core_semver` accepts `" 0.11.2 "`, `"v0.11.2"` and
-   `"vv0.11.2"` (`noema_semver_bump.py:28`). v1 requires canonical `X.Y.Z`.
+7. **Non-canonical `previous_version`.** #2260 accepts any non-empty value
+   (the pack value is not parsed): it only fills a falsy value
+   (`release-tag.yml:246-247`) and otherwise keeps it unchanged, and the
+   git-derived `--previous-version` overrides it (item 8). v1 requires a
+   string in canonical `X.Y.Z` form of at most 64 characters, and rejects,
+   for example, `"garbage"`, `"1.2"`, `"1.2.3-rc.1"`, `"01.0.0"`, `"   "`,
+   `" 0.11.2 "`, `"v0.11.2"`, `"vv0.11.2"`, `"0.2.0\n"`, the non-strings
+   `42`, `true` and `["0.11.2"]`, and a well-formed version longer than 64
+   characters (for example `1111…1.0.0` with 65 characters). Each example
+   was checked against the v1 evidence schema.
 8. **The `--previous-version` override.** In #2260 the git-derived
    `--previous-version` overrides the pack (`noema_semver_bump.py:110`,
    `:144`; passed at `release-tag.yml:274`). v1 has no override. The raters
@@ -271,6 +288,13 @@ for a v1 change before release:
     no index refs. v1 accepts both in addition to every #2260 text ref.
 11. **The reason-code set and its class mapping** are ours, tied to #2260's
     detectors. Changing them after release needs v2.
+12. **Unpaired UTF-16 surrogates in strings** (for example
+    `"feat: \ud800"`). #2260 accepts them: Python's `json` decodes them and
+    #2260 checks only blankness. The v1 schemas accept them too (JSON Schema
+    has no I-JSON keyword), but they violate I-JSON (RFC 7493), which
+    RFC 8785 canonicalisation requires, and the Decision 9 digest formula
+    raises `UnicodeEncodeError` on them. v1 rejects them in step 2
+    (`ijson_text`).
 
 ## Co-ordinator defaults pending 성호's decision
 
@@ -355,6 +379,18 @@ and a test ties each mark to this list.
     identity fast-mlsirm publishes (step 4).
 11. **`byte_caps`**: each document is within its `$comment` byte cap before
     parsing.
+12. **`ijson_text`**: every string (member names and values, in the pack,
+    observations and envelope) is I-JSON (RFC 7493): no unpaired UTF-16
+    surrogate such as `"\ud800"`. The document is rejected before any
+    digest is computed, because RFC 8785 requires I-JSON and the Decision 9
+    formula raises `UnicodeEncodeError` on such a string.
+
+**Step 2 TODO: fixture coverage.** Five of these checks have no
+`step_2_check` fixture case yet: `previous_version_source`,
+`producer_identity`, `receipt_schema_id`, `byte_caps` and `ijson_text`.
+Step 2 must add accept/reject cases for them together with the validator.
+The test that ties fixture marks to this list only requires every mark to
+name a listed check, so these entries are listed ahead of their fixtures.
 
 ## Unresolved owner decisions
 
@@ -378,7 +414,7 @@ answer, and later steps wait for the owner:
    accounts, provider families, blinding), is expected to follow from the
    fast-mlsirm#2035 estimator. The envelope allows 1 to 32 observations
    only as a bound, not as a required count.
-5. **The eleven inputs #2260 accepts and v1 rejects** (listed above).
+5. **The twelve inputs #2260 accepts and v1 rejects** (listed above).
 6. **The three Co-ordinator defaults** (listed above).
 
 ## Planned steps (each waits on the owner and fast-mlsirm#2035)
@@ -426,6 +462,8 @@ Preston-Werner, T. (2013). *Semantic Versioning 2.0.0*. https://semver.org/spec/
 JSON Schema. (2022). *JSON Schema: Draft 2020-12*. https://json-schema.org/draft/2020-12
 
 Bryan, P., Zyp, K., & Nottingham, M. (Eds.). (2013). *JavaScript Object Notation (JSON) Pointer* (RFC 6901). RFC Editor. https://www.rfc-editor.org/rfc/rfc6901
+
+Bray, T. (Ed.). (2015). *The I-JSON Message Format* (RFC 7493). RFC Editor. https://www.rfc-editor.org/rfc/rfc7493
 
 Rundgren, A., Jordan, B., & Erdtman, S. (2020). *JSON Canonicalization Scheme (JCS)* (RFC 8785). RFC Editor. https://www.rfc-editor.org/rfc/rfc8785
 

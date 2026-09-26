@@ -51,10 +51,14 @@ Every pack the v1 schema accepts is also accepted by #2260's code at
   members are required, `previous_version` must be canonical, every item
   must be a string, and sizes are capped. ADR 0137 lists every input #2260
   accepts and v1 rejects as an owner decision.
-- `previous_version` is the only previous version the raters see. #2260's
-  workflow passes a git-derived `--previous-version` that overrides the pack
-  for arithmetic. In v1 the producer writes that same value into the pack,
-  and step 2 rejects a mismatch.
+- `previous_version` is the only previous version the raters see. #2260
+  never parses the pack value: it accepts any non-empty value and fills
+  only a falsy one, and its workflow always passes a git-derived
+  `--previous-version` that overrides the pack. In v1 the producer writes
+  that same value into the pack, in canonical `X.Y.Z` form, and step 2
+  rejects a mismatch.
+- Strings must be I-JSON (no unpaired surrogates such as `"\ud800"`). The
+  schema cannot express this, so step 2 checks it before computing digests.
 - Items may contain newlines, tabs and other characters. An item is blank,
   and rejected, exactly when Python's `str.strip()` would empty it.
 - Identifiers that are not part of #2260's pack (the evidence source commit
