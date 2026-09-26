@@ -475,7 +475,7 @@ def test_free_evidence_expires_at_the_next_reset() -> None:
         [("Idempotency-key", "k-1")],  # urllib.request.Request.header_items() spelling
     ],
 )
-def test_idempotency_key_requests_neither_promote_nor_demote(request_headers) -> None:
+def test_idempotency_key_requests_skip_cost_only_evidence(request_headers) -> None:
     ledger = FreeServingLedger()
     assert evidence.request_has_idempotency_key(request_headers) is True
     assert (
@@ -499,14 +499,44 @@ def test_idempotency_key_requests_neither_promote_nor_demote(request_headers) ->
         evidence.record_provider_error(
             EXPERIENTIAL,
             "m",
-            429,
-            _quota_body("free_limit_reached"),
+            500,
+            {"error": {"code": "provider_error"}},
             request_headers=request_headers,
             ledger=ledger,
         )
         is None
     )
     assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.FREE
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (429, _quota_body("free_limit_reached")),
+        (402, {"error": {"code": "payment_required"}}),
+    ],
+)
+def test_idempotency_key_cannot_hide_explicit_quota_or_payment_demotion(
+    status, payload
+) -> None:
+    ledger = FreeServingLedger()
+    ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
+
+    assert (
+        evidence.record_provider_error(
+            EXPERIENTIAL,
+            "m",
+            status,
+            payload,
+            request_headers={"Idempotency-Key": "k-1"},
+            ledger=ledger,
+        )
+        is CostVerdict.EXHAUSTED
+    )
+    assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.EXHAUSTED
+    assert free_serving_admitted(
+        EXPERIENTIAL, "m", catalog_free=False, ledger=ledger
+    ) is False
 
 
 def test_blank_idempotency_key_is_not_a_skip() -> None:
