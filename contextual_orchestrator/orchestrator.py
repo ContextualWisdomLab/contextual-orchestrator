@@ -5707,6 +5707,7 @@ class TaskOrchestrator:
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
+        self._psychometric_persistence_lock = threading.Lock()
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
@@ -5714,7 +5715,6 @@ class TaskOrchestrator:
         self._openrouter_collector = OpenRouterUptimeCollector(
             self.candidates,
             self._group_router,
-            self._quality_router,
         )
         self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
@@ -6075,7 +6075,10 @@ class TaskOrchestrator:
         return report
 
     def _reload_state(self) -> None:
+        candidate_ids = set(self._psychometric_candidate_ids(self.candidates))
         for observation in self._store.load("psychometric_observation"):
+            if str(observation["agent_id"]) not in candidate_ids:
+                continue
             self._psychometric_router.observe_context_id(
                 str(observation["context_id"]),
                 str(observation["agent_id"]),
@@ -6083,6 +6086,7 @@ class TaskOrchestrator:
                 observation.get("vector"),
                 observation.get("irt_row", ()),
             )
+        self._retain_psychometric_candidates()
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record, restored=True)
             # A batch_route row persisted before judging (see batch_route's
@@ -6438,13 +6442,22 @@ class TaskOrchestrator:
         # request that never hits a cooldown pays no extra cost.
         rate_limited_skipped: list[str] = []
         wait_deadline: float | None = None
+        # Unattempted candidates are safe to call; after an attempt, only an
+        # explicit 429/503 rejection with a recorded cooldown may admit it again.
+        retryable_ids = {candidate.id for candidate in candidates}
         while True:
             eligible_round: list[ModelAgent] = []
             round_now = time.monotonic()
             for candidate in candidates:
-                if self._rate_limit_remaining(candidate.id, now=round_now) is None:
+                if (
+                    candidate.id in retryable_ids
+                    and self._rate_limit_remaining(candidate.id, now=round_now) is None
+                ):
                     eligible_round.append(candidate)
-                elif candidate.id not in rate_limited_skipped:
+                elif (
+                    self._rate_limit_remaining(candidate.id, now=round_now) is not None
+                    and candidate.id not in rate_limited_skipped
+                ):
                     # Record this evidence now: a round that succeeds returns
                     # before the post-round recompute below ever runs.
                     rate_limited_skipped.append(candidate.id)
@@ -6508,6 +6521,7 @@ class TaskOrchestrator:
                             #   multi-candidate loop; kept as defense in depth
                             #   with the typed ``provider_outcome_unknown``.
                             self._record_failure(candidate.id)
+                            retryable_ids.discard(candidate.id)
                             if candidate.group_name:
                                 self._group_router.observe_failure(candidate.id)
                             attempt_receipts.append(
@@ -6594,6 +6608,13 @@ class TaskOrchestrator:
                             else None,
                             status=signal_status,
                         )
+                    if (
+                        rate_limit_signal is not None
+                        and self._rate_limit_remaining(candidate.id) is not None
+                    ):
+                        retryable_ids.add(candidate.id)
+                    else:
+                        retryable_ids.discard(candidate.id)
                     # A 429 is quota exhaustion, not a model health failure: it
                     # must never trip or feed the circuit breaker (unlike a
                     # 503, which stays a real availability signal).
@@ -6650,6 +6671,16 @@ class TaskOrchestrator:
                     rate_limited_skipped.append(candidate.id)
             if wait_deadline is None:
                 wait_deadline = time.monotonic() + self._rate_limit_wait_budget(agent)
+            retry_candidates = [
+                candidate for candidate in candidates if candidate.id in retryable_ids
+            ]
+            attempted_ids = {candidate.id for candidate in eligible_round}
+            if any(
+                candidate.id not in attempted_ids
+                and self._rate_limit_remaining(candidate.id) is None
+                for candidate in retry_candidates
+            ) and time.monotonic() < wait_deadline:
+                continue
             # Delegate the earliest-ready/budget decision to the single
             # shared implementation (also used by
             # _invoke_with_rate_limit_recovery for route_once/conduct): waits
@@ -6659,7 +6690,7 @@ class TaskOrchestrator:
             # candidate attempted this round failed for an unrelated reason
             # -- so fall through to normal failure reporting below.
             if not self._await_rate_limit_recovery(
-                candidates,
+                retry_candidates,
                 deadline=wait_deadline,
                 transport="passthrough",
                 virtual_selector=virtual_selector,
@@ -9226,6 +9257,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
+        self._retain_psychometric_candidates()
         for agent in effective_discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
@@ -9502,6 +9534,10 @@ class TaskOrchestrator:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
             answer, served_id = attempt_answer, attempt_served_id
+            served = next(
+                (item for item in ranked_pool if item.id == attempt_served_id),
+                candidate,
+            )
             if isinstance(extras, dict) and extras.get("tool_calls"):
                 verification = {
                     "accepted": True,
@@ -9514,6 +9550,7 @@ class TaskOrchestrator:
                     text=text,
                     answer=answer,
                     served_id=served_id,
+                    served_candidate_id=self._psychometric_candidate_id(served),
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
@@ -9523,10 +9560,6 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
-            served = next(
-                (item for item in ranked_pool if item.id == attempt_served_id),
-                candidate,
-            )
             row["selection_design"] = self._selection_design_receipt(
                 ranked_pool, attempted, served
             )
@@ -9578,6 +9611,7 @@ class TaskOrchestrator:
         text: str,
         answer: str,
         served_id: str,
+        served_candidate_id: str | None = None,
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
@@ -9607,6 +9641,7 @@ class TaskOrchestrator:
                 self._observe_contextual_quality(
                     prompt_context,
                     served_id,
+                    expected_candidate_id=served_candidate_id,
                     accepted=accepted,
                     latency_seconds=latency_seconds,
                     output_tokens=output_tokens,
@@ -10405,17 +10440,20 @@ class TaskOrchestrator:
             or not self._psychometric_router.has_observations()
         ):
             return candidates
+        by_evidence_id = dict(zip(
+            self._psychometric_candidate_ids(candidates), candidates, strict=True
+        ))
         evidence = self._psychometric_router.ranked_evidence(
-            [candidate.id for candidate in candidates],
+            by_evidence_id,
             prompt_context,
             self._embed_cached(prompt_context),
         )
         if not evidence:
             return candidates
-        by_id = {candidate.id: candidate for candidate in candidates}
-        evidenced_ids = [agent_id for agent_id, _score in evidence]
-        return [by_id[agent_id] for agent_id in evidenced_ids] + [
-            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        evidenced_ids = [evidence_id for evidence_id, _score in evidence]
+        evidenced_agent_ids = {by_evidence_id[evidence_id].id for evidence_id in evidenced_ids}
+        return [by_evidence_id[evidence_id] for evidence_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
 
     def _observe_contextual_quality(
@@ -10423,6 +10461,7 @@ class TaskOrchestrator:
         prompt_context: str,
         served_id: str,
         *,
+        expected_candidate_id: str | None = None,
         accepted: bool,
         latency_seconds: float | None,
         output_tokens: int | None,
@@ -10430,29 +10469,56 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
-        self._psychometric_router.observe(
-            prompt_context,
-            served_id,
-            accepted,
-            self._embed_cached(prompt_context),
-            irt_row,
+        served = next(
+            (agent for agent in self.candidates if agent.id == served_id), None
         )
-        if self._store is not None:
-            context_id = self._psychometric_router.context_id(prompt_context)
-            record = next(
-                item
-                for item in self._psychometric_router.records()
-                if item["context_id"] == context_id and item["agent_id"] == served_id
+        if served is None:
+            # The pool was refreshed while judging; retention would discard
+            # this deployment's evidence, and the answer is already served.
+            return
+        current_candidate_id = self._psychometric_candidate_id(served)
+        if expected_candidate_id is not None and current_candidate_id != expected_candidate_id:
+            return
+        candidate_id = current_candidate_id
+        # Embedding is provider-latency work that depends only on the prompt
+        # context, never on the served agent, so it runs before the
+        # persistence lock is taken: holding the lock across it would
+        # serialize every unrelated observation and retention pass behind one
+        # request's provider call.
+        vector = self._embed_cached(prompt_context)
+        with self._psychometric_persistence_lock:
+            current = next(
+                (agent for agent in self.candidates if agent.id == served_id), None
             )
-            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
-            self._store.save("psychometric_observation", key, record)
-            retained = {
-                hashlib.sha256(
-                    f"{item['context_id']}\0{item['agent_id']}".encode()
-                ).hexdigest()
-                for item in self._psychometric_router.records()
-            }
-            self._store.prune_keyed("psychometric_observation", retained)
+            if current is None or self._psychometric_candidate_id(current) != candidate_id:
+                # The pool changed while embedding ran: the deployment this
+                # outcome describes is gone, and _retain_psychometric_candidates
+                # would discard its evidence anyway.
+                return
+            self._psychometric_router.observe(
+                prompt_context,
+                candidate_id,
+                accepted,
+                vector,
+                irt_row,
+            )
+            if self._store is not None:
+                context_id = self._psychometric_router.context_id(prompt_context)
+                records = self._psychometric_router.records()
+                record = next(
+                    item
+                    for item in records
+                    if item["context_id"] == context_id and item["agent_id"] == candidate_id
+                )
+                key = hashlib.sha256(f"{context_id}\0{candidate_id}".encode()).hexdigest()
+                self._store.save("psychometric_observation", key, record)
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in records
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     # --- dual-ledger membership maintenance ---------------------------------
 
@@ -10474,6 +10540,22 @@ class TaskOrchestrator:
         """Forget members that left the pool in every ledger."""
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
+        self._retain_psychometric_candidates()
+
+    def _retain_psychometric_candidates(self) -> None:
+        """Keep evidence only for the pool's current deployment configurations."""
+        with self._psychometric_persistence_lock:
+            self._psychometric_router.retain_agents(
+                self._psychometric_candidate_ids(self.candidates)
+            )
+            if self._store is not None:
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
@@ -12282,6 +12364,7 @@ class TaskOrchestrator:
         recovered_attempts: list[dict[str, Any]] = []
         recovered_eligible_agent_ids: list[str] = []
         while True:
+            cooling_at_round_start = set(self._rate_limited_snapshot())
             try:
                 result = self._invoke(
                     primary,
@@ -12346,10 +12429,38 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not virtual_selector or any(
-                    self._rate_limit_remaining(candidate.id) is None
+                ready = [
+                    candidate
                     for candidate in candidates
+                    if self._rate_limit_remaining(candidate.id) is None
+                ]
+                # A candidate skipped this round only because it was still
+                # cooling, and whose cooldown expired before this check, did
+                # not fail: re-run selection within the wait budget instead
+                # of reading it as a mixed failure. Any other ready candidate
+                # (one that was attempted, or not cooling) still re-raises.
+                round_attempted_ids = {
+                    row.get("agent_id") for row in current_attempts if isinstance(row, dict)
+                }
+                expired_unattempted = [
+                    candidate
+                    for candidate in ready
+                    if candidate.id in cooling_at_round_start
+                    and candidate.id not in round_attempted_ids
+                ]
+                if wait_deadline is None and expired_unattempted:
+                    wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
+                if (
+                    virtual_selector
+                    and ready
+                    and len(expired_unattempted) == len(ready)
+                    and wait_deadline is not None
+                    and time.monotonic() < wait_deadline
                 ):
+                    recovered_attempts = merged_attempts
+                    recovered_eligible_agent_ids = merged_eligible
+                    continue
+                if not virtual_selector or len(expired_unattempted) < len(ready):
                     # Not a genuine storm to wait out: either the caller
                     # pinned one explicit concrete model (fail fast,
                     # unchanged pre-existing contract -- see

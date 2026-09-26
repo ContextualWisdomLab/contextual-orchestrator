@@ -11,7 +11,7 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.30.0",
   "jsonschema>=4.26.0",
   "egressweave>=0.1.0,<0.2.0",
-  "fast-mlsirm==0.11.3",
+  "fast-mlsirm==0.11.4",
 ]
 
 [project.optional-dependencies]
@@ -19,7 +19,6 @@ test = [
   "hypothesis>=6.100",
 ]
 api = [
-  "anyio==4.14.2",
   "fastapi>=0.128.0",
   "uvicorn>=0.38.0",
 ]
