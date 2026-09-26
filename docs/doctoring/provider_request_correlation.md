@@ -314,6 +314,19 @@ purely incidentally (to represent "some transient failover-eligible
 failure", not to test rate-limiting itself) and were switched to 500 to keep
 that intent isolated from this feature.
 
+#### 2026-09-27 correction: unknown timing is not a five-second deadline
+
+The assumed-cooldown design above is superseded. RFC 9110 section 10.2.3
+defines `Retry-After` as optional; its absence supplies no mathematical or
+standards authority for the former five-second decision. A headerless 429 now
+marks the candidate unavailable without a retry instant. Other candidates are
+still attempted, but an all-unavailable storm returns typed 429 with
+`cooldown_source: "unavailable"`, no `Retry-After`, and `retryable: false`.
+The constructor/CLI option and the synthetic sleep were removed. Readiness
+uses JSON `null` for the absent duration, and a later unknown-duration 429
+invalidates any older finite deadline rather than reusing stale evidence; a
+later provider-declared duration restores a finite deadline.
+
 ### Follow-up: explicit-vs-virtual selector, not candidate count (2026-09-14)
 
 The "two or more candidates" guard above was itself a defect, not just a

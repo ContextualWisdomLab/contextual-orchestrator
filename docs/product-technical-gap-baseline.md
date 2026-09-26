@@ -1982,6 +1982,22 @@ the separately known local-only `mcp.Client` privacy test failure, neither
 touched by this change. `python -m interrogate -v contextual_orchestrator/`
 reported 100% docstring coverage.
 
+### 2026-09-27 correction: headerless 429 admission fails closed
+
+The assumed five-second cooldown described above is superseded. RFC 9110
+section 10.2.3 makes `Retry-After` optional; absence of that field and the
+recognized provider reset headers provides no authority for a retry time.
+`TaskOrchestrator` therefore records a headerless 429 as unavailable with no
+deadline, tries any other eligible candidate, and returns typed 429 with
+`cooldown_source: "unavailable"`, no `Retry-After`, and `retryable: false`
+when every candidate has unknown timing. The former constructor/CLI setting
+was removed. Provider readiness emits JSON `null` for the absent duration and
+never serializes `Infinity`; a later unknown-duration observation also
+invalidates an older finite provider deadline, while newer provider timing
+restores one. The owner-boundary RED test is
+commit `887e2f07390b1a8f7697578f91e92c2a34dfca3a`; final exact-head GREEN
+evidence and hosted-gate state are recorded on PR #1249.
+
 ## 2026-09-14 rate-limit-aware admission: explicit-vs-virtual selector, not candidate count
 
 The "two or more candidates" guard added earlier the same day was itself a
