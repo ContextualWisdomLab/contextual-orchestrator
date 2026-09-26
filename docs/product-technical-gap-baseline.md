@@ -7293,3 +7293,35 @@ release, deployment, independent approval, or production-cost authority.
   CodeQL, SAST, Security Scan, full tests, and independent review remain
   mandatory. Keep PR #1260 Draft and do not reuse predecessor Checks.
 
+## 2026-09-26 Unnamed configured-agent evidence identity
+
+**Status:** Proposed / Ready for review. This is PR-head evidence, not hosted
+GREEN, independent approval, protected-main authority, release, deployment, or
+production-cost authority.
+
+- **Gap / owner boundary:**
+  `contextual-orchestrator#1260@f08ad59db0db50e8091aa06f76fc6e0c2a06f1fc`
+  admitted a configured `cost:free` agent whose optional `provider_name` was
+  empty, but all completed/error/failure observations passed that empty value
+  to `FreeServingLedger.record()`. The ledger rejects an empty route identity,
+  so explicit `PAID` or `EXHAUSTED` evidence could not demote later requests.
+- **RED:** `1a9fedec67908f1b4b527edb7e83329d23293abf` adds a real
+  `ModelClient` contract for an unnamed configured agent. The predecessor
+  leaves `configured_agent:unnamed_free_agent/catalog-free-model` absent and
+  therefore remains free-admitted after a positive provider-reported cost.
+- **GREEN:** `1b3b2634c41a111ab3c81845eaa290f0589120ce` introduces one
+  shared route-identity function. It uses normalized `provider_name` when
+  present, otherwise the stable semantic key `configured_agent:<agent.id>`;
+  a route missing both identities fails closed. Completed responses, HTTP
+  errors, transport failures, and serving-time admission all consume that same
+  identity, so evidence cannot be written under one key and read under another.
+- **Verification:** the focused predecessor probe failed exactly because the
+  expected `PAID` verdict was `None`; the repaired focused probe plus the two
+  retained pre-send contracts passed **3/3**. Exact remote source/test assertions
+  cover the identity helper, fallback, three observation paths, admission,
+  RED contract, and expected key (**8/8**). Full-suite and hosted-check success
+  are not claimed.
+- **Action:** admit #1260 to review after resolving this exact finding. Require
+  fresh exact-head Security and Quality, CodeQL, SAST, Security Scan, full tests,
+  and independent approval before ordinary merge.
+
