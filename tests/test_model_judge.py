@@ -1313,6 +1313,39 @@ def test_missing_fast_mlsirm_does_not_use_a_direct_judge_fallback() -> None:
     invoke.assert_not_called()
 
 
+def test_unavailable_judge_verdict_is_marked_distinct_from_a_judged_rejection() -> None:
+    orchestrator, _ = _orch("unused")
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        unavailable = orchestrator._model_judge_verification("task", {"verifier_output": "report"})
+    empty = orchestrator._model_judge_verification("task", {"verifier_output": ""})
+
+    assert unavailable["accepted"] is False
+    assert unavailable["judge_status"] == "unavailable"
+    # An empty answer is a real (fail-closed) rejection of the answer itself.
+    assert empty["accepted"] is False
+    assert "judge_status" not in empty
+
+
+def test_conduct_with_unavailable_judge_keeps_adr_0001_worker_fallback() -> None:
+    """ADR 0001: an unavailable judge rejects, so conduct returns the worker output.
+
+    The only change is the ``judge_status`` marker that lets callers and traces
+    distinguish "no verdict" from "judged and rejected".
+    """
+    client = _ScriptedClient("unused")
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
+        client=client,
+    )
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        result = orchestrator.conduct(MESSAGES)
+
+    assert result["verification"]["accepted"] is False
+    assert result["verification"]["judge_status"] == "unavailable"
+    worker_row = next(row for row in result["trace"] if row.get("role") == "worker")
+    assert result["answer"] == worker_row["output"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

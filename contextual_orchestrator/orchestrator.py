@@ -9233,8 +9233,15 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
+            if verification.get("judge_status") == "unavailable":
+                row["realtime_judge"]["judge_status"] = "unavailable"
             trace_rows.append(row)
             if verification["accepted"]:
+                break
+            if verification.get("judge_status") == "unavailable":
+                # The next candidate would meet the same missing judge: keep the
+                # top-ranked answer (still unaccepted) instead of spending
+                # another provider call on a lower-ranked one.
                 break
             # Rejected answers already recorded a quality-ledger failure in
             # _realtime_route_judge; keep the last (best-available) answer but
@@ -9287,9 +9294,11 @@ class TaskOrchestrator:
         """Judge one direct-route answer now and feed the quality ledger.
 
         Accepted answers record one success observation (with provider token
-        counts when reported); rejected or unjudgeable answers record one
-        failure, so measured accuracy -- not just transport success -- steers
-        subsequent member ordering inside model groups. ``latency_seconds`` is
+        counts when reported); rejected or unjudgeable answers (e.g. an empty
+        or malformed-verdict answer) record one failure, so measured accuracy
+        -- not just transport success -- steers subsequent member ordering
+        inside model groups. A verdict marked ``judge_status: "unavailable"``
+        (no judge could run) is returned fail-closed without any observation. ``latency_seconds`` is
         ``None`` when the caller has no single-attempt wall-clock timing to
         honestly attribute to this one answer (see
         ``ModelGroupRouter.observe_success``); the success/failure signal is
@@ -9325,6 +9334,11 @@ class TaskOrchestrator:
         base = self._model_judge_verification(
             text, fallback_report, free_only=free_only
         )
+        if base.get("judge_status") == "unavailable":
+            # No verdict was produced, so there is no evidence about this
+            # answer's quality: stay fail-closed but do not record a ledger
+            # failure against the worker for the judge's own outage.
+            return base
         accepted = bool(base.get("accepted"))
         raw_irt_row = base.get("judge_irt_row")
         irt_row = (
@@ -11917,7 +11931,13 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
         excluded_agent_ids: set[str] | None = None,
     ) -> dict[str, Any]:
-        """Ask a model for a strict structured verdict and fail closed on uncertainty."""
+        """Ask a model for a strict structured verdict and fail closed on uncertainty.
+
+        When no verdict could be produced at all (fast-mlsirm missing/broken or
+        the judge call itself failed) the result still rejects (ADR 0001) and is
+        additionally marked ``judge_status: "unavailable"`` so callers can tell
+        "no verdict" apart from a judged rejection.
+        """
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
             return {
@@ -11934,6 +11954,7 @@ class TaskOrchestrator:
                 "reason": "fast-mlsirm judge could not be loaded; verification failed closed",
                 "verifier_output": verifier_output,
                 "judge": "model",
+                "judge_status": "unavailable",
             }
         if components is None:
             return {
@@ -11941,6 +11962,7 @@ class TaskOrchestrator:
                 "reason": "fast-mlsirm judge is unavailable; verification failed closed",
                 "verifier_output": verifier_output,
                 "judge": "model",
+                "judge_status": "unavailable",
             }
         judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
@@ -12064,6 +12086,7 @@ class TaskOrchestrator:
                 "reason": "model judge unavailable; verification failed closed",
                 "verifier_output": verifier_output,
                 "judge": "model",
+                "judge_status": "unavailable",
                 **self._judge_adapter_accounting_fields(judge_adapter),
             }
 

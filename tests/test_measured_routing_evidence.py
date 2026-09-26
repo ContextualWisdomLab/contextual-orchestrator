@@ -340,6 +340,81 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
     assert backup_quality["success_count"] == 1
 
 
+class _JudgeCallFails:
+    """fast-mlsirm components whose judge construction raises (provider/adapter outage)."""
+
+    format_error = ValueError
+
+    @staticmethod
+    def criterion_cls(**_kwargs):
+        return object()
+
+    class judge_cls:  # noqa: N801 - mirrors the resolved component attribute name
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("judge provider down")
+
+
+@pytest.mark.parametrize(
+    ("resolve_patch", "reason"),
+    [
+        ({"return_value": None}, "fast-mlsirm judge is unavailable; verification failed closed"),
+        (
+            {"side_effect": RuntimeError("broken fast-mlsirm import")},
+            "fast-mlsirm judge could not be loaded; verification failed closed",
+        ),
+        ({"return_value": _JudgeCallFails()}, "model judge unavailable; verification failed closed"),
+    ],
+    ids=["not-installed", "import-broken", "judge-call-failed"],
+)
+def test_route_once_unavailable_judge_stays_fail_closed_without_cascade_or_ledger_penalty(
+    monkeypatch: pytest.MonkeyPatch, resolve_patch: dict, reason: str
+) -> None:
+    """An unavailable judge produced no verdict about the worker answer.
+
+    ADR 0001 keeps the verdict fail-closed (``accepted`` stays ``False``), but a
+    missing judge is not evidence that a candidate answered badly: it must not
+    record a quality-ledger/psychometric failure for every candidate, and it
+    must not spend another provider call on a lower-ranked candidate that will
+    meet the same missing judge. The primary answer is returned, marked
+    ``judge_status == "unavailable"`` so callers can tell it apart from a
+    judged rejection.
+    """
+    from unittest.mock import patch
+
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning",), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning",), priority=1),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    invoked: list[str] = []
+
+    def fake_invoke(primary, messages, **kwargs):
+        invoked.append(primary.id)
+        return f"{primary.id} answer", primary.id, "mock", {"completion_tokens": 10}
+
+    contextual_observations: list[tuple] = []
+    monkeypatch.setattr(orchestrator, "_invoke", fake_invoke)
+    monkeypatch.setattr(
+        orchestrator,
+        "_observe_contextual_quality",
+        lambda *args, **kwargs: contextual_observations.append((args, kwargs)),
+    )
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", **resolve_patch):
+        result = orchestrator.route_once([{"role": "user", "content": "do work"}])
+
+    assert result["verification"]["accepted"] is False
+    assert result["verification"]["reason"] == reason
+    assert result["verification"]["judge_status"] == "unavailable"
+    assert result["trace"][-1]["realtime_judge"]["judge_status"] == "unavailable"
+    assert invoked == ["primary_worker"]
+    assert result["answer"] == "primary_worker answer"
+    for member in ("primary_worker", "backup_worker"):
+        assert orchestrator._quality_router.member_observation_count(member) == 0
+    assert contextual_observations == []
+
+
 def test_policy_realtime_judge_must_be_boolean() -> None:
     from contextual_orchestrator.orchestrator import OrchestrationPolicy
 
