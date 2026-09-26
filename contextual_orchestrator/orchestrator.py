@@ -9845,6 +9845,7 @@ class TaskOrchestrator:
                 )
                 step_prompt_bound = prompt_bound
             start = time.perf_counter()
+            selection_start = len(_REQUEST_SELECTION_ATTEMPTS.get() or ())
             output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
                 agent,
                 step_messages,
@@ -9881,8 +9882,9 @@ class TaskOrchestrator:
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
-            attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
-            row["selection_design"] = self._selection_design_receipt([agent], attempted, agent)
+            attempted = list((_REQUEST_SELECTION_ATTEMPTS.get() or [agent])[selection_start:])
+            served = self._agent(served_id)
+            row["selection_design"] = self._selection_design_receipt([agent], attempted, served)
             trace.append(row)
             if progress is not None:
                 _notify_progress(progress, step.role, "completed", redact_value(output))
@@ -12391,10 +12393,10 @@ class TaskOrchestrator:
                     dict.fromkeys([*recovered_eligible_agent_ids, *current_eligible])
                 )
 
-                def raise_with_recovered_route() -> NoReturn:
+                def raise_with_recovered_route(failure: ProviderUpstreamError = exc) -> NoReturn:
                     if merged_attempts:
                         raise _attach_route_evidence_to_upstream_error(
-                            exc,
+                            failure,
                             _route_evidence_payload(
                                 eligible_agent_ids=merged_eligible,
                                 attempted=merged_attempts,
@@ -12405,7 +12407,7 @@ class TaskOrchestrator:
                                 ),
                             ),
                         )
-                    raise exc
+                    raise failure
 
                 if exc.provider_status not in (429, 503):
                     raise_with_recovered_route()
