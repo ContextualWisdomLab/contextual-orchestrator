@@ -8,6 +8,7 @@ provider is ever called.
 from __future__ import annotations
 
 from dataclasses import replace
+from contextvars import copy_context
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
@@ -34,8 +35,20 @@ from contextual_orchestrator.spend_guard import (
 )
 from contextual_orchestrator.spend_metering import InMemorySpendLedgerStore, JsonlSpendLedgerStore
 
-PAID = ModelAgent("openai_paid_agent", "gpt-paid", base_url="https://api.openai.test/v1", provider_name="openai")
-BACKUP = ModelAgent("openrouter_backup_agent", "llama-backup", base_url="https://openrouter.test/api/v1", provider_name="openrouter")
+PAID = ModelAgent(
+    "openai_paid_agent",
+    "gpt-paid",
+    base_url="https://api.openai.test/v1",
+    provider_name="openai",
+    context_window=2000,
+)
+BACKUP = ModelAgent(
+    "openrouter_backup_agent",
+    "llama-backup",
+    base_url="https://openrouter.test/api/v1",
+    provider_name="openrouter",
+    context_window=2000,
+)
 UNPRICED = ModelAgent("bytez_unpriced_agent", "bytez-model", base_url="https://api.bytez.test/v1", provider_name="bytez")
 USAGE = {"prompt_tokens": 1000, "completion_tokens": 1000}
 PROMPT = [{"role": "user", "content": "hello there"}]
@@ -90,11 +103,11 @@ def _no_judge(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # -- defaults ----------------------------------------------------------------
 
-def test_default_config_has_no_run_cap_and_half_baseline_headroom() -> None:
-    """The documented defaults: no per-run cap; baselines need 50% headroom."""
+def test_default_config_has_no_run_cap_or_heuristic_baseline_threshold() -> None:
+    """The default adds neither a cap nor a numeric baseline admission rule."""
     config = SpendGuardConfig()
     assert config.run_max_cost is None
-    assert str(config.baseline_min_remaining_ratio) == "0.5"
+    assert not hasattr(config, "baseline_min_remaining_ratio")
     store = InMemoryConfigStore()
     store.set("spend_guard_settings", "run_max_cost_usd", "2.5")
     assert SpendGuardConfig.from_config_store(store).run_max_cost.as_float() == 2.5
@@ -131,6 +144,118 @@ def test_run_cap_meters_and_stops_further_calls_in_the_same_run() -> None:
     assert refused.value.detail["reason"] == "budget_exhausted"
     assert refused.value.detail["scope"] == "run"
     assert guard.last_run_summary()["budget"]["refusals"][0]["provider_name"] == "openai"
+
+
+def test_run_cap_refuses_paid_call_without_a_total_cost_upper_bound() -> None:
+    """A provider context ceiling bounds total tokens and prevents cap overshoot."""
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd="1.5"),
+        price_book=_price_book(),
+    )
+    orch, transport, _ = _orchestrator([PAID], {"openai": "answer"}, guard=guard)
+
+    with pytest.raises(BudgetExceededError) as refused:
+        orch.route_once(PROMPT)
+
+    assert refused.value.detail["reason"] == "insufficient_remaining_budget"
+    assert transport.calls == []
+
+
+def test_run_cap_fails_closed_when_total_token_ceiling_is_unknown() -> None:
+    """A priced route without an authoritative total-token ceiling is inadmissible."""
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd="100"),
+        price_book=_price_book(),
+    )
+    unbounded = replace(PAID, context_window=None)
+    orch, transport, _ = _orchestrator([unbounded], {"openai": "answer"}, guard=guard)
+
+    with pytest.raises(BudgetExceededError) as refused:
+        orch.route_once(PROMPT)
+
+    assert refused.value.detail["reason"] == "cost_upper_bound_unavailable"
+    assert transport.calls == []
+
+
+def test_run_cap_reserves_in_flight_upper_bounds_atomically() -> None:
+    """Two branches cannot both consume the same remaining run headroom."""
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd="3"),
+        price_book=_price_book(),
+    )
+    state = threading.Condition()
+    provider_calls: list[str] = []
+    outcomes: list[object] = []
+    release = threading.Event()
+
+    def provider_call() -> str:
+        with state:
+            provider_calls.append("openai")
+            state.notify_all()
+        release.wait()
+        return "answer"
+
+    def worker(context) -> None:
+        try:
+            result = context.run(
+                guarded_provider_call,
+                PAID,
+                PROMPT,
+                provider_call,
+                usage_reader=lambda: USAGE,
+            )
+            outcome: object = result
+        except Exception as exc:  # noqa: BLE001 - the refusal is the observed outcome
+            outcome = exc
+        with state:
+            outcomes.append(outcome)
+            state.notify_all()
+
+    with guard.run_scope() as scope:
+        first = threading.Thread(target=worker, args=(copy_context(),))
+        first.start()
+        with state:
+            state.wait_for(lambda: len(provider_calls) == 1)
+        second = threading.Thread(target=worker, args=(copy_context(),))
+        second.start()
+        with state:
+            state.wait_for(lambda: len(provider_calls) == 2 or bool(outcomes))
+        release.set()
+        first.join()
+        second.join()
+
+    assert provider_calls == ["openai"]
+    assert sum(isinstance(item, BudgetExceededError) for item in outcomes) == 1
+    assert scope.spent.as_float() == 2.0
+
+
+def test_unknown_failure_cost_consumes_the_reserved_upper_bound() -> None:
+    """A post-admission failure cannot release unmeasured spend as if it were free."""
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd="10"),
+        price_book=_price_book(),
+    )
+    calls: list[str] = []
+
+    def failed_call() -> str:
+        calls.append("failed")
+        raise RuntimeError("provider outcome unknown")
+
+    with guard.run_scope() as scope:
+        with pytest.raises(RuntimeError, match="outcome unknown"):
+            guarded_provider_call(PAID, PROMPT, failed_call, usage_reader=None)
+        with pytest.raises(BudgetExceededError) as refused:
+            guarded_provider_call(
+                PAID,
+                PROMPT,
+                lambda: calls.append("unexpected") or "answer",
+                usage_reader=None,
+            )
+
+    assert scope.spent.as_float() == 2.0
+    assert scope.measurement_complete is False
+    assert refused.value.detail["reason"] == "measurement_unavailable"
+    assert calls == ["failed"]
 
 
 def test_existing_spend_budget_check_consults_the_run_scope() -> None:
@@ -354,7 +479,7 @@ def test_mid_stream_limit_error_in_http_200_drops_the_provider() -> None:
 def test_baseline_is_skipped_first_and_charged_to_the_same_guard() -> None:
     """compare_to_baseline drops the sampled baseline when headroom runs short."""
     guard = SpendGuard(
-        config=SpendGuardConfig.from_values(run_max_cost_usd=3, baseline_min_remaining_ratio=0.5),
+        config=SpendGuardConfig.from_values(run_max_cost_usd=3),
         price_book=_price_book(),
     )
     orch, transport, _ = _orchestrator([PAID], {"openai": "answer"}, guard=guard)
@@ -365,8 +490,8 @@ def test_baseline_is_skipped_first_and_charged_to_the_same_guard() -> None:
 
 
 def test_baseline_runs_with_headroom_and_is_tagged() -> None:
-    """With enough headroom the baseline runs and is metered as baseline spend."""
-    guard = SpendGuard(config=SpendGuardConfig.from_values(run_max_cost_usd=100), price_book=_price_book())
+    """Without a hard cap the baseline runs and is metered as baseline spend."""
+    guard = SpendGuard(price_book=_price_book())
     orch, _, _ = _orchestrator([PAID], {"openai": "answer"}, guard=guard)
     report = orch.compare_to_baseline(["compare this prompt"], mode="route")
     assert report["aggregate"]["baseline_skipped_count"] == 0
@@ -419,7 +544,6 @@ def test_tenant_budget_applies_to_every_key_of_the_tenant() -> None:
     with guard.tenant_context(virtual_key=first_key):
         orch.route_once(PROMPT)
     with guard.tenant_context(virtual_key=second_key):
-        orch.route_once(PROMPT)
         with pytest.raises(BudgetExceededError) as refused:
             orch.route_once(PROMPT)
     assert refused.value.detail["scope"] == "tenant"
@@ -461,7 +585,7 @@ def test_soft_budget_logs_once_without_blocking(caplog: pytest.LogCaptureFixture
 def test_run_summary_lists_calls_budgets_and_drops() -> None:
     """The per-run artifact reports usage, cost completeness, limits, and dropped providers."""
     limit = _http_error(402, {"error": "Payment Required", "status": 402})
-    bytez = replace(UNPRICED, id="bytez_paid_agent")
+    bytez = replace(UNPRICED, id="bytez_paid_agent", context_window=1000)
     guard = SpendGuard(config=SpendGuardConfig.from_values(run_max_cost_usd=10), price_book=_price_book())
     guard.price_book.set_price(PriceEntry("bytez", "bytez-model", 0.01, 0.01))
     orch, _, _ = _orchestrator([bytez, BACKUP], {"bytez": limit, "openrouter": "ok"}, guard=guard)

@@ -144,16 +144,15 @@ def test_incomplete_measurement_blocks_billable_but_not_free_calls() -> None:
 
 
 def test_baseline_calls_are_skipped_first() -> None:
-    """A baseline is refused once remaining headroom drops below the ratio; primary still runs."""
+    """A paid baseline under a hard cap needs separate allocation authority."""
     positions = [_position(BudgetScope.RUN, "1", "0.45")]
     assert decide_affordability(positions, estimate=Money.usd("0.1"), now=0).allowed
     baseline = decide_affordability(
         positions, estimate=Money.usd("0.1"), now=0, purpose=CallPurpose.BASELINE
     )
-    assert baseline.reason == "baseline_headroom_exhausted"
+    assert baseline.reason == "baseline_allocation_unavailable"
     assert decide_affordability(
-        positions, estimate=Money.usd("0.01"), now=0, purpose=CallPurpose.BASELINE,
-        baseline_min_remaining_ratio=Decimal("0.1"),
+        positions, estimate=Money.usd(0), now=0, purpose=CallPurpose.BASELINE
     ).allowed
 
 
@@ -184,12 +183,6 @@ def test_soft_budget_is_reported_without_blocking() -> None:
     limit = SpendLimit(BudgetScope.TENANT, "acme", Money.usd(10), soft_max_cost=Money.usd(1))
     decision = decide_affordability([SpendPosition(limit, Money.usd(2))], estimate=Money.usd(1), now=0)
     assert decision.allowed and decision.soft_budget_crossed == ("tenant:acme",)
-
-
-def test_invalid_baseline_ratio_is_rejected() -> None:
-    """The baseline ratio must be a share in [0, 1]."""
-    with pytest.raises(ValueError):
-        decide_affordability([], estimate=None, now=0, baseline_min_remaining_ratio=Decimal("1.5"))
 
 
 # -- tenancy -----------------------------------------------------------------
@@ -253,8 +246,8 @@ def test_effective_price_prefers_catalog_then_local_then_free_tag() -> None:
     assert effective_price(catalog, provider="or", model="z", base_url="https://a") is None
 
 
-def test_estimate_is_a_prompt_only_lower_bound() -> None:
-    """The pre-call estimate never guesses output tokens."""
+def test_estimate_is_a_total_cost_upper_bound() -> None:
+    """The known total-token ceiling is priced at the costlier token rate."""
     price = Price(Decimal("1"), Decimal("100"))
-    assert estimate_call_cost(price, 2000) == Money.usd(2)
+    assert estimate_call_cost(price, 2000) == Money.usd(200)
     assert estimate_call_cost(None, 2000) is None
