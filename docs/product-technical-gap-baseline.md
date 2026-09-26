@@ -7195,3 +7195,29 @@ deployment, independent approval, or production-cost authority.
 - **Action:** keep PR #1260 Ready/Proposed; accept neither the earlier failed SAST
   nor the focused probe as hosted GREEN. Merge only after every required exact-head
   gate is terminal-success and review protection permits an ordinary merge.
+
+## 2026-09-26 Free-serving probe claim concurrency
+
+**Status:** Proposed. This is exact-head PR evidence, not protected-main, release,
+deployment, or billing telemetry.
+
+- **Gap:** `probe_free_candidates()` evaluated `probe_due()` and released the
+  ledger lock before network I/O. Two schedulers could therefore admit the same
+  never-observed Experiential route concurrently, violating the documented
+  at-most-one-probe-per-allowance-day boundary and potentially billing two probes.
+- **RED:** `9927a77be64b000dbfb757366b2ba05e7ec37b3c` adds a deterministic
+  concurrent regression. On that exact source, while the first probe is held in
+  flight, the second caller reports `{"probes": 1}` and reaches the duplicate
+  callback.
+- **GREEN:** `bdf8f3d156ef68c3df8019681698c1a46bc518c9` adds
+  `FreeServingLedger.claim_probe()`. It records an `UNKNOWN` reservation under
+  the existing ledger lock before transport, so only one caller can own the
+  route's daily probe slot. No provider/model/payment fallback or admission rule
+  is widened.
+- **Verification:** the exact remote module compiles and the same two-caller
+  probe reports second `{"probes": 0, "probed": []}`, duplicate callback
+  `false`, first thread terminated, and reserved verdict `unknown`.
+- **Action:** keep #1260 Ready/Proposed until fresh exact-head Security and
+  Quality, CodeQL, SAST, Security Scan, and independent review complete; then
+  use ordinary protected merge only.
+
