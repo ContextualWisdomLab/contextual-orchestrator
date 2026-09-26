@@ -196,11 +196,14 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
        smuggling: `=`, `;`, `,` and spaces are excluded, so
        `release_version=1.0.0` pairs and sentences do not fit, but
        verdict-looking tokens such as `confidence:0.97` or `major` still
-       match. Step 2 (`route_provenance`) catches them, because the value
-       must equal the gateway's route report and the free-pool catalogue;
+       match. Step 2 (`route_provenance`) catches them: all three fields
+       must equal the gateway's route report, and `model` (with its
+       `provider`) must also be in the free-pool catalogue; `agent_id` is
+       checked against the route report only;
      - `provider` is a lowercase provider name (`openrouter`, `nvidia_nim`,
        and so on) with no model path or `:variant`.
-   - It carries the opaque receipt, whose `schema_id` must be a URI.
+   - It carries the opaque receipt, whose `schema_id` must be a URI. The
+     URI pattern does not stop verdict-looking text (see step-2 check 10).
      Identical observation entries are rejected.
 6. **Closed, bounded, portable.**
    - Every object schema sets `additionalProperties: false`.
@@ -376,7 +379,10 @@ and a test ties each mark to this list.
    `producer.source_commit` match the installed release, and
    `evidence_source_commit` is the release commit.
 10. **`receipt_schema_id`**: `fast_mlsirm_receipt.schema_id` equals the
-    identity fast-mlsirm publishes (step 4).
+    identity fast-mlsirm publishes (step 4). Until then, a verdict-looking
+    `schema_id` such as `verdict:major;confidence=0.99` passes the v1 URI
+    pattern and is not covered by `route_provenance`, so nothing blocks it
+    until this check pins the receipt schema id.
 11. **`byte_caps`**: each document is within its `$comment` byte cap before
     parsing.
 12. **`ijson_text`**: every string (member names and values, in the pack,
