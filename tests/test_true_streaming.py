@@ -7,6 +7,7 @@ wire (local server), and /v1/chat/completions route+stream pipes live deltas out
 
 from __future__ import annotations
 
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -20,7 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator, default_role_effort_catalog  # noqa: E402
 from contextual_orchestrator import orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
@@ -769,6 +770,47 @@ def test_responses_stream_preserves_classified_provider_error_payload() -> None:
     assert payload["response"]["error"]["code"] == "rate_limit_exceeded"
     assert payload["response"]["error"]["detail"]["provider_status"] == 429
     assert payload["response"]["error"]["detail"]["retryable"] is True
+
+
+@pytest.mark.parametrize("route", [True, False])
+def test_responses_preflight_and_execution_share_effort_revision(monkeypatch, route) -> None:
+    catalog = default_role_effort_catalog()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))],
+        role_effort_catalog=catalog,
+    )
+    starting_hash = orchestrator._effort_snapshot().snapshot_hash
+    seen_hashes = []
+
+    def triage(_text):
+        catalog["worker"] = replace(catalog["worker"], reasoning_effort="high")
+        return not route
+
+    def stream_route(*_args, **_kwargs):
+        seen_hashes.append(orchestrator._effort_snapshot().snapshot_hash)
+        yield "unit answer"
+
+    def conduct(*_args, **_kwargs):
+        seen_hashes.append(orchestrator._effort_snapshot().snapshot_hash)
+        return {"answer": "unit answer"}
+
+    monkeypatch.setattr(orchestrator, "_needs_workflow", triage)
+    monkeypatch.setattr(orchestrator, "stream_route", stream_route)
+    monkeypatch.setattr(orchestrator, "conduct", conduct)
+    server = build_server(orchestrator, port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler._begin_sse = lambda: True
+    handler._write_sse = lambda _frame: True
+    try:
+        assert handler._stream_orchestrated_response(
+            orchestrator, SecurityConfig(auth_token="stream-token"),
+            [{"role": "user", "content": "unit question"}],
+            orchestrator.GATEWAY_DEFAULT_MODEL,
+        ) is True
+        assert seen_hashes == [starting_hash]
+    finally:
+        server.server_close()
+        orchestrator.close()
 
 
 # -- Live route-stream shared-context output budget (issue #1157 follow-up) --

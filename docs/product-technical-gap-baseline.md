@@ -1,5 +1,37 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-26 protected-main test-signal recovery — Proposed
+
+Canonical owner PR [#1266](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1266)
+recovers the runtime and test authority lost by earlier restack merges. Its exact
+CI-equivalent baseline exposed 153 failures plus one collection error on
+protected `main@5665b0ad`; the first owner repair removes 77 OpenRouter
+availability/answer-quality violations and restores collection so remaining
+failures are visible rather than hidden.
+
+The existing RED
+`test_unbounded_synchronous_embedding_waits_for_provider_completion` proves
+that the application default `timeout=None` reached
+`ProviderEmbeddingBatchBackend.wait`, where `math.isfinite(None)` raised
+`TypeError` instead of waiting for provider completion. GREEN
+`343bf7f82fd4f483ca829295c735b4e75017e31c` accepts `None` and non-finite
+numeric deadlines as the same explicit unbounded contract; documentation
+successor `ea1ac223bd8eb8c137c490ef7871734a27558a69` records that boundary.
+This is source evidence only until fresh exact-head hosted tests execute.
+
+Hosted RED run [36147466940](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36147466940)
+selected the repository's pinned Rust 1.97.1 directory override, whose
+`profile = "minimal"` omitted `rustfmt` and `clippy`; the Rust gate therefore
+failed before formatting or linting. GREEN source
+`6e70a196d715fd3c9ba9b89bc8698f252ead04e5` declares both components in
+`rust-toolchain.toml`. This is configuration evidence only until its fresh
+exact-head hosted Rust gate completes.
+
+Status remains **Proposed**. Missing #1074 production carryover, typed EgressWeave
+allowlist errors, ADR/citation inventory repairs, and replacement of the
+unhashable fast-mlsirm VCS dependency remain separate causal gates. Protected
+integration, immutable release, and consumer pins have not occurred.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
