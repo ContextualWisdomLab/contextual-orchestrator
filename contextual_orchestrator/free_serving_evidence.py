@@ -25,8 +25,10 @@ This module replaces that rule with evidence from real responses:
   other call that does not complete with a parsed cost (transport error,
   non-2xx, unreadable body, aborted stream) is ``UNKNOWN``
   (:func:`record_provider_error`, :func:`record_failed_call`). Requests sent
-  with an ``Idempotency-Key`` carry no cost and are skipped entirely: they
-  neither promote nor demote (:func:`request_has_idempotency_key`).
+  with an ``Idempotency-Key`` carry no cost, so cost-dependent evidence is
+  skipped. Explicit quota-exhaustion and payment-required errors still demote
+  because their authority does not depend on ``usage.cost``
+  (:func:`request_has_idempotency_key`).
 * **Ledger.** :data:`FREE_SERVING_LEDGER` keeps the last verdict per
   ``(provider, model)`` for this process, plus the time of the last demotion
   as a separate field. ``PAID`` and ``EXHAUSTED`` demote the route out of
@@ -517,17 +519,23 @@ def record_provider_error(
       call did not complete with a parsed cost, so it cannot keep a ``FREE``.
     * Other errors from other providers are ignored.
 
+    ``Idempotency-Key`` suppresses only cost-dependent error evidence.
+    Explicit quota-exhaustion and payment-required errors remain authoritative.
+
     Returns the recorded verdict, or ``None`` when nothing was recorded.
     """
-    if request_has_idempotency_key(request_headers):
-        return None
     provider = provider_name or ""
     if is_free_quota_exhausted_error(status, payload):
         verdict = CostVerdict.EXHAUSTED
+    elif (
+        provider in COST_EVIDENCE_REQUIRED_PROVIDERS
+        and status == PAYMENT_REQUIRED_STATUS
+    ):
+        verdict = CostVerdict.EXHAUSTED
+    elif request_has_idempotency_key(request_headers):
+        return None
     elif provider not in COST_EVIDENCE_REQUIRED_PROVIDERS:
         return None
-    elif status == PAYMENT_REQUIRED_STATUS:
-        verdict = CostVerdict.EXHAUSTED
     else:
         verdict = CostVerdict.UNKNOWN
     (ledger or FREE_SERVING_LEDGER).record(provider, model_id or "", verdict)
