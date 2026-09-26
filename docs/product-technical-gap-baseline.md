@@ -7207,3 +7207,20 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+## 2026-09-27 PR #1269 executable-fixture carryover — Proposed
+
+Canonical successor PR #1266 already contains predecessor #1269's two
+production repairs: `ProviderEmbeddingBatchBackend.wait(timeout=None)` keeps
+the no-implicit-deadline contract, and EgressWeave allowlist misses remain typed,
+non-retryable `provider_connection_error` 502 responses. Existing successor
+tests cover direct unbounded completion, infinite waits, coordinator defaults,
+and allowlist classification/failover.
+
+The remaining distinct executable requirements are carried at
+`2eceb6474c2904ae308991e89595b1f44c852940`: a finite wait returns while the
+provider is blocked, and the real default `/v1/embeddings` HTTP route forwards
+`ModelClient.timeout=None` unchanged to the provider backend. The predecessor's
+exact `cd30956feda8452aedb751a30a7f0206c442e1b2` reported 8/8 focused GREEN;
+the successor's isolated finite-deadline case passes and its exact test blob
+`8db8c9ec80757d25cd715aa3acaf191c7f613640` compiles. Fresh exact-head hosted
+execution and independent approval remain required; status stays Proposed.
