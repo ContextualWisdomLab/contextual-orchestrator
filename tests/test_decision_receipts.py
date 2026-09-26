@@ -722,6 +722,45 @@ def test_legacy_identity_backfill_and_indexed_window(tmp_path):
         store.close()
 
 
+
+def test_decision_window_binds_request_id_set_without_dynamic_sql(tmp_path):
+    """Hostile identifiers stay data while decision-window query text stays constant."""
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    store = _StateStore(tmp_path / "state.db")
+    request_ids = ("request_safe", "request?' OR 1=1 --")
+    with store._conn:
+        for request_id in request_ids:
+            for kind in (
+                "accepted_request",
+                "initial_decision",
+                "decision_receipt",
+                "provider_dispatch",
+            ):
+                store._conn.execute(
+                    "INSERT INTO orchestration_records(kind, key, payload) VALUES (?, ?, ?)",
+                    (kind, request_id, json.dumps({
+                        "request_id": request_id,
+                        "status": "accepted",
+                    })),
+                )
+    traced = []
+    try:
+        store._conn.set_trace_callback(traced.append)
+        cohort = store.load_decision_window(2)
+        store._conn.set_trace_callback(None)
+        assert {row["request_id"] for row in cohort["accepted"]} == set(request_ids)
+        assert {row["request_id"] for row in cohort["decisions"]} == set(request_ids)
+        window_queries = [
+            query for query in traced
+            if query.startswith("SELECT kind, key, payload") and "AND key IN" in query
+        ]
+        assert len(window_queries) == 2
+        assert all("json_each(" in query for query in window_queries)
+    finally:
+        store.close()
+
+
 def test_http_cold_and_cached_triage_keep_task_ack_after_auxiliary_work(tmp_path, monkeypatch):
     """Cold triage is diagnostic only; warm triage still measures the task decision."""
     from contextual_orchestrator.decision_receipts import _CURRENT_DECISION

@@ -37,6 +37,14 @@ from .chat_capability import (
 )
 from .conventions import legacy_discovered_agent_id
 from .credentials import NotConfigured, get_credential
+from .free_serving_evidence import (
+    COST_EVIDENCE_REQUIRED_PROVIDERS,
+    EXPERIENTIAL_PROMOTIONS_URL,
+    credential_route_identity,
+    free_promotion_slugs,
+    free_serving_admitted,
+    is_free_nominated,
+)
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,
@@ -559,6 +567,10 @@ class DiscoveredModel:
     currency_code: str = "USD"
     unit_prices: tuple[ModelUnitPrice, ...] = ()
     is_free: bool = False
+    # Nominated by a provider's public free promotion (not a price): the row
+    # is a free *candidate* whose admission still needs per-call cost
+    # evidence (see contextual_orchestrator.free_serving_evidence).
+    free_promotion: bool = False
     supports_zero_data_retention: bool | None = None
     supports_no_training: bool | None = None
     supports_no_prompt_retention: bool | None = None
@@ -1764,6 +1776,39 @@ def _openrouter_zdr_model_ids(*, timeout: float | None) -> set[str]:
     }
 
 
+def _experiential_free_promotion_slugs(*, timeout: float | None) -> frozenset[str]:
+    """Read Experiential's public keyless promotions; any failure nominates nothing.
+
+    No credential is sent: ``GET /api/models`` is a documented keyless read
+    (https://platform.experientiallabs.ai/llms.txt, "Models").
+    """
+    try:
+        payload = _fetch_json_same_host_https(
+            EXPERIENTIAL_PROMOTIONS_URL, api_key="", timeout=timeout
+        )
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return frozenset()
+    return free_promotion_slugs(payload)
+
+
+def apply_free_promotions(
+    discovered: list[DiscoveredModel], provider_name: str, slugs: frozenset[str]
+) -> list[DiscoveredModel]:
+    """Mark one provider's rows whose exact model id has a free promotion.
+
+    Only evidence-required providers are eligible: the promotion nominates a
+    candidate, but post-response cost cannot authorize the next request.
+    """
+    if not slugs or provider_name not in COST_EVIDENCE_REQUIRED_PROVIDERS:
+        return discovered
+    return [
+        replace(model, free_promotion=True)
+        if model.provider_name == provider_name and model.model_id in slugs
+        else model
+        for model in discovered
+    ]
+
+
 def _apply_discovered_model_evidence(
     discovered: list[DiscoveredModel], zdr_model_ids: set[str]
 ) -> list[DiscoveredModel]:
@@ -2148,6 +2193,19 @@ def discover_all_models(
                 thread_name="discover-openrouter-paid-inference",
             ),
         )
+    if any(model.provider_name == "experiential_labs" for model in routed):
+        # Fail-closed: a failed or timed-out public promotions read nominates
+        # no Experiential free candidate (every row stays paid).
+        routed = apply_free_promotions(
+            routed,
+            "experiential_labs",
+            _run_bounded_by_deadline(
+                lambda: _experiential_free_promotion_slugs(timeout=timeout),
+                discovery_deadline=discovery_deadline,
+                on_timeout=frozenset,
+                thread_name="discover-experiential-free-promotions",
+            ),
+        )
     if _LOGGER.isEnabledFor(logging.INFO):
         _LOGGER.info(
             "discovery_complete providers=%d models=%d errors=%d",
@@ -2466,11 +2524,22 @@ def general_free_serving_candidates(
     count never overstates how many free models the general chat pool could
     actually serve.
     """
-    # Promotional zero prices do not prevent Experiential paid waterfall overflow.
+    # A zero catalog price only nominates a route. Evidence-required providers
+    # remain closed without authoritative pre-send entitlement; passive cost
+    # evidence can only demote. Shared with ``TaskOrchestrator._is_free_agent``
+    # so the two selectors cannot diverge.
     candidates = [
         model
-        for model in free_discovered_models(discovered)
-        if model.provider_name != "experiential_labs"
+        for model in discovered
+        if is_free_nominated(model)
+        and free_serving_admitted(
+            model.provider_name,
+            model.model_id,
+            catalog_free=model.is_free,
+            route_identity=credential_route_identity(
+                model.provider_name, model.credential_name, model.chat_base_url
+            ),
+        )
         and is_routable_discovered_model(model)
         and not _requires_non_text_input(model)
     ]

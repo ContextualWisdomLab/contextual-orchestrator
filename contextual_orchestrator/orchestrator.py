@@ -48,6 +48,13 @@ from .chat_capability import (
 )
 from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
+from .free_serving_evidence import (
+    credential_route_identity,
+    free_serving_admitted,
+    record_failed_call,
+    record_provider_error,
+    record_reported_cost,
+)
 from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
@@ -1658,6 +1665,110 @@ def _responses_text_format_to_chat_response_format(
     }
 
 
+def _request_header_pairs(request: object) -> list[tuple[str, str]]:
+    """Return an outbound urllib request's headers as ``(name, value)`` pairs."""
+    header_items = getattr(request, "header_items", None)
+    if not callable(header_items):
+        return []
+    try:
+        return [(str(name), str(value)) for name, value in header_items()]
+    except (TypeError, ValueError):  # pragma: no cover - defensive; urllib always supports this
+        return []
+
+
+def _free_serving_policy_provider(agent: ModelAgent) -> str:
+    """Return the provider whose policy classifies one agent's evidence."""
+    provider_name = agent.provider_name.strip()
+    if provider_name:
+        return provider_name
+    agent_id = agent.id.strip()
+    return f"configured_agent:{agent_id}" if agent_id else ""
+
+
+def _free_serving_route_identity(agent: ModelAgent) -> str:
+    """Return the credential-and-endpoint ledger identity for one agent route."""
+    provider = _free_serving_policy_provider(agent)
+    if not agent.provider_name.strip():
+        return provider
+    return credential_route_identity(provider, agent.credential_name, agent.base_url)
+
+
+def _record_free_serving_evidence(
+    agent: ModelAgent, data: object, headers: object = None, request: object = None
+) -> None:
+    """Record one completed response's reported cost for the free-now ledger.
+
+    Never raises: cost evidence must not turn a successful provider response
+    into a failure. A missing or malformed cost is recorded as ``UNKNOWN``
+    (fail-closed for evidence-required providers, ignored for the rest); an
+    ``Idempotency-Key`` request is skipped. See
+    :mod:`contextual_orchestrator.free_serving_evidence`.
+    """
+    try:
+        usage = data.get("usage") if isinstance(data, dict) else None
+        record_reported_cost(
+            _free_serving_policy_provider(agent),
+            agent.model,
+            usage if isinstance(usage, dict) else None,
+            headers,
+            request_headers=_request_header_pairs(request),
+            route_identity=_free_serving_route_identity(agent),
+        )
+    except Exception:  # evidence is advisory for this response; never fail the call
+        _LOGGER.debug("free serving cost evidence could not be recorded", exc_info=True)
+
+
+def _record_free_serving_quota_error(
+    agent: ModelAgent, error: urllib.error.HTTPError, request: object = None
+) -> None:
+    """Record what an HTTP error implies for the free-now ledger; never raises.
+
+    A 429 free-quota error demotes any route. For evidence-required providers
+    an HTTP 402 demotes too and every other status is ``UNKNOWN`` (see
+    :func:`~contextual_orchestrator.free_serving_evidence.record_provider_error`).
+    The error body is read through the cached classifier payload, so it stays
+    readable for downstream classifiers.
+    """
+    try:
+        provider = _free_serving_policy_provider(agent)
+        payload = _http_error_payload(error) if error.code == 429 else None
+        record_provider_error(
+            provider,
+            getattr(agent, "model", None),
+            error.code,
+            payload,
+            request_headers=_request_header_pairs(request),
+            route_identity=_free_serving_route_identity(agent),
+        )
+    except Exception:  # evidence is advisory; the caller re-raises the HTTP error
+        _LOGGER.debug("free serving quota evidence could not be recorded", exc_info=True)
+
+
+def _record_free_serving_failure(
+    agent: ModelAgent, error: BaseException | None, request: object = None
+) -> None:
+    """Record a chat call that did not complete with a parsed cost; never raises.
+
+    HTTP errors are classified by :func:`_record_free_serving_quota_error`;
+    anything else (transport failure, truncated or non-JSON body, a stream that
+    raised or was closed before its final usage frame) records ``UNKNOWN`` for
+    evidence-required providers, so a failed call can never leave a route
+    ``FREE``.
+    """
+    if isinstance(error, urllib.error.HTTPError):
+        _record_free_serving_quota_error(agent, error, request)
+        return
+    try:
+        record_failed_call(
+            _free_serving_policy_provider(agent),
+            agent.model,
+            request_headers=_request_header_pairs(request),
+            route_identity=_free_serving_route_identity(agent),
+        )
+    except Exception:  # evidence is advisory; never replace the original failure
+        _LOGGER.debug("free serving failure evidence could not be recorded", exc_info=True)
+
+
 def _canonical_provider_usage(
     usage: dict[str, Any], *, responses: bool
 ) -> dict[str, Any]:
@@ -2960,14 +3071,21 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        opened = self._open_model_provider(request, destination, agent, timeout)
-        with opened as response:
-            data = json.loads(
-                self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES).decode(
-                    "utf-8"
+        try:
+            opened = self._open_model_provider(request, destination, agent, timeout)
+            with opened as response:
+                data = json.loads(
+                    self._read_bounded_response(response, MAX_PROVIDER_RESPONSE_BYTES).decode(
+                        "utf-8"
+                    )
                 )
-            )
+                response_headers = getattr(response, "headers", None)
+        except BaseException as exc:
+            # No parsed cost: an evidence-required route cannot stay FREE.
+            _record_free_serving_failure(agent, exc, request)
+            raise
         _record_provider_response_telemetry(data, started)
+        _record_free_serving_evidence(agent, data, response_headers, request)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -3145,7 +3263,12 @@ class ModelClient:
         agent: ModelAgent,
         timeout: float | None = None,
     ) -> Any:
-        """Open one model request using the resolved per-model wait, or none."""
+        """Open one model request using the resolved per-model wait, or none.
+
+        Cost telemetry and demotion evidence (including failures and 429/402
+        demotions) are recorded by the chat call sites (``_send``,
+        ``_send_raw``, ``stream_chat``), which see the whole call.
+        """
         resolved = self._resolved_model_timeout(agent, timeout)
         if resolved is None:
             return self._open_provider(request, destination)
@@ -3367,6 +3490,11 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         response_bytes = 0
+        # Set once this call's free-now evidence is recorded: the final usage
+        # frame's cost on success, or the failure in the ``except`` below. Any
+        # other exit (the consumer closing the generator -- GeneratorExit -- or
+        # another BaseException) records UNKNOWN in the ``finally``.
+        evidence_settled = False
         try:
             with self._open_model_provider(
                 request,
@@ -3428,7 +3556,15 @@ class ModelClient:
                 {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
                 started,
             )
+            evidence_settled = True
+            _record_free_serving_evidence(
+                agent, {"usage": stream_usage}, getattr(response, "headers", None), request
+            )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
+            if not evidence_settled:
+                # Recorded before classification closes an HTTPError body.
+                evidence_settled = True
+                _record_free_serving_failure(agent, exc, request)
             try:
                 # The gateway's own terminal tool-stop contract must survive the
                 # boundary: convert the provider HTTP shape into the package-owned
@@ -3458,6 +3594,11 @@ class ModelClient:
                         exc.close()
                     except Exception:  # noqa: BLE001 - cleanup must not expose provider diagnostics
                         pass
+        finally:
+            if not evidence_settled:
+                # Abandoned mid-stream (generator closed) or a BaseException:
+                # no final usage frame was read, so the call proves nothing.
+                _record_free_serving_failure(agent, None, request)
         if stream_error is not None:
             raise stream_error
 
@@ -3833,7 +3974,7 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
-    ) -> dict[str, Any]:  # pragma: no cover
+    ) -> dict[str, Any]:
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
         payload = _pin_openrouter_zdr(agent, payload)
         payload = self._clamp_agent_token_budget_with_evidence(agent, payload)
@@ -3849,13 +3990,20 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        with self._open_model_provider(request, destination, agent) as response:
-            data = json.loads(
-                self._read_bounded_response(
-                    response, MAX_PROVIDER_RESPONSE_BYTES
-                ).decode("utf-8")
-            )
+        try:
+            with self._open_model_provider(request, destination, agent) as response:
+                data = json.loads(
+                    self._read_bounded_response(
+                        response, MAX_PROVIDER_RESPONSE_BYTES
+                    ).decode("utf-8")
+                )
+                response_headers = getattr(response, "headers", None)
+        except BaseException as exc:
+            # No parsed cost: an evidence-required route cannot stay FREE.
+            _record_free_serving_failure(agent, exc, request)
+            raise
         _record_provider_response_telemetry(data, started)
+        _record_free_serving_evidence(agent, data, response_headers, request)
         return data
 
     def _mock_raw(
@@ -5269,19 +5417,20 @@ class _StateStore:
             phases = []
             diagnostics = []
             if request_ids:
-                placeholders = ",".join("?" for _ in request_ids)
+                request_id_set_json = json.dumps(request_ids, separators=(",", ":"))
                 phases = self._conn.execute(
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('initial_decision', 'decision_receipt') "
-                    "AND key IN (" + placeholders + ") "
+                    "AND key IN (SELECT value FROM json_each(?)) "
                     "ORDER BY seq DESC LIMIT ?",
-                    (*request_ids, 2 * limit + 1),
+                    (request_id_set_json, 2 * limit + 1),
                 ).fetchall()
                 diagnostics = self._conn.execute(
                     "SELECT kind, key, payload FROM orchestration_records "
                     "WHERE kind IN ('provider_dispatch', 'auxiliary_dispatch') "
-                    "AND key IN (" + placeholders + ") ORDER BY seq DESC LIMIT ?",
-                    (*request_ids, 8 * limit + 1),
+                    "AND key IN (SELECT value FROM json_each(?)) "
+                    "ORDER BY seq DESC LIMIT ?",
+                    (request_id_set_json, 8 * limit + 1),
                 ).fetchall()
             diagnostic_truncated = len(diagnostics) > 8 * limit
             diagnostics = list(reversed(diagnostics[:8 * limit]))
@@ -10108,19 +10257,30 @@ class TaskOrchestrator:
         its own capability's free route. See :meth:`_is_general_free_agent`
         for the stricter, blind-general-chat variant.
 
-        Experiential promotional/free metadata is deliberately excluded here
-        as well as in discovery-time selection. Its waterfall can spend
-        credits after a free limit, and the public contract exposes no
-        request-level free-only enforcement evidence. This protects durable
-        agents and capability-scoped routes that predate the discovery guard.
+        Catalog price only nominates a route. The shared
+        :func:`contextual_orchestrator.free_serving_evidence.free_serving_admitted`
+        predicate also protects
+        ``model_discovery.general_free_serving_candidates``: evidence-required
+        providers remain closed until authoritative pre-send entitlement proves
+        the next request is free. Provider-reported cost is passive telemetry
+        that can demote a route immediately; it cannot re-admit one. This
+        protects durable agents and capability-scoped routes that predate the
+        discovery guard.
         """
-        if agent.provider_name == "experiential_labs":
+        catalog_free = "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0
+        if not catalog_free:
+            catalog_free = self.price_per_million.get(agent.model) == 0 and sum(
+                candidate.model == agent.model for candidate in self.candidates
+            ) == 1
+        route_identity = _free_serving_route_identity(agent)
+        if not route_identity:
             return False
-        if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
-            return True
-        return self.price_per_million.get(agent.model) == 0 and sum(
-            candidate.model == agent.model for candidate in self.candidates
-        ) == 1
+        return free_serving_admitted(
+            _free_serving_policy_provider(agent),
+            agent.model,
+            catalog_free=catalog_free,
+            route_identity=route_identity,
+        )
 
     def _is_general_free_agent(
         self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None

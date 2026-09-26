@@ -1,5 +1,49 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-26 credential-route entitlement isolation — Proposed
+
+Current-head review of PR #1260 at `8f3b3d2fcf0c34c34eceb855894895b42dacd774`
+found two authority defects. The idempotency regression expected no verdict even
+though an explicit 429 `free_limit_reached` is cost-independent quota authority,
+and the ledger collapsed different credential accounts sharing one provider/model.
+RED `c3b3a3c57ab4ec22a273c8dc4e0d358f8c67c4fc` corrects the quota oracle and
+proves that billing `KEY_A` must not demote sibling `KEY_B`. The predecessor
+fails the credential-isolation behavior.
+
+GREEN `382cc0c3ddc55221df256c016e5d35b716394da6` separates policy provider from
+route identity; `5b732be0636a27453e6ee18171ef31e04998c3ba` binds runtime observations and
+admission to a secret-free credential-name plus endpoint fingerprint; and
+`39f75e86b4c7eb0144caa681612a76c8c5c71532` applies the identical key in
+discovery. Exact remote Python AST parsing passed for four changed source/test
+files. Direct production-module probes passed credential isolation 2/2 and
+idempotent quota authority 1/1. Test-name successor
+`106c2e6ccb4db076d476629b966a2dd9f50cdfee` states the narrower invariant:
+idempotent cost evidence is skipped while explicit quota authority remains.
+No credential value is read or exposed.
+
+A current-head review then found the executable fixtures still wrote and read
+provider/model keys while production used the credential-route fingerprint.
+At `0185f48a5088f3da7273a6e34902b3b3dbe8c05d`, recording `PAID` on the
+provider key left the actual route admitted (**RED 1/1**). Test-only GREEN
+`2f8b1fc96dae2a99613fb854945ba17ed01fa279` makes discovery and runtime
+fixtures use the same production route identity for record, verdict, and
+demotion checks. The exact test source parses, 18 runtime identity reads and
+five discovery identity references are present, the three stale provider-key
+runtime patterns are absent, and a direct production-module probe denies a
+route-qualified `PAID` observation (**GREEN 1/1**). This repairs test authority;
+it does not change production source.
+
+The exact-head full test file at
+`72eb26426caa7a5384d06661354399d3045c4ce2` then exposed two stale
+assertions: a post-call `FREE` observation still expected the evidence-required
+provider to be admitted on the next request (**RED: 2 failed, 94 passed**).
+Test-only GREEN `9c2b9df6215b3a8f8b6aa7ba8b94b3f271232e6e` keeps the recorded
+cost verdict but requires pre-send admission to remain closed on streaming and
+proxy paths; the full file passes 96 tests. Production source is unchanged.
+
+This is source-level GREEN only. Exact-head hosted Checks, independent approval,
+protected-main integration, immutable release, and production-cost evidence
+remain unverified; status stays Proposed.
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
@@ -7159,3 +7203,169 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+
+## 2026-09-26 Free-serving cost evidence SAST closure
+
+**Status:** Proposed. This is exact-head PR evidence, not protected-main, release,
+deployment, independent approval, or production-cost authority.
+
+- **Gap:** the central SAST generation for
+  `contextual-orchestrator#1260@25b896c97f6e011876f934cb09775217486381bd`
+  found two Medium+ SQL-construction results at `orchestrator.py:5400` and
+  `:5407`. Request identifiers were bound values, but the SQL supplied to
+  `sqlite3.Connection.execute()` still concatenated a request-count-derived
+  placeholder list. The fail-closed gate therefore rejected the exact head.
+- **RCA / RED:** hosted
+  [SAST run 36224067708](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36224067708)
+  is the immutable failure receipt. RED
+  `50a45b74df401eb257d41d864c6687e718c10b8f` adds an executable hostile-identifier
+  case that requires the two decision-window queries to keep constant SQL text
+  and bind the identifier set through SQLite JSON. At that RED head the test
+  requires `json_each(` while production still has both dynamic
+  `"AND key IN (" + placeholders + ")"` expressions.
+- **Smallest GREEN:** `c35ca2b7b4f2df3f65d8ed7caabe582961416e50`
+  replaces only those two expressions with
+  `key IN (SELECT value FROM json_each(?))`, binding one canonical JSON array
+  plus the existing bounded row limit. The hostile identifier remains data,
+  and the existing `orchestration_records_kind_key_seq` index is retained by
+  the observed SQLite query plan.
+- **Verification:** the exact remote source/test pair proves
+  `RED: requires json_each=true, source json_each=false, dynamic placeholder=true`
+  and `GREEN: requires json_each=true, source json_each=true, dynamic placeholder=false`.
+  A direct SQLite probe returns four expected phase rows, preserves
+  `request?' OR 1=1 --` as one identifier, executes one `json_each` query,
+  and uses the `kind=? AND key=?` composite index. Fresh exact-head Security
+  and Quality, CodeQL, SAST, and Security Scan remain required before merge.
+- **Action:** keep PR #1260 Ready/Proposed; accept neither the earlier failed SAST
+  nor the focused probe as hosted GREEN. Merge only after every required exact-head
+  gate is terminal-success and review protection permits an ordinary merge.
+
+## 2026-09-26 Free-serving probe claim concurrency
+
+**Status:** Proposed. This is exact-head PR evidence, not protected-main, release,
+deployment, or billing telemetry.
+
+- **Gap:** `probe_free_candidates()` evaluated `probe_due()` and released the
+  ledger lock before network I/O. Two schedulers could therefore admit the same
+  never-observed Experiential route concurrently, violating the documented
+  at-most-one-probe-per-allowance-day boundary and potentially billing two probes.
+- **RED:** `9927a77be64b000dbfb757366b2ba05e7ec37b3c` adds a deterministic
+  concurrent regression. On that exact source, while the first probe is held in
+  flight, the second caller reports `{"probes": 1}` and reaches the duplicate
+  callback.
+- **GREEN:** `bdf8f3d156ef68c3df8019681698c1a46bc518c9` adds
+  `FreeServingLedger.claim_probe()`. It records an `UNKNOWN` reservation under
+  the existing ledger lock before transport, so only one caller can own the
+  route's daily probe slot. No provider/model/payment fallback or admission rule
+  is widened.
+- **Verification:** the exact remote module compiles and the same two-caller
+  probe reports second `{"probes": 0, "probed": []}`, duplicate callback
+  `false`, first thread terminated, and reserved verdict `unknown`.
+- **Action:** keep #1260 Ready/Proposed until fresh exact-head Security and
+  Quality, CodeQL, SAST, Security Scan, and independent review complete; then
+  use ordinary protected merge only.
+
+
+
+## 2026-09-26 Idempotency error-authority separation
+
+**Status:** Proposed. This is exact-head PR evidence, not protected-main, release,
+deployment, independent approval, or production-cost telemetry.
+
+- **Gap / causal context:** Experiential's Cost API documents that an
+  `Idempotency-Key` suppresses `usage.cost` annotation so original and replay
+  bytes remain identical. Its machine-readable reference separately specifies
+  free-tier exhaustion as HTTP 429 `insufficient_quota`. The implementation
+  returned before classifying every idempotent error, so an explicit
+  `free_limit_reached` / `insufficient_quota` 429 or an evidence-required
+  provider's HTTP 402 could leave a route recorded `FREE`.
+- **RED:** `79ef8ca36b5c3dc23fed7b28c0cc314a404c6c92` replaces the vacuous
+  "neither promote nor demote" assumption with executable cases that preserve
+  the documented cost-annotation skip but require explicit quota/payment
+  errors to demote. The exact-source probe returns `result=None`,
+  `verdict=free`, then fails the `EXHAUSTED` assertion.
+- **Smallest GREEN:** `28ee3672e5041b4981674c1d8131725d193aea0d` changes only
+  `record_provider_error` branch order and its contract text. Explicit quota
+  429 and evidence-required 402 are classified before the idempotency skip;
+  successful cost evidence and generic failures from idempotent requests
+  remain skipped. No provider/model/payment fallback or admission rule widens.
+- **Verification:** exact remote module execution keeps idempotent success-cost
+  and generic-500 evidence skipped, while quota-code 429, quota-message 429,
+  and payment 402 each record `EXHAUSTED` and deny free admission. The focused
+  test source compiles.
+- **Action:** keep #1260 Ready/Proposed until fresh exact-head Security and
+  Quality, CodeQL, SAST, Security Scan, and independent review complete; then
+  use ordinary protected merge only.
+
+## 2026-09-26 Pre-send free-entitlement boundary
+
+**Status:** Proposed / Draft. This is exact-head PR evidence, not protected-main,
+release, deployment, independent approval, or production-cost authority.
+
+- **Gap / owner boundary:** `contextual-orchestrator#1260@d66a7768cfa40c891d9fce1aa64dfb65979c35aa`
+  sent a real request through `probe_free_candidates()` to learn the cost only
+  after the request. The source and PR accepted that one probe could be billed
+  when credits overflow was enabled. A previous `usage.cost == 0` observation
+  then admitted the next request, while an assumed daily reset,
+  `ALLOWANCE_RESET_SKEW_SECONDS = 300`, and caller `max_probes` changed
+  admission/probing decisions without authoritative pre-send entitlement.
+- **RED:** `d2da6baf199f4d0f887e8366a10a248a2ab42056` adds executable contracts
+  proving that a prior zero-cost response must not authorize the next request
+  and that the free-pool probe callback must never run. Against the predecessor
+  production both tests fail: admission returns `True` and the callback sees
+  `promotion-model`.
+- **GREEN:** `def10d1af449ec41b72676e3f09a805fce67f948` makes evidence-required
+  providers fail closed and turns `probe_free_candidates()` into a
+  side-effect-free zero-probe receipt. `dd673228cab54527c17140f9a3b06c721ce3d620`
+  removes automatic allowance-reset and skew authority: explicit
+  `PAID`/`EXHAUSTED` demotions persist until process-level reset.
+  `a6e48fe3426e466731376123dfed11da32d8d35b` replaces the superseded
+  calendar/probe-count tests with persistent-demotion, explicit-reset,
+  passive-evidence, and zero-callback contracts. `373518ff879f84143859838f6a146de79b16c047`
+  corrects the changelog.
+- **Contract doctoring:** `96417a078fad5a94c0ae43b7485f9a7c6765bb48`
+  renames the remaining promotion test so its name matches its assertions:
+  passive evidence never admits without authoritative pre-send entitlement.
+  This is test-contract wording only; production behavior is unchanged.
+- **Evidence:** Experiential Labs documents settled cost on or after a request;
+  no authoritative pre-send entitlement proving that the next call is free was
+  found. Therefore promotion and passive cost observations remain useful for
+  telemetry/demotion but are not `orchestrator/free` admission authority.
+- **Verification:** predecessor exact source reproduced **2/2 RED failures**;
+  repaired exact source passed the focused contracts **2/2** and production/test
+  Python compilation **2/2**. Fresh exact-head hosted Security and Quality,
+  CodeQL, SAST, Security Scan, full tests, and independent review remain
+  mandatory. Keep PR #1260 Draft and do not reuse predecessor Checks.
+
+## 2026-09-26 Unnamed configured-agent evidence identity
+
+**Status:** Proposed / Ready for review. This is PR-head evidence, not hosted
+GREEN, independent approval, protected-main authority, release, deployment, or
+production-cost authority.
+
+- **Gap / owner boundary:**
+  `contextual-orchestrator#1260@f08ad59db0db50e8091aa06f76fc6e0c2a06f1fc`
+  admitted a configured `cost:free` agent whose optional `provider_name` was
+  empty, but all completed/error/failure observations passed that empty value
+  to `FreeServingLedger.record()`. The ledger rejects an empty route identity,
+  so explicit `PAID` or `EXHAUSTED` evidence could not demote later requests.
+- **RED:** `1a9fedec67908f1b4b527edb7e83329d23293abf` adds a real
+  `ModelClient` contract for an unnamed configured agent. The predecessor
+  leaves `configured_agent:unnamed_free_agent/catalog-free-model` absent and
+  therefore remains free-admitted after a positive provider-reported cost.
+- **GREEN:** `1b3b2634c41a111ab3c81845eaa290f0589120ce` introduces one
+  shared route-identity function. It uses normalized `provider_name` when
+  present, otherwise the stable semantic key `configured_agent:<agent.id>`;
+  a route missing both identities fails closed. Completed responses, HTTP
+  errors, transport failures, and serving-time admission all consume that same
+  identity, so evidence cannot be written under one key and read under another.
+- **Verification:** the focused predecessor probe failed exactly because the
+  expected `PAID` verdict was `None`; the repaired focused probe plus the two
+  retained pre-send contracts passed **3/3**. Exact remote source/test assertions
+  cover the identity helper, fallback, three observation paths, admission,
+  RED contract, and expected key (**8/8**). Full-suite and hosted-check success
+  are not claimed.
+- **Action:** admit #1260 to review after resolving this exact finding. Require
+  fresh exact-head Security and Quality, CodeQL, SAST, Security Scan, full tests,
+  and independent approval before ordinary merge.
+
