@@ -48,6 +48,7 @@ from .chat_capability import (
 )
 from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
+from .free_serving_evidence import free_serving_admitted, record_reported_cost
 from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
@@ -1658,6 +1659,28 @@ def _responses_text_format_to_chat_response_format(
     }
 
 
+def _record_free_serving_evidence(
+    agent: ModelAgent, data: object, headers: object = None
+) -> None:
+    """Record one completed response's reported cost for the free-now ledger.
+
+    Never raises: cost evidence must not turn a successful provider response
+    into a failure. A missing or malformed cost is recorded as ``UNKNOWN``
+    (fail-closed for evidence-required providers, ignored for the rest); see
+    :mod:`contextual_orchestrator.free_serving_evidence`.
+    """
+    try:
+        usage = data.get("usage") if isinstance(data, dict) else None
+        record_reported_cost(
+            getattr(agent, "provider_name", None),
+            getattr(agent, "model", None),
+            usage if isinstance(usage, dict) else None,
+            headers,
+        )
+    except Exception:  # evidence is advisory for this response; never fail the call
+        _LOGGER.debug("free serving cost evidence could not be recorded", exc_info=True)
+
+
 def _canonical_provider_usage(
     usage: dict[str, Any], *, responses: bool
 ) -> dict[str, Any]:
@@ -2967,7 +2990,9 @@ class ModelClient:
                     "utf-8"
                 )
             )
+            response_headers = getattr(response, "headers", None)
         _record_provider_response_telemetry(data, started)
+        _record_free_serving_evidence(agent, data, response_headers)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -3428,6 +3453,9 @@ class ModelClient:
                 {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
                 started,
             )
+            _record_free_serving_evidence(
+                agent, {"usage": stream_usage}, getattr(response, "headers", None)
+            )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
             try:
                 # The gateway's own terminal tool-stop contract must survive the
@@ -3855,7 +3883,9 @@ class ModelClient:
                     response, MAX_PROVIDER_RESPONSE_BYTES
                 ).decode("utf-8")
             )
+            response_headers = getattr(response, "headers", None)
         _record_provider_response_telemetry(data, started)
+        _record_free_serving_evidence(agent, data, response_headers)
         return data
 
     def _mock_raw(
@@ -10108,19 +10138,26 @@ class TaskOrchestrator:
         its own capability's free route. See :meth:`_is_general_free_agent`
         for the stricter, blind-general-chat variant.
 
-        Experiential promotional/free metadata is deliberately excluded here
-        as well as in discovery-time selection. Its waterfall can spend
-        credits after a free limit, and the public contract exposes no
-        request-level free-only enforcement evidence. This protects durable
-        agents and capability-scoped routes that predate the discovery guard.
+        Catalog price only nominates a route. Whether it is servable free
+        *now* comes from per-call cost evidence recorded by
+        :class:`ModelClient` (see
+        :func:`contextual_orchestrator.free_serving_evidence.free_serving_admitted`,
+        shared with ``model_discovery.general_free_serving_candidates``): a
+        route that reported a positive cost is demoted immediately, and a
+        provider whose promotional free tier can overflow into paid credits
+        (Experiential Labs) is free only after a response proved a zero,
+        non-BYOK charge. Missing or unparseable evidence counts as paid for
+        those providers. This protects durable agents and capability-scoped
+        routes that predate the discovery guard.
         """
-        if agent.provider_name == "experiential_labs":
-            return False
-        if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
-            return True
-        return self.price_per_million.get(agent.model) == 0 and sum(
-            candidate.model == agent.model for candidate in self.candidates
-        ) == 1
+        catalog_free = "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0
+        if not catalog_free:
+            catalog_free = self.price_per_million.get(agent.model) == 0 and sum(
+                candidate.model == agent.model for candidate in self.candidates
+            ) == 1
+        return free_serving_admitted(
+            agent.provider_name, agent.model, catalog_free=catalog_free
+        )
 
     def _is_general_free_agent(
         self, agent: ModelAgent, *, chat_body: Mapping[str, Any] | None = None

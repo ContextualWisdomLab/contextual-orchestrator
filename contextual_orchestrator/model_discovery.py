@@ -37,6 +37,7 @@ from .chat_capability import (
 )
 from .conventions import legacy_discovered_agent_id
 from .credentials import NotConfigured, get_credential
+from .free_serving_evidence import free_serving_admitted
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,
@@ -2466,11 +2467,14 @@ def general_free_serving_candidates(
     count never overstates how many free models the general chat pool could
     actually serve.
     """
-    # Promotional zero prices do not prevent Experiential paid waterfall overflow.
+    # A zero catalog price only nominates a route; per-call cost evidence
+    # decides whether it is servable free *now* (Experiential's paid waterfall
+    # overflow, a demoted route that started billing). Shared with
+    # ``TaskOrchestrator._is_free_agent`` so the two selectors cannot diverge.
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if model.provider_name != "experiential_labs"
+        if free_serving_admitted(model.provider_name, model.model_id, catalog_free=model.is_free)
         and is_routable_discovered_model(model)
         and not _requires_non_text_input(model)
     ]
