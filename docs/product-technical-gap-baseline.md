@@ -1998,6 +1998,13 @@ restores one. The owner-boundary RED test is
 commit `887e2f07390b1a8f7697578f91e92c2a34dfca3a`; final exact-head GREEN
 evidence and hosted-gate state are recorded on PR #1249.
 
+The later `Retry-After: 0` regression at `cb058737` initially failed before
+reaching that boundary because its `FREE_MODEL` fixture omitted the required
+`cost:free` eligibility declaration. The fixture now declares the production
+admission fact explicitly; the focused route, rate-limit, workflow-security,
+and wheel-build contracts pass together. This is test-evidence repair only and
+does not broaden free-pool eligibility or change production routing.
+
 ## 2026-09-14 rate-limit-aware admission: explicit-vs-virtual selector, not candidate count
 
 The "two or more candidates" guard added earlier the same day was itself a

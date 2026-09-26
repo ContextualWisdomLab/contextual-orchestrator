@@ -636,7 +636,7 @@ def test_invoke_retries_same_agent_for_provider_authorized_zero_delay() -> None:
 
     client = ImmediateRetryThenSuccess()
     orchestrator = TaskOrchestrator(
-        [ModelAgent("solo_worker", "mock-a", tags=("reasoning",))],
+        [ModelAgent("solo_worker", "mock-a", tags=("reasoning", "cost:free"))],
         client=client,
         tool_retry_attempts=1,
     )
