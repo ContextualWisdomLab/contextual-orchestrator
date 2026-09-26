@@ -1018,24 +1018,150 @@ def test_discover_provider_models_skips_when_credential_missing() -> None:
     assert discover_provider_models(OPENAI_SOURCE) == []
 
 
+_OPENROUTER_CURRENT_KEY_URL = "https://openrouter.ai/api/v1/key"
+
+
+class _RawResponse(_Response):
+    """A provider response whose body is not necessarily valid JSON."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+
+def _probe_openrouter_paid_inference(outcome) -> tuple[bool | None, list]:
+    """Run the paid-inference probe against one mocked HTTP outcome.
+
+    ``outcome`` is either the response the trusted opener returns or the
+    exception it raises. Returns the probe result and every request seen, so
+    tests can pin which endpoint (and credential) the probe used. No request
+    ever leaves the process.
+    """
+    seen_requests = []
+
+    def urlopen(request, timeout=None, **_kwargs):
+        seen_requests.append(request)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=urlopen,
+    ):
+        return openrouter_paid_inference_available(), seen_requests
+
+
+def test_openrouter_paid_inference_probes_current_key_not_management_credits() -> None:
+    """``GET /api/v1/credits`` requires a management key; the probe holds an
+    inference key, so it must ask ``GET /api/v1/key`` about that key instead."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+
+    result, seen_requests = _probe_openrouter_paid_inference(
+        _Response({"data": {"limit": 100, "limit_remaining": 74.5}})
+    )
+
+    assert result is True
+    assert [request.full_url for request in seen_requests] == [_OPENROUTER_CURRENT_KEY_URL]
+    assert all("/credits" not in request.full_url for request in seen_requests)
+    assert seen_requests[0].get_method() == "GET"
+    assert seen_requests[0].get_header("Authorization") == "Bearer sk-router"
+
+
+def test_openrouter_paid_inference_without_credential_makes_no_request() -> None:
+    result, seen_requests = _probe_openrouter_paid_inference(
+        _Response({"data": {"limit_remaining": 74.5}})
+    )
+
+    assert result is None
+    assert seen_requests == []
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        ({"data": {"total_credits": 10, "total_usage": 9}}, True),
-        ({"data": {"total_credits": 10, "total_usage": 10}}, False),
-        ({"data": {"total_credits": 10, "total_usage": 11}}, False),
-        ({"data": {"total_credits": "invalid", "total_usage": 0}}, None),
+        # Positive remaining per-key limit is the only paid-admitting evidence.
+        ({"data": {"limit": 100, "limit_remaining": 74.5}}, True),
+        ({"data": {"limit": 1, "limit_remaining": 0.01}}, True),
+        ({"data": {"limit": 5, "limit_remaining": 5}}, True),
+        # null = the key has no spending limit: never admit unbounded paid spend.
+        ({"data": {"limit": None, "limit_remaining": None}}, False),
+        # Exhausted or overdrawn key limit.
+        ({"data": {"limit": 100, "limit_remaining": 0}}, False),
+        ({"data": {"limit": 100, "limit_remaining": 0.0}}, False),
+        ({"data": {"limit": 100, "limit_remaining": -0.5}}, False),
+        # Missing or malformed evidence: "could not determine".
+        ({"data": {"limit": 100}}, None),
+        ({"data": {}}, None),
+        ({"data": {"limit_remaining": "74.5"}}, None),
+        ({"data": {"limit_remaining": True}}, None),
+        ({"data": {"limit_remaining": float("inf")}}, None),
+        ({"data": {"limit_remaining": float("nan")}}, None),
+        ({"data": None}, None),
+        ({"data": [{"limit_remaining": 74.5}]}, None),
+        ({}, None),
+        # A management-key-only /credits balance is not key-limit evidence.
+        ({"data": {"total_credits": 10, "total_usage": 9}}, None),
     ],
 )
-def test_openrouter_paid_inference_uses_attested_remaining_credit(
+def test_openrouter_paid_inference_gates_on_current_key_limit_remaining(
     payload: dict, expected: bool | None
 ) -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
-    with patch(
-        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
-        return_value=_Response(payload),
-    ):
-        assert openrouter_paid_inference_available() is expected
+
+    result, seen_requests = _probe_openrouter_paid_inference(_Response(payload))
+
+    assert result is expected
+    assert [request.full_url for request in seen_requests] == [_OPENROUTER_CURRENT_KEY_URL]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # Non-200: what an inference key gets from the management-only
+        # /credits endpoint, plus ordinary auth/server failures.
+        urllib.error.HTTPError(
+            _OPENROUTER_CURRENT_KEY_URL, 403, "Forbidden", {}, io.BytesIO(
+                b'{"error":{"code":403,"message":"Only management keys can perform this operation"}}'
+            )
+        ),
+        urllib.error.HTTPError(_OPENROUTER_CURRENT_KEY_URL, 401, "Unauthorized", {}, None),
+        urllib.error.HTTPError(_OPENROUTER_CURRENT_KEY_URL, 500, "Server Error", {}, None),
+        # Network failures.
+        urllib.error.URLError("connection refused"),
+        TimeoutError("timed out"),
+        OSError("network unreachable"),
+        # Malformed JSON bodies.
+        _RawResponse(b"not json"),
+        _RawResponse(b""),
+        _RawResponse(b'{"data": {"limit_remaining": 74.5'),
+        _RawResponse(b"\xff\xfe"),
+    ],
+    ids=[
+        "http-403-management-only",
+        "http-401",
+        "http-500",
+        "url-error",
+        "timeout",
+        "os-error",
+        "malformed-json",
+        "empty-body",
+        "truncated-json",
+        "non-utf8-body",
+    ],
+)
+def test_openrouter_paid_inference_fails_closed_on_transport_or_json_failure(
+    outcome,
+) -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+
+    try:
+        result, seen_requests = _probe_openrouter_paid_inference(outcome)
+    finally:
+        if isinstance(outcome, urllib.error.HTTPError):
+            outcome.close()
+
+    assert result is None
+    assert [request.full_url for request in seen_requests] == [_OPENROUTER_CURRENT_KEY_URL]
 
 
 def test_discover_openai_compatible_parses_models_and_pricing() -> None:
