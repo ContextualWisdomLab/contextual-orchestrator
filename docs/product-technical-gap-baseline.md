@@ -7301,3 +7301,18 @@ Exact remote AST parsing passed for production and test files; two valid
 receipts passed and both contradictory receipts were rejected. Hosted exact-head
 checks, independent approval, protected-main integration, immutable release, and
 consumer bump remain required. Status stays Proposed.
+
+
+### #1273 cross-field-authority restack — Proposed
+
+After #1231 advanced to exact `9d5da7f9`, #1273's base authority changed and
+its prior exact head no longer represented the current owner contract. Ordinary
+two-parent merge-forward `3ba6a435` has parents #1273 exact `1a64f37c` and
+#1231 exact `9d5da7f9`; no force push or rebase was used. Its tree is the
+complete #1231 owner tree plus the sole
+`tests/test_decision_receipts.py` product delta.
+
+Exact compare against #1231 is ahead 6 / behind 0, one path, `+72/-0`;
+remote AST parsing passes 1/1. The native cancellation case, fresh non-skipped
+hosted checks, independent approval, prerequisite integration, immutable
+release, and consumer bump remain required. Status stays Proposed.
