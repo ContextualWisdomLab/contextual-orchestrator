@@ -1,0 +1,6 @@
+# Hash-pinned release SemVer schemas and their test fixtures must keep their
+# exact bytes: no end-of-line conversion, so MANIFEST.json digests survive
+# core.autocrlf clones and Windows-built wheels (ADR 0137).
+contextual_orchestrator/schemas/** -text
+tests/fixtures/release_semver_v1_conformance.json -text
+tests/fixtures/github_2260_noema_semver/** -text

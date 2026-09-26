@@ -6,15 +6,15 @@
   "schemas": {
     "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/evidence.schema.json": {
       "path": "v1/evidence.schema.json",
-      "sha256": "1006bf906ce023dc61f6d7c007576f39155d3636e7c599aeebabe10ca6582164"
+      "sha256": "9c6768602e4322ac0320d60e484fdfc56b26de3ce0c461e98a2911cc26f71736"
     },
     "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json": {
       "path": "v1/observation.schema.json",
-      "sha256": "1d0ee9ae64d135a299e28a84c81f1dc15010375b369f763ad695c8a05679c34d"
+      "sha256": "836ff74c10427f7023fc416ee0f843040a992160b9615f31411c03ee8f728146"
     },
     "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json": {
       "path": "v1/receipt_envelope.schema.json",
-      "sha256": "62010e31397d8e0c85bcea33dd6fa23ff54f3ef7e53250a89d6c944148753966"
+      "sha256": "5b14f3c9fcb8773f32db07360ac9b7fdaa4cda23f2b6df2a01ec7d7e382f35cb"
     }
   }
 }

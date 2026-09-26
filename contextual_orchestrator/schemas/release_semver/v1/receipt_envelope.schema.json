@@ -2,20 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json",
   "title": "Release SemVer receipt envelope (v1)",
-  "description": "Transport envelope that binds one evidence pack, the independent rater observations collected through orchestrator/free, and an unmodified fast-mlsirm calibrated release-decision receipt. contextual-orchestrator never computes or emits a version: outcome is copied from the fast-mlsirm receipt, and any decided version exists only inside that opaque receipt.",
-  "$comment": "Immutable once released. Any change requires a new vN directory and MANIFEST entry. Consumers must also reject documents larger than 1048576 UTF-8 bytes.",
+  "description": "Transport envelope that binds one evidence pack, the independent rater observations collected through orchestrator/free, and an unmodified fast-mlsirm calibrated release-decision receipt. contextual-orchestrator never produces or interprets a release decision: the only decision authority is fast_mlsirm_receipt.document, which is carried unchanged and bound by schema_id and sha256. The envelope deliberately has no outcome, decision or version field of its own.",
+  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 1048576 UTF-8 bytes.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "contract_id",
     "schema_sha256",
     "evidence_sha256",
+    "evidence_source_commit",
     "gateway_contract",
     "model_pool",
     "producer",
     "observations",
-    "fast_mlsirm_receipt",
-    "outcome"
+    "fast_mlsirm_receipt"
   ],
   "properties": {
     "contract_id": {
@@ -39,7 +39,12 @@
       }
     },
     "evidence_sha256": {
+      "description": "SHA-256 of the RFC 8785 canonical JSON form of the evidence pack.",
       "$ref": "#/$defs/sha256"
+    },
+    "evidence_source_commit": {
+      "description": "Source commit the evidence pack was collected at. Kept here, not in the #2260-shaped pack.",
+      "$ref": "#/$defs/commit"
     },
     "gateway_contract": {
       "const": "contextual-orchestrator-contract-v1"
@@ -63,12 +68,11 @@
         "package_version": {
           "description": "Version of the installed contextual-orchestrator release that produced this envelope (producer identity, not a release decision).",
           "type": "string",
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
-          "maxLength": 64
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
         },
         "source_commit": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
+          "$ref": "#/$defs/commit"
         }
       }
     },
@@ -76,6 +80,7 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 32,
+      "uniqueItems": true,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -89,15 +94,19 @@
             "$ref": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json"
           },
           "served_route": {
-            "description": "Route identity as reported by the gateway for this observation. Recorded for audit only; never a caller selection.",
+            "description": "Route identity reported by the gateway for this observation. route must be orchestrator/free; agent_id, model and provider are recorded for audit only and are never a caller selection.",
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "route",
               "agent_id",
               "model",
               "provider"
             ],
             "properties": {
+              "route": {
+                "const": "orchestrator/free"
+              },
               "agent_id": {
                 "$ref": "#/$defs/bounded_identifier"
               },
@@ -129,7 +138,7 @@
       }
     },
     "fast_mlsirm_receipt": {
-      "description": "The fast-mlsirm calibrated release-decision receipt, carried unchanged. contextual-orchestrator does not interpret document; it binds it by schema_id and the SHA-256 of its RFC 8785 canonical JSON form.",
+      "description": "The fast-mlsirm calibrated release-decision receipt, carried unchanged and never interpreted by contextual-orchestrator. document is the sole decision authority; sha256 is the SHA-256 of its RFC 8785 canonical JSON form, which consumers must recompute.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -148,22 +157,62 @@
           "$ref": "#/$defs/sha256"
         },
         "document": {
-          "type": "object"
+          "type": "object",
+          "minProperties": 1
         }
       }
-    },
-    "outcome": {
-      "description": "Copied from the fast-mlsirm receipt. contextual-orchestrator never derives it.",
-      "enum": [
-        "decision",
-        "no_decision"
-      ]
     }
   },
   "$defs": {
     "sha256": {
+      "description": "Lowercase hex SHA-256. Degenerate repeated-digit values (for example all zeros) are rejected.",
       "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "enum": [
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444",
+          "5555555555555555555555555555555555555555555555555555555555555555",
+          "6666666666666666666666666666666666666666666666666666666666666666",
+          "7777777777777777777777777777777777777777777777777777777777777777",
+          "8888888888888888888888888888888888888888888888888888888888888888",
+          "9999999999999999999999999999999999999999999999999999999999999999",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        ]
+      }
+    },
+    "commit": {
+      "description": "Exact 40-character lowercase Git commit id. Degenerate repeated-digit values are rejected.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "not": {
+        "enum": [
+          "0000000000000000000000000000000000000000",
+          "1111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444",
+          "5555555555555555555555555555555555555555",
+          "6666666666666666666666666666666666666666",
+          "7777777777777777777777777777777777777777",
+          "8888888888888888888888888888888888888888",
+          "9999999999999999999999999999999999999999",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccc",
+          "dddddddddddddddddddddddddddddddddddddddd",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "ffffffffffffffffffffffffffffffffffffffff"
+        ]
+      }
     },
     "bounded_identifier": {
       "type": "string",

@@ -2,124 +2,105 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/evidence.schema.json",
   "title": "Release SemVer evidence pack (v1)",
-  "description": "Deterministic, bounded evidence collected between the previous release tag (or the declared first-release candidate) and one exact source commit. It carries no version decision. Its evidence_sha256 is the SHA-256 of the RFC 8785 canonical JSON form of the whole document; v1 contains no JSON numbers.",
-  "$comment": "Immutable once released. Any change requires a new vN directory and MANIFEST entry. Consumers must also reject documents larger than 262144 UTF-8 bytes.",
+  "description": "The .github#2260 (ADR-0033) release evidence pack as normalised by its reusable release-tag workflow at dccacc77: the same member names, arrays of plain strings, previous_version, and the api_surface_inspected rule, closed and size-bounded. It carries no identifiers of its own and no version decision; the receipt envelope binds it by evidence_sha256, the SHA-256 of its RFC 8785 canonical JSON form (v1 packs contain no JSON numbers).",
+  "$comment": "Immutable once released: any change requires a new vN directory and MANIFEST entry. Resolve every $ref from the packaged schema files through a local registry; never retrieve a $id over the network. Consumers must also reject documents larger than 262144 UTF-8 bytes.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "contract_id",
-    "source_commit",
-    "previous_tag",
-    "declared_version",
-    "api_surface_inspected",
+    "previous_version",
     "changelog_fragments",
     "removed_public_symbols",
     "renamed_public_symbols",
     "required_arg_promotions",
     "deprecated_alias_only",
-    "http_api_route_changes",
-    "persistence_schema_changes",
     "commit_titles",
-    "pr_titles"
+    "pr_titles",
+    "api_surface_inspected"
   ],
   "properties": {
-    "contract_id": {
-      "const": "cwl_release_semver_evidence/v1"
-    },
-    "source_commit": {
-      "description": "Exact 40-character lowercase Git commit the evidence was collected at.",
+    "previous_version": {
+      "description": "Canonical three-component SemVer of the previous release without a v prefix. #2260 derives it from the latest tag and falls back to 0.0.0 when no tag exists; how that fallback is treated is an unresolved owner decision (ADR 0137).",
       "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
-    },
-    "previous_tag": {
-      "description": "Previous canonical release tag, or null when no release tag exists yet. How a null previous tag is treated is an unresolved owner decision (ADR 0137).",
-      "oneOf": [
-        {
-          "type": "string",
-          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
-          "maxLength": 64
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "declared_version": {
-      "description": "The [project].version declared in pyproject.toml at source_commit. Input evidence only; it is not an output version.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
-      "maxLength": 64
-    },
-    "api_surface_inspected": {
-      "description": "True only when the public API surface was actually inspected. Mirrors the .github#2260 evidence-pack rule.",
-      "type": "boolean"
+      "maxLength": 64,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
     },
     "changelog_fragments": {
-      "$ref": "#/$defs/evidence_items_256"
+      "$ref": "#/$defs/items_256"
     },
     "removed_public_symbols": {
-      "$ref": "#/$defs/evidence_items_256"
+      "$ref": "#/$defs/items_256"
     },
     "renamed_public_symbols": {
-      "$ref": "#/$defs/evidence_items_256"
+      "$ref": "#/$defs/items_256"
     },
     "required_arg_promotions": {
-      "$ref": "#/$defs/evidence_items_256"
+      "$ref": "#/$defs/items_256"
     },
     "deprecated_alias_only": {
-      "$ref": "#/$defs/evidence_items_256"
-    },
-    "http_api_route_changes": {
-      "$ref": "#/$defs/evidence_items_256"
-    },
-    "persistence_schema_changes": {
-      "$ref": "#/$defs/evidence_items_256"
+      "$ref": "#/$defs/items_256"
     },
     "commit_titles": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/evidence_item"
+        "$ref": "#/$defs/item"
       },
       "maxItems": 512
     },
     "pr_titles": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/evidence_item"
-      },
-      "maxItems": 256
+      "$ref": "#/$defs/items_256"
+    },
+    "api_surface_inspected": {
+      "description": "True only when the public API surface was actually inspected. As in #2260, a pack that is not marked inspected must carry at least one removed/renamed/required-arg finding.",
+      "type": "boolean"
     }
   },
-  "$defs": {
-    "evidence_ref": {
-      "description": "Stable, namespaced evidence identifier, for example commit:<sha> or api:removed:<symbol>.",
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_-]{0,31}:[^\\s]+$",
-      "minLength": 3,
-      "maxLength": 256
-    },
-    "evidence_item": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "ref",
-        "text"
-      ],
-      "properties": {
-        "ref": {
-          "$ref": "#/$defs/evidence_ref"
-        },
-        "text": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2000
-        }
+  "if": {
+    "properties": {
+      "api_surface_inspected": {
+        "const": true
       }
     },
-    "evidence_items_256": {
+    "required": [
+      "api_surface_inspected"
+    ]
+  },
+  "else": {
+    "anyOf": [
+      {
+        "properties": {
+          "removed_public_symbols": {
+            "minItems": 1
+          }
+        }
+      },
+      {
+        "properties": {
+          "renamed_public_symbols": {
+            "minItems": 1
+          }
+        }
+      },
+      {
+        "properties": {
+          "required_arg_promotions": {
+            "minItems": 1
+          }
+        }
+      }
+    ]
+  },
+  "$defs": {
+    "item": {
+      "description": "One evidence string. Like #2260's API lists, it must contain a non-whitespace character.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "\\S"
+    },
+    "items_256": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/evidence_item"
+        "$ref": "#/$defs/item"
       },
       "maxItems": 256
     }
