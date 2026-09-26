@@ -382,6 +382,41 @@ def test_close_fences_result_before_renewal_observes_close() -> None:
     assert backend.retrieve(job) == []
 
 
+def test_close_fences_failure_before_renewal_observes_close() -> None:
+    """Close itself fences provider failure before the renewal thread wakes."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(_requests):
+        started.set()
+        assert release.wait(timeout=2)
+        raise RuntimeError("late provider failure")
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=10,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="recoverable")])
+    assert started.wait(timeout=1)
+
+    backend.close()
+    release.set()
+    claim_key = (
+        "batch_job_registry:provider_embedding_job_execution:claim:"
+        f"{job.job_id}"
+    )
+    deadline = time.monotonic() + 1
+    while claim_key in client.strings and time.monotonic() < deadline:
+        threading.Event().wait(0.01)
+
+    assert claim_key not in client.strings
+    assert backend.poll(job)["status"] == "running"
+    assert "provider_embedding_errors" not in client.hashes
+
+
 
 
 def test_provider_job_recovers_after_claim_renewal_loss_without_restart() -> None:
