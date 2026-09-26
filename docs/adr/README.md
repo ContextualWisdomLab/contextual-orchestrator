@@ -17,6 +17,7 @@ They do not share numbering with `docs/planning/adrs/`.
 | [0006](0006-authoritative-chat-token-accounting.md) | Authoritative chat token accounting | Accepted | OpenAI Chat usage contract and exact tiktoken model mappings; PyO3 modules |
 | [0007](0007-hourly-loop-orchestrator-free-pool-pin.md) | Pin the hourly OpenCode maintenance loop to `orchestrator/free` | Proposed | `.github` ADR-0003 and the organization GitHub Actions `orchestrator/free` contract |
 | [0123](0123-web-search-mcp-a2a-gateway-foundation.md) | Web-search tool and the MCP/A2A gateway foundation | Partially accepted (web search shipped; MCP/A2A/Camoufox design-only) | Evans (2003) DDD; Fowler (2014) Bounded Context; Model Context Protocol spec; Agent2Agent protocol spec; SearXNG search API; Camoufox repository |
+| [0124](0124-incremental-domain-extraction.md) | Incremental domain extraction out of `orchestrator.py` | Proposed (step 1, reporting, implemented) | Evans (2003) DDD; Fowler (2014) Bounded Context; Fowler (2024) Strangler Fig Application; Cockburn (2005) Hexagonal Architecture |
 
 Each record uses Context / Decision / Consequences plus an APA 7th
 **References** section. Cite only verified DOI or official URLs. arXiv

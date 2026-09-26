@@ -31,7 +31,7 @@ Paper role values are deliberate exceptions because they are source terminology:
 
 ## Module Rules
 
-- Domain code stays in `contextual_orchestrator/orchestrator.py` until a second implementation forces extraction.
+- Domain code is extracted out of `contextual_orchestrator/orchestrator.py` incrementally, per [ADR 0124](adr/0124-incremental-domain-extraction.md) (which supersedes the former "stays in `orchestrator.py` until a second implementation forces extraction" rule). New domain logic goes to `contextual_orchestrator/domain/`; read-only reports live in `contextual_orchestrator/reporting/`.
 - Issue #568 compute profiles live in `reasoning_effort_profile.py` so the
   catalog and ablation can land without changing `OrchestrationPolicy` defaults.
 - Delivery adapters live in `server.py`.

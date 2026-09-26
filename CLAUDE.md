@@ -156,7 +156,8 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 
 ### Modules (`contextual_orchestrator/`)
 
-- `orchestrator.py` — the domain heart: `ModelAgent`, `WorkflowStep`, `OrchestrationPolicy`, `ModelClient`, `TaskOrchestrator`, secret/PII redaction, budget enforcement, spend analytics, and the commercial-readiness report generators behind `/api/v1/*`. Domain code stays here until a second implementation forces extraction (see `docs/code_conventions.md`).
+- `orchestrator.py` — the domain heart: `ModelAgent`, `WorkflowStep`, `OrchestrationPolicy`, `ModelClient`, `TaskOrchestrator`, secret/PII redaction, budget enforcement, and spend analytics. Domain code is being extracted incrementally per `docs/adr/0124-incremental-domain-extraction.md` (see `docs/code_conventions.md`).
+- `reporting/commercial_reports.py` — the commercial/sales/buyer readiness report generators behind `/api/v1/*`; `TaskOrchestrator` keeps thin delegating methods with the same signatures.
 - `reasoning_effort_profile.py` — issue #568 role compute catalog and equal-budget true-θ ablation that emits θ̂ and RMSE(θ̂, θ). Production route/conduct defaults stay locked until `production_default_change_allowed`. Buyer next action: `python tests/test_reasoning_effort_profile.py`.
 - `server.py` — HTTP delivery adapter and `SecurityConfig`; all request validation lives here.
 - `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the stdlib HTTP/admin surface remains sufficient).
