@@ -20,7 +20,7 @@ success_criteria:
     target: "no schema field carries a release version, decision, outcome or model self-reported confidence; the fast-mlsirm receipt document is the only decision authority"
     source: "tests/test_release_semver_schema_v1.py"
   - metric: "owner evidence-pack conformance"
-    target: "the .github#2260 evidence fixtures at dccacc77 validate unchanged against the v1 evidence schema"
+    target: "v1 accepts a strict subset of what .github#2260 accepts at dccacc77, including #2260's evidence fixtures unchanged and every text ref #2260 generates; each rejected #2260 input is listed as an owner decision"
     source: "tests/test_release_semver_schema_v1.py; tests/fixtures/github_2260_noema_semver/"
   - metric: "schema immutability"
     target: "v1 schema bytes are pinned by SHA-256 in MANIFEST.json and in an immutability guard test, and are LF-only with end-of-line conversion disabled"
@@ -74,6 +74,11 @@ CEFR slice ([`docs/cefr-language-observation.md`](../../cefr-language-observatio
 already shows the shape that fits: independent raters produce bounded
 *observations*, and fast-mlsirm owns the calibrated decision.
 
+In this ADR, "what #2260 accepts" means what #2260's code at `dccacc77`
+would let through: the inline pack check in `release-tag.yml` (lines
+237-270) plus `noema_semver_bump.py`. That part of `release-tag.yml` sits
+after the fail-closed `exit 1` (lines 210-211), so it does not run today.
+
 ## Decision
 
 1. **Observations only.** contextual-orchestrator collects independent rater
@@ -89,27 +94,62 @@ already shows the shape that fits: independent raters produce bounded
    `outcome` field of its own**. A copied outcome would be a second source
    of the decision that could contradict the receipt, so `document` is the
    only decision authority.
-3. **Evidence pack = the #2260 pack.** `evidence.schema.json` accepts the
-   pack that #2260's reusable `release-tag.yml` hands to
-   `noema_semver_bump.py` at `dccacc77`: `previous_version`,
-   `changelog_fragments`, `removed_public_symbols`, `renamed_public_symbols`,
-   `required_arg_promotions`, `deprecated_alias_only`, `commit_titles`,
-   `pr_titles` (arrays of plain strings) and `api_surface_inspected`. #2260's
-   rule is mirrored: unless `api_surface_inspected` is `true`, at least one
-   removed/renamed/required-arg finding is required. The pack carries no
-   identifiers of ours. The evidence source commit, schema digests and
-   evidence digest live in the envelope. #2260's own evidence fixtures are
-   copied byte-for-byte (Git blob ids recorded in `PROVENANCE.json`) and
-   must validate unchanged.
+3. **Evidence pack: a strict subset of what #2260 accepts.**
+   - `evidence.schema.json` uses #2260's nine member names:
+     `previous_version`, `changelog_fragments`, `removed_public_symbols`,
+     `renamed_public_symbols`, `required_arg_promotions`,
+     `deprecated_alias_only`, `commit_titles`, `pr_titles` (arrays of
+     strings) and `api_surface_inspected`.
+   - It mirrors #2260's rule: unless `api_surface_inspected` is `true`, at
+     least one removed/renamed/required-arg finding is required.
+   - Every pack v1 accepts, #2260 also accepts. #2260's two evidence
+     fixtures validate unchanged; they are copied byte for byte, with Git
+     blob ids recorded in `PROVENANCE.json`.
+   - v1 rejects some inputs #2260 accepts. They are listed under
+     "Inputs #2260 accepts and v1 rejects".
+   - The pack carries no identifiers of ours. The evidence source commit,
+     schema digests and evidence digest live in the envelope.
+   - **`previous_version`: what the rater sees.**
+     - #2260 keeps a non-empty pack value as-is. It fills the value only
+       when it is missing or empty (`release-tag.yml:246-247`), using
+       `git describe --tags --abbrev=0` minus one leading `v`, or `0.0.0`
+       without a tag (lines 225-229).
+     - #2260's `parse_core_semver` strips surrounding whitespace and every
+       leading `v` (`noema_semver_bump.py:28`).
+     - The workflow always passes that git-derived value as
+       `--previous-version` (`release-tag.yml:274`). The flag overrides
+       `evidence.previous_version` (`noema_semver_bump.py:110`) and is what
+       reaches the decision (`:144`). So in #2260, the pack text and the
+       version used for arithmetic can differ.
+     - In v1 the raters see only the pack, so they see the pack's
+       `previous_version`, which must be canonical `X.Y.Z`. The producer
+       writes the git-derived value there, and step 2 rejects a mismatch
+       (`previous_version_source`). The rater's input and the arithmetic
+       input therefore cannot diverge.
 4. **Observation (`cwl_release_semver_observation/v1`).**
    - It holds the echoed `evidence_sha256` and `assignment_ref`, plus
      `observed_class` (`major` | `minor` | `patch` | `abstain`, using #2260's
      bump-class labels), `evidence_refs`, `breaking_change_refs` and
      `reason_code`.
-   - **Citation refs** are `<prefix><item text>`. #2260 defines the prefixes
-     `changelog:`, `api:removed:`, `api:renamed:`, `api:required-arg:`
-     (`detected_breaking_refs`) and `api:deprecated-alias:` (recorded
-     fixtures). v1 adds `commit:` and `pr:`.
+   - `assignment_ref` is a caller-issued random 128-bit nonce (32 lowercase
+     hex digits), so it cannot carry verdict text.
+   - **Citation refs come in two forms.**
+     - An *index ref* is an RFC 6901 JSON Pointer fragment into the pack,
+       `#/<list>/<index>` (0-based). It can cite any item, including
+       multi-line fragments and symbols containing tabs, so an unusual
+       character never forces a rater to abstain.
+     - A *text ref* is a #2260 prefix plus the item with Python
+       `str.strip()` whitespace removed. That is exactly how #2260's
+       `detected_breaking_refs` builds `api:removed:`, `api:renamed:` and
+       `api:required-arg:` refs (`noema_semver_bump.py:68-79`). #2260's
+       recorded fixtures use `changelog:` and `api:deprecated-alias:`; v1
+       adds `commit:` and `pr:`.
+     - Text refs keep internal newlines, tabs and other characters. So every
+       text ref #2260 generates is accepted, for example
+       `api:removed:<symbol containing a tab>`. Leading or trailing
+       whitespace, which #2260 never generates, is rejected. The whitespace
+       class is spelled out as the exact `str.isspace()` set, not `\s`, so
+       every validator agrees.
    - **`reason_code` is a closed enum** tied to #2260's detectors and
      partitioned by class:
 
@@ -122,40 +162,61 @@ already shows the shape that fits: independent raters produce bounded
 
      `other_breaking_change` covers breaking changes that #2260 records only
      as changelog/commit text (for example an HTTP route removal).
-   - **Detector reasons must cite the matching ref.** `removed_public_symbol`
-     needs an `api:removed:` breaking ref, `renamed_public_symbol` an
-     `api:renamed:` ref, `required_arg_promotion` an `api:required-arg:`
-     ref, and `deprecated_alias_only` an `api:deprecated-alias:` evidence ref.
-   - **Breaking refs follow the class.** `major` needs at least one breaking
-     ref. `minor` and `patch` must have none. `abstain` may cite breaking
-     refs when the evidence conflicts. Every class except `abstain` needs at
-     least one evidence ref.
+   - **Detector reasons must cite the matching list**, by text or index.
+     `removed_public_symbol` needs an `api:removed:` or
+     `#/removed_public_symbols/` breaking ref. The renamed and required-arg
+     reasons work the same way, and `deprecated_alias_only` needs an
+     `api:deprecated-alias:` or `#/deprecated_alias_only/` evidence ref.
+   - **Breaking refs follow the class.**
+     - `major` needs at least one breaking ref.
+     - `minor` and `patch` must have none, and may not cite an item of
+       #2260's three detector lists at all, by text or index.
+     - `abstain` may cite breaking refs when the evidence conflicts.
+     - Every class except `abstain` needs at least one evidence ref.
+   - A gateway or transport failure is not an observation. #2260's
+     `recorded_unavailable.json` (`status`/`detail`) is not representable. A
+     failed call must not be recorded as `abstain`, because `abstain` is a
+     rater's judgement. The client fails closed instead.
 5. **Envelope (`cwl_release_semver_receipt_envelope/v1`).**
    - It holds the schema digests, the evidence digest,
      `evidence_source_commit`, `gateway_contract`
      (`contextual-orchestrator-contract-v1`), `model_pool` fixed to
      `orchestrator/free`, and producer identity.
    - Each observation carries a `served_route` whose `route` is fixed to
-     `orchestrator/free`; the served agent, model and provider are audit-only.
-   - It carries the opaque receipt. Identical observation entries are
-     rejected.
-6. **Closed, bounded, non-degenerate.**
+     `orchestrator/free`. The gateway reports the other fields; they are
+     audit-only and never come from model output:
+     - `agent_id` and `model` use a gateway-identifier character set
+       (letters, digits and `. _ : / @ + -`), so `key=value` or sentence text
+       does not fit;
+     - `provider` is a lowercase provider name (`openrouter`, `nvidia_nim`,
+       and so on) with no model path or `:variant`.
+   - It carries the opaque receipt, whose `schema_id` must be a URI.
+     Identical observation entries are rejected.
+6. **Closed, bounded, portable.**
    - Every object schema sets `additionalProperties: false`.
-   - Arrays, strings and identifiers have explicit maximums. The
-     per-document byte caps (256 KiB evidence, 16 KiB observation, 1 MiB
-     envelope) are recorded in each schema's `$comment` for the step 2
-     consumer to enforce.
+   - Arrays, strings and identifiers have explicit maximums (see the
+     Co-ordinator defaults for the list caps).
+   - The per-document byte caps are recorded in each schema's `$comment`
+     for the step 2 consumer to enforce: evidence 4 MiB, observation
+     64 KiB, envelope 4 MiB.
+   - Patterns do not use `\s`, `\d` or `\w`, whose meaning differs between
+     ECMA-262 and Python `re`.
+   - Python's `$` also matches before a final newline. So every
+     end-anchored pattern is guarded by `not: {pattern: "\n"}` or by a
+     fixed `maxLength`. Before this change, `"0.2.0\n"` and a digest with a
+     trailing newline passed.
    - Repeated-digit SHA-256 values and commit ids (all zeros, all `f`, and
-     so on) are rejected with a portable `not`/`enum` rather than a
-     lookahead regex.
+     so on) are rejected. This is **cosmetic**: it catches placeholders, not
+     wrong digests. Integrity comes from the step 2 digest checks.
 7. **Immutability and byte stability.**
    - `MANIFEST.json` maps each schema `$id` to the SHA-256 of its exact file
      bytes.
    - A test pins the v1 digests separately and fails if a v1 file is edited
      or deleted. Any change is a new `v2/` directory with new `$id`s.
    - `.gitattributes` sets `-text` on the schema directory and the schema
-     test fixtures, and a test asserts the files contain no CR bytes, so the
-     digests survive `core.autocrlf` clones and Windows-built wheels.
+     test fixtures. Tests assert that the files contain no CR bytes and that
+     `git check-attr` reports `text` unset, so the digests survive
+     `core.autocrlf` clones and Windows-built wheels.
 8. **Local `$ref` resolution only.** The `$id` values are identifiers, not
    retrieval locations. Consumers must resolve `$ref` (the envelope refers
    to the observation schema by `$id`) through a local registry built from
@@ -169,30 +230,131 @@ already shows the shape that fits: independent raters produce bounded
    encoded as UTF-8. Receipt documents may contain numbers and need a full
    RFC 8785 implementation.
 
-## Differences from #2260's workflow tolerance (owner decisions)
+## Inputs #2260 accepts and v1 rejects (owner decisions)
 
-v1 accepts #2260's fixtures unchanged, but it is stricter than the inline
-validation in #2260's `release-tag.yml`. Each difference below is proposed,
-not decided. The owner may accept it, or ask for a v1 change before release:
+Each item below is proposed, not decided. The owner may accept it, or ask
+for a v1 change before release:
 
-1. **Closed pack.** #2260 ignores unknown keys; v1 rejects them.
-   Reason: unknown keys would reach raters without a contract.
-2. **All nine members required.** #2260 fills a missing `previous_version`
-   and tolerates omitted lists, and an omitted `api_surface_inspected` when a
-   finding exists. v1 requires all nine members, with explicit empty lists;
-   both #2260 fixtures already carry them. Reason: an omitted list is
-   ambiguous between "none found" and "not collected".
-3. **Canonical `previous_version`.** #2260's `parse_core_semver` tolerates
-   surrounding whitespace and a leading `v`. v1 requires the canonical
-   `X.Y.Z` that #2260's workflow itself emits.
-4. **Non-blank items in every list.** #2260 enforces non-blank strings only
-   for the three API-finding lists. v1 enforces them for all lists and caps
-   sizes (2000 characters per item, 256 items per list, 512 commit titles).
-5. **`commit:` and `pr:` refs** are v1 additions; #2260 defines no prefix
-   for commit or PR titles. An item containing a control character, such
-   as a newline, cannot be cited by text.
-6. **The reason-code set and its class mapping** are ours, tied to #2260's
-   detectors. Changing them after release needs v2.
+1. **Unknown keys.** #2260 ignores unknown keys, including `$schema`; v1's
+   pack is closed. Reason: unknown keys would reach raters without a
+   contract.
+2. **Omitted members.** #2260 fills a missing or empty `previous_version`
+   (`release-tag.yml:246-247`) and tolerates omitted lists. It also
+   tolerates an omitted `api_surface_inspected` when a finding exists. v1
+   requires all nine members with explicit lists; both #2260 fixtures carry
+   them. Reason: an omitted list is ambiguous between "none found" and "not
+   collected".
+3. **Null `pr_titles`, `changelog_fragments` and `commit_titles`.** #2260
+   never checks these three. It does reject null API lists and a null
+   `deprecated_alias_only` (`release-tag.yml:266-268`). v1 requires arrays.
+4. **Non-boolean `api_surface_inspected`** (for example `"yes"`). #2260
+   tests `is True`, so `"yes"` counts as "not inspected" and passes when a
+   finding exists. v1 requires a JSON boolean.
+5. **Non-string list items.** #2260 accepts any items in
+   `changelog_fragments`, `commit_titles`, `pr_titles` and
+   `deprecated_alias_only`: `{sha, title}` objects, numbers or `null`. Only
+   the three API lists must be non-blank strings (`noema_semver_bump.py:73-79`).
+   v1 requires strings in every list.
+6. **Blank items outside the API lists.** #2260 checks blankness only for
+   the three API lists. v1 rejects any item that `str.strip()` would empty.
+7. **Non-canonical `previous_version`.** #2260 keeps a non-empty pack
+   value, and `parse_core_semver` accepts `" 0.11.2 "`, `"v0.11.2"` and
+   `"vv0.11.2"` (`noema_semver_bump.py:28`). v1 requires canonical `X.Y.Z`.
+8. **The `--previous-version` override.** In #2260 the git-derived
+   `--previous-version` overrides the pack (`noema_semver_bump.py:110`,
+   `:144`; passed at `release-tag.yml:274`). v1 has no override. The raters
+   see the pack value, the producer writes the git-derived value, and step 2
+   rejects a mismatch (Decision 3).
+9. **Oversized packs.** #2260 has no size limits. v1 caps them (see the
+   Co-ordinator defaults below).
+10. **v1-only citation forms.** #2260 defines no `commit:`/`pr:` prefix and
+    no index refs. v1 accepts both in addition to every #2260 text ref.
+11. **The reason-code set and its class mapping** are ours, tied to #2260's
+    detectors. Changing them after release needs v2.
+
+## Co-ordinator defaults pending 성호's decision
+
+The Co-ordinator chose these after the second review, from realistic inputs
+that the earlier draft wrongly rejected. They are implemented in v1 as
+defaults and still need 성호's decision:
+
+1. **Size caps from realistic sizes.**
+   - This repository has no release tag, about 2,296 commits and 46
+     `CHANGELOG.d` fragments. The largest fragment is 7,728 characters, and
+     two exceed 2,000. A first-release pack with every commit and PR title
+     is about 270 KB.
+   - The caps are:
+
+     | List | Max items | Max item length (characters) |
+     |---|---|---|
+     | `changelog_fragments` | 1024 | 16384 |
+     | `commit_titles` | 4096 | 2000 |
+     | `pr_titles` | 4096 | 2000 |
+     | each API list and `deprecated_alias_only` | 1024 | 2000 |
+
+   - The document caps are 4 MiB for evidence, 64 KiB per observation and
+     4 MiB per envelope. Text refs may be up to 16405 characters (the
+     longest prefix plus 16384); long items are best cited by index.
+   - Blank items stay rejected.
+2. **Multi-line text stays citable.**
+   - Changelog fragments (25 of the 46 here are multi-line) may contain
+     `\n` and `\t`, like every other item.
+   - Any item can be cited by index (`#/<list>/<index>`).
+   - Text refs keep internal whitespace and control characters, so every
+     ref #2260 generates, including `api:removed:<symbol containing a tab>`,
+     is accepted.
+3. **`recorded_unavailable.json` coverage.** #2260's seventh fixture is
+   copied byte for byte and recorded in `PROVENANCE.json`. Tests show it is
+   not an observation, envelope or evidence pack, and that its
+   `status`/`detail` cannot be attached to an `abstain` observation.
+
+## Step 2 validator cross-checks
+
+The schemas cannot see across documents, so step 2's typed validator must
+perform these checks. Fixture cases that only these checks can reject are
+marked `step_2_check` in `tests/fixtures/release_semver_v1_conformance.json`,
+and a test ties each mark to this list.
+
+1. **`receipt_digest`**: `fast_mlsirm_receipt.sha256` equals the RFC 8785
+   SHA-256 of `fast_mlsirm_receipt.document`.
+2. **`evidence_digest`**: the envelope's `evidence_sha256` equals the
+   canonical SHA-256 of the pack actually supplied, and each observation's
+   `evidence_sha256` equals the envelope's.
+3. **`schema_digests`**: `schema_sha256.evidence` and
+   `schema_sha256.observation` equal the `MANIFEST.json` entries of the
+   installed release, and those equal the file bytes.
+4. **`citation_membership`**: every ref resolves to exactly one pack item.
+   - An index ref must be within the list's bounds.
+   - A text ref must equal `prefix + item.strip()` for an item of the list
+     its prefix names.
+   - An index ref and a text ref to the same item count as one citation.
+5. **`class_vs_breaking_evidence`**: a `minor` or `patch` observation is
+   rejected when any of the following holds:
+   - #2260's independent detectors fire, that is, the pack's
+     removed/renamed/required-arg lists are not empty;
+   - it cites, by text or index, a changelog/commit/PR item carrying a
+     breaking marker (`breaking:`, `!:`, `BREAKING CHANGE`). Today a patch
+     citing `changelog:breaking: ...` passes the schema.
+
+   The schema already rejects minor/patch citing a detector-list item
+   directly.
+6. **`previous_version_source`**: the pack's `previous_version` equals the
+   git-derived value #2260 passes as `--previous-version`.
+7. **`route_provenance`**: `served_route` agent, model and provider equal
+   the gateway's route report for that call, not model output.
+   - `model` is in the `orchestrator/free` catalogue for that gateway
+     contract.
+   - `provider` is an admitted free-pool source (`openai/...` or a `:paid`
+     variant never is).
+8. **`assignment_nonce`**: `assignment_ref` is the nonce issued for that
+   call and is unique within the envelope.
+9. **`producer_identity`**: `producer.package_version` and
+   `producer.source_commit` match the installed release, and
+   `evidence_source_commit` is the release commit.
+10. **`receipt_schema_id`**: `fast_mlsirm_receipt.schema_id` equals the
+    identity fast-mlsirm publishes (step 4).
+11. **`byte_caps`**: each document is within its `$comment` byte cap before
+    parsing.
 
 ## Unresolved owner decisions
 
@@ -216,13 +378,14 @@ answer, and later steps wait for the owner:
    accounts, provider families, blinding), is expected to follow from the
    fast-mlsirm#2035 estimator. The envelope allows 1 to 32 observations
    only as a bound, not as a required count.
-5. **The six differences listed above.**
+5. **The eleven inputs #2260 accepts and v1 rejects** (listed above).
+6. **The three Co-ordinator defaults** (listed above).
 
 ## Planned steps (each waits on the owner and fast-mlsirm#2035)
 
 1. This ADR, the v1 schemas, manifest, packaging and tests.
-2. Typed validation of evidence/observation documents, citation membership
-   and the evidence digest, with no transport.
+2. A typed validator that performs the step 2 cross-checks above, with no
+   transport.
 3. An `observe` client that sends a strict `json_schema` request to the
    provisioned `orchestrator/free` sidecar using only the gateway token
    file. No provider/model selection is exposed.
@@ -249,6 +412,9 @@ answer, and later steps wait for the owner:
 - **`{ref, text}` evidence items with our own identifiers inside the pack.**
   Rejected: #2260 is the owner's design and uses plain strings; our
   identifiers belong in the envelope.
+- **Text-only citations that forbid control characters.** Rejected: they
+  rejected refs #2260 itself generates and forced abstention on multi-line
+  fragments. Index refs plus #2260-exact text refs cover every item.
 - **Schemas inline in Python (as the CEFR slice does).** Rejected for this
   contract: consumers outside this package must verify the exact bytes, so
   standalone files with a digest manifest are more verifiable.
@@ -258,6 +424,8 @@ answer, and later steps wait for the owner:
 Preston-Werner, T. (2013). *Semantic Versioning 2.0.0*. https://semver.org/spec/v2.0.0.html
 
 JSON Schema. (2022). *JSON Schema: Draft 2020-12*. https://json-schema.org/draft/2020-12
+
+Bryan, P., Zyp, K., & Nottingham, M. (Eds.). (2013). *JavaScript Object Notation (JSON) Pointer* (RFC 6901). RFC Editor. https://www.rfc-editor.org/rfc/rfc6901
 
 Rundgren, A., Jordan, B., & Erdtman, S. (2020). *JSON Canonicalization Scheme (JCS)* (RFC 8785). RFC Editor. https://www.rfc-editor.org/rfc/rfc8785
 
