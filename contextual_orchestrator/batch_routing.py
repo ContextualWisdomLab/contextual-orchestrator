@@ -1172,6 +1172,7 @@ class ProviderEmbeddingBatchBackend:
                     job_id,
                     lease_seconds=self._claim_lease_seconds,
                     renew_until_epoch=deadline_epoch,
+                    renew_while=lambda: not self._closed.is_set(),
                 ) as execution_claim:
                     self._run_claimed_job(job_id, execution_claim)
             except ClaimNotAcquired:
@@ -1263,6 +1264,8 @@ class ProviderEmbeddingBatchBackend:
         requests = list(self._requests[job_id])
         try:
             vectors, prompt_tokens = self._runner(requests)
+            if self._closed.is_set():
+                execution_claim.mark_lost()
             execution_claim.ensure_owned()
             if time.time() >= self._execution_deadline(job_id):
                 self._publish_terminal(
