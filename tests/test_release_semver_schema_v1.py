@@ -40,9 +40,9 @@ ID_PREFIX = "https://github.com/ContextualWisdomLab/contextual-orchestrator/sche
 # these files must fail here. A schema change is a new ``v2/`` directory with
 # its own MANIFEST entries, never an edit to these bytes or to this table.
 PINNED_V1_SHA256 = {
-    "v1/evidence.schema.json": "727300e57699cb091a5301b3a255f80c27f709f01fd05814a0018869a84d7405",
-    "v1/observation.schema.json": "4264b462a24d472f5a1ee4c540116a61b5aa0bc9a25ef98d26c39b100049a091",
-    "v1/receipt_envelope.schema.json": "2bda1460ceda96c4431bd73db59e2dbacc4569e43144ce29abaadd4af744fd42",
+    "v1/evidence.schema.json": "47a8ac9ea09a31d585847dab77527b282e57e424f0eacaaddf9d0874edaa248a",
+    "v1/observation.schema.json": "d6bdce42dcc9f32f788d307177248194e67dac4850baaceed039db25e1933d56",
+    "v1/receipt_envelope.schema.json": "61ab4a625a6b0d7edb2f0fb899f003d37c4b6559415b1ae86aced39bab278ed6",
 }
 
 # The .github#2260 evidence-pack member names (tests/fixtures/noema_semver at
@@ -98,15 +98,16 @@ TEXT_REF_PREFIXES = {
 PYTHON_STRIP_WHITESPACE = "".join(
     character for character in map(chr, range(0x110000)) if character.isspace()
 )
-# Co-ordinator defaults pending the owner's decision (ADR 0137): list caps.
+# List caps (ADR 0137). Titles were raised to 32768 in review round 4 so an
+# untagged first release keeps every commit; producers never truncate.
 LIST_CAPS = {
     "changelog_fragments": (1024, 16384),
     "removed_public_symbols": (1024, 2000),
     "renamed_public_symbols": (1024, 2000),
     "required_arg_promotions": (1024, 2000),
     "deprecated_alias_only": (1024, 2000),
-    "commit_titles": (4096, 2000),
-    "pr_titles": (4096, 2000),
+    "commit_titles": (32768, 2000),
+    "pr_titles": (32768, 2000),
 }
 ADR_PATH = (
     ROOT_DIR
@@ -114,6 +115,20 @@ ADR_PATH = (
     / "planning"
     / "adrs"
     / "0137-release-semver-observation-schema.md"
+)
+EVIDENCE_BYTE_CAP = 4194304
+# fast-mlsirm schema identities seen on main at 00f5cb91 (ADR 0137, "Receipt
+# identity format"). fast-mlsirm#2035 has not published the receipt identity.
+FAST_MLSIRM_OBSERVED_SCHEMA_IDS = (
+    "fast-mlsirm.sampling-design.v1",
+    "fast-mlsirm.sampling-design.v2",
+    "fast-mlsirm.achieved-proportion.v1",
+    "fast-mlsirm.lineage_channel_weight_evidence.v1",
+    "fast-mlsirm-item-bank-report-v2",
+    (
+        "https://contextualwisdomlab.github.io/fast-mlsirm/contracts/"
+        "tepp-lineage-pair-criterion-posterior-v2.schema.json"
+    ),
 )
 GITATTRIBUTES_LINES = (
     "contextual_orchestrator/schemas/** -text",
@@ -671,11 +686,11 @@ def test_refs_resolve_from_the_local_registry_only() -> None:
     [
         (
             "evidence",
-            lambda d: d.__setitem__("commit_titles", [d["commit_titles"][0]] * 4097),
+            lambda d: d.__setitem__("commit_titles", [d["commit_titles"][0]] * 32769),
         ),
         (
             "evidence",
-            lambda d: d.__setitem__("pr_titles", [d["pr_titles"][0]] * 4097),
+            lambda d: d.__setitem__("pr_titles", [d["pr_titles"][0]] * 32769),
         ),
         (
             "evidence",
@@ -896,3 +911,93 @@ def test_schema_gap_cases_name_a_step_2_check_listed_in_the_adr() -> None:
         assert check in listed
     assert "citation_membership" in listed
     assert "class_vs_breaking_evidence" in listed
+
+
+def _receipt_schema_id_admitted(envelope: dict[str, Any], allowlist: Any) -> bool:
+    """Reference for step 2 check ``receipt_schema_id``: exact allowlist membership.
+
+    Fail closed: anything but a list of strings admits nothing, and an empty
+    allowlist rejects every envelope.
+    """
+    if not isinstance(allowlist, list) or not all(
+        isinstance(entry, str) for entry in allowlist
+    ):
+        return False
+    return envelope["fast_mlsirm_receipt"]["schema_id"] in allowlist
+
+
+def test_receipt_schema_id_allowlist_is_empty_until_step_4() -> None:
+    """The installed allowlist ships empty; step 4 adds fast-mlsirm's identity."""
+    assert _manifest()["receipt_schema_id_allowlist"] == []
+
+
+def test_check_10_rejects_every_envelope_while_the_allowlist_is_empty() -> None:
+    """A late step 4 blocks every envelope instead of letting any through."""
+    allowlist = _manifest()["receipt_schema_id_allowlist"]
+    envelopes = [
+        case["document"]
+        for case in _conformance_cases()
+        if case["schema"] == "receipt_envelope" and case["valid"]
+    ]
+    assert len(envelopes) > 1
+    for envelope in envelopes:
+        assert list(_validator("receipt_envelope").iter_errors(envelope)) == []
+        assert not _receipt_schema_id_admitted(envelope, allowlist)
+    for malformed in (None, {}, "fast-mlsirm.sampling-design.v1", [None]):
+        assert not _receipt_schema_id_admitted(envelopes[0], malformed)
+
+
+def test_verdict_looking_receipt_schema_id_is_never_admitted() -> None:
+    """The check-10 fixture passes the schema but not an exact-identity allowlist."""
+    (case,) = [
+        case
+        for case in _conformance()["cases"]
+        if case.get("step_2_check") == "receipt_schema_id"
+    ]
+    envelope = _apply(_valid_document("receipt_envelope"), case["ops"])
+    assert envelope["fast_mlsirm_receipt"]["schema_id"] == (
+        "verdict:major;confidence=0.99"
+    )
+    assert list(_validator("receipt_envelope").iter_errors(envelope)) == []
+    assert not _receipt_schema_id_admitted(envelope, [])
+    # Hypothetical step-4 pin, for illustration only.
+    pinned = ["fast-mlsirm.release-decision-receipt.v1"]
+    assert not _receipt_schema_id_admitted(envelope, pinned)
+    admitted = copy.deepcopy(envelope)
+    admitted["fast_mlsirm_receipt"]["schema_id"] = pinned[0]
+    assert _receipt_schema_id_admitted(admitted, pinned)
+
+
+@pytest.mark.parametrize("schema_id", FAST_MLSIRM_OBSERVED_SCHEMA_IDS)
+def test_fast_mlsirm_identity_forms_pass_the_schema_id_pattern(schema_id: str) -> None:
+    """Every identity form fast-mlsirm uses today fits, so #2035 cannot force v2."""
+    envelope = _valid_document("receipt_envelope")
+    envelope["fast_mlsirm_receipt"]["schema_id"] = schema_id
+    assert list(_validator("receipt_envelope").iter_errors(envelope)) == []
+
+
+def test_title_cap_fits_inside_the_document_byte_cap() -> None:
+    """32768 realistic titles per list stay under 4 MiB, so the byte cap stays a DoS bound."""
+    document = _valid_document("evidence")
+    document["commit_titles"] = [
+        f"fix(router): commit {index:05d} " + "x" * 80 for index in range(32768)
+    ]
+    assert list(_validator("evidence").iter_errors(document)) == []
+    encoded = json.dumps(document, ensure_ascii=False).encode("utf-8")
+    assert len(encoded) < EVIDENCE_BYTE_CAP
+
+
+def test_index_refs_reach_the_last_title() -> None:
+    """Index refs cover every title position up to the 32768-item cap, and no further."""
+    validator = _ref_validator()
+    assert validator.is_valid("#/commit_titles/32767")
+    assert validator.is_valid("#/pr_titles/32767")
+    assert not validator.is_valid("#/commit_titles/100000")
+
+
+def test_adr_states_producers_never_truncate() -> None:
+    """ADR 0137 records the fail-closed producer rule for oversized packs."""
+    adr = ADR_PATH.read_text(encoding="utf-8")
+    assert "never truncates" in adr
+    assert "fails closed" in adr
+    assert "32768" in adr
