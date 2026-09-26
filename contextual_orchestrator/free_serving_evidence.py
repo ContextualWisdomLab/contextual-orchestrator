@@ -16,17 +16,30 @@ This module replaces that rule with evidence from real responses:
 * **Evidence.** Every provider response the
   :class:`~contextual_orchestrator.orchestrator.ModelClient` reads (probe,
   preflight, served call) is classified from its provider-reported per-call
-  cost (:func:`classify_reported_cost`): ``cost == 0`` with an explicit
-  ``is_byok: false`` is ``FREE``; ``cost > 0`` is ``PAID``; anything missing,
-  malformed, negative, non-finite, or BYOK is ``UNKNOWN``. A 429
-  ``insufficient_quota`` / ``free_limit_reached`` error is ``EXHAUSTED``
-  (:func:`is_free_quota_exhausted_error`). Requests sent with an
-  ``Idempotency-Key`` carry no cost and are skipped entirely: they neither
-  promote nor demote (:func:`request_has_idempotency_key`).
+  cost (:func:`classify_reported_cost`): a JSON-number ``cost == 0`` with an
+  explicit ``is_byok: false`` is ``FREE``; ``cost > 0`` is ``PAID``; anything
+  missing, malformed (including numeric *strings*), negative, non-finite, or
+  BYOK is ``UNKNOWN``. A 429 ``insufficient_quota`` / ``free_limit_reached``
+  error is ``EXHAUSTED`` (:func:`is_free_quota_exhausted_error`); for
+  evidence-required providers an HTTP 402 is ``EXHAUSTED`` too, and every
+  other call that does not complete with a parsed cost (transport error,
+  non-2xx, unreadable body, aborted stream) is ``UNKNOWN``
+  (:func:`record_provider_error`, :func:`record_failed_call`). Requests sent
+  with an ``Idempotency-Key`` carry no cost and are skipped entirely: they
+  neither promote nor demote (:func:`request_has_idempotency_key`).
 * **Ledger.** :data:`FREE_SERVING_LEDGER` keeps the last verdict per
-  ``(provider, model)`` for this process. ``PAID`` and ``EXHAUSTED`` demote the
-  route out of every free selector immediately, and the demotion holds until
-  the next 00:00 UTC allowance reset (09:00 KST).
+  ``(provider, model)`` for this process, plus the time of the last demotion
+  as a separate field. ``PAID`` and ``EXHAUSTED`` demote the route out of
+  every free selector immediately, and the demotion holds until the next
+  allowance reset after it, whatever is recorded in between (a later
+  ``UNKNOWN`` cannot clear it and a ``FREE`` is rejected). A ``FREE`` verdict
+  also expires at the next reset, so an idle route never stays free across
+  resets without fresh evidence.
+* **Reset.** The allowance resets at 00:00 UTC (09:00 KST). The ledger places
+  the boundary :data:`ALLOWANCE_RESET_SKEW_SECONDS` (5 minutes) later, at
+  00:05 UTC, so a few minutes of clock skew between this host and the
+  provider cannot lift a demotion (or admit a probe) before the provider
+  actually reset (:func:`last_allowance_reset`).
 * **Admission.** :func:`free_serving_admitted` is the one predicate
   discovery-time selection (``model_discovery.general_free_serving_candidates``)
   and serving-time selection (``TaskOrchestrator._is_free_agent``) share, so
@@ -35,10 +48,14 @@ This module replaces that rule with evidence from real responses:
   without a ``FREE`` verdict they are paid, whatever the catalog says. Other
   providers keep catalog-price admission and are only demoted by explicit
   ``PAID``/``EXHAUSTED`` evidence.
-* **Re-admission.** A demoted route becomes *probe-due* again after the next
-  00:00 UTC free-allowance reset (:meth:`FreeServingLedger.probe_due`). It is
-  re-admitted only by fresh ``FREE`` evidence from that probe, never assumed
-  free (:func:`probe_free_candidates`).
+* **Re-admission.** A route whose last observation predates the latest
+  reset (demoted, unknown, or a stale ``FREE``) becomes *probe-due*
+  (:meth:`FreeServingLedger.probe_due`). It is re-admitted only by fresh
+  ``FREE`` evidence from that probe, never assumed free
+  (:func:`probe_free_candidates`). A probe can be billed once when the free
+  allowance is already used up and the organization has credits overflow on;
+  that single billed call demotes the route until the next reset and is an
+  accepted trade-off.
 
 Where the cost is read (documented; retrieved 2026-09-26): Experiential Labs
 stamps the settled USD cost on the response body as ``usage.cost`` for every
@@ -53,6 +70,12 @@ That a promotional free-tier call reports exactly ``cost: 0`` with
 live response. No public document names a per-call cost *response header*;
 :data:`REPORTED_COST_HEADER` stays ``None`` as an optional slot, and when set,
 header and body must agree or the call is ``UNKNOWN``.
+
+Known limitations (documented follow-ups): an hourly-allowance 429 holds the
+route until the next *daily* reset (conservative); nothing inside the
+orchestrator calls :func:`probe_free_candidates` yet (the review launcher
+does); admission and dispatch are not atomic, so a call admitted just before
+a concurrent demotion is still sent.
 """
 
 from __future__ import annotations
@@ -60,11 +83,12 @@ from __future__ import annotations
 import calendar
 import enum
 import math
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 COST_EVIDENCE_REQUIRED_PROVIDERS: frozenset[str] = frozenset({"experiential_labs"})
@@ -102,6 +126,22 @@ FREE_QUOTA_ERROR_MARKERS: frozenset[str] = frozenset(
 )
 """Documented 429 error markers for an exhausted free allowance."""
 
+PAYMENT_REQUIRED_STATUS = 402
+"""HTTP status that demotes an evidence-required route (credits/allowance gone)."""
+
+ALLOWANCE_RESET_SKEW_SECONDS = 300
+"""Clock-skew margin added to the 00:00 UTC allowance reset (5 minutes).
+
+The ledger treats 00:05 UTC as the reset so a host clock running a few minutes
+ahead of the provider cannot lift a demotion, expire the hold, or schedule a
+probe before the provider has actually reset. The cost is that a demotion
+observed between 00:00 and 00:05 UTC (host clock) is attributed to the previous
+allowance day and lifts at 00:05; the route then still needs a fresh ``FREE``
+probe before it is admitted.
+"""
+
+_HEADER_COST_PATTERN = re.compile(r"[0-9]{1,20}(?:\.[0-9]{1,20})?", re.ASCII)
+
 
 class CostVerdict(str, enum.Enum):
     """Classification of one provider response's reported cost."""
@@ -116,28 +156,33 @@ _DEMOTING_VERDICTS = frozenset({CostVerdict.PAID, CostVerdict.EXHAUSTED})
 
 
 def _parse_cost(value: object) -> Decimal | None:
-    """Return a finite non-negative cost, or ``None`` for anything else."""
-    if isinstance(value, bool) or value is None:
+    """Return a finite non-negative cost from a real JSON number, else ``None``.
+
+    Only ``int``/``float`` (never ``bool``) count: the documented ``usage.cost``
+    is a JSON number, so a string such as ``"0"`` or ``"0E+5"`` is malformed
+    evidence, not a zero charge.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     if isinstance(value, float):
         if not math.isfinite(value):
             return None
         parsed = Decimal(repr(value))
-    elif isinstance(value, int):
-        parsed = Decimal(value)
-    elif isinstance(value, str):
-        stripped = value.strip()
-        if not stripped or len(stripped) > 64:
-            return None
-        try:
-            parsed = Decimal(stripped)
-        except InvalidOperation:
-            return None
     else:
-        return None
-    if not parsed.is_finite() or parsed < 0:
+        parsed = Decimal(value)
+    if parsed < 0:
         return None
     return parsed
+
+
+def _parse_header_cost(value: object) -> Decimal | None:
+    """Parse an optional cost header: plain ASCII decimal digits only."""
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not _HEADER_COST_PATTERN.fullmatch(stripped):
+        return None
+    return Decimal(stripped)
 
 
 def _header_value(headers: object, name: str) -> object:
@@ -174,7 +219,7 @@ def _header_cost(headers: object) -> tuple[bool, Decimal | None]:
     raw = _header_value(headers, REPORTED_COST_HEADER)
     if raw is None:
         return False, None
-    return True, _parse_cost(raw)
+    return True, _parse_header_cost(raw)
 
 
 def classify_reported_cost(
@@ -275,9 +320,15 @@ def free_promotion_slugs(payload: object) -> frozenset[str]:
 
 
 def last_allowance_reset(now: float) -> float:
-    """Return the epoch seconds of the most recent 00:00 UTC (free-tier reset)."""
-    day = time.gmtime(now)
-    return float(calendar.timegm((day.tm_year, day.tm_mon, day.tm_mday, 0, 0, 0)))
+    """Return the epoch seconds of the most recent allowance reset boundary.
+
+    The provider resets at 00:00 UTC; the boundary is that midnight plus
+    :data:`ALLOWANCE_RESET_SKEW_SECONDS` (00:05 UTC), so ``now`` between 00:00
+    and 00:05 UTC still belongs to the previous allowance day.
+    """
+    day = time.gmtime(now - ALLOWANCE_RESET_SKEW_SECONDS)
+    midnight = calendar.timegm((day.tm_year, day.tm_mon, day.tm_mday, 0, 0, 0))
+    return float(midnight + ALLOWANCE_RESET_SKEW_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -289,48 +340,56 @@ class CostObservation:
 
 
 class FreeServingLedger:
-    """Thread-safe, process-local last-verdict store keyed by route identity."""
+    """Thread-safe, process-local verdict store keyed by route identity.
+
+    Two facts are kept per route: the last observation (verdict + time) and,
+    separately, the time of the last ``PAID``/``EXHAUSTED`` demotion. Keeping
+    the demotion apart means a later ``UNKNOWN`` (a failed call, a missing
+    cost) can replace the last verdict without erasing the hold.
+    """
 
     def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
         self._lock = threading.Lock()
         self._observations: dict[tuple[str, str], CostObservation] = {}
+        self._demoted_at: dict[tuple[str, str], float] = {}
         self._clock = clock
 
     def now(self) -> float:
         """Return the ledger clock's current time."""
         return float(self._clock())
 
-    def record(self, provider_name: str, model_id: str, verdict: CostVerdict) -> None:
-        """Record one verdict; ``UNKNOWN`` is kept only for evidence-required providers.
+    def _demotion_active(self, key: tuple[str, str], now: float) -> bool:
+        demoted_at = self._demoted_at.get(key)
+        return demoted_at is not None and demoted_at >= last_allowance_reset(now)
 
-        A provider that never reports per-call cost would otherwise overwrite
-        a meaningful ``PAID`` demotion with noise. For evidence-required
+    def record(self, provider_name: str, model_id: str, verdict: CostVerdict) -> bool:
+        """Record one verdict and return whether it was stored.
+
+        ``UNKNOWN`` is kept only for evidence-required providers: a provider
+        that never reports per-call cost would otherwise overwrite a
+        meaningful ``PAID`` demotion with noise. For evidence-required
         providers ``UNKNOWN`` replaces an earlier ``FREE`` (fail-closed).
 
-        A ``PAID``/``EXHAUSTED`` demotion holds until the next 00:00 UTC
-        allowance reset: a ``FREE`` verdict observed before that reset is
-        ignored, so a demoted route is re-admitted only by fresh ``FREE``
-        evidence gathered after the reset.
+        A ``PAID``/``EXHAUSTED`` demotion holds until the next allowance reset
+        after it (:func:`last_allowance_reset`): until then a ``FREE`` verdict
+        is rejected, however many other verdicts were recorded in between.
         """
         if not provider_name or not model_id:
-            return
+            return False
         if (
             verdict is CostVerdict.UNKNOWN
             and provider_name not in COST_EVIDENCE_REQUIRED_PROVIDERS
         ):
-            return
+            return False
         with self._lock:
             now = self.now()
             key = (provider_name, model_id)
-            current = self._observations.get(key)
-            if (
-                verdict is CostVerdict.FREE
-                and current is not None
-                and current.verdict in _DEMOTING_VERDICTS
-                and current.observed_at >= last_allowance_reset(now)
-            ):
-                return
+            if verdict is CostVerdict.FREE and self._demotion_active(key, now):
+                return False
+            if verdict in _DEMOTING_VERDICTS:
+                self._demoted_at[key] = now
             self._observations[key] = CostObservation(verdict, now)
+            return True
 
     def observation(self, provider_name: str, model_id: str) -> CostObservation | None:
         """Return the last observation for a route, if any."""
@@ -338,24 +397,48 @@ class FreeServingLedger:
             return self._observations.get((provider_name, model_id))
 
     def verdict(self, provider_name: str, model_id: str) -> CostVerdict | None:
-        """Return the last verdict for a route, if any."""
+        """Return the last verdict for a route, if any (it may be stale; see :meth:`free_now`)."""
         observation = self.observation(provider_name, model_id)
         return observation.verdict if observation is not None else None
+
+    def demoted(self, provider_name: str, model_id: str) -> bool:
+        """Return whether a ``PAID``/``EXHAUSTED`` demotion holds for the route now."""
+        with self._lock:
+            return self._demotion_active((provider_name, model_id), self.now())
+
+    def free_now(self, provider_name: str, model_id: str) -> bool:
+        """Return whether fresh ``FREE`` evidence (since the latest reset) admits the route."""
+        with self._lock:
+            now = self.now()
+            key = (provider_name, model_id)
+            observation = self._observations.get(key)
+            return (
+                observation is not None
+                and observation.verdict is CostVerdict.FREE
+                and observation.observed_at >= last_allowance_reset(now)
+                and not self._demotion_active(key, now)
+            )
 
     def probe_due(self, provider_name: str, model_id: str) -> bool:
         """Return whether a fresh cost probe may run for this route now.
 
-        Never-observed routes are due. A ``FREE`` route is not (served traffic
-        keeps re-checking it). A non-``FREE`` route becomes due again only after
-        the next 00:00 UTC allowance reset following its observation; until a
-        probe returns ``FREE`` it stays out of every free selector.
+        Never-observed routes are due. Otherwise a route is due only when its
+        last observation predates the latest allowance reset: that covers a
+        demotion or ``UNKNOWN`` from an earlier allowance day and a ``FREE``
+        verdict that expired at the reset. A route observed since the reset is
+        not due (a ``FREE`` one keeps being re-checked by served traffic; a
+        demoted or unknown one waits for the next reset, so a route is probed
+        at most once per allowance day).
         """
-        observation = self.observation(provider_name, model_id)
-        if observation is None:
-            return True
-        if observation.verdict is CostVerdict.FREE:
-            return False
-        return observation.observed_at < last_allowance_reset(self.now())
+        with self._lock:
+            now = self.now()
+            key = (provider_name, model_id)
+            observation = self._observations.get(key)
+            if observation is None:
+                return True
+            if self._demotion_active(key, now):
+                return False
+            return observation.observed_at < last_allowance_reset(now)
 
     def snapshot(self) -> dict[str, str]:
         """Return a JSON-safe ``"provider/model" -> verdict`` view for evidence files."""
@@ -366,9 +449,10 @@ class FreeServingLedger:
             }
 
     def reset(self) -> None:
-        """Forget every observation (tests and process-level resets)."""
+        """Forget every observation and demotion (tests and process-level resets)."""
         with self._lock:
             self._observations.clear()
+            self._demoted_at.clear()
 
 
 FREE_SERVING_LEDGER = FreeServingLedger()
@@ -404,15 +488,52 @@ def record_provider_error(
     request_headers: object = None,
     ledger: FreeServingLedger | None = None,
 ) -> CostVerdict | None:
-    """Record ``EXHAUSTED`` for a 429 free-quota error; ignore any other error."""
+    """Record the verdict an HTTP error response implies for its route.
+
+    * A 429 free-quota error is ``EXHAUSTED`` for every provider.
+    * For evidence-required providers an HTTP 402 (payment required) is
+      ``EXHAUSTED`` as well, and any other error status is ``UNKNOWN``: the
+      call did not complete with a parsed cost, so it cannot keep a ``FREE``.
+    * Other errors from other providers are ignored.
+
+    Returns the recorded verdict, or ``None`` when nothing was recorded.
+    """
     if request_has_idempotency_key(request_headers):
         return None
-    if not is_free_quota_exhausted_error(status, payload):
+    provider = provider_name or ""
+    if is_free_quota_exhausted_error(status, payload):
+        verdict = CostVerdict.EXHAUSTED
+    elif provider not in COST_EVIDENCE_REQUIRED_PROVIDERS:
+        return None
+    elif status == PAYMENT_REQUIRED_STATUS:
+        verdict = CostVerdict.EXHAUSTED
+    else:
+        verdict = CostVerdict.UNKNOWN
+    (ledger or FREE_SERVING_LEDGER).record(provider, model_id or "", verdict)
+    return verdict
+
+
+def record_failed_call(
+    provider_name: str | None,
+    model_id: str | None,
+    *,
+    request_headers: object = None,
+    ledger: FreeServingLedger | None = None,
+) -> CostVerdict | None:
+    """Record ``UNKNOWN`` for an evidence-required call that produced no parsed cost.
+
+    Used for transport errors, unreadable or truncated bodies, and streams that
+    raised or were abandoned before the final usage frame. Other providers
+    are unaffected. Returns the recorded verdict, or ``None``.
+    """
+    if request_has_idempotency_key(request_headers):
+        return None
+    if (provider_name or "") not in COST_EVIDENCE_REQUIRED_PROVIDERS:
         return None
     (ledger or FREE_SERVING_LEDGER).record(
-        provider_name or "", model_id or "", CostVerdict.EXHAUSTED
+        provider_name or "", model_id or "", CostVerdict.UNKNOWN
     )
-    return CostVerdict.EXHAUSTED
+    return CostVerdict.UNKNOWN
 
 
 def free_serving_admitted(
@@ -424,13 +545,21 @@ def free_serving_admitted(
 ) -> bool:
     """Return whether a route may serve a free selector right now.
 
-    * Evidence-required providers: only a last verdict of ``FREE``.
-    * Every other provider: catalog-free and not demoted by ``PAID``/``EXHAUSTED``.
+    * Evidence-required providers: only a ``FREE`` verdict recorded since the
+      latest allowance reset, with no demotion held since then.
+    * Every other provider: catalog-free, last verdict not ``PAID``/``EXHAUSTED``,
+      and no demotion held since the latest reset.
     """
-    verdict = (ledger or FREE_SERVING_LEDGER).verdict(provider_name or "", model_id or "")
-    if (provider_name or "") in COST_EVIDENCE_REQUIRED_PROVIDERS:
-        return verdict is CostVerdict.FREE
-    return bool(catalog_free) and verdict not in _DEMOTING_VERDICTS
+    store = ledger or FREE_SERVING_LEDGER
+    provider = provider_name or ""
+    model = model_id or ""
+    if provider in COST_EVIDENCE_REQUIRED_PROVIDERS:
+        return store.free_now(provider, model)
+    return (
+        bool(catalog_free)
+        and store.verdict(provider, model) not in _DEMOTING_VERDICTS
+        and not store.demoted(provider, model)
+    )
 
 
 def is_free_nominated(model: object) -> bool:

@@ -52,7 +52,14 @@ def _discovered(provider: str, model_id: str, *, free: bool = True) -> Discovere
     [
         ({"cost": 0, "is_byok": False}, CostVerdict.FREE),
         ({"cost": 0.0, "is_byok": False}, CostVerdict.FREE),
-        ({"cost": "0", "is_byok": False}, CostVerdict.FREE),
+        # Only real JSON numbers count: numeric strings are malformed evidence.
+        ({"cost": "0", "is_byok": False}, CostVerdict.UNKNOWN),
+        ({"cost": "0E+5", "is_byok": False}, CostVerdict.UNKNOWN),
+        ({"cost": " 0 ", "is_byok": False}, CostVerdict.UNKNOWN),
+        ({"cost": "\u0660", "is_byok": False}, CostVerdict.UNKNOWN),  # ARABIC-INDIC ZERO
+        ({"cost": "0.5", "is_byok": False}, CostVerdict.UNKNOWN),
+        ({"cost": 0e5, "is_byok": False}, CostVerdict.FREE),  # a JSON number 0E+5
+        ({"cost": False, "is_byok": False}, CostVerdict.UNKNOWN),
         ({"cost": 0.0016, "is_byok": False}, CostVerdict.PAID),
         ({"cost": 1}, CostVerdict.PAID),
         # BYOK settles cost 0 while the upstream provider bills the account.
@@ -90,6 +97,11 @@ def test_configured_cost_header_must_parse_and_agree_with_the_body(monkeypatch) 
     assert classify_reported_cost(free_body, {"x-test-call-cost": "0"}) is CostVerdict.FREE
     assert classify_reported_cost(free_body, {"x-test-call-cost": "0.01"}) is CostVerdict.UNKNOWN
     assert classify_reported_cost(free_body, {"x-test-call-cost": "n/a"}) is CostVerdict.UNKNOWN
+    for malformed in ("0E+5", "\u0660", "-0", "0x0", "", "0."):
+        assert (
+            classify_reported_cost(free_body, {"x-test-call-cost": malformed})
+            is CostVerdict.UNKNOWN
+        ), malformed
     assert classify_reported_cost({"is_byok": False}, {"x-test-call-cost": "0.5"}) is CostVerdict.PAID
     assert classify_reported_cost({"is_byok": False}, {"x-test-call-cost": "0"}) is CostVerdict.FREE
     assert classify_reported_cost({}, {"x-test-call-cost": "0"}) is CostVerdict.UNKNOWN
@@ -215,7 +227,9 @@ def test_model_client_records_evidence_from_every_completed_call(monkeypatch) ->
 # --- Round-2 decisions: promotions nomination, 429 demotion, UTC reset, idempotency ---
 
 _UTC_2026_09_26_1000 = 1790416800.0  # 2026-09-26T10:00:00Z (19:00 KST)
-_UTC_2026_09_27_0000 = 1790467200.0  # 2026-09-27T00:00:00Z (09:00 KST), next reset
+_UTC_2026_09_27_0000 = 1790467200.0  # 2026-09-27T00:00:00Z (09:00 KST), provider reset
+_SKEW = evidence.ALLOWANCE_RESET_SKEW_SECONDS
+_NEXT_RESET = _UTC_2026_09_27_0000 + _SKEW  # 00:05 UTC: the ledger's skew-safe boundary
 
 
 def _quota_body(code: str) -> dict[str, object]:
@@ -230,10 +244,15 @@ class _Clock:
         return self.now
 
 
-def test_utc_reset_boundary_is_midnight_utc() -> None:
-    assert evidence.last_allowance_reset(_UTC_2026_09_26_1000) == _UTC_2026_09_27_0000 - 86400
-    assert evidence.last_allowance_reset(_UTC_2026_09_27_0000) == _UTC_2026_09_27_0000
-    assert evidence.last_allowance_reset(_UTC_2026_09_27_0000 - 1) == _UTC_2026_09_27_0000 - 86400
+def test_utc_reset_boundary_is_midnight_utc_plus_a_skew_margin() -> None:
+    assert _SKEW == 300
+    previous = _NEXT_RESET - 86400
+    assert evidence.last_allowance_reset(_UTC_2026_09_26_1000) == previous
+    # 00:00-00:05 UTC on the host clock still belongs to the previous allowance day.
+    assert evidence.last_allowance_reset(_UTC_2026_09_27_0000) == previous
+    assert evidence.last_allowance_reset(_NEXT_RESET - 1) == previous
+    assert evidence.last_allowance_reset(_NEXT_RESET) == _NEXT_RESET
+    assert evidence.last_allowance_reset(_UTC_2026_09_27_0000 - 1) == previous
 
 
 @pytest.mark.parametrize(
@@ -273,14 +292,15 @@ def test_quota_exhaustion_demotes_until_the_next_utc_reset_and_needs_a_free_prob
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     assert ledger.probe_due(EXPERIENTIAL, "m") is False
 
-    # A zero-cost reply before the reset cannot undo the demotion.
-    clock.now = _UTC_2026_09_27_0000 - 1
-    record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
-    assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.EXHAUSTED
-    assert ledger.probe_due(EXPERIENTIAL, "m") is False
+    # A zero-cost reply before the reset (and inside the skew margin) cannot undo it.
+    for before_reset in (_UTC_2026_09_27_0000 - 1, _UTC_2026_09_27_0000 + 1, _NEXT_RESET - 1):
+        clock.now = before_reset
+        record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
+        assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.EXHAUSTED
+        assert ledger.probe_due(EXPERIENTIAL, "m") is False
 
-    # After 00:00 UTC the route is probe-due but still not free until evidence.
-    clock.now = _UTC_2026_09_27_0000 + 1
+    # After 00:05 UTC the route is probe-due but still not free until evidence.
+    clock.now = _NEXT_RESET + 1
     assert ledger.probe_due(EXPERIENTIAL, "m") is True
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
@@ -293,22 +313,122 @@ def test_paid_demotion_also_holds_until_the_reset_for_catalog_free_providers() -
     record_reported_cost("openrouter", "m:free", {"cost": 0.2, "is_byok": False}, ledger=ledger)
     record_reported_cost("openrouter", "m:free", {"cost": 0, "is_byok": False}, ledger=ledger)
     assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is False
-    clock.now = _UTC_2026_09_27_0000 + 60
+    clock.now = _NEXT_RESET + 60
     record_reported_cost("openrouter", "m:free", {"cost": 0, "is_byok": False}, ledger=ledger)
     assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is True
 
 
-def test_non_quota_errors_do_not_touch_the_ledger() -> None:
+def test_provider_errors_never_leave_an_evidence_required_route_free() -> None:
+    """Non-quota errors are UNKNOWN for Experiential and ignored for other providers."""
     ledger = FreeServingLedger()
+    for status, payload in (
+        (429, {"error": {"code": "rate_limit_exceeded"}}),
+        (503, None),
+        (500, {}),
+    ):
+        record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
+        assert (
+            evidence.record_provider_error(EXPERIENTIAL, "m", status, payload, ledger=ledger)
+            is CostVerdict.UNKNOWN
+        )
+        assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+
+    record_reported_cost("openrouter", "m:free", {"cost": 0, "is_byok": False}, ledger=ledger)
+    for status in (402, 429, 500, 503):
+        assert evidence.record_provider_error("openrouter", "m:free", status, {}, ledger=ledger) is None
+    assert ledger.verdict("openrouter", "m:free") is CostVerdict.FREE
+    assert evidence.record_failed_call("openrouter", "m:free", ledger=ledger) is None
+    assert ledger.verdict("openrouter", "m:free") is CostVerdict.FREE
+
+
+def test_http_402_demotes_an_evidence_required_route_until_the_reset() -> None:
+    clock = _Clock(_UTC_2026_09_26_1000)
+    ledger = FreeServingLedger(clock=clock)
     record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
     assert (
         evidence.record_provider_error(
-            EXPERIENTIAL, "m", 429, {"error": {"code": "rate_limit_exceeded"}}, ledger=ledger
+            EXPERIENTIAL, "m", 402, {"error": {"code": "insufficient_credits"}}, ledger=ledger
         )
-        is None
+        is CostVerdict.EXHAUSTED
     )
-    assert evidence.record_provider_error(EXPERIENTIAL, "m", 503, None, ledger=ledger) is None
+    assert ledger.demoted(EXPERIENTIAL, "m") is True
+    record_reported_cost(EXPERIENTIAL, "m", {"cost": 0, "is_byok": False}, ledger=ledger)
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+    clock.now = _NEXT_RESET
+    assert ledger.demoted(EXPERIENTIAL, "m") is False
+    assert ledger.probe_due(EXPERIENTIAL, "m") is True
+
+
+@pytest.mark.parametrize("demotion", [CostVerdict.PAID, CostVerdict.EXHAUSTED])
+def test_a_demotion_holds_through_later_unknown_verdicts_until_the_reset(demotion) -> None:
+    """PAID/EXHAUSTED, UNKNOWN, FREE on one UTC day must end NOT admitted (R1)."""
+    clock = _Clock(_UTC_2026_09_26_1000)
+    ledger = FreeServingLedger(clock=clock)
+    ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
+    clock.now += 60
+    assert ledger.record(EXPERIENTIAL, "m", demotion) is True
+    clock.now += 60
+    assert ledger.record(EXPERIENTIAL, "m", CostVerdict.UNKNOWN) is True
+    clock.now += 60
+    assert ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE) is False
+    assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.UNKNOWN
+    assert ledger.demoted(EXPERIENTIAL, "m") is True
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+    assert ledger.probe_due(EXPERIENTIAL, "m") is False
+
+    # Still held just before the skew-safe boundary...
+    clock.now = _NEXT_RESET - 1
+    assert ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE) is False
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+    # ...and lifted after it, but only fresh FREE evidence re-admits the route.
+    clock.now = _NEXT_RESET + 1
+    assert ledger.probe_due(EXPERIENTIAL, "m") is True
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+    assert ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE) is True
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is True
+
+
+def test_catalog_free_providers_also_keep_the_demotion_hold() -> None:
+    clock = _Clock(_UTC_2026_09_26_1000)
+    ledger = FreeServingLedger(clock=clock)
+    ledger.record("openrouter", "m:free", CostVerdict.PAID)
+    assert ledger.record("openrouter", "m:free", CostVerdict.FREE) is False
+    assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is False
+    clock.now = _NEXT_RESET + 1
+    # No fresh evidence: the last verdict is still PAID, so it stays out.
+    assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is False
+    assert ledger.record("openrouter", "m:free", CostVerdict.FREE) is True
+    assert free_serving_admitted("openrouter", "m:free", catalog_free=True, ledger=ledger) is True
+
+
+def test_a_demotion_inside_the_skew_window_lifts_at_the_boundary() -> None:
+    """Documented trade-off of the 5-minute margin."""
+    clock = _Clock(_UTC_2026_09_27_0000 + 120)  # 00:02 UTC, host clock
+    ledger = FreeServingLedger(clock=clock)
+    ledger.record(EXPERIENTIAL, "m", CostVerdict.PAID)
+    assert ledger.demoted(EXPERIENTIAL, "m") is True
+    clock.now = _NEXT_RESET
+    assert ledger.demoted(EXPERIENTIAL, "m") is False
+    assert ledger.probe_due(EXPERIENTIAL, "m") is True
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+
+
+def test_free_evidence_expires_at_the_next_reset() -> None:
+    """An idle route cannot stay FREE across an allowance reset."""
+    clock = _Clock(_UTC_2026_09_26_1000)
+    ledger = FreeServingLedger(clock=clock)
+    ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is True
+    assert ledger.probe_due(EXPERIENTIAL, "m") is False
+    clock.now = _NEXT_RESET - 1
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is True
+    clock.now = _NEXT_RESET
     assert ledger.verdict(EXPERIENTIAL, "m") is CostVerdict.FREE
+    assert ledger.free_now(EXPERIENTIAL, "m") is False
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
+    assert ledger.probe_due(EXPERIENTIAL, "m") is True
+    ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE)
+    assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=False, ledger=ledger) is True
 
 
 @pytest.mark.parametrize(
@@ -402,19 +522,31 @@ def test_model_client_demotes_a_route_on_a_served_429_free_quota_error(monkeypat
     assert orchestrator_module._http_error_payload(error) == _quota_body("insufficient_quota")
 
 
-def test_model_client_ignores_non_quota_http_errors(monkeypatch) -> None:
+def test_model_client_non_quota_http_errors_are_unknown_only_for_evidence_routes(
+    monkeypatch,
+) -> None:
     agent = _agent()
+    other = ModelAgent(
+        id="openrouter_free",
+        model="vendor/model:free",
+        base_url="https://openrouter.ai/api/v1",
+        provider_name="openrouter",
+        tags=("chat", "cost:free"),
+    )
     client = ModelClient()
     record_reported_cost(EXPERIENTIAL, agent.model, {"cost": 0, "is_byok": False})
+    record_reported_cost("openrouter", other.model, {"cost": 0, "is_byok": False})
 
     def _raise(*_args, **_kwargs):
         raise _http_error(503, {"error": {"code": "overloaded"}})
 
     monkeypatch.setattr(client, "_open_provider", _raise)
-    payload = {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]}
-    with pytest.raises(urllib.error.HTTPError):
-        client._send(agent, payload)
-    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.FREE
+    for route in (agent, other):
+        payload = {"model": route.model, "messages": [{"role": "user", "content": "hi"}]}
+        with pytest.raises(urllib.error.HTTPError):
+            client._send(route, payload)
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
+    assert FREE_SERVING_LEDGER.verdict("openrouter", other.model) is CostVerdict.FREE
 
 
 def test_serving_hooks_skip_idempotency_key_requests() -> None:
@@ -564,8 +696,272 @@ def test_probe_free_candidates_probes_only_nominated_due_evidence_routes() -> No
     evidence.probe_free_candidates(rows, probe=_probe, max_probes=4, ledger=ledger)
     assert seen == ["over-budget"]
 
-    # After 00:00 UTC every non-FREE route is due again; FREE is not re-probed.
+    # Inside the 5-minute skew margin nothing is due yet.
     seen.clear()
     clock.now = _UTC_2026_09_27_0000 + 5
     evidence.probe_free_candidates(rows, probe=_probe, max_probes=10, ledger=ledger)
-    assert seen == ["exhausted", "raises", "silent", "over-budget"]
+    assert seen == []
+
+    # After the 00:05 UTC boundary every route is due again, including the FREE
+    # one: its evidence expired at the reset.
+    clock.now = _NEXT_RESET + 5
+    evidence.probe_free_candidates(rows, probe=_probe, max_probes=10, ledger=ledger)
+    assert seen == ["free-now", "exhausted", "raises", "silent", "over-budget"]
+
+
+# --- R2/R3: every chat transport records evidence, including failures ---------
+
+
+class _RawResponse(_FakeResponse):
+    """A provider response whose body bytes are given verbatim (e.g. truncated)."""
+
+    def __init__(self, raw: bytes) -> None:
+        self._stream = io.BytesIO(raw)
+        self.headers = {}
+        self.status = 200
+
+
+class _SSEResponse:
+    def __init__(self, lines: list[bytes], *, fail_after: int | None = None) -> None:
+        self._lines = lines
+        self._fail_after = fail_after
+        self.headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def __iter__(self):
+        for index, line in enumerate(self._lines):
+            if self._fail_after is not None and index >= self._fail_after:
+                raise OSError("connection reset mid-stream")
+            yield line
+
+
+_FREE_BODY = {"choices": [{"message": {"content": "OK"}}], "usage": {"cost": 0, "is_byok": False}}
+_PAID_BODY = {"choices": [{"message": {"content": "OK"}}], "usage": {"cost": 0.004, "is_byok": False}}
+
+
+def _sse(usage: dict[str, object] | None) -> list[bytes]:
+    lines = [b'data: {"choices":[{"delta":{"content":"O"}}]}',
+             b'data: {"choices":[{"delta":{"content":"K"},"finish_reason":"stop"}]}']
+    if usage is not None:
+        lines.append(b"data: " + json.dumps({"choices": [], "usage": usage}).encode("utf-8"))
+    lines.append(b"data: [DONE]")
+    return lines
+
+
+def _free_route(agent: ModelAgent) -> None:
+    FREE_SERVING_LEDGER.reset()
+    record_reported_cost(agent.provider_name, agent.model, {"cost": 0, "is_byok": False})
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is True
+
+
+def _open_returning(client, monkeypatch, factory) -> None:
+    monkeypatch.setattr(client, "_open_model_provider", lambda *_a, **_k: factory())
+
+
+def _open_raising(client, monkeypatch, error: BaseException) -> None:
+    def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(client, "_open_provider", _raise)
+
+
+_FAILURES = {
+    "truncated_json": (lambda: _RawResponse(b'{"choices":[{"message":{"content":"OK"}}],"usage":{"cost":0.4')),
+    "non_json": (lambda: _RawResponse(b"<html>bad gateway</html>")),
+}
+
+
+@pytest.mark.parametrize("failure", sorted(_FAILURES))
+def test_send_records_unknown_for_an_unreadable_body(monkeypatch, failure) -> None:
+    agent = _agent()
+    client = ModelClient()
+    _free_route(agent)
+    _open_returning(client, monkeypatch, _FAILURES[failure])
+    with pytest.raises(Exception):
+        client._send(agent, {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]})
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_http_error(402, {"error": {"code": "insufficient_credits"}}), CostVerdict.EXHAUSTED),
+        (_http_error(500, {}), CostVerdict.UNKNOWN),
+        (urllib.error.URLError("connection refused"), CostVerdict.UNKNOWN),
+        (TimeoutError("read timed out"), CostVerdict.UNKNOWN),
+    ],
+    ids=["http_402", "http_500", "transport", "timeout"],
+)
+def test_send_records_failed_calls(monkeypatch, error, expected) -> None:
+    agent = _agent()
+    client = ModelClient()
+    _free_route(agent)
+    _open_raising(client, monkeypatch, error)
+    with pytest.raises(type(error)):
+        client._send(agent, {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]})
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
+    assert FREE_SERVING_LEDGER.demoted(EXPERIENTIAL, agent.model) is (
+        expected is CostVerdict.EXHAUSTED
+    )
+
+
+def _stream(client: ModelClient, agent: ModelAgent):
+    return client.stream_chat(agent, [{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        ({"cost": 0, "is_byok": False}, CostVerdict.FREE),
+        ({"cost": 0.0021, "is_byok": False}, CostVerdict.PAID),
+        ({"cost": "0", "is_byok": False}, CostVerdict.UNKNOWN),
+        (None, CostVerdict.UNKNOWN),  # stream ended without a usage frame
+    ],
+)
+def test_stream_records_the_final_usage_frame(monkeypatch, usage, expected) -> None:
+    agent = _agent()
+    client = ModelClient()
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+    _open_returning(client, monkeypatch, lambda: _SSEResponse(_sse(usage)))
+    assert "".join(_stream(client, agent)) == "OK"
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is (expected is CostVerdict.FREE)
+
+
+def test_stream_records_unknown_when_it_fails_mid_stream(monkeypatch) -> None:
+    agent = _agent()
+    client = ModelClient()
+    _free_route(agent)
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+    _open_returning(
+        client, monkeypatch, lambda: _SSEResponse(_sse({"cost": 0, "is_byok": False}), fail_after=1)
+    )
+    received: list[str] = []
+    with pytest.raises(Exception):
+        for delta in _stream(client, agent):
+            received.append(delta)
+    assert received == ["O"]
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
+
+
+def test_stream_records_unknown_when_the_consumer_abandons_it(monkeypatch) -> None:
+    agent = _agent()
+    client = ModelClient()
+    _free_route(agent)
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+    _open_returning(
+        client, monkeypatch, lambda: _SSEResponse(_sse({"cost": 0, "is_byok": False}))
+    )
+    stream = _stream(client, agent)
+    assert next(stream) == "O"
+    stream.close()  # GeneratorExit before the final usage frame
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.UNKNOWN
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_http_error(402, {"error": {"code": "insufficient_credits"}}), CostVerdict.EXHAUSTED),
+        (_http_error(429, _quota_body("free_limit_reached")), CostVerdict.EXHAUSTED),
+        (_http_error(503, {}), CostVerdict.UNKNOWN),
+        (urllib.error.URLError("connection refused"), CostVerdict.UNKNOWN),
+    ],
+    ids=["http_402", "quota_429", "http_503", "transport"],
+)
+def test_stream_records_open_failures(monkeypatch, error, expected) -> None:
+    agent = _agent()
+    client = ModelClient()
+    _free_route(agent)
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+    _open_raising(client, monkeypatch, error)
+    with pytest.raises(Exception):
+        list(_stream(client, agent))
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
+
+
+def _passthrough(client: ModelClient, agent: ModelAgent) -> dict[str, object]:
+    return client.proxy_send_once(
+        agent,
+        "chat/completions",
+        {"model": agent.model, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [(_FREE_BODY, CostVerdict.FREE), (_PAID_BODY, CostVerdict.PAID)],
+)
+def test_proxy_send_once_records_evidence_through_send_raw(monkeypatch, body, expected) -> None:
+    agent = _agent()
+    client = ModelClient()
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+    _open_returning(client, monkeypatch, lambda: _FakeResponse(body))
+    assert _passthrough(client, agent)["usage"] == body["usage"]
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is (expected is CostVerdict.FREE)
+
+
+@pytest.mark.parametrize(
+    ("setup", "expected"),
+    [
+        ("truncated_json", CostVerdict.UNKNOWN),
+        ("http_402", CostVerdict.EXHAUSTED),
+        ("http_500", CostVerdict.UNKNOWN),
+        ("transport", CostVerdict.UNKNOWN),
+    ],
+)
+def test_proxy_send_once_records_failed_calls(monkeypatch, setup, expected) -> None:
+    agent = _agent()
+    client = ModelClient()
+    _free_route(agent)
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+    if setup == "truncated_json":
+        _open_returning(client, monkeypatch, _FAILURES["truncated_json"])
+    else:
+        error = {
+            "http_402": _http_error(402, {"error": {"code": "insufficient_credits"}}),
+            "http_500": _http_error(500, {}),
+            "transport": urllib.error.URLError("connection refused"),
+        }[setup]
+        _open_raising(client, monkeypatch, error)
+    with pytest.raises(Exception):
+        _passthrough(client, agent)
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is expected
+    assert TaskOrchestrator([agent])._is_free_agent(agent) is False
+
+
+def test_send_raw_records_evidence_directly(monkeypatch) -> None:
+    agent = _agent()
+    client = ModelClient()
+    _open_returning(client, monkeypatch, lambda: _FakeResponse(_FREE_BODY))
+    assert client._send_raw(agent, "chat/completions", {"model": agent.model})["usage"] == (
+        _FREE_BODY["usage"]
+    )
+    assert FREE_SERVING_LEDGER.verdict(EXPERIENTIAL, agent.model) is CostVerdict.FREE
+
+
+def test_failure_recording_never_masks_the_provider_error(monkeypatch) -> None:
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    agent = _agent()
+    client = ModelClient()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(orchestrator_module, "record_failed_call", _boom)
+    monkeypatch.setattr(orchestrator_module, "record_provider_error", _boom)
+    for error in (urllib.error.URLError("refused"), _http_error(500, {})):
+        _open_raising(client, monkeypatch, error)
+        with pytest.raises(type(error)):
+            client._send(agent, {"model": agent.model, "messages": []})
