@@ -51,6 +51,8 @@ from .privacy_policy_analysis import (
 )
 from .reasoning_effort_profile import default_role_effort_catalog
 from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
+from .spend_guard import SpendGuard, SpendGuardConfig, VirtualKeyError
+from .spend_metering import JsonlSpendLedgerStore, write_run_usage_summary
 
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
@@ -748,6 +750,10 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in discovered
         if not model.evidence_only and is_discovered_chat_candidate(model)
     ]
+    # One price catalogue for spend admission and usage records (ADR 0138).
+    spend_guard = getattr(orchestrator, "spend_guard", None)
+    if spend_guard is not None:
+        refresh_price_book(chat_models, spend_guard.price_book)
     configured_gateway_probe_required = any(
         model.provider_name == "configured_gateway"
         and get_credential(model.credential_name) is not None
@@ -1081,6 +1087,20 @@ def main(argv: list[str] | None = None) -> None:
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
+    parser.add_argument("--run-max-cost-usd", type=float, default=None,
+                        help="Per-run in-memory USD spend cap checked before every provider call "
+                             "(default: no per-run cap; ADR 0138).")
+    parser.add_argument("--tenant-id", default=None,
+                        help="Trusted tenant id the CLI run is metered and budgeted under "
+                             "(default: 'default').")
+    parser.add_argument("--virtual-key-credential", default=None,
+                        help="KV credential name holding a virtual tenant key; its tenant and "
+                             "budget apply to the run (requires --spend-ledger-path).")
+    parser.add_argument("--spend-ledger-path", default=None,
+                        help="Append-only JSONL spend ledger for usage records, virtual keys, "
+                             "and tenant budgets (default: in-memory only).")
+    parser.add_argument("--run-usage-summary", default=None,
+                        help="Write the per-run usage summary JSON artifact to this path.")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument(
@@ -1135,6 +1155,24 @@ def main(argv: list[str] | None = None) -> None:
     )
     _add_log_level_arguments(parser)
     args = parser.parse_args(arguments)
+    try:
+        spend_guard = SpendGuard(
+            config=SpendGuardConfig.from_values(
+                run_max_cost_usd=args.run_max_cost_usd,
+            ),
+            store=(
+                JsonlSpendLedgerStore(args.spend_ledger_path)
+                if args.spend_ledger_path
+                else None
+            ),
+        )
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    virtual_key = None
+    if args.virtual_key_credential:
+        virtual_key = get_credential(args.virtual_key_credential)
+        if virtual_key is None:
+            parser.error(f"virtual key credential {args.virtual_key_credential!r} is not configured")
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -1155,6 +1193,7 @@ def main(argv: list[str] | None = None) -> None:
         rate_limit_wait_seconds=args.rate_limit_wait_seconds,
         rate_limit_unknown_cooldown_seconds=args.rate_limit_unknown_cooldown_seconds,
         allow_empty_agents=args.auto_discover_model_agents,
+        spend_guard=spend_guard,
         role_effort_catalog=(
             default_role_effort_catalog() if args.role_effort_catalog == "default" else None
         ),
@@ -1286,7 +1325,19 @@ def main(argv: list[str] | None = None) -> None:
     if not args.prompt:
         parser.error("prompt is required unless --serve is set")
 
-    result = orchestrator.complete([{"role": "user", "content": args.prompt}], mode=args.mode)
+    try:
+        spend_guard.resolve_identity(tenant_id=args.tenant_id, virtual_key=virtual_key)
+    except (VirtualKeyError, ValueError) as exc:
+        parser.error(str(exc))
+    with spend_guard.tenant_context(tenant_id=args.tenant_id, virtual_key=virtual_key):
+        try:
+            result = orchestrator.complete(
+                [{"role": "user", "content": args.prompt}], mode=args.mode
+            )
+        finally:
+            summary = spend_guard.last_run_summary()
+            if args.run_usage_summary and summary is not None:
+                write_run_usage_summary(args.run_usage_summary, summary)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

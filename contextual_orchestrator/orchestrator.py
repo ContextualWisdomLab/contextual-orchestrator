@@ -78,6 +78,15 @@ from .pii_protection import (
     is_encrypted_detail,
     load_pii_encryptor,
 )
+from .domain.budget import BudgetExceededError, CallPurpose
+from .spend_guard import (
+    SpendGuard,
+    guarded_provider_call,
+    guarded_provider_stream,
+    metered_passthrough_call,
+    raise_if_stream_limit_event,
+    with_run_scope,
+)
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -283,14 +292,6 @@ def _safe_provider_probe_error_type(exc: Exception) -> str:
     """Keep provider diagnostics package-owned instead of echoing exception classes."""
     name = type(exc).__name__
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
-
-
-class BudgetExceededError(RuntimeError):
-    """Raised when an operator-configured spend budget is already exhausted."""
-
-    def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
-        super().__init__(message)
-        self.detail = detail or {}
 
 
 class ProviderResponseError(RuntimeError):
@@ -2417,6 +2418,10 @@ class ModelClient:
             normalized.add(value)
         return frozenset(normalized)
 
+    def peek_usage(self) -> dict[str, Any] | None:
+        """Return provider-reported usage from the most recent call without clearing it."""
+        return getattr(self._local, "usage", None)
+
     def take_usage(self) -> dict[str, Any] | None:
         """Return and clear provider-reported usage from the most recent chat() on this thread."""
         usage = getattr(self._local, "usage", None)
@@ -2601,6 +2606,22 @@ class ModelClient:
         return vectors, prompt_tokens  # pragma: no cover
 
     def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        top_p: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ) -> str:
+        """Send one chat request through the active run's spend guard (ADR 0138)."""
+        return guarded_provider_call(
+            agent,
+            messages,
+            lambda: self._chat_transport(agent, messages, temperature, top_p, effort_profile),
+            usage_reader=self.peek_usage,
+        )
+
+    def _chat_transport(
         self,
         agent: ModelAgent,
         messages: list[ChatMessage],
@@ -3242,6 +3263,24 @@ class ModelClient:
         effort_profile: ReasoningEffortProfile | None = None,
         include_usage: bool = False,
     ):
+        """Stream one chat request through the active run's spend guard (ADR 0138)."""
+        yield from guarded_provider_stream(
+            agent,
+            messages,
+            lambda: self._stream_chat_transport(
+                agent, messages, temperature, effort_profile, include_usage
+            ),
+            usage_reader=self.peek_usage,
+        )
+
+    def _stream_chat_transport(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+        include_usage: bool = False,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
@@ -3403,6 +3442,7 @@ class ModelClient:
                         continue
                     if not isinstance(chunk, dict):
                         continue
+                    raise_if_stream_limit_event(agent, chunk)
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         self._local.usage = usage
@@ -3492,6 +3532,27 @@ class ModelClient:
         )
 
     def _proxy_send(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        *,
+        allow_transient_retries: bool,
+        operation_kind: str = "request",
+    ) -> dict[str, Any]:
+        """Meter one passthrough call in the active run (ADR 0138)."""
+        return metered_passthrough_call(
+            agent,
+            lambda: self._proxy_send_transport(
+                agent,
+                endpoint,
+                payload,
+                allow_transient_retries=allow_transient_retries,
+                operation_kind=operation_kind,
+            ),
+        )
+
+    def _proxy_send_transport(
         self,
         agent: ModelAgent,
         endpoint: str,
@@ -3637,6 +3698,16 @@ class ModelClient:
                 )
 
     def proxy_send_bytes(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> tuple[bytes, str]:
+        """Meter one binary passthrough call in the active run (ADR 0138)."""
+        return metered_passthrough_call(
+            agent,
+            lambda: self._proxy_send_bytes_transport(agent, endpoint, payload),
+            channel="passthrough_bytes",
+        )
+
+    def _proxy_send_bytes_transport(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> tuple[bytes, str]:
         """Passthrough a provider response whose body is binary media."""
@@ -5535,7 +5606,10 @@ class TaskOrchestrator:
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
         rate_limit_unknown_cooldown_seconds: float = 5.0,
+        spend_guard: SpendGuard | None = None,
     ) -> None:
+        # Per-run cap, virtual-key/tenant budgets, provider drop, metering (ADR 0138).
+        self.spend_guard = spend_guard if spend_guard is not None else SpendGuard()
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
         self._context_window_local = threading.local()
@@ -5985,6 +6059,7 @@ class TaskOrchestrator:
         }
     )
 
+    @with_run_scope
     def proxy_completion(
         self,
         body: dict[str, Any],
@@ -6015,6 +6090,9 @@ class TaskOrchestrator:
         ``role_effort_catalog`` is configured (``_role_effort_profile``
         returns ``None`` and behavior is unchanged).
         """
+        spend_scope = SpendGuard.active_scope()
+        if spend_scope is not None:
+            spend_scope.raise_if_exhausted()
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
@@ -6999,6 +7077,8 @@ class TaskOrchestrator:
                                 orchestration.update(output_budget)
                     return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                    if isinstance(exc, BudgetExceededError):
+                        raise  # spend guard refusals fail closed (ADR 0138)
                     try:
                         if isinstance(exc, ToolFallbackStoppedError):
                             raise
@@ -7237,6 +7317,8 @@ class TaskOrchestrator:
             try:
                 raw, final_agent = send_synthesis(upstream)
             except Exception as exc:
+                if isinstance(exc, BudgetExceededError):
+                    raise  # spend guard refusals fail closed (ADR 0138)
                 if (
                     not _is_request_too_large_error(exc)
                     and not isinstance(exc, EffortProfileError)
@@ -7598,6 +7680,7 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
+    @with_run_scope
     def complete(
         self,
         messages: list[ChatMessage],
@@ -7727,6 +7810,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return not self._needs_workflow(text)
 
+    @with_run_scope
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -7796,6 +7880,8 @@ class TaskOrchestrator:
                     parts.append(delta)
                     yield delta
             except Exception as exc:
+                if isinstance(exc, BudgetExceededError):
+                    raise  # spend guard refusals fail closed (ADR 0138)
                 request_too_large = _is_request_too_large_error(exc)
                 if (agent.group_name or free_only) and not request_too_large:
                     self._group_router.observe_failure(agent.id)
@@ -7986,6 +8072,7 @@ class TaskOrchestrator:
             partition=cache_partition,
         )
 
+    @with_run_scope
     def run(
         self,
         messages: list[ChatMessage],
@@ -8073,6 +8160,9 @@ class TaskOrchestrator:
         additional_cost_usd: float | None = 0.0,
     ) -> None:
         """Fail before another provider call would cross an operator budget."""
+        spend_scope = SpendGuard.active_scope()
+        if spend_scope is not None:
+            spend_scope.raise_if_exhausted()
         with self._budget_spend_lock:
             spent_output_tokens = self._budget_spent_output_tokens
             spent_cost_decimal = self._budget_spent_cost_usd
@@ -8521,6 +8611,7 @@ class TaskOrchestrator:
         )
         return evaluation
 
+    @with_run_scope
     def compare_to_baseline(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
         """Measure the orchestration engine against a single-worker baseline.
 
@@ -8542,9 +8633,31 @@ class TaskOrchestrator:
             orchestrated = self._dispatch(messages, mode)
             orchestrated_latency = round((time.perf_counter() - start) * 1000, 2)
 
-            start = time.perf_counter()
-            baseline = self.route_once(messages)
-            baseline_latency = round((time.perf_counter() - start) * 1000, 2)
+            # Sampled baselines are charged to the same run guard and are the
+            # first spend to be skipped when headroom runs short (ADR 0138).
+            spend_scope = SpendGuard.active_scope()
+            baseline = None
+            if spend_scope is None or spend_scope.baseline_admissible():
+                start = time.perf_counter()
+                try:
+                    with SpendGuard.call_purpose(CallPurpose.BASELINE):
+                        baseline = self.route_once(messages)
+                except BudgetExceededError:
+                    baseline = None
+                baseline_latency = round((time.perf_counter() - start) * 1000, 2)
+            if baseline is None:
+                results.append({
+                    "prompt": prompt[:120],
+                    "orchestrated": {
+                        "mode": orchestrated["mode"],
+                        "latency_ms": orchestrated_latency,
+                        "steps": len(orchestrated["trace"]),
+                        "verified": bool(orchestrated.get("verification", {}).get("accepted")),
+                        "answer_length": len(orchestrated["answer"]),
+                    },
+                    "baseline": {"skipped": True, "reason": "spend_budget"},
+                })
+                continue
 
             orchestrated_steps = len(orchestrated["trace"])
             baseline_steps = len(baseline["trace"])
@@ -8568,9 +8681,12 @@ class TaskOrchestrator:
             })
 
         count = len(results)
+        all_results = results
+        results = [row for row in all_results if not row["baseline"].get("skipped")]
+        compared = len(results)
 
         def avg(select: Any) -> float:
-            return round(sum(select(row) for row in results) / count, 2) if count else 0.0
+            return round(sum(select(row) for row in results) / compared, 2) if compared else 0.0
 
         aggregate = {
             "orchestrated_avg_latency_ms": avg(lambda row: row["orchestrated"]["latency_ms"]),
@@ -8579,12 +8695,13 @@ class TaskOrchestrator:
             "orchestrated_avg_steps": avg(lambda row: row["orchestrated"]["steps"]),
             "baseline_avg_steps": avg(lambda row: row["baseline"]["steps"]),
             "avg_structural_coverage_delta": avg(lambda row: row["structural_coverage_delta"]),
-            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / count, 2) if count else 0.0,
+            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / compared, 2) if compared else 0.0,
+            "baseline_skipped_count": count - compared,
         }
         return {
             "mode": mode,
             "prompt_count": count,
-            "results": results,
+            "results": all_results,
             "aggregate": aggregate,
             "quality_proxy": (
                 "structural proxy from mock/runtime outputs (contributing steps + verifier-pass presence); "
@@ -9095,6 +9212,7 @@ class TaskOrchestrator:
         """Store this thread's most recent context-window exclusion evidence."""
         self._context_window_local.value = value
 
+    @with_run_scope
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -9356,6 +9474,7 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @with_run_scope
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -10963,6 +11082,8 @@ class TaskOrchestrator:
                             else self.client.chat(agent, messages)
                         )
                 except Exception as exc:
+                    if isinstance(exc, BudgetExceededError):
+                        raise  # spend guard refusals fail closed (ADR 0138)
                     if _is_request_too_large_error(exc):
                         break
                     every_failure_was_request_too_large = False
@@ -11276,6 +11397,9 @@ class TaskOrchestrator:
             and all(tag in agent.tags for tag in required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
+        spend_scope = SpendGuard.active_scope()
+        if spend_scope is not None:
+            eligible = spend_scope.filter_candidates(eligible)
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
         healthy = healthy or eligible
