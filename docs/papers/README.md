@@ -404,12 +404,15 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [Bolsinova and Tijmstra (2019)](https://doi.org/10.1007/s11336-019-09682-5) — [bounded abstract review and outcome-leakage constraint](../doctoring/irt_router_measurement_review.md#conditional-dependence-follow-up).
 - [Bolsinova and Molenaar (2018)](https://doi.org/10.3389/fpsyg.2018.01525) — [bounded nonlinear-dependence intake and proposed leakage-safe evaluation](../doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake); no LLM transfer or replication claim.
 - [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
+- [Order Statistics, David and Nagaraja](https://doi.org/10.1002/0471722162) — citation only; no local PDF reviewed.
 - [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
 - [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
 - [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
 - [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
 - [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
 - [DOI 10.1111/rssc.12569](https://doi.org/10.1111/rssc.12569)
+- [Kaplan and Meier, incomplete observations](https://doi.org/10.1080/01621459.1958.10501452) — citation only; no local PDF reviewed.
+- [Hyndman and Fan, sample quantiles](https://doi.org/10.1080/00031305.1996.10473566) — citation only; no local PDF reviewed.
 - [DOI 10.1145/2043556.2043566](https://doi.org/10.1145/2043556.2043566)
 - [DOI 10.1145/2080.357392](https://doi.org/10.1145/2080.357392)
 - [DOI 10.1145/2408776.2408794](https://doi.org/10.1145/2408776.2408794)
@@ -423,6 +426,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [RFC 9110](https://doi.org/10.17487/RFC9110)
 - [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
 - [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)
+- [Brookmeyer and Crowley, median survival interval](https://doi.org/10.2307/2530286) — citation only; no local PDF reviewed.
 - [arXiv 2211.09110 DOI](https://doi.org/10.48550/arXiv.2211.09110)
 - [arXiv 2305.05176 DOI](https://doi.org/10.48550/arXiv.2305.05176)
 - [arXiv 2403.04132 DOI](https://doi.org/10.48550/arXiv.2403.04132)
@@ -430,6 +434,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [arXiv 2406.18665 DOI](https://doi.org/10.48550/arXiv.2406.18665)
 - [arXiv 2512.04388 DOI](https://doi.org/10.48550/arXiv.2512.04388)
 - [arXiv 2512.04695 DOI](https://doi.org/10.48550/arXiv.2512.04695)
+- [Recursive Language Models, arXiv 2512.24601](https://arxiv.org/abs/2512.24601) — citation only; no local PDF reviewed.
 - [arXiv 2601.17814 DOI](https://doi.org/10.48550/arXiv.2601.17814)
 - [arXiv 2606.21228 DOI](https://doi.org/10.48550/arXiv.2606.21228)
 - [arXiv 2608.06867 DOI](https://doi.org/10.48550/arXiv.2608.06867)

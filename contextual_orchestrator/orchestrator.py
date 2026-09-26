@@ -9766,6 +9766,7 @@ class TaskOrchestrator:
 
     @policy.setter
     def policy(self, policy: OrchestrationPolicy) -> None:
+        """Update the policy used when a new request starts."""
         self._configured_policy = policy
 
     @contextmanager
@@ -11106,6 +11107,7 @@ class TaskOrchestrator:
                         next(member for member in race_members if member.id == outcome.winner_endpoint_id),
                     ))
                 return output, served_id, served_model, usage
+            attempted.extend(race_members)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
         last_provider_response_error: ProviderResponseError | None = None
