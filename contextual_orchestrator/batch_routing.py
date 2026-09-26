@@ -1306,6 +1306,9 @@ class ProviderEmbeddingBatchBackend:
         except ClaimNotAcquired:
             raise
         except Exception as exc:  # noqa: BLE001 - polling exposes bounded failure metadata
+            if self._closed.is_set():
+                execution_claim.mark_lost()
+            execution_claim.ensure_owned()
             error = {
                 "error_type": type(exc).__name__,
                 "http_status": getattr(
