@@ -16,7 +16,10 @@ admission to a secret-free credential-name plus endpoint fingerprint; and
 `39f75e86b4c7eb0144caa681612a76c8c5c71532` applies the identical key in
 discovery. Exact remote Python AST parsing passed for four changed source/test
 files. Direct production-module probes passed credential isolation 2/2 and
-idempotent quota authority 1/1. No credential value is read or exposed.
+idempotent quota authority 1/1. Test-name successor
+`106c2e6ccb4db076d476629b966a2dd9f50cdfee` states the narrower invariant:
+idempotent cost evidence is skipped while explicit quota authority remains.
+No credential value is read or exposed.
 
 This is source-level GREEN only. Exact-head hosted Checks, independent approval,
 protected-main integration, immutable release, and production-cost evidence
