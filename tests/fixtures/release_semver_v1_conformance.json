@@ -43,8 +43,8 @@
       "document": {
         "contract_id": "cwl_release_semver_receipt_envelope/v1",
         "schema_sha256": {
-          "evidence": "727300e57699cb091a5301b3a255f80c27f709f01fd05814a0018869a84d7405",
-          "observation": "4264b462a24d472f5a1ee4c540116a61b5aa0bc9a25ef98d26c39b100049a091"
+          "evidence": "47a8ac9ea09a31d585847dab77527b282e57e424f0eacaaddf9d0874edaa248a",
+          "observation": "d6bdce42dcc9f32f788d307177248194e67dac4850baaceed039db25e1933d56"
         },
         "evidence_sha256": "1f8be05885efca92d767930da7e902dd7781f50f7c26cb1d12258cc80789926b",
         "evidence_source_commit": "5665b0ad1e07ffb5e9f8c59e44b6b2a785298013",
@@ -231,7 +231,8 @@
     {"name": "observation: removed-symbol reason citing only a renamed index", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["observed_class"], "value": "major"}, {"op": "set", "path": ["reason_code"], "value": "removed_public_symbol"}, {"op": "set", "path": ["evidence_refs"], "value": ["#/renamed_public_symbols/0"]}, {"op": "set", "path": ["breaking_change_refs"], "value": ["#/renamed_public_symbols/0"]}]},
     {"name": "observation: index ref to an unknown member", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["#/notes/0"]}]},
     {"name": "observation: index ref with a leading zero", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["#/commit_titles/01"]}]},
-    {"name": "observation: index ref beyond four digits", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["#/commit_titles/10000"]}]},
+    {"name": "observation: index ref beyond five digits", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["#/commit_titles/100000"]}]},
+    {"name": "observation: index ref past the 32768-title cap passes the schema", "schema": "observation", "valid": true, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["#/commit_titles/32768"]}], "step_2_check": "citation_membership"},
     {"name": "observation: index ref with a trailing newline", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["#/commit_titles/0\n"]}]},
     {"name": "observation: index ref without the fragment marker", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["/commit_titles/0"]}]},
     {"name": "observation: text ref with a trailing tab (#2260 strips it)", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["commit:feat(api): add an additive opt-in field\t"]}]},
@@ -252,7 +253,16 @@
     {"name": "envelope: sentence in agent_id", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["observations", 0, "served_route", "agent_id"], "value": "major bump, confidence 0.99"}]},
     {"name": "envelope: served model with a trailing newline", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["observations", 0, "served_route", "model"], "value": "example/free-model-1\n"}]},
     {"name": "envelope: receipt schema_id with whitespace", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "urn:x verdict major"}]},
-    {"name": "envelope: receipt schema_id that is not a URI", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "verdict-major"}]},
+    {"name": "envelope: receipt schema_id that is neither a URI nor a fast-mlsirm identifier", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "verdict-major"}]},
+    {"name": "envelope: verdict-looking receipt schema_id passes the schema", "schema": "receipt_envelope", "valid": true, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "verdict:major;confidence=0.99"}], "step_2_check": "receipt_schema_id"},
+    {"name": "envelope: fast-mlsirm dotted receipt schema_id", "schema": "receipt_envelope", "valid": true, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "fast-mlsirm.sampling-design.v1"}]},
+    {"name": "envelope: fast-mlsirm dotted receipt schema_id with underscores", "schema": "receipt_envelope", "valid": true, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "fast-mlsirm.lineage_channel_weight_evidence.v1"}]},
+    {"name": "envelope: fast-mlsirm hyphenated receipt schema_id", "schema": "receipt_envelope", "valid": true, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "fast-mlsirm-item-bank-report-v2"}]},
+    {"name": "envelope: fast-mlsirm dotted receipt schema_id with key=value text", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "fast-mlsirm.verdict=major.v1"}]},
+    {"name": "envelope: fast-mlsirm dotted receipt schema_id with a space", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "fast-mlsirm.release decision.v1"}]},
+    {"name": "envelope: fast-mlsirm dotted receipt schema_id without a version", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "fast-mlsirm.release-decision-receipt"}]},
+    {"name": "envelope: fast-mlsirm dotted receipt schema_id in upper case", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "Fast-MLSIRM.Release-Decision.v1"}]},
+    {"name": "envelope: fast-mlsirm dotted receipt schema_id with a trailing newline", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "schema_id"], "value": "fast-mlsirm.sampling-design.v1\n"}]},
     {"name": "envelope: producer version with a trailing newline", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["producer", "package_version"], "value": "0.2.0\n"}]},
     {"name": "envelope: evidence commit with a trailing newline", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["evidence_source_commit"], "value": "5665b0ad1e07ffb5e9f8c59e44b6b2a785298013\n"}]},
     {"name": "envelope: receipt digest with a trailing newline", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "sha256"], "value": "8aeb2e49d3d2fe314562b0103fe662439a320d04572d18b929f326a5e292940f\n"}]},
