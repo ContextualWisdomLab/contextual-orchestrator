@@ -11772,6 +11772,7 @@ class TaskOrchestrator:
         """
         wait_deadline: float | None = None
         while True:
+            cooling_at_round_start = set(self._rate_limited_snapshot())
             try:
                 return self._invoke(
                     primary,
@@ -11804,10 +11805,36 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not virtual_selector or any(
-                    self._rate_limit_remaining(candidate.id) is None
+                ready = [
+                    candidate
                     for candidate in candidates
+                    if self._rate_limit_remaining(candidate.id) is None
+                ]
+                # A candidate skipped this round only because it was still
+                # cooling, and whose cooldown expired before this check, did
+                # not fail: re-run selection within the wait budget instead
+                # of reading it as a mixed failure. Assumed cooldowns recorded
+                # microseconds apart made this a race on wall-clock timing.
+                # _invoke only attempts a cooling candidate when every healthy
+                # candidate is cooling; one that then failed for another
+                # reason costs at most one more round, because it is no longer
+                # cooling at the next round start and re-raises below.
+                expired_unattempted = [
+                    candidate
+                    for candidate in ready
+                    if candidate.id in cooling_at_round_start
+                ]
+                if wait_deadline is None and expired_unattempted:
+                    wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
+                if (
+                    virtual_selector
+                    and ready
+                    and len(expired_unattempted) == len(ready)
+                    and wait_deadline is not None
+                    and time.monotonic() < wait_deadline
                 ):
+                    continue
+                if not virtual_selector or len(expired_unattempted) < len(ready):
                     # Not a genuine storm to wait out: either the caller
                     # pinned one explicit concrete model (fail fast,
                     # unchanged pre-existing contract -- see
