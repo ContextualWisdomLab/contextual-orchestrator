@@ -12421,6 +12421,19 @@ class TaskOrchestrator:
                     skip_rate_limited=False,
                     prompt_token_lower_bound=prompt_token_lower_bound,
                 )
+                if not candidates and required_tags:
+                    # Mirror _invoke: an image request with no vision-capable
+                    # candidate ran on the text candidates, so judge the storm
+                    # on that same set instead of an empty vision set.
+                    candidates = self._failover_candidates(
+                        primary,
+                        text,
+                        eligibility_role or role,
+                        allowed_agent_ids=allowed_agent_ids,
+                        prompt_context=prompt_context,
+                        skip_rate_limited=False,
+                        prompt_token_lower_bound=prompt_token_lower_bound,
+                    )
                 if excluded_agent_ids:
                     candidates = [
                         candidate
