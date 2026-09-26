@@ -157,13 +157,15 @@ def _optional_text(value: Any, field: str) -> str | None:
     """Validate one optional bounded extracted text."""
     if value is None:
         return None
-    if type(value) is not str or len(value.encode("utf-8")) > MAX_OBJECT_TEXT_BYTES:
+    if type(value) is not str:
         raise _reject("invalid_text", f"{field} must be text of at most {MAX_OBJECT_TEXT_BYTES} bytes")
     if any(
         unicodedata.category(character) in {"Cc", "Cs"} and character not in "\n\t"
         for character in value
     ):
         raise _reject("invalid_text", f"{field} must not contain control characters")
+    if len(value.encode("utf-8")) > MAX_OBJECT_TEXT_BYTES:
+        raise _reject("invalid_text", f"{field} must be text of at most {MAX_OBJECT_TEXT_BYTES} bytes")
     _scan_for_leaks(value, field)
     return value
 
