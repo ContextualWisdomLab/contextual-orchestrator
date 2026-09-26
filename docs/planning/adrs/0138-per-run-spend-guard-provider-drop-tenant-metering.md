@@ -71,8 +71,11 @@ priced at the more expensive of the prompt and completion rates. Unknown or
 conflicting total-token ceilings fail closed under a hard cap; a prompt-only
 lower bound is never admission authority. `decide_affordability` evaluates the
 upper bound over every active limit. Admission and in-flight reservation occur
-under one run-scope lock, so concurrent branches cannot spend the same
-remaining headroom. A call is refused, before it is sent, when for any limit:
+under one store budget transaction. The in-memory adapter serializes every run
+scope that can access it. The JSONL adapter takes a POSIX file lock, refreshes
+its projection, and appends a durable reservation before releasing that lock,
+so separate run scopes and processes cannot spend the same remaining
+headroom. A call is refused, before it is sent, when for any limit:
 
 - the limit is already spent (`budget_exhausted`);
 - the price is unknown for a billable endpoint (`price_unknown`, fail closed);
@@ -203,8 +206,12 @@ https://docs.litellm.ai/docs/proxy/team_budgets
   - `InMemorySpendLedgerStore`.
   - `JsonlSpendLedgerStore`, a durable append-only adapter. It fsyncs each
     write and replays the file at startup. A torn final line moves to
-    `<name>.partial`; corruption anywhere else raises. It assumes a single
-    writer.
+    `<name>.partial`; corruption anywhere else raises. `spend_reservation` and
+    `spend_release` events retain admission state across processes and crashes;
+    no elapsed-time expiry is inferred. POSIX `flock` serializes the refresh,
+    decision and reservation append. Without that file-lock authority,
+    uncapped metering remains available but a shared hard budget fails closed
+    with `reservation_authority_unavailable`.
 
   Key and tenant definitions share the same store.
 - **Aggregation.** `aggregate_usage` groups by tenant, tenant + provider/model,
@@ -242,9 +249,10 @@ that PR.
 - With a cap set, an endpoint without a PriceBook row (for example Bytez today)
   is refused. Operators must price it or tag it `cost:free` from evidence. This
   is deliberate fail-closed behaviour.
-- Admission is check-then-call. Concurrent calls in one run (endpoint races,
-  batch fallback) can each pass the check and together overshoot by up to one
-  call's cost per concurrent branch.
+- Admission reserves the proven total-cost upper bound before the provider
+  boundary. Known settlement replaces the reservation with measured/zero
+  usage; an unknown outcome or process crash leaves the reservation active and
+  therefore fails closed without inventing a charge or an expiry.
 - Streaming calls often report no usage (`stream_usage_supported`). Under a cap,
   a paid streamed call without usage blocks further paid calls in that run.
 - Key and tenant spend are computed by scanning the store on each admission.
@@ -260,8 +268,8 @@ that PR.
 - Removing `price_per_million`.
 - Metering for embedding and Batch API calls.
 - Limit errors inside non-stream HTTP 200 bodies.
-- Atomic admission under concurrency.
-- Multi-writer JSONL or a SQL adapter.
+- A SQL-backed high-throughput adapter; JSONL intentionally serializes budget
+  transactions and scans its append-only projection.
 - Uploading the run artifact from workflows.
 - `ModelClient`'s internal 429 retries on paths outside `_invoke` may retry once
   before the drop is observed.

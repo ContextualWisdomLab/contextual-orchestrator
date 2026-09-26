@@ -21,13 +21,19 @@ callers can aggregate across runs.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import tempfile
 import threading
-from typing import Any, Iterable, Protocol
+from typing import Any, ContextManager, Iterable, Iterator, Protocol
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - POSIX production/runtime contract
+    fcntl = None  # type: ignore[assignment]
 
 from .cost_ledger import AttributionDimensions, UsageRecord
 from .domain.budget import BudgetScope
@@ -147,6 +153,54 @@ class MeteredUsage:
         )
 
 
+@dataclass(frozen=True)
+class SpendReservation:
+    """One durable pre-call cost upper bound shared across run scopes."""
+
+    reservation_id: str
+    tenant_id: str
+    run_id: str
+    reserved_cost: Money
+    created_at: int
+    virtual_key_id: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject identifiers or amounts that cannot authorize admission."""
+        if not self.reservation_id or not self.tenant_id or not self.run_id:
+            raise ValueError("reservation_id, tenant_id, and run_id are required")
+        if self.reserved_cost.amount <= 0:
+            raise ValueError("reserved_cost must be positive")
+        if type(self.created_at) is not int or self.created_at < 0:
+            raise ValueError("created_at must be a non-negative integer")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the append-only ledger representation."""
+        return {
+            "reservation_id": self.reservation_id,
+            "tenant_id": self.tenant_id,
+            "virtual_key_id": self.virtual_key_id,
+            "run_id": self.run_id,
+            "reserved_cost": {
+                "amount": str(self.reserved_cost.amount),
+                "currency": self.reserved_cost.currency,
+            },
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SpendReservation":
+        """Rebuild a reservation from an append-only ledger event."""
+        cost = data["reserved_cost"]
+        return cls(
+            reservation_id=data["reservation_id"],
+            tenant_id=data["tenant_id"],
+            virtual_key_id=data.get("virtual_key_id"),
+            run_id=data["run_id"],
+            reserved_cost=Money(cost["amount"], cost.get("currency", "USD")),
+            created_at=int(data["created_at"]),
+        )
+
+
 class SpendLedgerStore(Protocol):
     """Storage port for metered usage and budget definitions."""
 
@@ -180,6 +234,27 @@ class SpendLedgerStore(Protocol):
         """Look up a tenant's budget."""
         ...
 
+    def budget_transaction(self) -> ContextManager[None]:
+        """Serialize refresh, affordability decision, and reservation mutation."""
+        ...
+
+    @property
+    def budget_transaction_authoritative(self) -> bool:
+        """Whether the transaction covers every writer that can share this store."""
+        ...
+
+    def put_spend_reservation(self, reservation: SpendReservation) -> None:
+        """Record a cost upper bound before the provider boundary."""
+        ...
+
+    def active_spend_reservations(self) -> list[SpendReservation]:
+        """Return reservations that have no authoritative settlement."""
+        ...
+
+    def release_spend_reservation(self, reservation_id: str) -> bool:
+        """Release a reservation after authoritative settlement."""
+        ...
+
 
 class InMemorySpendLedgerStore:
     """Process-local :class:`SpendLedgerStore`."""
@@ -190,6 +265,18 @@ class InMemorySpendLedgerStore:
         self._record_ids: set[str] = set()
         self._keys: dict[str, VirtualKey] = {}
         self._budgets: dict[str, TenantBudget] = {}
+        self._reservations: dict[str, SpendReservation] = {}
+
+    @contextmanager
+    def budget_transaction(self) -> Iterator[None]:
+        """Serialize one admission decision and reservation mutation."""
+        with self._lock:
+            yield
+
+    @property
+    def budget_transaction_authoritative(self) -> bool:
+        """A process-local store covers every writer that can access its state."""
+        return True
 
     def append_usage(self, entry: MeteredUsage) -> bool:
         """Append one entry unless its usage record id is already stored."""
@@ -238,18 +325,35 @@ class InMemorySpendLedgerStore:
         with self._lock:
             return self._budgets.get(tenant_id)
 
+    def put_spend_reservation(self, reservation: SpendReservation) -> None:
+        """Store an active pre-call cost bound."""
+        with self._lock:
+            self._reservations[reservation.reservation_id] = reservation
+
+    def active_spend_reservations(self) -> list[SpendReservation]:
+        """Return every reservation not yet settled."""
+        with self._lock:
+            return list(self._reservations.values())
+
+    def release_spend_reservation(self, reservation_id: str) -> bool:
+        """Remove a reservation after authoritative settlement."""
+        with self._lock:
+            return self._reservations.pop(reservation_id, None) is not None
+
 
 class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
     """Durable append-only JSON Lines :class:`SpendLedgerStore`.
 
     Each line is one event: ``{"event": "usage" | "virtual_key" |
-    "tenant_budget", "data": {...}}``. Definitions are last-write-wins on
-    replay. The file is replayed on construction; an unterminated *final*
+    "tenant_budget" | "spend_reservation" | "spend_release", "data": {...}}``.
+    Definitions are last-write-wins on replay. Active reservations survive a
+    crash and therefore fail closed until explicit authoritative settlement.
+    A POSIX file lock serializes cross-process budget transactions. The file
+    is replayed on construction; an unterminated *final*
     line (a crash mid-write) is counted in :attr:`skipped_partial_lines` and
     moved to ``<name>.partial`` so later appends stay line-aligned, while a
     corrupt line anywhere else raises ``ValueError`` so lost spend is never
-    silently under-counted. Writes are flushed and fsynced. The adapter
-    assumes a single writer process per file.
+    silently under-counted. Writes are flushed and fsynced.
     """
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
@@ -257,6 +361,54 @@ class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
         self.path = Path(path)
         self.skipped_partial_lines = 0
         self._write_lock = threading.Lock()
+        self._transaction_state = threading.local()
+        self._budget_lock_path = Path(f"{self.path}.lock")
+        if self.path.exists():
+            with self.budget_transaction():
+                pass
+
+    def _in_budget_transaction(self) -> bool:
+        return bool(getattr(self._transaction_state, "active", False))
+
+    @property
+    def budget_transaction_authoritative(self) -> bool:
+        """POSIX flock is the cross-process authority for this adapter."""
+        return fcntl is not None
+
+    @contextmanager
+    def budget_transaction(self) -> Iterator[None]:
+        """Lock, refresh, then atomically decide and mutate across processes."""
+        with self._lock:
+            if self._in_budget_transaction():
+                yield
+                return
+            if fcntl is None:
+                self._transaction_state.active = True
+                try:
+                    self._reload()
+                    yield
+                finally:
+                    self._transaction_state.active = False
+                return
+            self._budget_lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._budget_lock_path.open("a+b") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                self._transaction_state.active = True
+                try:
+                    self._reload()
+                    yield
+                finally:
+                    self._transaction_state.active = False
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+    def _reload(self) -> None:
+        """Rebuild the in-memory projection while holding the file lock."""
+        self._entries.clear()
+        self._record_ids.clear()
+        self._keys.clear()
+        self._budgets.clear()
+        self._reservations.clear()
+        self.skipped_partial_lines = 0
         if self.path.exists():
             self._replay()
 
@@ -301,17 +453,36 @@ class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
             super().put_virtual_key(VirtualKey.from_dict(data))
         elif kind == "tenant_budget":
             super().put_tenant_budget(TenantBudget.from_dict(data))
+        elif kind == "spend_reservation":
+            super().put_spend_reservation(SpendReservation.from_dict(data))
+        elif kind == "spend_release":
+            super().release_spend_reservation(data["reservation_id"])
         else:
             raise ValueError(f"unknown spend ledger event {kind!r}")
 
     def _write(self, kind: str, data: dict[str, Any]) -> None:
-        line = json.dumps({"event": kind, "data": data}, sort_keys=True, separators=(",", ":"))
+        if self._in_budget_transaction():
+            self._write_unlocked(kind, data)
+            return
         with self._write_lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
+            self._budget_lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._budget_lock_path.open("a+b") as lock_handle:
+                if fcntl is not None:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    self._write_unlocked(kind, data)
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+    def _write_unlocked(self, kind: str, data: dict[str, Any]) -> None:
+        """Append one event while the caller owns the process/file lock."""
+        line = json.dumps({"event": kind, "data": data}, sort_keys=True, separators=(",", ":"))
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
     def append_usage(self, entry: MeteredUsage) -> bool:
         """Persist, then index, one usage entry (duplicates are not rewritten)."""
@@ -332,6 +503,20 @@ class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
         with self._lock:
             self._write("tenant_budget", budget.as_dict())
             super().put_tenant_budget(budget)
+
+    def put_spend_reservation(self, reservation: SpendReservation) -> None:
+        """Persist, then index, one active cost upper bound."""
+        with self._lock:
+            self._write("spend_reservation", reservation.as_dict())
+            super().put_spend_reservation(reservation)
+
+    def release_spend_reservation(self, reservation_id: str) -> bool:
+        """Persist settlement before removing an active reservation."""
+        with self._lock:
+            if reservation_id not in self._reservations:
+                return False
+            self._write("spend_release", {"reservation_id": reservation_id})
+            return super().release_spend_reservation(reservation_id)
 
 
 def spent_in_scope(
@@ -366,6 +551,30 @@ def spent_in_scope(
             continue
         total = total + entry.charged_cost
     return total, unpriced
+
+
+def reserved_in_scope(
+    reservations: Iterable[SpendReservation],
+    *,
+    scope: BudgetScope,
+    scope_id: str,
+    since: int | None,
+    currency: str = "USD",
+) -> Money:
+    """Sum active pre-call cost bounds for one budget scope and window."""
+    total = Money.zero(currency)
+    for reservation in reservations:
+        if since is not None and reservation.created_at < since:
+            continue
+        if scope is BudgetScope.TENANT and reservation.tenant_id != scope_id:
+            continue
+        if scope is BudgetScope.VIRTUAL_KEY and reservation.virtual_key_id != scope_id:
+            continue
+        if scope is BudgetScope.RUN and reservation.run_id != scope_id:
+            continue
+        if reservation.reserved_cost.currency == total.currency:
+            total = total + reservation.reserved_cost
+    return total
 
 
 def aggregate_usage(
@@ -493,8 +702,10 @@ __all__ = [
     "JsonlSpendLedgerStore",
     "MeteredUsage",
     "RUN_SUMMARY_SCHEMA",
+    "SpendReservation",
     "SpendLedgerStore",
     "aggregate_usage",
+    "reserved_in_scope",
     "spent_in_scope",
     "summarize_run",
     "write_run_usage_summary",

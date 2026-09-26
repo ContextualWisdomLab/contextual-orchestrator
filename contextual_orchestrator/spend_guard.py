@@ -24,7 +24,7 @@ Outside a run scope every hook is a no-op pass-through. See ADR 0138.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import logging
@@ -63,7 +63,14 @@ from .domain.tenancy import (
 )
 from .kv_config import InMemoryConfigStore
 from .provider_errors import ProviderUpstreamError, provider_limit_evidence
-from .spend_metering import MeteredUsage, SpendLedgerStore, spent_in_scope, summarize_run
+from .spend_metering import (
+    MeteredUsage,
+    SpendLedgerStore,
+    SpendReservation,
+    reserved_in_scope,
+    spent_in_scope,
+    summarize_run,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -226,8 +233,14 @@ class RunSpendScope:
                 since=limit.window_start(now),
                 currency=currency,
             )
-            with self._lock:
-                spent = spent + self.reserved
+            if store is not None:
+                spent = spent + reserved_in_scope(
+                    store.active_spend_reservations(),
+                    scope=limit.scope,
+                    scope_id=limit.scope_id,
+                    since=limit.window_start(now),
+                    currency=currency,
+                )
             positions.append(SpendPosition(limit, spent, True))
         return positions
 
@@ -261,7 +274,9 @@ class RunSpendScope:
         """Raise ``BudgetExceededError`` when any active budget is already exhausted."""
         self.decide(Money.zero(self.spent.currency), CallPurpose.PRIMARY).raise_if_refused()
 
-    def admit(self, agent: Any, messages: Any) -> tuple[Price | None, Money | None]:
+    def admit(
+        self, agent: Any, messages: Any
+    ) -> tuple[Price | None, SpendReservation | None]:
         """Atomically reserve an affordable call's cost ceiling and return it with price."""
         provider = str(getattr(agent, "provider_name", "") or "")
         with self._lock:
@@ -289,19 +304,62 @@ class RunSpendScope:
             estimate = None
             unknown_estimate_reason = "cost_upper_bound_unavailable"
         purpose = _CALL_PURPOSE.get()
-        with self._lock:
-            has_hard_cap = any(
-                position.limit.max_cost is not None
-                for position in self.positions(self.guard.now())
-            )
+        store = self.guard.store
+        transaction = store.budget_transaction() if store is not None else nullcontext()
+        with self._lock, transaction:
+            now = self.guard.now()
+            positions = self.positions(now)
+            hard_positions = [
+                position for position in positions if position.limit.max_cost is not None
+            ]
+            has_hard_cap = bool(hard_positions)
             decision = self.decide(
                 estimate,
                 purpose,
                 unknown_estimate_reason=unknown_estimate_reason,
             )
-            reservation = estimate if decision.allowed and has_hard_cap else None
+            shared_hard_position = next(
+                (
+                    position
+                    for position in hard_positions
+                    if position.limit.scope is not BudgetScope.RUN
+                ),
+                None,
+            )
+            if (
+                decision.allowed
+                and estimate is not None
+                and estimate.amount > 0
+                and store is not None
+                and shared_hard_position is not None
+                and not store.budget_transaction_authoritative
+            ):
+                decision = decide_affordability(
+                    [shared_hard_position],
+                    estimate=None,
+                    now=now,
+                    purpose=purpose,
+                    unknown_estimate_reason="reservation_authority_unavailable",
+                )
+            reservation = (
+                SpendReservation(
+                    reservation_id=f"spend_reservation_{secrets.token_hex(16)}",
+                    tenant_id=self.tenant_id,
+                    virtual_key_id=(self.virtual_key.key_id if self.virtual_key else None),
+                    run_id=self.run_id,
+                    reserved_cost=estimate,
+                    created_at=now,
+                )
+                if decision.allowed
+                and has_hard_cap
+                and estimate is not None
+                and estimate.amount > 0
+                else None
+            )
             if reservation is not None:
-                self.reserved = self.reserved + reservation
+                if store is not None:
+                    store.put_spend_reservation(reservation)
+                self.reserved = self.reserved + reservation.reserved_cost
         if not decision.allowed:
             detail = {
                 **decision.detail,
@@ -418,7 +476,7 @@ class RunSpendScope:
         call_status: str,
         limit_reason: str | None = None,
         known_zero_cost: bool = False,
-        reserved_cost: Money | None = None,
+        reservation: SpendReservation | None = None,
     ) -> MeteredUsage:
         """Record one provider call and charge its cost to the run.
 
@@ -460,6 +518,7 @@ class RunSpendScope:
             purpose=_CALL_PURPOSE.get().value,
             provider_limit_reason=limit_reason,
         )
+        reserved_cost = reservation.reserved_cost if reservation is not None else None
         with self._lock:
             if reserved_cost is not None:
                 self.reserved = self.reserved.minus_floor_zero(reserved_cost)
@@ -480,7 +539,13 @@ class RunSpendScope:
         store = self.guard.store
         if store is not None:
             try:
-                store.append_usage(entry)
+                if reservation is None:
+                    store.append_usage(entry)
+                else:
+                    with store.budget_transaction():
+                        store.append_usage(entry)
+                        if charged is not None:
+                            store.release_spend_reservation(reservation.reservation_id)
             except Exception as exc:  # noqa: BLE001 - keep the call result; surface the loss
                 with self._lock:
                     self.store_failures += 1
@@ -747,7 +812,7 @@ def guarded_provider_call(
     scope = _ACTIVE_RUN.get()
     if scope is None:
         return call()
-    price, reserved_cost = scope.admit(agent, messages)
+    price, reservation = scope.admit(agent, messages)
     try:
         result = call()
     except Exception as exc:
@@ -760,7 +825,7 @@ def guarded_provider_call(
             call_status=_call_status(signal),
             limit_reason=signal.reason or None,
             known_zero_cost=_refused_before_billing(signal, exc),
-            reserved_cost=reserved_cost,
+            reservation=reservation,
         )
         if signal.drops_provider:
             status, _evidence = _error_status_and_evidence(exc)
@@ -774,7 +839,7 @@ def guarded_provider_call(
         price=price,
         channel=channel,
         call_status="ok",
-        reserved_cost=reserved_cost,
+        reservation=reservation,
     )
     return result
 
@@ -791,7 +856,7 @@ def guarded_provider_stream(
     if scope is None:
         yield from open_stream()
         return
-    price, reserved_cost = scope.admit(agent, messages)
+    price, reservation = scope.admit(agent, messages)
     settled = False
     try:
         yield from open_stream()
@@ -806,7 +871,7 @@ def guarded_provider_stream(
             call_status=_call_status(signal),
             limit_reason=signal.reason or None,
             known_zero_cost=_refused_before_billing(signal, exc),
-            reserved_cost=reserved_cost,
+            reservation=reservation,
         )
         if signal.drops_provider:
             status, _evidence = _error_status_and_evidence(exc)
@@ -822,7 +887,7 @@ def guarded_provider_stream(
                 price=price,
                 channel="stream",
                 call_status="ok",
-                reserved_cost=reserved_cost,
+                reservation=reservation,
             )
 
 

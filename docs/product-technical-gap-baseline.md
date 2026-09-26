@@ -7184,15 +7184,24 @@ price fixture. The baseline contracts observed the `0.5` rule.
 **Action and owner.** `contextual-orchestrator` remains the canonical owner.
 ADR 0138 now requires a known total-token ceiling and prices it entirely at the
 more expensive prompt/completion rate, which bounds every possible token split.
-Unknown price or ceiling fails closed. Admission and reservation are atomic
-inside `RunSpendScope`; settlement releases the reservation only after recording
-the outcome, and an unmeasured outcome consumes the reserved ceiling for later
-admission while charged cost remains unknown. The numeric baseline threshold
-and CLI/KV surface are removed; paid baseline work under a hard cap requires a
-future versioned allocation authority, while zero-cost or uncapped work can run.
+Unknown price or ceiling fails closed. The first repair made admission atomic
+inside one `RunSpendScope`; it did not protect shared virtual-key/tenant
+headroom across separate run scopes or JSONL projections. Follow-up RED
+contracts `test_tenant_budget_reserves_across_concurrent_run_scopes`,
+`test_jsonl_budget_reserves_across_concurrent_store_instances`, and
+`test_jsonl_unknown_outcome_reservation_survives_a_new_store_instance` exposed
+that remaining boundary. `SpendLedgerStore` now owns the transaction and active
+reservation projection. JSONL appends durable reservation/release events under
+a POSIX file lock after refreshing the ledger; an unknown outcome or crash
+leaves its reservation active with no inferred expiry. A runtime without that
+lock still meters uncapped work but refuses shared hard-budget admission as
+`reservation_authority_unavailable`. The numeric baseline threshold and CLI/KV
+surface remain removed; paid baseline work under a hard cap requires a future
+versioned allocation authority, while zero-cost or uncapped work can run.
 
-**Verification and status.** Focused spend-domain, guard, and CLI tests are
-GREEN locally; exact command and counts are recorded in the PR repair receipt.
+**Verification and status.** Focused spend-domain, provider-limit, metering,
+guard, and CLI tests are GREEN locally; exact command and counts are recorded
+in the PR repair receipt.
 ADR 0138 stays **Proposed**. Fresh exact-head hosted Security/CodeQL/SAST checks,
 independent approval, protected-main integration, and immutable release remain
 required; no deployment or production-cost claim is made.

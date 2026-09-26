@@ -19,6 +19,7 @@ import urllib.error
 import pytest
 
 from contextual_orchestrator import orchestrator as orchestrator_module
+from contextual_orchestrator import spend_metering as spend_metering_module
 from contextual_orchestrator.cost_ledger import PriceBook, PriceEntry
 from contextual_orchestrator.domain.budget import BudgetExceededError, CallPurpose
 from contextual_orchestrator.kv_config import InMemoryConfigStore
@@ -258,11 +259,11 @@ def test_unknown_failure_cost_consumes_the_reserved_upper_bound() -> None:
     assert calls == ["failed"]
 
 
-def test_tenant_budget_reserves_across_concurrent_run_scopes() -> None:
-    """Separate runs sharing a store cannot spend the same tenant headroom."""
-    store = InMemorySpendLedgerStore()
-    guard = SpendGuard(price_book=_price_book(), store=store)
-    guard.set_tenant_budget("acme", max_budget_usd="3")
+def _assert_tenant_budget_reserves_across_runs(
+    first_guard: SpendGuard,
+    second_guard: SpendGuard,
+) -> None:
+    """Exercise one shared tenant limit through two concurrent run scopes."""
     state = threading.Condition()
     release = threading.Event()
     provider_calls: list[str] = []
@@ -275,7 +276,7 @@ def test_tenant_budget_reserves_across_concurrent_run_scopes() -> None:
         release.wait()
         return "answer"
 
-    def worker() -> None:
+    def worker(guard: SpendGuard) -> None:
         try:
             with guard.tenant_context(tenant_id="acme"), guard.run_scope():
                 outcome: object = guarded_provider_call(
@@ -290,11 +291,11 @@ def test_tenant_budget_reserves_across_concurrent_run_scopes() -> None:
             outcomes.append(outcome)
             state.notify_all()
 
-    first = threading.Thread(target=worker)
+    first = threading.Thread(target=worker, args=(first_guard,))
     first.start()
     with state:
         state.wait_for(lambda: len(provider_calls) == 1)
-    second = threading.Thread(target=worker)
+    second = threading.Thread(target=worker, args=(second_guard,))
     second.start()
     with state:
         state.wait_for(lambda: len(provider_calls) == 2 or bool(outcomes))
@@ -304,6 +305,28 @@ def test_tenant_budget_reserves_across_concurrent_run_scopes() -> None:
 
     assert provider_calls == ["openai"]
     assert sum(isinstance(item, BudgetExceededError) for item in outcomes) == 1
+
+
+def test_tenant_budget_reserves_across_concurrent_run_scopes() -> None:
+    """Separate runs sharing an in-memory store cannot spend the same headroom."""
+    guard = SpendGuard(price_book=_price_book(), store=InMemorySpendLedgerStore())
+    guard.set_tenant_budget("acme", max_budget_usd="3")
+    _assert_tenant_budget_reserves_across_runs(guard, guard)
+
+
+def test_jsonl_budget_reserves_across_concurrent_store_instances(tmp_path: Path) -> None:
+    """Separate JSONL projections serialize admission through the file authority."""
+    ledger_path = tmp_path / "ledger.jsonl"
+    first_guard = SpendGuard(
+        price_book=_price_book(),
+        store=JsonlSpendLedgerStore(ledger_path),
+    )
+    first_guard.set_tenant_budget("acme", max_budget_usd="3")
+    second_guard = SpendGuard(
+        price_book=_price_book(),
+        store=JsonlSpendLedgerStore(ledger_path),
+    )
+    _assert_tenant_budget_reserves_across_runs(first_guard, second_guard)
 
 
 def test_jsonl_unknown_outcome_reservation_survives_a_new_store_instance(
@@ -342,6 +365,82 @@ def test_jsonl_unknown_outcome_reservation_survives_a_new_store_instance(
 
     assert refused.value.detail["reason"] == "insufficient_remaining_budget"
     assert provider_calls == []
+
+
+def test_jsonl_known_settlement_releases_the_reservation(tmp_path: Path) -> None:
+    """Measured settlement replaces the upper bound with actual durable spend."""
+    ledger_path = tmp_path / "ledger.jsonl"
+    guard = SpendGuard(
+        price_book=_price_book(),
+        store=JsonlSpendLedgerStore(ledger_path),
+    )
+    guard.set_tenant_budget("acme", max_budget_usd="5")
+    provider_calls: list[str] = []
+
+    for _ in range(2):
+        with guard.tenant_context(tenant_id="acme"), guard.run_scope():
+            guarded_provider_call(
+                PAID,
+                PROMPT,
+                lambda: provider_calls.append("openai") or "answer",
+                usage_reader=lambda: USAGE,
+            )
+
+    reloaded_store = JsonlSpendLedgerStore(ledger_path)
+    assert reloaded_store.active_spend_reservations() == []
+    reloaded_guard = SpendGuard(price_book=_price_book(), store=reloaded_store)
+    with reloaded_guard.tenant_context(tenant_id="acme"), reloaded_guard.run_scope():
+        with pytest.raises(BudgetExceededError):
+            guarded_provider_call(
+                PAID,
+                PROMPT,
+                lambda: provider_calls.append("unexpected") or "answer",
+                usage_reader=lambda: USAGE,
+            )
+
+    assert provider_calls == ["openai", "openai"]
+
+
+def test_jsonl_without_file_lock_keeps_uncapped_metering_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Missing cross-process locking does not disable an uncapped ledger."""
+    store = JsonlSpendLedgerStore(tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(spend_metering_module, "fcntl", None)
+    guard = SpendGuard(price_book=_price_book(), store=store)
+
+    with guard.tenant_context(tenant_id="acme"), guard.run_scope():
+        assert guarded_provider_call(
+            PAID,
+            PROMPT,
+            lambda: "answer",
+            usage_reader=lambda: USAGE,
+        ) == "answer"
+
+    assert len(JsonlSpendLedgerStore(store.path).usage_entries()) == 1
+
+
+def test_jsonl_without_file_lock_refuses_shared_hard_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A shared hard budget fails closed without cross-process reservation authority."""
+    store = JsonlSpendLedgerStore(tmp_path / "ledger.jsonl")
+    guard = SpendGuard(price_book=_price_book(), store=store)
+    guard.set_tenant_budget("acme", max_budget_usd="3")
+    monkeypatch.setattr(spend_metering_module, "fcntl", None)
+
+    with guard.tenant_context(tenant_id="acme"), guard.run_scope():
+        with pytest.raises(BudgetExceededError) as refused:
+            guarded_provider_call(
+                PAID,
+                PROMPT,
+                lambda: "unexpected",
+                usage_reader=lambda: USAGE,
+            )
+
+    assert refused.value.detail["reason"] == "reservation_authority_unavailable"
 
 
 def test_existing_spend_budget_check_consults_the_run_scope() -> None:
