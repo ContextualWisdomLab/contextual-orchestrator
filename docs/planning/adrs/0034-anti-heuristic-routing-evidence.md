@@ -358,6 +358,27 @@ carries the verdict so callers can audit every accept/reject decision.
 Disabling the flag keeps the legacy verification shape for deployments
 without a judge-capable member.
 
+A judge failure that carries no evidence about the answer is still a
+rejection (ADR 0001: `accepted` stays `false`), but it is marked
+`judge_status` and is not a quality observation:
+
+- `misconfigured`: no judge can run (fast-mlsirm missing, broken, or not
+  constructible, or no eligible judge agent). Logged at error level.
+- `unavailable`: the judge's own provider call failed transiently (timeout,
+  `OSError`, upstream 5xx or rate limit, `EndpointUnavailableError`,
+  `BudgetExceededError`), classified from the exception the gateway's judge
+  adapter observed. Logged at warning level.
+
+For either status, `route_once` records no quality-ledger or psychometric
+observation, stops failing over (the next candidate would meet the same
+judge), and returns the top-ranked answer with the marker on its
+verification and trace row. Streamed and batched answers get the same marker
+and also record no observation. Unjudged results are never written to the
+response cache. Every other judge failure, including ones the candidate
+answer can cause (request too large, missing assistant content, exhausted
+structured output, parse or encoding errors) and unknown exceptions, remains
+an ordinary rejection: one failure is recorded and failover continues.
+
 ## Alternatives rejected
 
 - Keeping keyword tables behind a feature flag: preserves silent rot and
