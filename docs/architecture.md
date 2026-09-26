@@ -150,8 +150,9 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   request's administrator-owned
   `model_timeout_seconds` deadline or the `rate_limit_wait_seconds`
   caller-contract default, or raises an honest `429`/`provider_rate_limited`
-  with a `Retry-After` header (never a `502` connection-failure
-  misclassification) when waiting is impossible. Two callers reach it:
+  (never a `502` connection-failure misclassification) when waiting is
+  impossible. `Retry-After` is present only for provider-declared finite
+  timing; unavailable timing omits it. Two callers reach it:
   `proxy_completion`'s own passthrough failover loop, and
   `TaskOrchestrator._invoke_with_rate_limit_recovery`, which wraps `_invoke`
   -- the shared engine `route_once` and every `conduct` step (including the
