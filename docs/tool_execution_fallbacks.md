@@ -69,7 +69,7 @@ When the retry budget is exhausted, an idempotent transient failure moves to the
 
 ### HTTP and streaming contract
 
-A non-streaming fail-closed decision returns HTTP `409` with OpenAI-shaped error code `tool_execution_stopped`. The error detail contains only the stable action, effective failure kind, reason code, and—when normalization produced `ambiguous_outcome`—the observed timeout or transport kind.
+A non-streaming fail-closed decision returns HTTP `409` with OpenAI-shaped error code `tool_execution_stopped`. The error detail contains the stable action, effective failure kind, reason code, and—when normalization produced `ambiguous_outcome`—the observed timeout or transport kind. When earlier candidates already failed over, the same detail includes `route` (eligible agent ids, typed attempts, and terminal reason `fail_closed`) and still omits provider or tool text.
 
 Once streaming response headers have been sent, the server cannot change the HTTP status. It therefore emits the same structured `tool_execution_stopped` error payload as an SSE `data:` frame, follows it with a terminal chunk whose `finish_reason` is `error`, and then emits `[DONE]`. Clients must treat either form as a stopped operation that requires operator reconciliation rather than automatic replay.
 

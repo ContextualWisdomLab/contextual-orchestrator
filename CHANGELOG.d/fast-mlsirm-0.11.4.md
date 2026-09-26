@@ -1,0 +1,1 @@
+Replaced the source-built `fast-mlsirm` snapshot with the immutable PyPI 0.11.4 release. The default install now uses published wheels with hashes recorded in both lock files while preserving the Contextual Orchestrator judge and psychometric runtime contract.

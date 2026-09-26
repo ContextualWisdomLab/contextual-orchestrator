@@ -104,6 +104,46 @@ from .token_counting import (
 )
 
 
+_REQUEST_EXECUTION_SNAPSHOT: ContextVar[
+    tuple[object, object, OrchestrationPolicy] | None
+] = ContextVar(
+    "contextual_orchestrator_request_execution_snapshot", default=None
+)
+_REQUEST_SELECTION_ATTEMPTS: ContextVar[list | None] = ContextVar(
+    "contextual_orchestrator_request_selection_attempts", default=None
+)
+
+
+def _request_execution_scoped(method: Callable) -> Callable:
+    """Share policy and effort across nested calls without leaking suspended streams."""
+    if inspect.isgeneratorfunction(method):
+        @wraps(method)
+        def scoped_stream(self, *args, **kwargs):
+            """Advance and close a stream in its own captured request context."""
+            with self._request_execution_scope():
+                context = copy_context()
+                stream = method(self, *args, **kwargs)
+            exhausted = object()
+            try:
+                while True:
+                    item = context.run(next, stream, exhausted)
+                    if item is exhausted:
+                        return
+                    yield item
+            finally:
+                context.run(stream.close)
+
+        return scoped_stream
+
+    @wraps(method)
+    def scoped_call(self, *args, **kwargs):
+        """Restore the caller's context after a synchronous result or exception."""
+        with self._request_execution_scope():
+            return method(self, *args, **kwargs)
+
+    return scoped_call
+
+
 _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
     "contextual_orchestrator_request_endpoint_agent_ids", default=None
 )
@@ -1459,6 +1499,29 @@ def _typed_attempt_entry(
     }
 
 
+def _append_tool_stop_route_attempt(
+    attempts: list[dict[str, Any]],
+    agent: ModelAgent,
+    *,
+    transport: str,
+) -> None:
+    """Record a terminal tool stop without borrowing a provider error code.
+
+    ``_append_typed_route_failure`` classifies through the provider taxonomy
+    and would label this attempt ``api_error``. The tool decision already
+    rides on the enclosing ``ToolFallbackStoppedError``.
+    """
+    attempts.append(
+        {
+            "agent_id": agent.id,
+            "model": agent.model,
+            "outcome": "fail_closed",
+            "retryable": False,
+            "transport": transport,
+        }
+    )
+
+
 def _append_typed_route_failure(
     attempts: list[dict[str, Any]],
     agent: ModelAgent,
@@ -1518,6 +1581,15 @@ def _attach_route_evidence_to_response_error(
     route_payload: dict[str, Any],
 ) -> ProviderResponseError:
     """Attach route evidence while preserving fail-closed response taxonomy."""
+    error.detail = {**error.detail, "route": route_payload}
+    return error
+
+
+def _attach_route_evidence_to_tool_stop(
+    error: ToolFallbackStoppedError,
+    route_payload: dict[str, Any],
+) -> ToolFallbackStoppedError:
+    """Attach route evidence without converting a tool stop into another error."""
     error.detail = {**error.detail, "route": route_payload}
     return error
 
@@ -4035,10 +4107,19 @@ class ModelClient:
         policy = EgressPolicy.from_hosts(self.allowed_provider_hosts, allow_local=False)
         try:
             validated = validate_egress_url_details(agent.base_url, policy=policy)
-        except EgressNotAllowedError as exc:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted") from exc
+        except EgressNotAllowedError:
+            validated = None
         if validated is None:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="provider_connection_error",
+                message="provider endpoint is not allowlisted or publicly routable",
+                client_status=502,
+                provider_status=None,
+                retryable=False,
+                transport="chat",
+            ) from None
         # Reuse EgressWeave's already-validated, already-resolved addresses
         # directly rather than re-resolving — re-resolving here would reopen
         # the validate-then-connect DNS-rebinding gap EgressWeave closes.
@@ -5626,6 +5707,7 @@ class TaskOrchestrator:
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
+        self._psychometric_persistence_lock = threading.Lock()
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
@@ -5633,7 +5715,6 @@ class TaskOrchestrator:
         self._openrouter_collector = OpenRouterUptimeCollector(
             self.candidates,
             self._group_router,
-            self._quality_router,
         )
         self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
@@ -5994,7 +6075,10 @@ class TaskOrchestrator:
         return report
 
     def _reload_state(self) -> None:
+        candidate_ids = set(self._psychometric_candidate_ids(self.candidates))
         for observation in self._store.load("psychometric_observation"):
+            if str(observation["agent_id"]) not in candidate_ids:
+                continue
             self._psychometric_router.observe_context_id(
                 str(observation["context_id"]),
                 str(observation["agent_id"]),
@@ -6002,6 +6086,7 @@ class TaskOrchestrator:
                 observation.get("vector"),
                 observation.get("irt_row", ()),
             )
+        self._retain_psychometric_candidates()
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record, restored=True)
             # A batch_route row persisted before judging (see batch_route's
@@ -6050,6 +6135,7 @@ class TaskOrchestrator:
         }
     )
 
+    @_request_execution_scoped
     def proxy_completion(
         self,
         body: dict[str, Any],
@@ -6356,13 +6442,22 @@ class TaskOrchestrator:
         # request that never hits a cooldown pays no extra cost.
         rate_limited_skipped: list[str] = []
         wait_deadline: float | None = None
+        # Unattempted candidates are safe to call; after an attempt, only an
+        # explicit 429/503 rejection with a recorded cooldown may admit it again.
+        retryable_ids = {candidate.id for candidate in candidates}
         while True:
             eligible_round: list[ModelAgent] = []
             round_now = time.monotonic()
             for candidate in candidates:
-                if self._rate_limit_remaining(candidate.id, now=round_now) is None:
+                if (
+                    candidate.id in retryable_ids
+                    and self._rate_limit_remaining(candidate.id, now=round_now) is None
+                ):
                     eligible_round.append(candidate)
-                elif candidate.id not in rate_limited_skipped:
+                elif (
+                    self._rate_limit_remaining(candidate.id, now=round_now) is not None
+                    and candidate.id not in rate_limited_skipped
+                ):
                     # Record this evidence now: a round that succeeds returns
                     # before the post-round recompute below ever runs.
                     rate_limited_skipped.append(candidate.id)
@@ -6382,6 +6477,7 @@ class TaskOrchestrator:
                         effort_profile,
                         api_surface=api_surface,
                     )
+                consumed_response = None
                 try:
                     send_once = getattr(self.client, "proxy_send_once", None)
                     if not callable(send_once):
@@ -6389,6 +6485,8 @@ class TaskOrchestrator:
                     record_initial_selection([candidate.id], "automatic_proxy")
                     result = send_once(candidate, endpoint, candidate_payload)
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                    if isinstance(exc, urllib.error.HTTPError):
+                        consumed_response = exc
                     classified = classify_provider_failure(
                         exc,
                         agent_id=candidate.id,
@@ -6423,6 +6521,7 @@ class TaskOrchestrator:
                             #   multi-candidate loop; kept as defense in depth
                             #   with the typed ``provider_outcome_unknown``.
                             self._record_failure(candidate.id)
+                            retryable_ids.discard(candidate.id)
                             if candidate.group_name:
                                 self._group_router.observe_failure(candidate.id)
                             attempt_receipts.append(
@@ -6509,6 +6608,13 @@ class TaskOrchestrator:
                             else None,
                             status=signal_status,
                         )
+                    if (
+                        rate_limit_signal is not None
+                        and self._rate_limit_remaining(candidate.id) is not None
+                    ):
+                        retryable_ids.add(candidate.id)
+                    else:
+                        retryable_ids.discard(candidate.id)
                     # A 429 is quota exhaustion, not a model health failure: it
                     # must never trip or feed the circuit breaker (unlike a
                     # 503, which stays a real availability signal).
@@ -6522,6 +6628,12 @@ class TaskOrchestrator:
                     if candidate.group_name and not skip_breaker:
                         self._group_router.observe_failure(candidate.id)
                     continue
+                finally:
+                    if consumed_response is not None:
+                        try:
+                            consumed_response.close()
+                        except Exception:
+                            pass  # Preserve classification and failover on cleanup failure.
                 self._record_success(candidate.id)
                 if candidate.group_name:
                     self._group_router.observe_success(
@@ -6559,6 +6671,16 @@ class TaskOrchestrator:
                     rate_limited_skipped.append(candidate.id)
             if wait_deadline is None:
                 wait_deadline = time.monotonic() + self._rate_limit_wait_budget(agent)
+            retry_candidates = [
+                candidate for candidate in candidates if candidate.id in retryable_ids
+            ]
+            attempted_ids = {candidate.id for candidate in eligible_round}
+            if any(
+                candidate.id not in attempted_ids
+                and self._rate_limit_remaining(candidate.id) is None
+                for candidate in retry_candidates
+            ) and time.monotonic() < wait_deadline:
+                continue
             # Delegate the earliest-ready/budget decision to the single
             # shared implementation (also used by
             # _invoke_with_rate_limit_recovery for route_once/conduct): waits
@@ -6568,7 +6690,7 @@ class TaskOrchestrator:
             # candidate attempted this round failed for an unrelated reason
             # -- so fall through to normal failure reporting below.
             if not self._await_rate_limit_recovery(
-                candidates,
+                retry_candidates,
                 deadline=wait_deadline,
                 transport="passthrough",
                 virtual_selector=virtual_selector,
@@ -6956,6 +7078,9 @@ class TaskOrchestrator:
                 self._group_router.observe_failure(candidate.id)
             synthesis_failure_recorded = True
 
+        synthesis_route_attempts: list[dict[str, Any]] = []
+        synthesis_eligible_agent_ids: list[str] = []
+
         def send_synthesis(
             payload: dict[str, Any],
             *,
@@ -6983,12 +7108,16 @@ class TaskOrchestrator:
                     ),
                 ]
             )
-            attempts: list[dict[str, Any]] = []
-            eligible_agent_ids = [candidate.id for candidate in ordered_candidates]
+            attempts = synthesis_route_attempts
+            eligible_agent_ids = synthesis_eligible_agent_ids
+            eligible_agent_ids.extend(
+                candidate.id for candidate in ordered_candidates
+                if candidate.id not in eligible_agent_ids
+            )
 
             def route_evidence(*, terminal_reason: str) -> dict[str, Any]:
                 return {
-                    "eligible_agent_ids": eligible_agent_ids,
+                    "eligible_agent_ids": list(eligible_agent_ids),
                     "attempted": list(attempts),
                     "terminal_reason": terminal_reason,
                 }
@@ -7066,6 +7195,57 @@ class TaskOrchestrator:
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     try:
                         if isinstance(exc, ToolFallbackStoppedError):
+                            current_route = (
+                                exc.detail.get("route")
+                                if isinstance(exc.detail, dict)
+                                else None
+                            )
+                            current_attempts = (
+                                list(current_route.get("attempted", ()))
+                                if isinstance(current_route, dict)
+                                else []
+                            )
+                            if not any(
+                                isinstance(row, dict)
+                                and row.get("agent_id") == candidate.id
+                                for row in current_attempts
+                            ):
+                                _append_tool_stop_route_attempt(
+                                    current_attempts,
+                                    candidate,
+                                    transport="structured_synthesis",
+                                )
+                            merged_attempts = [*attempts, *current_attempts]
+                            current_eligible = (
+                                list(current_route.get("eligible_agent_ids", ()))
+                                if isinstance(current_route, dict)
+                                else []
+                            )
+                            if merged_attempts:
+                                _attach_route_evidence_to_tool_stop(
+                                    exc,
+                                    _route_evidence_payload(
+                                        eligible_agent_ids=list(
+                                            dict.fromkeys(
+                                                [
+                                                    *eligible_agent_ids,
+                                                    *current_eligible,
+                                                ]
+                                            )
+                                        ),
+                                        attempted=merged_attempts,
+                                        terminal_reason="fail_closed",
+                                    ),
+                                )
+                            # A prior candidate already set this flag, so the
+                            # outer handler will not record this terminal stop.
+                            # Group stability still needs this candidate once.
+                            # Do not also trip the circuit: fail-closed tool
+                            # stops are not provider-health failures.
+                            if synthesis_failure_recorded and (
+                                candidate.group_name or free_only
+                            ):
+                                self._group_router.observe_failure(candidate.id)
                             raise
                         request_too_large = _is_request_too_large_error(exc)
                         saw_request_too_large = saw_request_too_large or request_too_large
@@ -7663,6 +7843,7 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
+    @_request_execution_scoped
     def complete(
         self,
         messages: list[ChatMessage],
@@ -7792,6 +7973,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return not self._needs_workflow(text)
 
+    @_request_execution_scoped
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -7984,6 +8166,10 @@ class TaskOrchestrator:
             trace_step["usage"] = usage
         if isinstance(output_budget, dict):
             trace_step.update(output_budget)
+        attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
+        trace_step["selection_design"] = self._selection_design_receipt(
+            [agent], attempted, agent
+        )
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -8035,6 +8221,13 @@ class TaskOrchestrator:
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        effort_snapshot = self._effort_snapshot()
+        parameters["effort_snapshot_hash"] = (
+            None if effort_snapshot is None else effort_snapshot.snapshot_hash
+        )
+        parameters["policy_snapshot_hash"] = hashlib.sha256(
+            json.dumps(self.policy.as_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         if resolved_mode is not None:
             parameters["resolved_mode"] = resolved_mode
         endpoint_partition = _request_endpoint_partition()
@@ -8051,6 +8244,7 @@ class TaskOrchestrator:
             partition=cache_partition,
         )
 
+    @_request_execution_scoped
     def run(
         self,
         messages: list[ChatMessage],
@@ -8200,6 +8394,7 @@ class TaskOrchestrator:
         )
         return output_tokens, round(output_cost, 6)
 
+    @_request_execution_scoped
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
 
@@ -8435,6 +8630,8 @@ class TaskOrchestrator:
             "latency_ms": batch_latency_ms,
             "subtask": "Direct route (batched)", "access": [], "output": result["content"],
         }
+        attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
+        row["selection_design"] = self._selection_design_receipt([agent], attempted, agent)
         if result.get("usage") is not None:
             row["usage"] = result["usage"]
         run_id = f"run_{uuid.uuid4().hex}"
@@ -9060,6 +9257,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
+        self._retain_psychometric_candidates()
         for agent in effective_discovered_agents:
             self._routers_register_member(agent.id)
         if added or updated:
@@ -9172,6 +9370,7 @@ class TaskOrchestrator:
         """Store this thread's pending route attempt evidence."""
         self._route_evidence_local.value = value
 
+    @_request_execution_scoped
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -9251,6 +9450,7 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
+            selection_start = len(_REQUEST_SELECTION_ATTEMPTS.get() or ())
             attempt_answer, attempt_served_id, attempt_served_model, attempt_usage = (
                 self._invoke_with_rate_limit_recovery(
                     candidate,
@@ -9262,6 +9462,7 @@ class TaskOrchestrator:
                     prompt_token_lower_bound=prompt_bound,
                 )
             )
+            attempted = list((_REQUEST_SELECTION_ATTEMPTS.get() or [candidate])[selection_start:])
             current_route_evidence = self._last_route_evidence
             self._last_route_evidence = None
             if isinstance(current_route_evidence, dict):
@@ -9333,6 +9534,10 @@ class TaskOrchestrator:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
             answer, served_id = attempt_answer, attempt_served_id
+            served = next(
+                (item for item in ranked_pool if item.id == attempt_served_id),
+                candidate,
+            )
             if isinstance(extras, dict) and extras.get("tool_calls"):
                 verification = {
                     "accepted": True,
@@ -9345,6 +9550,7 @@ class TaskOrchestrator:
                     text=text,
                     answer=answer,
                     served_id=served_id,
+                    served_candidate_id=self._psychometric_candidate_id(served),
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
@@ -9354,6 +9560,9 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
+            row["selection_design"] = self._selection_design_receipt(
+                ranked_pool, attempted, served
+            )
             trace_rows.append(row)
             if verification["accepted"]:
                 break
@@ -9402,6 +9611,7 @@ class TaskOrchestrator:
         text: str,
         answer: str,
         served_id: str,
+        served_candidate_id: str | None = None,
         latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
@@ -9431,6 +9641,7 @@ class TaskOrchestrator:
                 self._observe_contextual_quality(
                     prompt_context,
                     served_id,
+                    expected_candidate_id=served_candidate_id,
                     accepted=accepted,
                     latency_seconds=latency_seconds,
                     output_tokens=output_tokens,
@@ -9479,6 +9690,7 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @_request_execution_scoped
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -9669,6 +9881,8 @@ class TaskOrchestrator:
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
+            attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
+            row["selection_design"] = self._selection_design_receipt([agent], attempted, agent)
             trace.append(row)
             if progress is not None:
                 _notify_progress(progress, step.role, "completed", redact_value(output))
@@ -9806,25 +10020,120 @@ class TaskOrchestrator:
             )
 
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
-        """Return the opt-in profile bound to one workflow role."""
-        if self.role_effort_catalog is None:
+        """Use the active request revision; preserve standalone single-role adapters."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is None or active[0] is not self:
+            catalog = self.role_effort_catalog
+            return catalog.get(role) if catalog is not None else None
+        snapshot = active[1]
+        if snapshot is None:
             return None
-        return self.role_effort_catalog.get(role)
+        profile = snapshot.role_profiles.get(role)
+        return ReasoningEffortProfile(**profile) if profile is not None else None
+
+    @property
+    def policy(self) -> OrchestrationPolicy:
+        """Read the active request's policy, or the configured policy between requests."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        return active[2] if active is not None and active[0] is self else self._configured_policy
+
+    @policy.setter
+    def policy(self, policy: OrchestrationPolicy) -> None:
+        """Publish policy for later requests without changing work already in progress."""
+        self._configured_policy = policy
+
+    @contextmanager
+    def _request_execution_scope(self):
+        """Capture policy and validate effort once; preserve nested calls and other instances."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            yield
+            return
+        policy = self._configured_policy
+        attempts: list = []
+        snapshot_token = _REQUEST_EXECUTION_SNAPSHOT.set((self, self._effort_snapshot(), policy))
+        attempt_token = _REQUEST_SELECTION_ATTEMPTS.set(attempts)
+        try:
+            yield
+        finally:
+            _REQUEST_SELECTION_ATTEMPTS.reset(attempt_token)
+            _REQUEST_EXECUTION_SNAPSHOT.reset(snapshot_token)
+
+    def _effort_snapshot(self):
+        """Read this request's catalog, or validate a fresh standalone-operation copy."""
+        active = _REQUEST_EXECUTION_SNAPSHOT.get()
+        if active is not None and active[0] is self:
+            return active[1]
+        catalog = self.role_effort_catalog
+        return snapshot_role_effort_catalog(dict(catalog)) if catalog is not None else None
+
+    def _note_selection_attempt(self, agent: ModelAgent) -> None:
+        """Record one real provider call for this request's selection receipt."""
+        attempts = _REQUEST_SELECTION_ATTEMPTS.get()
+        if attempts is not None:
+            attempts.append(agent)
+
+    def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
+        """Bind routing evidence to the declared deployment and decode policy."""
+        return self._psychometric_candidate_ids((agent,))[0]
+
+    def _psychometric_candidate_ids(self, agents: Iterable[ModelAgent]) -> list[str]:
+        """Bind an ordered batch to the request's validated decode-policy snapshot."""
+        agents = list(agents)
+        if not agents:
+            return []
+        effort_snapshot = self._effort_snapshot()
+        effort_catalog = effort_snapshot.snapshot_hash if effort_snapshot is not None else None
+        candidate_ids = []
+        for agent in agents:
+            configuration = json.dumps(
+                {"agent": agent.to_config(), "role_effort_catalog": effort_catalog},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
+            candidate_ids.append(f"{agent.id}:{revision}")
+        return candidate_ids
+
+    def _selection_design_receipt(
+        self,
+        candidates: Iterable[ModelAgent],
+        attempted: Iterable[ModelAgent],
+        selected: ModelAgent,
+    ) -> dict[str, Any]:
+        """Describe the observed deterministic assignment without inventing propensity."""
+        policy = json.dumps(
+            self.policy.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        candidates = list(candidates)
+        attempted = list(attempted)
+        deployment_ids = self._psychometric_candidate_ids([*candidates, *attempted, selected])
+        return {
+            "assignment_mechanism": "deterministic_ranked",
+            "propensity_status": "not_identified",
+            "selected_probability": None,
+            "policy_snapshot_hash": hashlib.sha256(policy).hexdigest(),
+            "candidate_deployment_ids": deployment_ids[:len(candidates)],
+            "attempted_deployment_ids": deployment_ids[len(candidates):-1],
+            "selected_deployment_id": deployment_ids[-1],
+        }
 
     def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Attach a replayable role-effort snapshot when the operator opted in.
+        """Attach effective policy and an opt-in replayable role-effort snapshot.
 
         Buyer next action: compare ``reasoning_effort_snapshot.snapshot_hash``
         on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
-        the constructor catalog to keep today's payload.
+        the constructor catalog to omit role-effort metadata.
         """
-        if self.role_effort_catalog is None:
+        result["policy_snapshot"] = self.policy.as_dict()
+        snapshot = self._effort_snapshot()
+        if snapshot is None:
             return result
-        snapshot = snapshot_role_effort_catalog(self.role_effort_catalog)
         result["reasoning_effort_snapshot"] = {
             "profile_version": snapshot.profile_version,
             "snapshot_hash": snapshot.snapshot_hash,
-            "role_profiles": snapshot.role_profiles,
+            "role_profiles": copy.deepcopy(snapshot.role_profiles),
         }
         return result
 
@@ -10129,17 +10438,20 @@ class TaskOrchestrator:
             or not self._psychometric_router.has_observations()
         ):
             return candidates
+        by_evidence_id = dict(zip(
+            self._psychometric_candidate_ids(candidates), candidates, strict=True
+        ))
         evidence = self._psychometric_router.ranked_evidence(
-            [candidate.id for candidate in candidates],
+            by_evidence_id,
             prompt_context,
             self._embed_cached(prompt_context),
         )
         if not evidence:
             return candidates
-        by_id = {candidate.id: candidate for candidate in candidates}
-        evidenced_ids = [agent_id for agent_id, _score in evidence]
-        return [by_id[agent_id] for agent_id in evidenced_ids] + [
-            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        evidenced_ids = [evidence_id for evidence_id, _score in evidence]
+        evidenced_agent_ids = {by_evidence_id[evidence_id].id for evidence_id in evidenced_ids}
+        return [by_evidence_id[evidence_id] for evidence_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
 
     def _observe_contextual_quality(
@@ -10147,6 +10459,7 @@ class TaskOrchestrator:
         prompt_context: str,
         served_id: str,
         *,
+        expected_candidate_id: str | None = None,
         accepted: bool,
         latency_seconds: float | None,
         output_tokens: int | None,
@@ -10154,29 +10467,56 @@ class TaskOrchestrator:
     ) -> None:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
-        self._psychometric_router.observe(
-            prompt_context,
-            served_id,
-            accepted,
-            self._embed_cached(prompt_context),
-            irt_row,
+        served = next(
+            (agent for agent in self.candidates if agent.id == served_id), None
         )
-        if self._store is not None:
-            context_id = self._psychometric_router.context_id(prompt_context)
-            record = next(
-                item
-                for item in self._psychometric_router.records()
-                if item["context_id"] == context_id and item["agent_id"] == served_id
+        if served is None:
+            # The pool was refreshed while judging; retention would discard
+            # this deployment's evidence, and the answer is already served.
+            return
+        current_candidate_id = self._psychometric_candidate_id(served)
+        if expected_candidate_id is not None and current_candidate_id != expected_candidate_id:
+            return
+        candidate_id = current_candidate_id
+        # Embedding is provider-latency work that depends only on the prompt
+        # context, never on the served agent, so it runs before the
+        # persistence lock is taken: holding the lock across it would
+        # serialize every unrelated observation and retention pass behind one
+        # request's provider call.
+        vector = self._embed_cached(prompt_context)
+        with self._psychometric_persistence_lock:
+            current = next(
+                (agent for agent in self.candidates if agent.id == served_id), None
             )
-            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
-            self._store.save("psychometric_observation", key, record)
-            retained = {
-                hashlib.sha256(
-                    f"{item['context_id']}\0{item['agent_id']}".encode()
-                ).hexdigest()
-                for item in self._psychometric_router.records()
-            }
-            self._store.prune_keyed("psychometric_observation", retained)
+            if current is None or self._psychometric_candidate_id(current) != candidate_id:
+                # The pool changed while embedding ran: the deployment this
+                # outcome describes is gone, and _retain_psychometric_candidates
+                # would discard its evidence anyway.
+                return
+            self._psychometric_router.observe(
+                prompt_context,
+                candidate_id,
+                accepted,
+                vector,
+                irt_row,
+            )
+            if self._store is not None:
+                context_id = self._psychometric_router.context_id(prompt_context)
+                records = self._psychometric_router.records()
+                record = next(
+                    item
+                    for item in records
+                    if item["context_id"] == context_id and item["agent_id"] == candidate_id
+                )
+                key = hashlib.sha256(f"{context_id}\0{candidate_id}".encode()).hexdigest()
+                self._store.save("psychometric_observation", key, record)
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in records
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     # --- dual-ledger membership maintenance ---------------------------------
 
@@ -10198,6 +10538,22 @@ class TaskOrchestrator:
         """Forget members that left the pool in every ledger."""
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
+        self._retain_psychometric_candidates()
+
+    def _retain_psychometric_candidates(self) -> None:
+        """Keep evidence only for the pool's current deployment configurations."""
+        with self._psychometric_persistence_lock:
+            self._psychometric_router.retain_agents(
+                self._psychometric_candidate_ids(self.candidates)
+            )
+            if self._store is not None:
+                retained = {
+                    hashlib.sha256(
+                        f"{item['context_id']}\0{item['agent_id']}".encode()
+                    ).hexdigest()
+                    for item in self._psychometric_router.records()
+                }
+                self._store.prune_keyed("psychometric_observation", retained)
 
     @staticmethod
     def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
@@ -10978,6 +11334,7 @@ class TaskOrchestrator:
                 with self.client.request_settings(**request_settings), tool_scope:
                     record_initial_selection([member.id for member in race_members], "text_race",
                                              attempt_id=decision_attempt_id)
+                    self._note_selection_attempt(agent)
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
                         if effort_profile is not None
@@ -11084,6 +11441,7 @@ class TaskOrchestrator:
                     )
                     with transport_scope, tool_scope:
                         record_initial_selection([agent.id], "invocation_" + role)
+                        self._note_selection_attempt(agent)
                         output = (
                             self.client.chat(agent, messages, effort_profile=effort_profile)
                             if effort_profile is not None
@@ -11122,6 +11480,18 @@ class TaskOrchestrator:
                         # convert this to failover without an explicit product
                         # decision distinguishing which failure kinds that would
                         # actually be safe for.
+                        _append_tool_stop_route_attempt(
+                            route_attempts, agent, transport="chat"
+                        )
+                        if route_attempts:
+                            _attach_route_evidence_to_tool_stop(
+                                exc,
+                                _route_evidence_payload(
+                                    eligible_agent_ids=eligible_agent_ids,
+                                    attempted=route_attempts,
+                                    terminal_reason="fail_closed",
+                                ),
+                            )
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
@@ -11156,6 +11526,22 @@ class TaskOrchestrator:
                         decision = classify_provider_transport_failure(exc.retryable)
                     elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
+                            # Default and auto routes have no allow-list, so
+                            # this used to rethrow before the recorder and
+                            # drop both the prior failover and this malformed
+                            # attempt. Keep the response-error taxonomy.
+                            _append_typed_route_failure(
+                                route_attempts, agent, exc, transport="chat"
+                            )
+                            if route_attempts:
+                                _attach_route_evidence_to_response_error(
+                                    exc,
+                                    _route_evidence_payload(
+                                        eligible_agent_ids=eligible_agent_ids,
+                                        attempted=route_attempts,
+                                        terminal_reason="fail_closed",
+                                    ),
+                                )
                             raise
                         bounded_provider_response_failures += 1
                         last_provider_response_error = exc
@@ -11183,6 +11569,23 @@ class TaskOrchestrator:
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         if decision.circuit_failure:  # pragma: no branch - retry-classified failures always trip the circuit
                             self._record_failure(agent.id)
+                        if isinstance(exc, ProviderUpstreamError):
+                            _append_typed_route_failure(
+                                route_attempts, agent, exc, transport="chat"
+                            )
+                        else:
+                            # The retry decision is already the authority for
+                            # this tool failure. Do not reclassify it as a
+                            # provider api_error merely to build the receipt.
+                            route_attempts.append(
+                                {
+                                    "agent_id": agent.id,
+                                    "model": agent.model,
+                                    "outcome": "retryable_transport",
+                                    "retryable": True,
+                                    "transport": "chat",
+                                }
+                            )
                         if self.tool_retry_backoff_seconds:
                             retry_ceiling = min(
                                 self.tool_retry_backoff_seconds
@@ -11199,8 +11602,8 @@ class TaskOrchestrator:
                     if decision.circuit_failure:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
-                        _append_typed_route_failure(
-                            route_attempts, agent, exc, transport="chat"
+                        _append_tool_stop_route_attempt(
+                            route_attempts, agent, transport="chat"
                         )
                         raise ToolFallbackStoppedError(
                             agent.id,
@@ -11959,6 +12362,7 @@ class TaskOrchestrator:
         recovered_attempts: list[dict[str, Any]] = []
         recovered_eligible_agent_ids: list[str] = []
         while True:
+            cooling_at_round_start = set(self._rate_limited_snapshot())
             try:
                 result = self._invoke(
                     primary,
@@ -12023,10 +12427,38 @@ class TaskOrchestrator:
                         for candidate in candidates
                         if candidate.id not in excluded_agent_ids
                     ]
-                if not virtual_selector or any(
-                    self._rate_limit_remaining(candidate.id) is None
+                ready = [
+                    candidate
                     for candidate in candidates
+                    if self._rate_limit_remaining(candidate.id) is None
+                ]
+                # A candidate skipped this round only because it was still
+                # cooling, and whose cooldown expired before this check, did
+                # not fail: re-run selection within the wait budget instead
+                # of reading it as a mixed failure. Any other ready candidate
+                # (one that was attempted, or not cooling) still re-raises.
+                round_attempted_ids = {
+                    row.get("agent_id") for row in current_attempts if isinstance(row, dict)
+                }
+                expired_unattempted = [
+                    candidate
+                    for candidate in ready
+                    if candidate.id in cooling_at_round_start
+                    and candidate.id not in round_attempted_ids
+                ]
+                if wait_deadline is None and expired_unattempted:
+                    wait_deadline = time.monotonic() + self._rate_limit_wait_budget(primary)
+                if (
+                    virtual_selector
+                    and ready
+                    and len(expired_unattempted) == len(ready)
+                    and wait_deadline is not None
+                    and time.monotonic() < wait_deadline
                 ):
+                    recovered_attempts = merged_attempts
+                    recovered_eligible_agent_ids = merged_eligible
+                    continue
+                if not virtual_selector or len(expired_unattempted) < len(ready):
                     # Not a genuine storm to wait out: either the caller
                     # pinned one explicit concrete model (fail fast,
                     # unchanged pre-existing contract -- see
@@ -12088,6 +12520,40 @@ class TaskOrchestrator:
                             str(current_route.get("terminal_reason"))
                             if isinstance(current_route, dict)
                             else "eligible_set_exhausted"
+                        ),
+                    ),
+                ) from None
+            except ToolFallbackStoppedError as exc:
+                if not recovered_attempts:
+                    raise
+                current_route = (
+                    exc.detail.get("route") if isinstance(exc.detail, dict) else None
+                )
+                if not isinstance(current_route, dict):
+                    current_route = None
+                current_attempts = (
+                    list(current_route.get("attempted", ()))
+                    if current_route is not None
+                    else []
+                )
+                current_eligible = (
+                    list(current_route.get("eligible_agent_ids", ()))
+                    if current_route is not None
+                    else []
+                )
+                raise _attach_route_evidence_to_tool_stop(
+                    exc,
+                    _route_evidence_payload(
+                        eligible_agent_ids=list(
+                            dict.fromkeys(
+                                [*recovered_eligible_agent_ids, *current_eligible]
+                            )
+                        ),
+                        attempted=[*recovered_attempts, *current_attempts],
+                        terminal_reason=(
+                            str(current_route.get("terminal_reason") or "fail_closed")
+                            if current_route is not None
+                            else "fail_closed"
                         ),
                     ),
                 ) from None

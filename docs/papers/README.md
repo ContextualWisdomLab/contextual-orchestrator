@@ -145,6 +145,11 @@ redistribution is unclear.
   (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
   Grounds workflow steps, recursion depth, decomposition, and access-list
   scope as first-class ablation factors.
+- Zhang, A. L., Kraska, T., & Khattab, O. (2026). *Recursive language models*
+  (arXiv:2512.24601, Version 3). https://arxiv.org/abs/2512.24601
+  Cited by the request-partitioning ADR and doctoring receipts as external
+  motivation for bounded ownership of long inputs. Citation only; this is not
+  a reproduction of RLM experiments.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
@@ -286,6 +291,7 @@ that the papers were fully reviewed, their claims reproduced, or PDFs licensed.
 | 2506.22316 | [Polytomous judge benchmark](../benchmarks/2026-08-11-polytomous-llm-judge.md) and [judge calibration ADR](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md) |
 | 2110.15150 | [Purpose-limited protection ADR](../planning/adrs/0028-purpose-limited-pii-protection.md) |
 | 2601.17814 | [Model-group specification](../model-group-product-technical-spec.md) and [free-pool admission research](../research/review-gateway-free-pool-admission.md) |
+| 2512.24601 | [Request partitioning ADR](../planning/adrs/0135-whole-request-partitioning.md) and [learned-policy authority receipt](../doctoring/learned_policy_authority_20260910.md) |
 
 Scope: explicit arXiv URL, colon, and DOI-style identifiers in tracked Python,
 Rust, Markdown, and TOML files. This is a discovery census, not a complete
@@ -400,12 +406,15 @@ standards rather than papers. Existing citation discussions remain authoritative
 this register prevents DOI-only sources from escaping the discovery inventory.
 Case and sentence-final punctuation are normalized by the inventory test.
 
+- [David and Nagaraja (2003), *Order statistics*](https://doi.org/10.1002/0471722162) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md) and [library research](../library_research.md).
 - [DOI 10.1007/s11336-006-1478-z](https://doi.org/10.1007/s11336-006-1478-z)
 - [Bolsinova and Tijmstra (2019)](https://doi.org/10.1007/s11336-019-09682-5) — [bounded abstract review and outcome-leakage constraint](../doctoring/irt_router_measurement_review.md#conditional-dependence-follow-up).
 - [Bolsinova and Molenaar (2018)](https://doi.org/10.3389/fpsyg.2018.01525) — [bounded nonlinear-dependence intake and proposed leakage-safe evaluation](../doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake); no LLM transfer or replication claim.
 - [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
 - [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
 - [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
+- [Hyndman and Fan (1996), sample quantiles](https://doi.org/10.1080/00031305.1996.10473566) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
+- [Kaplan and Meier (1958), nonparametric estimation from incomplete observations](https://doi.org/10.1080/01621459.1958.10501452) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
 - [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
 - [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
@@ -423,6 +432,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [RFC 9110](https://doi.org/10.17487/RFC9110)
 - [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
 - [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)
+- [Brookmeyer and Crowley (1982), median survival time confidence interval](https://doi.org/10.2307/2530286) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [arXiv 2211.09110 DOI](https://doi.org/10.48550/arXiv.2211.09110)
 - [arXiv 2305.05176 DOI](https://doi.org/10.48550/arXiv.2305.05176)
 - [arXiv 2403.04132 DOI](https://doi.org/10.48550/arXiv.2403.04132)

@@ -41,6 +41,12 @@ from contextual_orchestrator.provider_errors import (
     resolve_retry_after_seconds,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server
+from contextual_orchestrator.tool_fallback import (
+    ToolExecutionError,
+    ToolFailureKind,
+    ToolFallbackStoppedError,
+    classify_tool_failure,
+)
 
 
 def _headers(pairs: dict[str, str] | None = None) -> Message:
@@ -83,18 +89,21 @@ def test_parse_retry_after_missing_or_unparseable_is_unknown() -> None:
 
 
 def test_resolve_retry_after_prefers_retry_after_header() -> None:
-    exc = _rate_limited_error(headers={"Retry-After": "3", "x-ratelimit-reset": "99"})
-    assert resolve_retry_after_seconds(exc) == 3.0
+    with _rate_limited_error(headers={"Retry-After": "3", "x-ratelimit-reset": "99"}) as exc:
+        assert resolve_retry_after_seconds(exc) == 3.0
+    assert exc.closed
 
 
 def test_resolve_retry_after_falls_back_to_ratelimit_reset_header() -> None:
-    exc = _rate_limited_error(headers={"x-ratelimit-reset-requests": "7"})
-    assert resolve_retry_after_seconds(exc) == 7.0
+    with _rate_limited_error(headers={"x-ratelimit-reset-requests": "7"}) as exc:
+        assert resolve_retry_after_seconds(exc) == 7.0
+    assert exc.closed
 
 
 def test_resolve_retry_after_unknown_when_neither_header_present() -> None:
-    exc = _rate_limited_error(headers={})
-    assert resolve_retry_after_seconds(exc) is None
+    with _rate_limited_error(headers={}) as exc:
+        assert resolve_retry_after_seconds(exc) is None
+    assert exc.closed
 
 
 # --------------------------------------------------------------------------
@@ -271,6 +280,31 @@ def test_storm_with_budget_waits_and_succeeds_on_retry() -> None:
     assert result["orchestration"]["rate_limited_skipped"]
     # A 429 must not trip the circuit breaker for either candidate.
     assert orchestrator._circuit == {}
+
+
+def test_mixed_failure_wait_retries_only_explicitly_rejected_candidate() -> None:
+    """A later 429 can recover without replaying an earlier uncertain send."""
+    client = SequencedRateLimitClient(
+        {
+            "primary_free_agent": [ConnectionResetError("provider outcome unknown")],
+            "fallback_free_agent": [
+                _rate_limited_error(headers={"Retry-After": "1"}),
+                {"id": "chatcmpl_recovered", "choices": []},
+            ],
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), client=client, rate_limit_wait_seconds=5.0
+    )
+
+    result = orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "hi"}]}
+    )
+
+    assert result["id"] == "chatcmpl_recovered"
+    assert client.calls == ["primary_free_agent", "fallback_free_agent", "fallback_free_agent"]
+    assert orchestrator._circuit["primary_free_agent"]["failures"] == 1.0
+    assert "fallback_free_agent" not in orchestrator._circuit
 
 
 # --------------------------------------------------------------------------
@@ -597,6 +631,152 @@ def test_route_once_preserves_recovered_attempts_on_malformed_exhaustion() -> No
     orchestrator.close()
 
 
+def _service_unavailable(retry_after_seconds: float) -> ProviderUpstreamError:
+    """Classified 503 the chat transport already handed to ``_invoke``."""
+    return ProviderUpstreamError(
+        agent_id="unit",
+        model="unit-model",
+        error_code="service_unavailable",
+        message="upstream unavailable",
+        client_status=503,
+        provider_status=503,
+        retryable=True,
+        transport="chat",
+        extra_detail={"retry_after_seconds": retry_after_seconds},
+    )
+
+
+def _ambiguous_tool_stop() -> ToolExecutionError:
+    return ToolExecutionError(
+        "request may have completed token=must-not-leak",
+        tool_name="send_message",
+        kind=ToolFailureKind.TRANSPORT_ERROR,
+        outcome_unknown=True,
+    )
+
+
+def test_http_fail_closed_after_503_keeps_route_and_stops() -> None:
+    """HTTP 409 keeps the earlier 503 and the terminal tool stop, then stops."""
+    agents = [
+        *_free_route_agents(),
+        ModelAgent(
+            "untried_free_agent",
+            "untried-free-model",
+            priority=0,
+            provider_name="untried",
+            tags=("cost:free", "reasoning", "coding"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents, tool_retry_attempts=0)
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_service_unavailable(1.0)],
+            "fallback_free_agent": [_ambiguous_tool_stop()],
+            "untried_free_agent": ["must not run"],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    response = None
+    try:
+        status, body, response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            token,
+        )
+    finally:
+        if response is not None:
+            response.close()
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert response is not None and response.closed
+    assert status == 409, body
+    assert body["error"]["code"] == "tool_execution_stopped"
+    assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
+    route = body["error"]["detail"]["route"]
+    assert route["eligible_agent_ids"] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+        "untried_free_agent",
+    ]
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    terminal = route["attempted"][-1]
+    assert "error_code" not in terminal
+    assert "provider_status" not in terminal
+    assert [attempt["agent_id"] for attempt in route["attempted"]] == [
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert route["terminal_reason"] == "fail_closed"
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent"]
+    assert "must-not-leak" not in json.dumps(body)
+
+
+def test_route_once_fail_closed_keeps_attempts_from_the_wait_round(monkeypatch) -> None:
+    """A tool stop after a 503 storm still carries the waited round's attempts."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    slept: list[float] = []
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    def advance_clock(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    orchestrator._rate_limit_sleep = advance_clock
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [
+                _service_unavailable(0.01),
+                _service_unavailable(0.01),
+            ],
+            "fallback_free_agent": [
+                _service_unavailable(0.01),
+                _ambiguous_tool_stop(),
+            ],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    with pytest.raises(ToolFallbackStoppedError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert type(excinfo.value) is ToolFallbackStoppedError
+    route = excinfo.value.detail["route"]
+    assert route["terminal_reason"] == "fail_closed"
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport",
+        "retryable_transport",
+        "retryable_transport",
+        "fail_closed",
+    ]
+    assert chat_outcomes.calls == [
+        "primary_free_agent",
+        "fallback_free_agent",
+        "primary_free_agent",
+        "fallback_free_agent",
+    ]
+    assert slept == [pytest.approx(0.01, abs=0.5)]
+    orchestrator.close()
+
+
 def test_route_once_preserves_attempts_across_judge_rejected_worker_rounds() -> None:
     """A later direct worker success must not erase an earlier failover receipt."""
     orchestrator = TaskOrchestrator(_free_route_agents(), tool_retry_attempts=1)
@@ -635,6 +815,7 @@ def test_route_once_preserves_attempts_across_judge_rejected_worker_rounds() -> 
         "fallback_free_agent",
     ]
     assert [attempt["outcome"] for attempt in result["route"]["attempted"]] == [
+        "retryable_transport",
         "retryable_transport",
         "served",
         "served",
@@ -678,6 +859,108 @@ def test_route_once_preserves_malformed_taxonomy_for_mixed_size_exhaustion(
         else ["request_too_large", "fail_closed"]
     )
     assert route["terminal_reason"] == "eligible_set_exhausted"
+    orchestrator.close()
+
+
+def _default_route_agents() -> list[ModelAgent]:
+    """Two ungrouped workers so a default/auto route failsover with no allow-list."""
+    return [
+        ModelAgent(
+            "primary_worker",
+            "primary-model",
+            priority=10,
+            tags=("reasoning", "writing"),
+        ),
+        ModelAgent(
+            "fallback_worker",
+            "fallback-model",
+            priority=1,
+            tags=("reasoning", "writing"),
+        ),
+    ]
+
+
+def _wrapped_provider_tool_stop(agent_id: str) -> ToolFallbackStoppedError:
+    """The already-wrapped stop ``_provider_tool_execution_stopped`` returns."""
+    decision = classify_tool_failure(
+        ToolExecutionError(
+            "provider reported terminal tool execution state",
+            tool_name="provider_tool_runtime",
+            kind=ToolFailureKind.TRANSPORT_ERROR,
+            outcome_unknown=True,
+        )
+    )
+    return ToolFallbackStoppedError(agent_id, decision)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL],
+)
+def test_default_route_malformed_after_failover_keeps_response_route(
+    model_name: str,
+) -> None:
+    """A default/auto failover must attach route before rethrowing a malformed response."""
+    orchestrator = TaskOrchestrator(_default_route_agents(), tool_retry_attempts=0)
+    orchestrator.client.chat = QueuedChatOutcomes(
+        {
+            "primary_worker": [_service_unavailable(1.0)],
+            "fallback_worker": [ProviderResponseError("malformed fallback response")],
+        }
+    )
+
+    with pytest.raises(ProviderResponseError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=model_name,
+        )
+
+    assert type(excinfo.value) is ProviderResponseError
+    route = excinfo.value.detail["route"]
+    assert [row["agent_id"] for row in route["attempted"]] == [
+        "primary_worker",
+        "fallback_worker",
+    ]
+    assert [row["outcome"] for row in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    assert route["terminal_reason"] == "fail_closed"
+    orchestrator.close()
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL],
+)
+def test_default_route_wrapped_tool_stop_keeps_prior_attempts(
+    model_name: str,
+) -> None:
+    """An already-wrapped provider tool stop still carries the prior failover row."""
+    orchestrator = TaskOrchestrator(_default_route_agents(), tool_retry_attempts=0)
+    orchestrator.client.chat = QueuedChatOutcomes(
+        {
+            "primary_worker": [_service_unavailable(1.0)],
+            "fallback_worker": [_wrapped_provider_tool_stop("fallback_worker")],
+        }
+    )
+
+    with pytest.raises(ToolFallbackStoppedError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "hello"}],
+            model_name=model_name,
+        )
+
+    route = excinfo.value.detail["route"]
+    assert [row["outcome"] for row in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    terminal = route["attempted"][-1]
+    assert terminal["agent_id"] == "fallback_worker"
+    assert "error_code" not in terminal
+    assert "provider_status" not in terminal
+    assert route["terminal_reason"] == "fail_closed"
     orchestrator.close()
 
 
