@@ -1,5 +1,53 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-26 protected-main test-signal recovery — Proposed
+
+Canonical owner PR [#1266](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1266)
+recovers the runtime and test authority lost by earlier restack merges. Its exact
+CI-equivalent baseline exposed 153 failures plus one collection error on
+protected `main@5665b0ad`; the first owner repair removes 77 OpenRouter
+availability/answer-quality violations and restores collection so remaining
+failures are visible rather than hidden.
+
+The existing RED
+`test_unbounded_synchronous_embedding_waits_for_provider_completion` proves
+that the application default `timeout=None` reached
+`ProviderEmbeddingBatchBackend.wait`, where `math.isfinite(None)` raised
+`TypeError` instead of waiting for provider completion. GREEN
+`343bf7f82fd4f483ca829295c735b4e75017e31c` accepts `None` and non-finite
+numeric deadlines as the same explicit unbounded contract; documentation
+successor `ea1ac223bd8eb8c137c490ef7871734a27558a69` records that boundary.
+This is source evidence only until fresh exact-head hosted tests execute.
+
+Hosted RED run [36147466940](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36147466940)
+selected the repository's pinned Rust 1.97.1 directory override, whose
+`profile = "minimal"` omitted `rustfmt` and `clippy`; the Rust gate therefore
+failed before formatting or linting. GREEN source
+`6e70a196d715fd3c9ba9b89bc8698f252ead04e5` declares both components in
+`rust-toolchain.toml`. This is configuration evidence only until its fresh
+exact-head hosted Rust gate completes.
+
+Follow-up source at `f882ee7b12e805bd5924a28d3a23999d7e76f160`
+integrates the previously dropped #1074 request-policy/effort snapshots,
+psychometric deployment identities and selection-design receipts; restores typed
+EgressWeave allowlist failures; repairs the planning ADR filename and paper
+inventory; and moves affected CI installs to the exact `uv.lock` environment.
+These source deltas supersede the earlier “not fixed” bucket descriptions; their
+hosted verification remains pending.
+
+Current-head review found the OpenRouter telemetry fetch still used unbounded
+`response.read()`. RED `e76d3b3954de37c293a98339aefadbdd016e0d90`
+read the full oversized payload (requested size `-1`) and returned a parsed
+99.5 value. GREEN `9cf335ab8021923cf4e301f951e4e37a5bae01fb`
+reads only the shared 8 MiB provider-response bound plus one byte and rejects an
+oversized payload before JSON parsing. Exact source/test AST parsing passed; the
+direct behavior probe rejected the oversized response with one 65-byte read
+under a test-injected 64-byte bound and preserved a valid 99.5 response.
+
+Status remains **Proposed**. Fresh exact-head hosted tests, independent approval,
+protected integration, an immutable fast-mlsirm release instead of VCS
+consumption, and consumer pins remain unverified.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
@@ -7159,3 +7207,41 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+
+## 2026-09-27 PR #1269 executable-fixture carryover — Proposed
+
+Canonical successor PR #1266 already contains predecessor #1269's two
+production repairs: `ProviderEmbeddingBatchBackend.wait(timeout=None)` keeps
+the no-implicit-deadline contract, and EgressWeave allowlist misses remain typed,
+non-retryable `provider_connection_error` 502 responses. Existing successor
+tests cover direct unbounded completion, infinite waits, coordinator defaults,
+and allowlist classification/failover.
+
+The remaining distinct executable requirements are carried at
+`2eceb6474c2904ae308991e89595b1f44c852940`: a finite wait returns while the
+provider is blocked, and the real default `/v1/embeddings` HTTP route forwards
+`ModelClient.timeout=None` unchanged to the provider backend. The predecessor's
+exact `cd30956feda8452aedb751a30a7f0206c442e1b2` reported 8/8 focused GREEN;
+the successor's isolated finite-deadline case passes and its exact test blob
+`8db8c9ec80757d25cd715aa3acaf191c7f613640` compiles. Fresh exact-head hosted
+execution and independent approval remain required; status stays Proposed.
+
+## 2026-09-27 Same-agent selection receipt fidelity — Proposed
+
+PR #1266's deterministic selection receipt recorded each candidate once even
+when the research-backed retry decision made multiple real calls to the same
+Agent. That understated request execution and contradicted the existing
+endpoint-race invariant that `attempted_deployment_ids` reproduces actual call
+order and multiplicity. RED `f56e10d3` extends the ordinary free-pool retry
+fixture: five real provider calls produced only three receipt entries. GREEN
+`9188e232` appends the deployment identity inside the retry loop, preserving
+each call without changing retry admission, ordering, weights, or fallback.
+
+Publication commit `cad76d46` exposed a transfer-path defect: a locally
+captured large-file payload contained an output-truncation marker, corrupting
+`orchestrator.py`, and the same path truncated this baseline. Forward repair
+`bd3d83d9` restores the source from protected predecessor blob `5e7bf08b`
+plus the reviewed one-line change. This receipt restores the full baseline
+directly from exact `ca5efdc0` authority. No force push or history rewrite was
+used. Exact-head hosted execution, independent approval, protected-main
+integration, and immutable release remain required; status stays Proposed.

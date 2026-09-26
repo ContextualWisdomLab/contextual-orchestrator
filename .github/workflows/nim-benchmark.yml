@@ -49,10 +49,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
       - name: Install pinned runtime
         run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps -e .
+          uv sync --locked --extra api --extra db --extra queue
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run dry benchmark
         env:
@@ -104,10 +109,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
       - name: Install pinned runtime
         run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps -e .
+          uv sync --locked --extra api --extra db --extra queue
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Resolve live parameters
         id: live_params
