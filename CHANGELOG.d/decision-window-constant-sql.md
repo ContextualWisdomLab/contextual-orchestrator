@@ -1,0 +1,1 @@
+Replaced the string-concatenated `IN (?, ?, …)` list in the decision-window reader with a single JSON-array parameter expanded by SQLite `json_each`, so the SQL text is constant. Behaviour is unchanged; this clears the two blocking Semgrep `sqlalchemy-execute-raw-query` findings that fail every PR on `main`.

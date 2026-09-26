@@ -321,6 +321,27 @@ algorithms. They add validity, identification, and fair-comparison checks:
   complete review of results. The [implementation proposal](../doctoring/autonomous_kpi_runbook.md#expanded-population-validity-proposal)
   is an engineering inference, not a demonstrated LLM-routing result.
 
+## Multi-model answer combination
+
+These sources ground `contextual_orchestrator/domain/combination.py`,
+`domain/moa.py`, and `application/fan_out.py`. The combination modules and
+their stated divergences are described in
+[multi-model combination](../doctoring/multi_model_combination.md).
+
+- **Self-consistency**: Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le,
+  Ed H. Chi, Sharan Narang, Aakanksha Chowdhery, Denny Zhou. *Self-consistency
+  improves chain of thought reasoning in language models*. ICLR 2023.
+  arXiv:2203.11171. Used for: the plurality-vote aggregation rule over
+  extracted final answers, and reporting agreement share as an uncertainty
+  signal. The paper votes over samples from one model; this repository votes
+  across different workers. Source: https://arxiv.org/abs/2203.11171.
+- **Mixture-of-Agents**: Junlin Wang, Jue Wang, Ben Athiwaratkun, Ce Zhang,
+  James Zou. *Mixture-of-Agents enhances large language model capabilities*.
+  arXiv:2406.04692, 2024. Used for: the proposer/aggregator split and the
+  Aggregate-and-Synthesize instruction (Table 1). Implemented as one proposer
+  layer plus one aggregator (the paper's MoA-Lite depth), not the multi-layer
+  default. Source: https://arxiv.org/abs/2406.04692.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
