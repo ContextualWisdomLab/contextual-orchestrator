@@ -47,6 +47,7 @@ class FakeValkeyClient:
         self.expirations: Dict[str, int] = {}
         self.strings: Dict[str, Any] = {}
         self.execution_extension_attempted = threading.Event()
+        self.execution_extension_count = 0
         self.lose_execution_extension = True
         self.execution_acquire_failures = 0
 
@@ -77,6 +78,8 @@ class FakeValkeyClient:
 
         def extend(self, _seconds: float, *, replace_ttl: bool) -> bool:
             assert replace_ttl is True
+            self._client.execution_extension_count += 1
+            self._client.execution_extension_attempted.set()
             if self._lose_on_extend:
                 self._owned = False
                 self._client.lose_execution_extension = False
@@ -302,6 +305,48 @@ def test_close_wakes_waiter_without_cancelling_durable_provider_job() -> None:
     release.set()
     assert not waiter.is_alive()
     assert result["status"] == "running"
+
+
+def test_close_stops_durable_claim_renewal_and_fences_late_result() -> None:
+    """A closed worker must release its durable claim without publishing late output."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(_requests):
+        started.set()
+        assert release.wait(timeout=2)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=0.15,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="recoverable")])
+    assert started.wait(timeout=1)
+    assert client.execution_extension_attempted.wait(timeout=1)
+
+    backend.close()
+    extensions_at_close = client.execution_extension_count
+    assert threading.Event().wait(0.2) is False
+    assert client.execution_extension_count == extensions_at_close
+
+    release.set()
+    claim_key = (
+        "batch_job_registry:provider_embedding_job_execution:claim:"
+        f"{job.job_id}"
+    )
+    deadline = time.monotonic() + 1
+    while claim_key in client.strings and time.monotonic() < deadline:
+        threading.Event().wait(0.01)
+
+    assert claim_key not in client.strings
+    assert backend.poll(job)["status"] == "running"
+    assert backend.retrieve(job) == []
+
+
 
 
 def test_provider_job_recovers_after_claim_renewal_loss_without_restart() -> None:
