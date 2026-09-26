@@ -7279,6 +7279,10 @@ release, deployment, independent approval, or production-cost authority.
   calendar/probe-count tests with persistent-demotion, explicit-reset,
   passive-evidence, and zero-callback contracts. `373518ff879f84143859838f6a146de79b16c047`
   corrects the changelog.
+- **Contract doctoring:** `96417a078fad5a94c0ae43b7485f9a7c6765bb48`
+  renames the remaining promotion test so its name matches its assertions:
+  passive evidence never admits without authoritative pre-send entitlement.
+  This is test-contract wording only; production behavior is unchanged.
 - **Evidence:** Experiential Labs documents settled cost on or after a request;
   no authoritative pre-send entitlement proving that the next call is free was
   found. Therefore promotion and passive cost observations remain useful for
