@@ -182,6 +182,40 @@ OPENAPI_SPEC = {
                     "stream places this object in the final completion chunk."
                 ),
                 "required": ["eligible_agent_ids", "attempted", "terminal_reason"],
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {"terminal_reason": {"const": "served"}},
+                            "required": ["terminal_reason"],
+                        },
+                        "then": {
+                            "properties": {
+                                "attempted": {
+                                    "contains": {
+                                        "type": "object",
+                                        "required": ["outcome"],
+                                        "properties": {"outcome": {"const": "served"}},
+                                    },
+                                    "minContains": 1,
+                                    "maxContains": 1,
+                                }
+                            }
+                        },
+                        "else": {
+                            "properties": {
+                                "attempted": {
+                                    "not": {
+                                        "contains": {
+                                            "type": "object",
+                                            "required": ["outcome"],
+                                            "properties": {"outcome": {"const": "served"}},
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ],
                 "properties": {
                     "eligible_agent_ids": {"type": "array", "items": {"type": "string"}},
                     "attempted": {
