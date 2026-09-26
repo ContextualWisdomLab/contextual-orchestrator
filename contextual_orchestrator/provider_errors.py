@@ -41,6 +41,7 @@ __all__ = [
     "classify_provider_failure",
     "parse_retry_after",
     "provider_error_body",
+    "provider_limit_evidence",
     "rate_limited_storm_error",
     "resolve_retry_after_seconds",
     "safe_provider_message",
@@ -145,6 +146,22 @@ def provider_error_body(exc: urllib.error.HTTPError) -> bytes:
     except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
         pass
     return body
+
+
+def provider_limit_evidence(exc: urllib.error.HTTPError) -> dict[str, str]:
+    """Return bounded limit-classification fields from a cached HTTP error body.
+
+    Only identifier-like values survive (see
+    ``domain.provider_limits.limit_evidence_from_payload``); an unreadable or
+    non-JSON body yields ``{}``.
+    """
+    from .domain.provider_limits import limit_evidence_from_payload
+
+    try:
+        payload = _json.loads(provider_error_body(exc).decode("utf-8", errors="replace"))
+    except (ValueError, TypeError):
+        return {}
+    return limit_evidence_from_payload(payload)
 
 
 def parse_retry_after(value: str | None, *, now: float | None = None) -> float | None:
@@ -322,6 +339,7 @@ class ProviderUpstreamError(RuntimeError):
         retryable: bool = False,
         transport: str = "chat",
         extra_detail: dict[str, Any] | None = None,
+        limit_evidence: dict[str, str] | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.model = model
@@ -331,6 +349,9 @@ class ProviderUpstreamError(RuntimeError):
         self.retryable = retryable
         self.transport = transport
         self.extra_detail = dict(extra_detail or {})
+        # Bounded identifier fields from the upstream error body (never free
+        # text) for the spend guard's provider-limit rule; not caller-facing.
+        self.limit_evidence = dict(limit_evidence or {})
         super().__init__(message)
 
     @property
@@ -383,6 +404,7 @@ def classify_provider_failure(
             retryable=exc.retryable,
             transport=transport,
             extra_detail=exc.extra_detail,
+            limit_evidence=getattr(exc, "limit_evidence", None),
         )
     if isinstance(exc, urllib.error.HTTPError):
         status = exc.code
@@ -411,6 +433,7 @@ def classify_provider_failure(
             retryable=retryable,
             transport=transport,
             extra_detail=extra_detail,
+            limit_evidence=provider_limit_evidence(exc),
         )
     if isinstance(exc, ssl.SSLCertVerificationError):
         return ProviderUpstreamError(
