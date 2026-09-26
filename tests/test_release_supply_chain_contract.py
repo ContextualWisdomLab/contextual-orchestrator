@@ -37,6 +37,60 @@ def test_release_requires_sbom_before_publication() -> None:
     assert "if-no-files-found: error" in fetch_block
 
 
+def test_sbom_lookup_ignores_successful_scheduled_run_on_same_commit(tmp_path: Path) -> None:
+    """Fetch the push-run SBOM even when a newer scheduled run shares its SHA."""
+    block = _workflow_text().split(
+        "      - name: Fetch the required CycloneDX SBOM for this commit\n", 1
+    )[1].split("\n      - name:", 1)[0]
+    script = textwrap.dedent(block.split("        run: |\n", 1)[1])
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ \"$1 $2\" == 'run list' ]]; then\n"
+        "  if [[ \" $* \" == *' --branch main '* && \" $* \" == *' --event push '* ]]; then\n"
+        "    echo 101\n"
+        "  else\n"
+        "    echo 202\n"
+        "  fi\n"
+        "elif [[ \"$1 $2\" == 'run download' && \" $* \" == *' 101 '* ]]; then\n"
+        "  mkdir -p sbom-download\n"
+        "  printf '%s\\n' '{\"bomFormat\":\"CycloneDX\"}' > sbom-download/cyclonedx-sbom.json\n"
+        "else\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+             "GITHUB_REPOSITORY": "ContextualWisdomLab/contextual-orchestrator",
+             "TARGET_SHA": "a" * 40},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "sbom-download/cyclonedx-sbom.json").is_file()
+
+
+def test_release_builds_wheel_without_system_setuptools() -> None:
+    """A clean verifier must install its build backend in isolation."""
+    workflow = _workflow_text()
+    build = workflow.split("      - name: Build the installable package for this exact commit\n", 1)[1]
+    build = build.split("\n      - name:", 1)[0]
+    assert "uv build --wheel --python 3.12 --out-dir dist" in build
+    assert 'SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${TARGET_SHA}")"' in build
+    assert "export SOURCE_DATE_EPOCH" in build
+    assert 'uv build --wheel --python 3.12 --out-dir "${RUNNER_TEMP}/release-rebuild"' in build
+    assert 'cmp "${wheel}" "${RUNNER_TEMP}/release-rebuild/${wheel##*/}"' in build
+    assert "uv pip install --no-deps --python 3.12 --target" in build
+    assert "--no-build-isolation" not in build
+    assert "importlib.metadata.distributions(path=[str(site)])" in build
+
+
 def test_sbom_asset_attachment_is_fail_closed() -> None:
     """A published canonical release must not report success with its SBOM missing."""
     workflow = _workflow_text()

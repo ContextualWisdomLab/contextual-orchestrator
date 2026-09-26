@@ -195,6 +195,27 @@ def test_render_release_notes_includes_provenance_and_section_body() -> None:
     assert "- New thing." in body
 
 
+def test_render_release_notes_fits_github_body_cap_and_links_full_changelog() -> None:
+    """An oversized section is cut on a line boundary and links the exact-commit CHANGELOG."""
+    module = _module()
+    lines = [f"- Change {index:06d} " + "x" * 80 for index in range(2000)]
+    body = module.render_release_notes(
+        version="0.2.0",
+        section_body="\n".join(lines),
+        repository="ContextualWisdomLab/contextual-orchestrator",
+        commit_sha="a" * 40,
+    )
+    assert len(body) <= module.GITHUB_RELEASE_BODY_LIMIT
+    assert "a" * 40 in body
+    assert (
+        "https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/"
+        + "a" * 40
+        + "/CHANGELOG.md"
+    ) in body
+    kept = [line for line in body.splitlines() if line.startswith("- Change ")]
+    assert kept and kept == lines[: len(kept)]
+
+
 def test_main_writes_rendered_notes_to_the_requested_output_path(tmp_path: Path) -> None:
     """The CLI wires pyproject/changelog extraction into one written notes file."""
     module = _module()

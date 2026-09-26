@@ -139,6 +139,22 @@ owner tests and protected release. See [the evidence receipt](https://github.com
 These are failed deliveries in the accuracy denominator, not measured routing
 decision latencies. Their elapsed times include work beyond initial selection.
 
+### Structured synthesis 429 follow-up, 2026-09-25
+
+[Noema run 36024200990](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36024200990)
+reported a terminal 429 after 1288 seconds through the older sidecar source
+pin `767e67fbc6b881a452761f32abb69b9971b9b03b`. Its single caller attempt
+does not reveal internal candidate attempts. Source inspection separately found
+that Noema sends `orchestrator/free` with a JSON schema, and structured final
+synthesis exhausted retryable 429 candidates without the bounded cooldown
+recovery already used by conduct and passthrough. The focused regression was
+RED on parent `84736f4d` and GREEN after applying that shared wait contract to
+final synthesis and schema repair. Tests cover an all-429 storm, prior cooldown,
+budget expiry, mixed 429/502 and 429/413 outcomes, and a nonretryable 429.
+This is source-side evidence; a protected merged
+revision, immutable release, updated consumer pin, and a fresh hosted Noema
+run are still needed for delivery and acceptance.
+
 ## Stacked quality-trigger repair
 
 Lineage correction: existing PR #1066 at

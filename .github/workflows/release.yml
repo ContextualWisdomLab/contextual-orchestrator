@@ -254,8 +254,15 @@ jobs:
             exit 1
           fi
 
+      - name: Build locked native decision measurement for the full test suite
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          uv sync --locked --extra api --extra db --extra queue --group dev --group native-build
+          uv run --no-sync maturin develop --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml
+
       - name: Run the full required test suite fresh on this exact commit
-        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+        run: uv run --no-sync python -m pytest -q
 
       - name: Render release notes from CHANGELOG.md
         run: |
@@ -271,7 +278,7 @@ jobs:
       - name: Fetch the required CycloneDX SBOM for this commit
         run: |
           set -euo pipefail
-          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${TARGET_SHA}" --status success --json databaseId --jq '.[0].databaseId // empty')"
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow security.yml --commit "${TARGET_SHA}" --branch main --event push --status success --json databaseId --jq '.[0].databaseId // empty')"
           if [ -z "${run_id}" ]; then
             echo "::error::No successful Security workflow run with CycloneDX evidence is available for exact commit ${TARGET_SHA}; refusing to publish without the required SBOM." >&2
             exit 1
@@ -286,6 +293,35 @@ jobs:
             exit 1
           fi
 
+      - name: Build the installable package for this exact commit
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${TARGET_SHA}")"
+          export SOURCE_DATE_EPOCH
+          uv build --wheel --python 3.12 --out-dir dist
+          wheel="dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
+          test -s "${wheel}"
+          uv build --wheel --python 3.12 --out-dir "${RUNNER_TEMP}/release-rebuild"
+          if ! cmp "${wheel}" "${RUNNER_TEMP}/release-rebuild/${wheel##*/}"; then
+            echo "::error::The exact-commit wheel changed between isolated builds." >&2
+            exit 1
+          fi
+          (cd dist && sha256sum "${wheel##*/}" > SHA256SUMS)
+          release_site="${RUNNER_TEMP}/release-package"
+          uv pip install --no-deps --python 3.12 --target "${release_site}" "${wheel}"
+          RELEASE_SITE="${release_site}" python - <<'PY'
+          import importlib.metadata
+          import os
+          from pathlib import Path
+
+          site = Path(os.environ["RELEASE_SITE"])
+          distributions = list(importlib.metadata.distributions(path=[str(site)]))
+          assert len(distributions) == 1
+          assert distributions[0].metadata["Name"] == "contextual-orchestrator"
+          assert distributions[0].version == os.environ["RELEASE_VERSION"]
+          assert (site / "contextual_orchestrator/__init__.py").is_file()
+          PY
+
       - name: Upload rendered notes and SBOM for the publish job
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
         with:
@@ -293,6 +329,7 @@ jobs:
           path: |
             release-notes.md
             sbom-download/**
+            dist/**
           if-no-files-found: error
           retention-days: 1
 
@@ -345,6 +382,8 @@ jobs:
           set -euo pipefail
           test -s release-notes.md
           test -s sbom-download/cyclonedx-sbom.json
+          test -s "dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
+          (cd dist && sha256sum -c SHA256SUMS)
 
       - name: Create the annotated release tag
         if: env.TAG_RESUME != 'true'
@@ -375,11 +414,13 @@ jobs:
         run: |
           set -euo pipefail
           release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${RELEASE_VERSION}")"
-          if ! jq -e --arg tag "v${RELEASE_VERSION}" '
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" --arg wheel "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" '
             .tag_name == $tag and .prerelease == false and
             ((.draft == true and .immutable == false) or
              (.draft == false and .immutable == true and
-              ([.assets[] | select(.name == "cyclonedx-sbom.json" and (.size | type) == "number" and .size > 0)] | length) == 1))
+              ([.assets[] | select(.name == "cyclonedx-sbom.json" and (.size | type) == "number" and .size > 0)] | length) == 1 and
+              ([.assets[] | select(.name == $wheel and (.size | type) == "number" and .size > 0)] | length) == 1 and
+              ([.assets[] | select(.name == "SHA256SUMS" and (.size | type) == "number" and .size > 0)] | length) == 1))
           ' <<<"${release}" >/dev/null; then
             echo "::error::Existing release is neither a resumable draft nor a complete immutable release; refusing mutation." >&2
             exit 1
@@ -426,14 +467,31 @@ jobs:
             exit 1
           fi
 
+      - name: Attach the verified installable package
+        run: |
+          set -euo pipefail
+          wheel="contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
+          (cd dist && sha256sum -c SHA256SUMS)
+          for asset in "${wheel}" SHA256SUMS; do
+            attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+            if ! printf '%s\n' "${attached}" | grep -qxF "${asset}"; then
+              gh release upload "v${RELEASE_VERSION}" "dist/${asset}" --repo "${GITHUB_REPOSITORY}"
+            fi
+            remote_dir="$(mktemp -d)"
+            gh release download "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --pattern "${asset}" --dir "${remote_dir}"
+            cmp "dist/${asset}" "${remote_dir}/${asset}"
+          done
+
       - name: Publish the verified draft and require immutable attestation
         run: |
           set -euo pipefail
           release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/v${RELEASE_VERSION}"
           release="$(gh api "${release_endpoint}")"
-          if ! jq -e --arg tag "v${RELEASE_VERSION}" '
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" --arg wheel "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" '
             .tag_name == $tag and .prerelease == false and
             ([.assets[] | select(.name == "cyclonedx-sbom.json" and (.size | type) == "number" and .size > 0)] | length) == 1 and
+            ([.assets[] | select(.name == $wheel and (.size | type) == "number" and .size > 0)] | length) == 1 and
+            ([.assets[] | select(.name == "SHA256SUMS" and (.size | type) == "number" and .size > 0)] | length) == 1 and
             ((.draft == true and .immutable == false) or
              (.draft == false and .immutable == true))
           ' <<<"${release}" >/dev/null; then
@@ -453,4 +511,8 @@ jobs:
           fi
           gh release verify "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}"
           gh release verify-asset "v${RELEASE_VERSION}" sbom-download/cyclonedx-sbom.json \
+            --repo "${GITHUB_REPOSITORY}"
+          gh release verify-asset "v${RELEASE_VERSION}" "dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" \
+            --repo "${GITHUB_REPOSITORY}"
+          gh release verify-asset "v${RELEASE_VERSION}" dist/SHA256SUMS \
             --repo "${GITHUB_REPOSITORY}"
