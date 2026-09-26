@@ -1,0 +1,168 @@
+{
+  "contract_family": "release_semver/v1",
+  "description": "Fixture-only conformance cases for the v1 release SemVer evidence, observation, and receipt-envelope schemas. No document here was produced by a model or by fast-mlsirm; the fast-mlsirm receipt is an opaque placeholder. Each case applies set/remove operations to the base document of its schema and declares whether the result must validate.",
+  "canonical_evidence_sha256": "019dafd1687a4938d36f3fdba92782929a77e34f458500e88387966e2e7b32af",
+  "base_documents": {
+    "evidence": {
+      "name": "evidence: first-release candidate with no previous tag",
+      "document": {
+        "contract_id": "cwl_release_semver_evidence/v1",
+        "source_commit": "5665b0ad1e07ffb5e9f8c59e44b6b2a785298013",
+        "previous_tag": null,
+        "declared_version": "0.2.0",
+        "api_surface_inspected": true,
+        "changelog_fragments": [
+          {
+            "ref": "changelog:CHANGELOG.d/example-additive-api.md",
+            "text": "Add an additive, opt-in API field."
+          }
+        ],
+        "removed_public_symbols": [],
+        "renamed_public_symbols": [],
+        "required_arg_promotions": [],
+        "deprecated_alias_only": [],
+        "http_api_route_changes": [],
+        "persistence_schema_changes": [],
+        "commit_titles": [
+          {
+            "ref": "commit:5665b0ad1e07ffb5e9f8c59e44b6b2a785298013",
+            "text": "feat(api): add an additive opt-in field"
+          }
+        ],
+        "pr_titles": [
+          {
+            "ref": "pr:1020",
+            "text": "Evidence-based per-model timeout allocator"
+          }
+        ]
+      }
+    },
+    "observation": {
+      "name": "observation: minor with supporting evidence",
+      "document": {
+        "contract_id": "cwl_release_semver_observation/v1",
+        "evidence_sha256": "019dafd1687a4938d36f3fdba92782929a77e34f458500e88387966e2e7b32af",
+        "assignment_ref": "rater-01",
+        "observed_class": "minor",
+        "evidence_refs": [
+          "changelog:CHANGELOG.d/example-additive-api.md",
+          "commit:5665b0ad1e07ffb5e9f8c59e44b6b2a785298013"
+        ],
+        "breaking_change_refs": [],
+        "reason_code": null
+      }
+    },
+    "receipt_envelope": {
+      "name": "envelope: no_decision copied from fast-mlsirm",
+      "document": {
+        "contract_id": "cwl_release_semver_receipt_envelope/v1",
+        "schema_sha256": {
+          "evidence": "1006bf906ce023dc61f6d7c007576f39155d3636e7c599aeebabe10ca6582164",
+          "observation": "1d0ee9ae64d135a299e28a84c81f1dc15010375b369f763ad695c8a05679c34d"
+        },
+        "evidence_sha256": "019dafd1687a4938d36f3fdba92782929a77e34f458500e88387966e2e7b32af",
+        "gateway_contract": "contextual-orchestrator-contract-v1",
+        "model_pool": "orchestrator/free",
+        "producer": {
+          "package": "contextual-orchestrator",
+          "package_version": "0.2.0",
+          "source_commit": "5665b0ad1e07ffb5e9f8c59e44b6b2a785298013"
+        },
+        "observations": [
+          {
+            "observation": {
+              "contract_id": "cwl_release_semver_observation/v1",
+              "evidence_sha256": "019dafd1687a4938d36f3fdba92782929a77e34f458500e88387966e2e7b32af",
+              "assignment_ref": "rater-01",
+              "observed_class": "minor",
+              "evidence_refs": [
+                "changelog:CHANGELOG.d/example-additive-api.md",
+                "commit:5665b0ad1e07ffb5e9f8c59e44b6b2a785298013"
+              ],
+              "breaking_change_refs": [],
+              "reason_code": null
+            },
+            "served_route": {
+              "agent_id": "example_free_agent_1",
+              "model": "example/free-model-1",
+              "provider": "example-provider"
+            },
+            "transport": {
+              "api_surface": "chat.completions",
+              "response_format": "json_schema"
+            }
+          },
+          {
+            "observation": {
+              "contract_id": "cwl_release_semver_observation/v1",
+              "evidence_sha256": "019dafd1687a4938d36f3fdba92782929a77e34f458500e88387966e2e7b32af",
+              "assignment_ref": "rater-02",
+              "observed_class": "abstain",
+              "evidence_refs": [],
+              "breaking_change_refs": [],
+              "reason_code": "insufficient_evidence"
+            },
+            "served_route": {
+              "agent_id": "example_free_agent_2",
+              "model": "example/free-model-2",
+              "provider": "example-provider"
+            },
+            "transport": {
+              "api_surface": "chat.completions",
+              "response_format": "json_schema"
+            }
+          }
+        ],
+        "fast_mlsirm_receipt": {
+          "schema_id": "urn:example:fast-mlsirm:release-decision-receipt:fixture-only",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "document": {
+            "fixture_only": true,
+            "note": "opaque to contextual-orchestrator"
+          }
+        },
+        "outcome": "no_decision"
+      }
+    }
+  },
+  "cases": [
+    {"name": "evidence: previous tag with a removed public symbol", "schema": "evidence", "valid": true, "ops": [{"op": "set", "path": ["previous_tag"], "value": "v0.2.0"}, {"op": "set", "path": ["declared_version"], "value": "0.3.0"}, {"op": "set", "path": ["removed_public_symbols"], "value": [{"ref": "api:removed:contextual_orchestrator.example_symbol", "text": "Removed example_symbol from contextual_orchestrator.__all__."}]}]},
+    {"name": "observation: abstain with reason code", "schema": "observation", "valid": true, "ops": [{"op": "set", "path": ["assignment_ref"], "value": "rater-02"}, {"op": "set", "path": ["observed_class"], "value": "abstain"}, {"op": "set", "path": ["evidence_refs"], "value": []}, {"op": "set", "path": ["reason_code"], "value": "insufficient_evidence"}]},
+    {"name": "observation: major with breaking refs", "schema": "observation", "valid": true, "ops": [{"op": "set", "path": ["assignment_ref"], "value": "rater-03"}, {"op": "set", "path": ["observed_class"], "value": "major"}, {"op": "set", "path": ["evidence_refs"], "value": ["commit:5665b0ad1e07ffb5e9f8c59e44b6b2a785298013"]}, {"op": "set", "path": ["breaking_change_refs"], "value": ["commit:5665b0ad1e07ffb5e9f8c59e44b6b2a785298013"]}]},
+    {"name": "envelope: decision copied from fast-mlsirm", "schema": "receipt_envelope", "valid": true, "ops": [{"op": "set", "path": ["outcome"], "value": "decision"}]},
+    {"name": "evidence: unknown property", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["notes"], "value": "x"}]},
+    {"name": "evidence: release_version is not an evidence field", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["release_version"], "value": "0.3.0"}]},
+    {"name": "evidence: short source commit", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["source_commit"], "value": "5665b0ad"}]},
+    {"name": "evidence: uppercase source commit", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["source_commit"], "value": "5665B0AD1E07FFB5E9F8C59E44B6B2A785298013"}]},
+    {"name": "evidence: previous tag without v prefix", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["previous_tag"], "value": "0.2.0"}]},
+    {"name": "evidence: declared version with v prefix", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["declared_version"], "value": "v0.2.0"}]},
+    {"name": "evidence: declared version with leading zero", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["declared_version"], "value": "0.02.0"}]},
+    {"name": "evidence: missing api_surface_inspected", "schema": "evidence", "valid": false, "ops": [{"op": "remove", "path": ["api_surface_inspected"]}]},
+    {"name": "evidence: bare string item instead of ref/text object", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["commit_titles", 0], "value": "feat: x"}]},
+    {"name": "evidence: empty item text", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["commit_titles", 0, "text"], "value": ""}]},
+    {"name": "evidence: ref containing whitespace", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["commit_titles", 0, "ref"], "value": "commit:abc def"}]},
+    {"name": "evidence: ref without namespace", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["commit_titles", 0, "ref"], "value": "5665b0ad"}]},
+    {"name": "evidence: wrong contract id", "schema": "evidence", "valid": false, "ops": [{"op": "set", "path": ["contract_id"], "value": "cwl_release_semver_evidence/v2"}]},
+    {"name": "observation: confidence is not representable", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["confidence"], "value": 0.91}]},
+    {"name": "observation: release_version is not representable", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["release_version"], "value": "0.3.0"}]},
+    {"name": "observation: unknown class", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["observed_class"], "value": "none"}]},
+    {"name": "observation: abstain without reason code", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["assignment_ref"], "value": "rater-02"}, {"op": "set", "path": ["observed_class"], "value": "abstain"}, {"op": "set", "path": ["evidence_refs"], "value": []}]},
+    {"name": "observation: major without breaking refs", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["assignment_ref"], "value": "rater-03"}, {"op": "set", "path": ["observed_class"], "value": "major"}, {"op": "set", "path": ["evidence_refs"], "value": ["commit:5665b0ad1e07ffb5e9f8c59e44b6b2a785298013"]}]},
+    {"name": "observation: non-abstain without evidence refs", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": []}]},
+    {"name": "observation: duplicate evidence refs", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_refs"], "value": ["changelog:CHANGELOG.d/example-additive-api.md", "changelog:CHANGELOG.d/example-additive-api.md"]}]},
+    {"name": "observation: short evidence digest", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["evidence_sha256"], "value": "abc"}]},
+    {"name": "observation: free-text reason code", "schema": "observation", "valid": false, "ops": [{"op": "set", "path": ["assignment_ref"], "value": "rater-02"}, {"op": "set", "path": ["observed_class"], "value": "abstain"}, {"op": "set", "path": ["evidence_refs"], "value": []}, {"op": "set", "path": ["reason_code"], "value": "Not enough evidence."}]},
+    {"name": "observation: missing assignment ref", "schema": "observation", "valid": false, "ops": [{"op": "remove", "path": ["assignment_ref"]}]},
+    {"name": "envelope: release_version is not representable", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["release_version"], "value": "0.3.0"}]},
+    {"name": "envelope: unknown outcome", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["outcome"], "value": "approve"}]},
+    {"name": "envelope: non-free model pool", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["model_pool"], "value": "orchestrator/auto"}]},
+    {"name": "envelope: no observations", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["observations"], "value": []}]},
+    {"name": "envelope: caller model selection field", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["observations", 0, "served_route", "requested_model"], "value": "x/y"}]},
+    {"name": "envelope: responses api surface", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["observations", 0, "transport", "api_surface"], "value": "responses"}]},
+    {"name": "envelope: nested observation with confidence", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["observations", 0, "observation", "confidence"], "value": 0.9}]},
+    {"name": "envelope: fast-mlsirm receipt without digest", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "remove", "path": ["fast_mlsirm_receipt", "sha256"]}]},
+    {"name": "envelope: fast-mlsirm receipt document not an object", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["fast_mlsirm_receipt", "document"], "value": "0.3.0"}]},
+    {"name": "envelope: self-referential envelope schema digest", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["schema_sha256", "receipt_envelope"], "value": "0000000000000000000000000000000000000000000000000000000000000000"}]},
+    {"name": "envelope: wrong producer package", "schema": "receipt_envelope", "valid": false, "ops": [{"op": "set", "path": ["producer", "package"], "value": "fast-mlsirm"}]}
+  ]
+}

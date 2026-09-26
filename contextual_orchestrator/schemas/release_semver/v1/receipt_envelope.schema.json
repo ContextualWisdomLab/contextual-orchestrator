@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/receipt_envelope.schema.json",
+  "title": "Release SemVer receipt envelope (v1)",
+  "description": "Transport envelope that binds one evidence pack, the independent rater observations collected through orchestrator/free, and an unmodified fast-mlsirm calibrated release-decision receipt. contextual-orchestrator never computes or emits a version: outcome is copied from the fast-mlsirm receipt, and any decided version exists only inside that opaque receipt.",
+  "$comment": "Immutable once released. Any change requires a new vN directory and MANIFEST entry. Consumers must also reject documents larger than 1048576 UTF-8 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "schema_sha256",
+    "evidence_sha256",
+    "gateway_contract",
+    "model_pool",
+    "producer",
+    "observations",
+    "fast_mlsirm_receipt",
+    "outcome"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "cwl_release_semver_receipt_envelope/v1"
+    },
+    "schema_sha256": {
+      "description": "SHA-256 of the exact evidence and observation schema file bytes used, as listed in MANIFEST.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence",
+        "observation"
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observation": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evidence_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "gateway_contract": {
+      "const": "contextual-orchestrator-contract-v1"
+    },
+    "model_pool": {
+      "description": "The only admissible pool. No provider, model, or group selection is representable.",
+      "const": "orchestrator/free"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package",
+        "package_version",
+        "source_commit"
+      ],
+      "properties": {
+        "package": {
+          "const": "contextual-orchestrator"
+        },
+        "package_version": {
+          "description": "Version of the installed contextual-orchestrator release that produced this envelope (producer identity, not a release decision).",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+          "maxLength": 64
+        },
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "observation",
+          "served_route",
+          "transport"
+        ],
+        "properties": {
+          "observation": {
+            "$ref": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json"
+          },
+          "served_route": {
+            "description": "Route identity as reported by the gateway for this observation. Recorded for audit only; never a caller selection.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "agent_id",
+              "model",
+              "provider"
+            ],
+            "properties": {
+              "agent_id": {
+                "$ref": "#/$defs/bounded_identifier"
+              },
+              "model": {
+                "$ref": "#/$defs/bounded_identifier"
+              },
+              "provider": {
+                "$ref": "#/$defs/bounded_identifier"
+              }
+            }
+          },
+          "transport": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "api_surface",
+              "response_format"
+            ],
+            "properties": {
+              "api_surface": {
+                "const": "chat.completions"
+              },
+              "response_format": {
+                "const": "json_schema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "fast_mlsirm_receipt": {
+      "description": "The fast-mlsirm calibrated release-decision receipt, carried unchanged. contextual-orchestrator does not interpret document; it binds it by schema_id and the SHA-256 of its RFC 8785 canonical JSON form.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_id",
+        "sha256",
+        "document"
+      ],
+      "properties": {
+        "schema_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\s]+$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document": {
+          "type": "object"
+        }
+      }
+    },
+    "outcome": {
+      "description": "Copied from the fast-mlsirm receipt. contextual-orchestrator never derives it.",
+      "enum": [
+        "decision",
+        "no_decision"
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "bounded_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\s]+$"
+    }
+  }
+}

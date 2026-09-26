@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/observation.schema.json",
+  "title": "Release SemVer rater observation (v1)",
+  "description": "One independent rater's bare observation over exactly one evidence pack. It is observation evidence for a calibrated fast-mlsirm estimator, not a release decision. It deliberately has no confidence or self-reported probability field and no output version.",
+  "$comment": "Immutable once released. Any change requires a new vN directory and MANIFEST entry. Consumers must also reject documents larger than 16384 UTF-8 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "evidence_sha256",
+    "assignment_ref",
+    "observed_class",
+    "evidence_refs",
+    "breaking_change_refs",
+    "reason_code"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "cwl_release_semver_observation/v1"
+    },
+    "evidence_sha256": {
+      "description": "Echo of the evidence pack digest the rater was given. A mismatch invalidates the observation.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "assignment_ref": {
+      "description": "Opaque rater-assignment reference issued by the caller; echoed unchanged.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "observed_class": {
+      "description": "The SemVer change class this rater observes in the evidence, or abstain.",
+      "enum": [
+        "major",
+        "minor",
+        "patch",
+        "abstain"
+      ]
+    },
+    "evidence_refs": {
+      "description": "Evidence-pack refs that support the observed class. Must be refs present in the evidence pack; that membership check is performed by the consumer.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_ref"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
+    "breaking_change_refs": {
+      "description": "Evidence-pack refs this rater considers backward-incompatible.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_ref"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
+    "reason_code": {
+      "description": "Bounded machine-readable reason. Required when abstaining.",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "observed_class": {
+            "const": "abstain"
+          }
+        },
+        "required": [
+          "observed_class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "evidence_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "observed_class": {
+            "const": "major"
+          }
+        },
+        "required": [
+          "observed_class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "breaking_change_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "evidence_ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,31}:[^\\s]+$",
+      "minLength": 3,
+      "maxLength": 256
+    }
+  }
+}

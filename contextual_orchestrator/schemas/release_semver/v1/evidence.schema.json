@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ContextualWisdomLab/contextual-orchestrator/schemas/release_semver/v1/evidence.schema.json",
+  "title": "Release SemVer evidence pack (v1)",
+  "description": "Deterministic, bounded evidence collected between the previous release tag (or the declared first-release candidate) and one exact source commit. It carries no version decision. Its evidence_sha256 is the SHA-256 of the RFC 8785 canonical JSON form of the whole document; v1 contains no JSON numbers.",
+  "$comment": "Immutable once released. Any change requires a new vN directory and MANIFEST entry. Consumers must also reject documents larger than 262144 UTF-8 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_id",
+    "source_commit",
+    "previous_tag",
+    "declared_version",
+    "api_surface_inspected",
+    "changelog_fragments",
+    "removed_public_symbols",
+    "renamed_public_symbols",
+    "required_arg_promotions",
+    "deprecated_alias_only",
+    "http_api_route_changes",
+    "persistence_schema_changes",
+    "commit_titles",
+    "pr_titles"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "cwl_release_semver_evidence/v1"
+    },
+    "source_commit": {
+      "description": "Exact 40-character lowercase Git commit the evidence was collected at.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "previous_tag": {
+      "description": "Previous canonical release tag, or null when no release tag exists yet. How a null previous tag is treated is an unresolved owner decision (ADR 0137).",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+          "maxLength": 64
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "declared_version": {
+      "description": "The [project].version declared in pyproject.toml at source_commit. Input evidence only; it is not an output version.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "maxLength": 64
+    },
+    "api_surface_inspected": {
+      "description": "True only when the public API surface was actually inspected. Mirrors the .github#2260 evidence-pack rule.",
+      "type": "boolean"
+    },
+    "changelog_fragments": {
+      "$ref": "#/$defs/evidence_items_256"
+    },
+    "removed_public_symbols": {
+      "$ref": "#/$defs/evidence_items_256"
+    },
+    "renamed_public_symbols": {
+      "$ref": "#/$defs/evidence_items_256"
+    },
+    "required_arg_promotions": {
+      "$ref": "#/$defs/evidence_items_256"
+    },
+    "deprecated_alias_only": {
+      "$ref": "#/$defs/evidence_items_256"
+    },
+    "http_api_route_changes": {
+      "$ref": "#/$defs/evidence_items_256"
+    },
+    "persistence_schema_changes": {
+      "$ref": "#/$defs/evidence_items_256"
+    },
+    "commit_titles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_item"
+      },
+      "maxItems": 512
+    },
+    "pr_titles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_item"
+      },
+      "maxItems": 256
+    }
+  },
+  "$defs": {
+    "evidence_ref": {
+      "description": "Stable, namespaced evidence identifier, for example commit:<sha> or api:removed:<symbol>.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,31}:[^\\s]+$",
+      "minLength": 3,
+      "maxLength": 256
+    },
+    "evidence_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "text"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/evidence_ref"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "evidence_items_256": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_item"
+      },
+      "maxItems": 256
+    }
+  }
+}
