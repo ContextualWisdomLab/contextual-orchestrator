@@ -276,6 +276,34 @@ def test_renewal_loss_is_visible_to_the_claim_holder() -> None:
             claim.ensure_owned()
 
 
+def test_close_wakes_waiter_without_cancelling_durable_provider_job() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(_requests):
+        started.set()
+        release.wait(timeout=5)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner, job_registry=JobRegistryFactory(client), claim_lease_seconds=0.5
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="recoverable")])
+    assert started.wait(timeout=1)
+    result = {}
+    waiter = threading.Thread(
+        target=lambda: result.update(backend.wait(job, timeout=None)), daemon=True
+    )
+    waiter.start()
+    backend.close()
+    waiter.join(timeout=1)
+    release.set()
+    assert not waiter.is_alive()
+    assert result["status"] == "running"
+
+
 def test_provider_job_recovers_after_claim_renewal_loss_without_restart() -> None:
     """A stale attempt cannot publish; the live worker reclaims and completes."""
     client = FakeValkeyClient()

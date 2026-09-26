@@ -1091,6 +1091,14 @@ class ProviderEmbeddingBatchBackend:
         self._closed.set()
         with self._executor_lock:
             executor, self._executor = self._executor, None
+        for job_id, event in list(self._terminal_events.items()):
+            if self._registry.durable:
+                # The next backend can reclaim persisted work after this worker exits.
+                event.set()
+            else:
+                self.cancel(
+                    BatchJob(job_id=job_id, backend=self.name), reason="backend closed"
+                )
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
