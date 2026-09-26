@@ -27,10 +27,10 @@ tested, let alone achieved.
 | --- | --- | --- | --- |
 | `domain/candidates.py` | `CandidateAnswer`, `CandidateSet`, `CombinationOutcome` value objects | — | — |
 | `domain/combination.py` `RankedFirst` | Today's route semantics as a strategy | — | — |
-| `domain/combination.py` `PluralityVote` | Vote over extracted final answers; agreement share reported as `support` | Wang et al. (2023), arXiv:2203.11171 §2, §3.5 | Voters are different workers, not samples of one model. `min_support` abstention and rank tie-break are repository choices. |
-| `domain/combination.py` `ScoredBestOfN` | Pick the highest score from an external scorer port | — | Wang et al. (2024) find an LLM ranker weaker than MoA aggregation (§3.3); kept as a baseline arm. |
+| `domain/combination.py` `PluralityVote` | Vote over extracted final answers; agreement share reported as `support` | Wang et al. (2023), arXiv:2203.11171 §2, §3.5 | Voters are different workers, not samples of one model. A tied mode abstains because the cited rule supplies no secondary authority. |
+| `domain/combination.py` `ScoredBestOfN` | Pick the unique highest score from an external scorer port | — | Equal maximum scores abstain because rank is not scorer evidence. Wang et al. (2024) find an LLM ranker weaker than MoA aggregation (§3.3); kept as a baseline arm. |
 | `domain/moa.py` | Aggregate-and-Synthesize aggregator messages | Wang et al. (2024), arXiv:2406.04692 Table 1, Eq. 1 | One proposer layer (MoA-Lite depth). Proposers anonymised. "open-source models" → "models". |
-| `application/fan_out.py` | Bounded parallel fan-out through a completion port; MoA runner | — | Deadline is wall-clock for the proposer layer only. |
+| `application/fan_out.py` | Parallel fan-out through a bounded-concurrency completion port; MoA runner | — | The proposer deadline defaults to `None`, leaving completion to the upstream provider. A finite value is an explicit administrative bound for the proposer layer only. |
 
 Fail-closed rules, consistent with planning ADR 0001:
 
@@ -39,6 +39,26 @@ Fail-closed rules, consistent with planning ADR 0001:
 - Provider error messages are never recorded; only the exception class name.
 - Cost is `None` whenever any part is unknown, including when a proposer
   failed (a failed call may still be billed).
+- A vote-count tie or external-score tie abstains. Rank is evidence ordering,
+  not an uncalibrated secondary quality score.
+- No support threshold is accepted. The cited plurality rule selects only a
+  unique mode; an unsupported policy threshold cannot change admission.
+- Fan-out has no default elapsed-time cutoff. A finite deadline is explicit
+  administrative input, while the completion port owns upstream cancellation.
+
+## 2026-09-27 no-heuristics repair
+
+Exact head `a4183535` required every caller to invent a finite
+`deadline_seconds`, accepted an arbitrary plurality `min_support`, and used
+prior rank to decide both vote-count and score ties. The module documentation
+identified the first two plurality controls as repository choices rather than
+results of the cited self-consistency algorithm.
+
+RED commit `e34a038b` adds contracts for default-null completion, tied-mode
+abstention, unique-plurality selection without a threshold, and score-tie
+abstention. GREEN commit `0940e654` removes the unsupported controls. The
+focused combination/fan-out suite passes 58 tests. This evidence is PR-head
+only until exact-head hosted checks and independent approval complete.
 
 ## Evidence boundary
 
