@@ -44,7 +44,7 @@ and that undeclared hindsight comparisons are omitted.
 `paired_bootstrap_mean_difference` takes keyword-only `resample_count`,
 `confidence_level`, and `seed`. `None` is a fail-closed sentinel, not a
 statistical default. Coverage must be a finite exclusive unit interval. The
-percentile indices follow Efron and Tibshirani (1993); if the lower and upper
+percentile indices follow Efron and Tibshirani (1994); if the lower and upper
 indices collapse, the declaration cannot be represented and the run fails.
 The method name is `paired_bootstrap_percentile`; coverage is a numeric field.
 

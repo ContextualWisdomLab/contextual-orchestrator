@@ -84,10 +84,14 @@ See the [read scope and proposed experiment](../doctoring/irt_router_measurement
 - **FrugalGPT: How to Use Large Language Models While Reducing Cost and
   Improving Performance** — Lingjiao Chen, Matei Zaharia, James Zou. arXiv:2305.05176, 2023.
   `frugalgpt-cost-2305.05176.pdf`
-  Motivates the **configurable price table + per-request cost accounting** and
-  cost-optimising model selection: cost varies by orders of magnitude across
-  providers/models, so a gateway should price each request and route to the
-  cheapest capable upstream. Version-page license: arXiv non-exclusive;
+  Inspiration for the **configurable price table + per-request cost accounting**:
+  the paper's Table 1 shows LLM API prices differing by up to two orders of
+  magnitude. Partial, not an implementation: FrugalGPT's method is a sequential
+  LLM cascade that scores each returned answer with a learned generation scorer
+  and stops at per-stage thresholds tuned under a budget, whereas this repository
+  prices requests and picks the cheapest priced upstream from a table
+  (`batch_routing.cheapest_upstream`) before any answer is seen, with no answer
+  scorer or budget-tuned stop threshold. Version-page license: arXiv non-exclusive;
   additional redistribution basis unverified.
   source: https://arxiv.org/abs/2305.05176.
 
@@ -103,8 +107,14 @@ See the [read scope and proposed experiment](../doctoring/irt_router_measurement
   Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E. Gonzalez, M.
   Waleed Kadous, Ion Stoica. arXiv:2406.18665, 2024.
   `routellm-routing-2406.18665.pdf`
-  Grounds the **routing decision** layer (`RoutingPolicy` + cost-aware upstream
-  selection): route strong/weak model choices to hit a cost/quality target.
+  Inspiration for the **routing decision** layer's framing: choose a stronger or
+  weaker model to hit a cost/quality target. Not an implementation: RouteLLM
+  trains a router that predicts the probability that the strong model's answer
+  beats the weak model's (from Chatbot Arena preference data) and routes on a
+  threshold α, whereas `RoutingPolicy` (`batch_routing.py`) is a deterministic
+  sync/batch rule over caller hints and configured thresholds, and worker/role
+  routing is a deterministic capability-hint heuristic (see
+  [architecture](../architecture.md#implementation-mapping)).
   Version-page license: arXiv non-exclusive; additional redistribution basis
   unverified. Source: https://arxiv.org/abs/2406.18665.
 
@@ -138,13 +148,24 @@ redistribution is unclear.
 - Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
   *Trinity: An evolved LLM coordinator* (arXiv:2512.04695).
   https://arxiv.org/abs/2512.04695
-  Grounds thinker / worker / verifier (plus synthesizer, planner, judge)
-  role bindings on the catalog.
+  Name borrowing, not an implementation: TRINITY defines exactly three roles
+  (Thinker, Worker, Verifier) and trains a coordinator (a ~0.6B model plus a
+  ~10K-parameter head, optimised with sep-CMA-ES) that chooses both the model and
+  the role on every turn, stopping when the Verifier accepts. This repository's
+  `conduct` runs a fixed thinker → worker → verifier → synthesizer template with
+  heuristic worker choice, and its catalog adds synthesizer, planner and judge
+  bindings that are not TRINITY roles.
 - Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
   *Learning to orchestrate agents in natural language with the Conductor*
   (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
-  Grounds workflow steps, recursion depth, decomposition, and access-list
-  scope as first-class ablation factors.
+  Partial: the step format (natural-language subtask, assigned worker, access
+  list of prior step outputs) and access-list-scoped context match the paper.
+  The paper's workflows come from a 7B model trained with reinforcement learning
+  (GRPO) on task correctness; this repository uses the fixed 4-step template by
+  default (`OrchestrationPolicy.workflow_planning = "template"`) or an untrained,
+  prompted planner model (`"generated"`), which corresponds to the paper's
+  training-free ablation that replaces the trained Conductor with prompted
+  frontier models (Appendix B.7, Table 11), not to the trained Conductor.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
@@ -222,8 +243,11 @@ verified observed-task evidence and the protected release process.
   unobserved psychometric response. Mean intervals do not establish p95
   performance. Citation and summary only; redistribution was not established.
 
-- Efron, B., & Tibshirani, R. J. (1993). *An introduction to the bootstrap*.
-  Chapman & Hall. https://doi.org/10.1201/9780429246593
+- Efron, B., & Tibshirani, R. J. (1994). *An introduction to the bootstrap*.
+  Chapman and Hall/CRC. https://doi.org/10.1201/9780429246593
+  Year and imprint follow the DOI record (Crossref and publisher metadata:
+  Chapman and Hall/CRC, published 1994-05-15); earlier text in this repository
+  cited 1993.
   Grounds the percentile interval: ordered bootstrap replications, with
   coverage α taken from the operator declaration rather than a hidden 95%
   constant, and resample count B as a Monte Carlo precision declaration.
@@ -277,6 +301,8 @@ At `fcf0047c37706975d9bff1ab4b95c54a2a383f54`, a tracked-text census found
 six explicit arXiv identifiers referenced elsewhere but absent from this index.
 Their existing evidence records remain canonical; these links do not imply
 that the papers were fully reviewed, their claims reproduced, or PDFs licensed.
+A recheck at `5665b0ad1e07ffb5e9f8c59e44b6b2a785298013` (2026-09-26) found one
+more, 2512.24601, added as the last row.
 
 | Identifier | Existing evidence and implementation discussion |
 | --- | --- |
@@ -286,6 +312,7 @@ that the papers were fully reviewed, their claims reproduced, or PDFs licensed.
 | 2506.22316 | [Polytomous judge benchmark](../benchmarks/2026-08-11-polytomous-llm-judge.md) and [judge calibration ADR](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md) |
 | 2110.15150 | [Purpose-limited protection ADR](../planning/adrs/0028-purpose-limited-pii-protection.md) |
 | 2601.17814 | [Model-group specification](../model-group-product-technical-spec.md) and [free-pool admission research](../research/review-gateway-free-pool-admission.md) |
+| 2512.24601 | Zhang, Kraska, and Khattab, *Recursive language models* (v3): [request-partitioning ADR](../planning/adrs/2026-09-10-request-partitioning.md), [learned-policy authority](../doctoring/learned_policy_authority_20260910.md), [partition cancellation](../doctoring/request_partition_cancellation_20260910.md), and [partition replay](../doctoring/request_partition_replay_20260910.md) |
 
 Scope: explicit arXiv URL, colon, and DOI-style identifiers in tracked Python,
 Rust, Markdown, and TOML files. This is a discovery census, not a complete
@@ -364,8 +391,8 @@ https://doi.org/10.1037/0003-066X.50.9.741
 
 Reise, S. P., Ainsworth, A. T., & Haviland, M. G. (2005). Item response theory:
 Fundamentals, applications, and promise in psychological research. *Current
-Opinion in Psychiatry, 18*(5), 611–616.
-https://doi.org/10.1097/01.yco.0000170421.57227.9b
+Directions in Psychological Science, 14*(2), 95–101.
+https://doi.org/10.1111/j.0963-7214.2005.00342.x
 
 Kim, S., & Chung, S. (2019). *Psychometric evidence to assess expanded test
 use* (Research Memorandum No. RM-19-07). Educational Testing Service.
@@ -400,15 +427,18 @@ standards rather than papers. Existing citation discussions remain authoritative
 this register prevents DOI-only sources from escaping the discovery inventory.
 Case and sentence-final punctuation are normalized by the inventory test.
 
+- [DOI 10.1002/0471722162](https://doi.org/10.1002/0471722162) — David and Nagaraja (2003), *Order statistics* (3rd ed.); cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md) and [library research](../library_research.md).
 - [DOI 10.1007/s11336-006-1478-z](https://doi.org/10.1007/s11336-006-1478-z)
 - [Bolsinova and Tijmstra (2019)](https://doi.org/10.1007/s11336-019-09682-5) — [bounded abstract review and outcome-leakage constraint](../doctoring/irt_router_measurement_review.md#conditional-dependence-follow-up).
 - [Bolsinova and Molenaar (2018)](https://doi.org/10.3389/fpsyg.2018.01525) — [bounded nonlinear-dependence intake and proposed leakage-safe evaluation](../doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake); no LLM transfer or replication claim.
 - [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
 - [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
 - [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
+- [DOI 10.1080/00031305.1996.10473566](https://doi.org/10.1080/00031305.1996.10473566) — Hyndman and Fan (1996), sample quantiles; cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
+- [DOI 10.1080/01621459.1958.10501452](https://doi.org/10.1080/01621459.1958.10501452) — Kaplan and Meier (1958), product-limit estimator; cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
-- [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
 - [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
+- [DOI 10.1111/j.0963-7214.2005.00342.x](https://doi.org/10.1111/j.0963-7214.2005.00342.x) — Reise, Ainsworth, and Haviland (2005), *Current Directions in Psychological Science*; replaces a non-resolving DOI previously listed for this citation.
 - [DOI 10.1111/rssc.12569](https://doi.org/10.1111/rssc.12569)
 - [DOI 10.1145/2043556.2043566](https://doi.org/10.1145/2043556.2043566)
 - [DOI 10.1145/2080.357392](https://doi.org/10.1145/2080.357392)
@@ -434,6 +464,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [arXiv 2606.21228 DOI](https://doi.org/10.48550/arXiv.2606.21228)
 - [arXiv 2608.06867 DOI](https://doi.org/10.48550/arXiv.2608.06867)
 - [DOI 10.1214/aos/1176344552](https://doi.org/10.1214/aos/1176344552)
+- [DOI 10.2307/2530286](https://doi.org/10.2307/2530286) — Brookmeyer and Crowley (1982), median survival-time confidence interval; cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [DOI 10.1525/collabra.33267](https://doi.org/10.1525/collabra.33267)
 - [DOI 10.18653/v1/2026.findings-acl.1881](https://doi.org/10.18653/v1/2026.findings-acl.1881)
 - [NIST AI 100-1](https://doi.org/10.6028/NIST.AI.100-1)
