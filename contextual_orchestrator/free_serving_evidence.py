@@ -82,7 +82,6 @@ a concurrent demotion is still sent.
 
 from __future__ import annotations
 
-import calendar
 import enum
 import math
 import re
@@ -130,17 +129,6 @@ FREE_QUOTA_ERROR_MARKERS: frozenset[str] = frozenset(
 
 PAYMENT_REQUIRED_STATUS = 402
 """HTTP status that demotes an evidence-required route (credits/allowance gone)."""
-
-ALLOWANCE_RESET_SKEW_SECONDS = 300
-"""Clock-skew margin added to the 00:00 UTC allowance reset (5 minutes).
-
-The ledger treats 00:05 UTC as the reset so a host clock running a few minutes
-ahead of the provider cannot lift a demotion, expire the hold, or schedule a
-probe before the provider has actually reset. The cost is that a demotion
-observed between 00:00 and 00:05 UTC (host clock) is attributed to the previous
-allowance day and lifts at 00:05; the route then still needs a fresh ``FREE``
-probe before it is admitted.
-"""
 
 _HEADER_COST_PATTERN = re.compile(r"[0-9]{1,20}(?:\.[0-9]{1,20})?", re.ASCII)
 
@@ -321,18 +309,6 @@ def free_promotion_slugs(payload: object) -> frozenset[str]:
     return frozenset(slugs)
 
 
-def last_allowance_reset(now: float) -> float:
-    """Return the epoch seconds of the most recent allowance reset boundary.
-
-    The provider resets at 00:00 UTC; the boundary is that midnight plus
-    :data:`ALLOWANCE_RESET_SKEW_SECONDS` (00:05 UTC), so ``now`` between 00:00
-    and 00:05 UTC still belongs to the previous allowance day.
-    """
-    day = time.gmtime(now - ALLOWANCE_RESET_SKEW_SECONDS)
-    midnight = calendar.timegm((day.tm_year, day.tm_mon, day.tm_mday, 0, 0, 0))
-    return float(midnight + ALLOWANCE_RESET_SKEW_SECONDS)
-
-
 @dataclass(frozen=True)
 class CostObservation:
     """The last cost verdict recorded for one route."""
@@ -360,9 +336,13 @@ class FreeServingLedger:
         """Return the ledger clock's current time."""
         return float(self._clock())
 
-    def _demotion_active(self, key: tuple[str, str], now: float) -> bool:
-        demoted_at = self._demoted_at.get(key)
-        return demoted_at is not None and demoted_at >= last_allowance_reset(now)
+    def _demotion_active(self, key: tuple[str, str]) -> bool:
+        """Return whether an explicit demotion remains uncleared.
+
+        A provider calendar is not pre-send entitlement evidence. Demotions
+        therefore persist until an explicit process-level reset.
+        """
+        return key in self._demoted_at
 
     def record(self, provider_name: str, model_id: str, verdict: CostVerdict) -> bool:
         """Record one verdict and return whether it was stored.
@@ -386,7 +366,7 @@ class FreeServingLedger:
         with self._lock:
             now = self.now()
             key = (provider_name, model_id)
-            if verdict is CostVerdict.FREE and self._demotion_active(key, now):
+            if verdict is CostVerdict.FREE and self._demotion_active(key):
                 return False
             if verdict in _DEMOTING_VERDICTS:
                 self._demoted_at[key] = now
@@ -406,19 +386,17 @@ class FreeServingLedger:
     def demoted(self, provider_name: str, model_id: str) -> bool:
         """Return whether a ``PAID``/``EXHAUSTED`` demotion holds for the route now."""
         with self._lock:
-            return self._demotion_active((provider_name, model_id), self.now())
+            return self._demotion_active((provider_name, model_id))
 
     def free_now(self, provider_name: str, model_id: str) -> bool:
         """Return whether fresh ``FREE`` evidence (since the latest reset) admits the route."""
         with self._lock:
-            now = self.now()
             key = (provider_name, model_id)
             observation = self._observations.get(key)
             return (
                 observation is not None
                 and observation.verdict is CostVerdict.FREE
-                and observation.observed_at >= last_allowance_reset(now)
-                and not self._demotion_active(key, now)
+                and not self._demotion_active(key)
             )
 
     def probe_due(self, provider_name: str, model_id: str) -> bool:
@@ -432,15 +410,7 @@ class FreeServingLedger:
         demoted or unknown one waits for the next reset, so a route is probed
         at most once per allowance day).
         """
-        with self._lock:
-            now = self.now()
-            key = (provider_name, model_id)
-            observation = self._observations.get(key)
-            if observation is None:
-                return True
-            if self._demotion_active(key, now):
-                return False
-            return observation.observed_at < last_allowance_reset(now)
+        return False
 
     def claim_probe(self, provider_name: str, model_id: str) -> bool:
         """Atomically reserve one route\'s probe slot for the current allowance day.
@@ -449,19 +419,7 @@ class FreeServingLedger:
         Concurrent schedulers therefore cannot both pass a separate
         probe_due check and issue duplicate, potentially billed probes.
         """
-        if not provider_name or not model_id:
-            return False
-        with self._lock:
-            now = self.now()
-            key = (provider_name, model_id)
-            observation = self._observations.get(key)
-            if observation is not None:
-                if self._demotion_active(key, now):
-                    return False
-                if observation.observed_at >= last_allowance_reset(now):
-                    return False
-            self._observations[key] = CostObservation(CostVerdict.UNKNOWN, now)
-            return True
+        return False
 
     def snapshot(self) -> dict[str, str]:
         """Return a JSON-safe ``"provider/model" -> verdict`` view for evidence files."""
@@ -583,7 +541,7 @@ def free_serving_admitted(
     provider = provider_name or ""
     model = model_id or ""
     if provider in COST_EVIDENCE_REQUIRED_PROVIDERS:
-        return store.free_now(provider, model)
+        return False
     return (
         bool(catalog_free)
         and store.verdict(provider, model) not in _DEMOTING_VERDICTS
@@ -616,28 +574,5 @@ def probe_free_candidates(
     Returns:
         ``{"probes": n, "probed": ["provider/model", ...]}``.
     """
-    store = ledger or FREE_SERVING_LEDGER
-    probed: list[str] = []
-    for model in models:
-        if len(probed) >= max_probes:
-            break
-        provider = str(getattr(model, "provider_name", "") or "")
-        model_id = str(getattr(model, "model_id", "") or "")
-        if (
-            provider not in COST_EVIDENCE_REQUIRED_PROVIDERS
-            or not is_free_nominated(model)
-            or not store.claim_probe(provider, model_id)
-        ):
-            continue
-        probed.append(f"{provider}/{model_id}")
-        before = store.observation(provider, model_id)
-        try:
-            probe(model)
-        except Exception:  # noqa: BLE001 - any failure is "not proven free"
-            if store.observation(provider, model_id) is before:
-                store.record(provider, model_id, CostVerdict.UNKNOWN)
-            continue
-        if store.observation(provider, model_id) is before:
-            # The probe path recorded nothing (e.g. a mock transport).
-            store.record(provider, model_id, CostVerdict.UNKNOWN)
-    return {"probes": len(probed), "probed": probed}
+    del models, probe, max_probes, ledger
+    return {"probes": 0, "probed": []}
