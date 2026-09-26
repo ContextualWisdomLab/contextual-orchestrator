@@ -47,6 +47,10 @@ _OPENROUTER_UPTIME_ORIGIN = "https://openrouter.ai/api/v1"
 # uptime update -- so it keeps its own fixed, independent bound instead.
 _UPTIME_FETCH_TIMEOUT_SECONDS = 10.0
 
+# Match the inference response boundary: telemetry is untrusted provider input
+# and must not consume unbounded memory before JSON validation.
+_OPENROUTER_UPTIME_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+
 
 class OpenRouterUptimeCollector:
     """Periodically fold upstream availability into the transport prior."""
@@ -152,7 +156,12 @@ class OpenRouterUptimeCollector:
             with urllib.request.urlopen(
                 request, timeout=_UPTIME_FETCH_TIMEOUT_SECONDS
             ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                response_body = response.read(
+                    _OPENROUTER_UPTIME_RESPONSE_MAX_BYTES + 1
+                )
+                if len(response_body) > _OPENROUTER_UPTIME_RESPONSE_MAX_BYTES:
+                    raise ValueError("OpenRouter uptime response exceeds byte limit")
+                payload = json.loads(response_body.decode("utf-8"))
                 endpoints = payload.get("data", {}).get("endpoints", [])
                 uptimes = [
                     endpoint["uptime_last_30m"]
