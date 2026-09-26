@@ -637,7 +637,7 @@ def test_model_client_non_quota_http_errors_are_unknown_only_for_evidence_routes
     assert FREE_SERVING_LEDGER.verdict("openrouter", other.model) is CostVerdict.FREE
 
 
-def test_serving_hooks_skip_idempotency_key_requests() -> None:
+def test_serving_hooks_skip_idempotent_cost_but_keep_quota_authority() -> None:
     import urllib.request
 
     from contextual_orchestrator import orchestrator as orchestrator_module
