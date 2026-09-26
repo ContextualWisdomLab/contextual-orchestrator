@@ -11200,19 +11200,23 @@ class TaskOrchestrator:
                         # never be accidentally downgraded to fail-closed by
                         # incidental wording in an upstream error body (e.g. a
                         # 400 that happens to mention "invalid arguments").
-                        if (
-                            exc.provider_status == 429
-                            and self._rate_limit_remaining(agent.id) is not None
-                        ):
-                            # An active or unavailable cooldown belongs to quota
-                            # admission, not the health circuit or an immediate
-                            # same-agent retry. Retry-After: 0 has already expired
-                            # here and keeps the bounded retry contract below.
+                        if exc.provider_status == 429:
+                            active_cooldown = (
+                                self._rate_limit_remaining(agent.id) is not None
+                            )
                             decision = ToolFailureDecision(
                                 kind=ToolFailureKind.RATE_LIMITED,
-                                action=ToolFallbackAction.FAILOVER_AGENT,
-                                reason_code="tool_failure.rate_limited.failover_agent",
-                                retry_safe=False,
+                                action=(
+                                    ToolFallbackAction.FAILOVER_AGENT
+                                    if active_cooldown
+                                    else ToolFallbackAction.RETRY_SAME_AGENT
+                                ),
+                                reason_code=(
+                                    "tool_failure.rate_limited.failover_agent"
+                                    if active_cooldown
+                                    else "tool_failure.rate_limited.retry_same_agent"
+                                ),
+                                retry_safe=not active_cooldown,
                                 circuit_failure=False,
                             )
                         else:
