@@ -832,6 +832,36 @@ def test_virtual_selector_single_candidate_storm_waits_and_serves() -> None:
     orchestrator.close()
 
 
+def test_expired_cooldown_does_not_retry_unrelated_provider_error() -> None:
+    orchestrator = TaskOrchestrator(
+        _single_free_agent(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    orchestrator._record_rate_limit("solo_free_agent", 30.0)
+    failure = ProviderUpstreamError(
+        agent_id="solo_free_agent", model="solo-free-model",
+        error_code="upstream_error", message="provider failed",
+        client_status=502, provider_status=500, retryable=False, transport="chat",
+    )
+    calls: list[str] = []
+
+    def fail_after_cooldown_expires(agent: ModelAgent, *_args: Any, **_kwargs: Any) -> str:
+        calls.append(agent.id)
+        orchestrator._rate_limit_until[agent.id] = time.monotonic() - 1
+        raise failure
+
+    orchestrator.client.chat = fail_after_cooldown_expires
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            orchestrator.route_once(
+                [{"role": "user", "content": "hello"}],
+                model_name=TaskOrchestrator.FREE_MODEL,
+            )
+        assert excinfo.value is failure
+        assert calls == ["solo_free_agent"]
+    finally:
+        orchestrator.close()
+
+
 def test_virtual_selector_single_candidate_storm_without_budget_raises_honest_429() -> None:
     """Same single-candidate virtual case with no wait budget: honest 429, not a generic failure."""
     orchestrator = TaskOrchestrator(
