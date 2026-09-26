@@ -181,7 +181,7 @@ OPENAPI_SPEC = {
                     "and single-worker streaming fallback paths. A successful "
                     "stream places this object in the final completion chunk."
                 ),
-                "required": ["eligible_agent_ids", "attempted"],
+                "required": ["eligible_agent_ids", "attempted", "terminal_reason"],
                 "properties": {
                     "eligible_agent_ids": {"type": "array", "items": {"type": "string"}},
                     "attempted": {
@@ -190,6 +190,11 @@ OPENAPI_SPEC = {
                     },
                     "terminal_reason": {
                         "type": "string",
+                        "enum": [
+                            "served",
+                            "fail_closed",
+                            "eligible_set_exhausted",
+                        ],
                         "description": "Why the route stopped, e.g. served, fail_closed, eligible_set_exhausted.",
                     },
                 },

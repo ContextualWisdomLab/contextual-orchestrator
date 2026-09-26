@@ -13,3 +13,8 @@ internal and undocumented; `api_contract.py` now carries it as a versioned
 (`0.3.0`) `OrchestrationRoute`/`OrchestrationRouteAttempt` schema, and
 `test_api_contract.py` validates a real structured-synthesis failover and a real
 streaming failover against it.
+
+The 0.3.1 route contract now requires `terminal_reason` and constrains it to
+`served`, `fail_closed`, or `eligible_set_exhausted`. Receipts that omit the
+termination authority or invent an undocumented value fail schema validation
+instead of forcing a consumer-defined fallback interpretation.

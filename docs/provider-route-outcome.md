@@ -10,7 +10,9 @@ response header. The gateway owns candidate selection and fallback. A successful
 streaming response places `orchestration.route` in its final completion chunk;
 the route uses the same `OrchestrationRoute` and `OrchestrationRouteAttempt`
 schemas published by the OpenAPI 0.3.1 contract. The `attempted` entries are in
-execution order. The final `served` entry identifies the candidate that returned
+execution order. `terminal_reason` is mandatory and has exactly three values:
+`served`, `eligible_set_exhausted`, or `fail_closed`; a missing or unknown value
+is not a valid receipt. The final `served` entry identifies the candidate that returned
 the completion; earlier entries describe failed candidates. The final frame is
 the success receipt. If the connection ends before it, the caller has no
 authoritative served-candidate receipt and must treat the outcome as unknown.
