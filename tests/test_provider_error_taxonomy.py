@@ -641,6 +641,8 @@ def test_invoke_retries_same_agent_for_provider_authorized_zero_delay() -> None:
         tool_retry_attempts=1,
     )
     orchestrator._triage_fn = lambda text: False
+    health_failures: list[str] = []
+    orchestrator._record_failure = health_failures.append  # type: ignore[method-assign]
     try:
         result = orchestrator.route_once(
             [{"role": "user", "content": "route this"}],
@@ -651,6 +653,7 @@ def test_invoke_retries_same_agent_for_provider_authorized_zero_delay() -> None:
 
     assert result["answer"] == "recovered immediately"
     assert client.calls == 2
+    assert health_failures == []
     assert orchestrator._circuit == {}
 
 
