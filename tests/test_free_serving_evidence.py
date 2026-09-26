@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import urllib.error
 from contextlib import contextmanager
 
@@ -386,6 +387,41 @@ def test_a_demotion_holds_through_later_unknown_verdicts_until_the_reset(demotio
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is False
     assert ledger.record(EXPERIENTIAL, "m", CostVerdict.FREE) is True
     assert free_serving_admitted(EXPERIENTIAL, "m", catalog_free=True, ledger=ledger) is True
+
+
+def test_concurrent_probe_callers_claim_each_route_at_most_once() -> None:
+    """Concurrent schedulers cannot double-probe and double-bill one route."""
+    clock = _Clock(_UTC_2026_09_26_1000)
+    ledger = FreeServingLedger(clock=clock)
+    model = _discovered(EXPERIENTIAL, "m")
+    first_probe_entered = threading.Event()
+    release_first_probe = threading.Event()
+    duplicate_probe = threading.Event()
+
+    def blocking_probe(_model: object) -> None:
+        if not first_probe_entered.is_set():
+            first_probe_entered.set()
+            assert release_first_probe.wait(timeout=2)
+            return
+        duplicate_probe.set()
+
+    first = threading.Thread(
+        target=lambda: evidence.probe_free_candidates(
+            [model], probe=blocking_probe, max_probes=1, ledger=ledger
+        )
+    )
+    first.start()
+    assert first_probe_entered.wait(timeout=2)
+
+    second = evidence.probe_free_candidates(
+        [model], probe=blocking_probe, max_probes=1, ledger=ledger
+    )
+    release_first_probe.set()
+    first.join(timeout=2)
+
+    assert first.is_alive() is False
+    assert second == {"probes": 0, "probed": []}
+    assert duplicate_probe.is_set() is False
 
 
 def test_catalog_free_providers_also_keep_the_demotion_hold() -> None:
