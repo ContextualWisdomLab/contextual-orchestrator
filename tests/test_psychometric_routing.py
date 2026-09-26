@@ -1028,6 +1028,58 @@ def test_runtime_deployment_change_discards_contextual_judge_observation() -> No
     orchestrator.close()
 
 
+def test_discovery_replacement_discards_obsolete_observation() -> None:
+    original = ModelAgent("model_a", "model-a", tags=("discovered", "reasoning", "writing"))
+    orchestrator = TaskOrchestrator([original])
+    try:
+        orchestrator._observe_contextual_quality(
+            "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
+        )
+        orchestrator.sync_discovered_agents([
+            replace(original, model="model-b")
+        ])
+        assert orchestrator._psychometric_router.records() == []
+        orchestrator.sync_discovered_agents([original])
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
+
+def test_timeout_patch_discards_obsolete_observation(tmp_path: Path) -> None:
+    agent = ModelAgent("model_a", "model-a")
+    orchestrator = TaskOrchestrator([agent], agents_db=str(tmp_path / "agents.sqlite3"))
+    try:
+        orchestrator._observe_contextual_quality(
+            "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
+        )
+        orchestrator.patch_agent("default", "model_a", {"model_timeout_seconds": 7200})
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
+
+def test_inflight_answer_does_not_judge_replacement_deployment(monkeypatch) -> None:
+    original = ModelAgent("model_a", "model-a", tags=("reasoning", "writing"))
+    orchestrator = TaskOrchestrator([original])
+    original_deployment = orchestrator._psychometric_candidate_id(original)
+
+    def reply(_agent, _messages, **_kwargs):
+        orchestrator.patch_agent("default", original.id, {"priority": 2})
+        return "answer from original deployment"
+
+    monkeypatch.setattr(orchestrator.client, "chat", reply)
+    monkeypatch.setattr(
+        orchestrator, "_model_judge_verification",
+        lambda *_args, **_kwargs: {"accepted": True, "reason": "unit verdict", "judge": "model"},
+    )
+    try:
+        result = orchestrator.route_once([{"role": "user", "content": "answer this"}])
+        assert result["trace"][0]["selection_design"]["selected_deployment_id"] == original_deployment
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
+
 def test_runtime_change_cannot_race_a_persisted_psychometric_observation(
     tmp_path: Path, monkeypatch
 ) -> None:
