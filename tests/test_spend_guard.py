@@ -364,7 +364,7 @@ def test_jsonl_unknown_outcome_reservation_survives_a_new_store_instance(
                 usage_reader=lambda: USAGE,
             )
 
-    assert refused.value.detail["reason"] == "insufficient_remaining_budget"
+    assert refused.value.detail["reason"] == "measurement_unavailable"
     assert provider_calls == []
 
 

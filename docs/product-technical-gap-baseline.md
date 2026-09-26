@@ -7195,9 +7195,13 @@ reservation projection. JSONL appends durable reservation/release events under
 a POSIX file lock after refreshing the ledger; an unknown outcome or crash
 leaves its reservation active with no inferred expiry. A runtime without that
 lock still meters uncapped work but refuses shared hard-budget admission as
-`reservation_authority_unavailable`. The numeric baseline threshold and CLI/KV
-surface remain removed; paid baseline work under a hard cap requires a future
-versioned allocation authority, while zero-cost or uncapped work can run.
+`reservation_authority_unavailable`. Review follow-up contracts additionally
+make unknown-cost ledger entries mark run/key/tenant positions incomplete,
+refuse cross-currency prices without exchange-rate evidence, contain recursive
+provider JSON parsing failures, and map ledger path I/O failures to the CLI
+argument-error surface. The numeric baseline threshold and CLI/KV surface
+remain removed; paid baseline work under a hard cap requires a future versioned
+allocation authority, while zero-cost or uncapped work can run.
 
 **Verification and status.** Focused spend-domain, provider-limit, metering,
 guard, and CLI tests are GREEN locally; exact command and counts are recorded

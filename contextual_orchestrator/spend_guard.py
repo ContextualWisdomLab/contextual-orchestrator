@@ -241,7 +241,7 @@ class RunSpendScope:
                     since=limit.window_start(now),
                     currency=currency,
                 )
-            positions.append(SpendPosition(limit, spent, True))
+            positions.append(SpendPosition(limit, spent, _unpriced == 0))
         return positions
 
     def decide(

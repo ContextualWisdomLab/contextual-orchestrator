@@ -1166,7 +1166,7 @@ def main(argv: list[str] | None = None) -> None:
                 else None
             ),
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         parser.error(str(exc))
     virtual_key = None
     if args.virtual_key_credential:

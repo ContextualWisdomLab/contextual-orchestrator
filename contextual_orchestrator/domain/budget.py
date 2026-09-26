@@ -239,6 +239,11 @@ def decide_affordability(
                 _refusal(position, unknown_estimate_reason, now, estimate, purpose)
             )
             continue
+        if estimate.currency != maximum.currency:
+            refusals.append(
+                _refusal(position, "price_currency_mismatch", now, estimate, purpose)
+            )
+            continue
         if billable and not position.measurement_complete:
             refusals.append(
                 _refusal(position, "measurement_unavailable", now, estimate, purpose)

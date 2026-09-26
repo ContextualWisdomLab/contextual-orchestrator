@@ -159,7 +159,7 @@ def provider_limit_evidence(exc: urllib.error.HTTPError) -> dict[str, str]:
 
     try:
         payload = _json.loads(provider_error_body(exc).decode("utf-8", errors="replace"))
-    except (ValueError, TypeError):
+    except Exception:  # noqa: BLE001 - untrusted body parsing must not abort classification
         return {}
     return limit_evidence_from_payload(payload)
 

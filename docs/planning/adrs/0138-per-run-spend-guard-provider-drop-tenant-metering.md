@@ -79,10 +79,13 @@ headroom. A call is refused, before it is sent, when for any limit:
 
 - the limit is already spent (`budget_exhausted`);
 - the price is unknown for a billable endpoint (`price_unknown`, fail closed);
+- the price and active hard limit use different currencies and no exchange-rate
+  evidence exists (`price_currency_mismatch`, fail closed);
 - a priced route lacks an authoritative total-token ceiling
   (`cost_upper_bound_unavailable`, fail closed);
-- an earlier paid call in this run finished without measurable cost
-  (`measurement_unavailable`, fail closed; free and local calls still run);
+- an earlier paid call in the run, virtual-key, or tenant scope finished
+  without measurable cost (`measurement_unavailable`, fail closed; free and
+  local calls still run);
 - the reserved total-cost upper bound would cross the cap
   (`insufficient_remaining_budget`);
 - it is a paid sampled baseline under a hard cap without a separate versioned
@@ -257,6 +260,9 @@ that PR.
   a paid streamed call without usage blocks further paid calls in that run.
 - Key and tenant spend are computed by scanning the store on each admission.
   That is O(entries). A windowed index is deferred.
+- CLI ledger open/read/lock failures use the argument-error surface instead of
+  exposing an operator traceback. Untrusted recursive provider JSON degrades
+  to empty limit evidence and cannot abort failure classification.
 
 ## Deferred
 
