@@ -20,7 +20,7 @@ from contextual_orchestrator.batch_routing import (
     ProviderEmbeddingBatchBackend,
     _DaemonWorkerPool,
 )
-from contextual_orchestrator.cost_router import _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+from contextual_orchestrator.cost_router import _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
@@ -50,7 +50,11 @@ class _SyntheticExactCounter:
 
 
 def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> None:
-    """A null model timeout does not break the existing batch-retention boundary."""
+    """A null model timeout leaves the batch execution deadline unbounded.
+
+    The registry retention window is not substituted as an implicit deadline;
+    see ``test_unbounded_execution_timeout_never_substitutes_registry_retention``.
+    """
     coordinator = CostRoutingCoordinator(
         TaskOrchestrator([], allow_empty_agents=True),
         embedding_token_counter=_SyntheticExactCounter(),
@@ -58,7 +62,7 @@ def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> N
 
     backend = coordinator._provider_embedding_backend()
 
-    assert backend._execution_timeout_seconds == 604_800
+    assert backend._execution_timeout_seconds is None
     assert backend._claim_lease_seconds is None
     backend.close()
 
@@ -593,7 +597,7 @@ def test_durable_provider_embedding_backend_survives_unbounded_client_timeout() 
     coordinator = CostRoutingCoordinator(orchestrator, job_registry=registry)
 
     backend = coordinator._embedding_backends["provider"]
-    assert backend._claim_lease_seconds == _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+    assert backend._claim_lease_seconds == _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
     backend.close()
 
 
