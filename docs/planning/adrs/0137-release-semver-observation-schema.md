@@ -203,9 +203,9 @@ after the fail-closed `exit 1` (lines 210-211), so it does not run today.
      - `provider` is a lowercase provider name (`openrouter`, `nvidia_nim`,
        and so on) with no model path or `:variant`.
    - It carries the opaque receipt, whose `schema_id` must be a URI or a
-     fast-mlsirm identifier in fast-mlsirm's dotted
-     (`fast-mlsirm.<name>.v<N>`) or hyphenated (`fast-mlsirm-<name>-v<N>`)
-     form (see "Receipt identity format"). The pattern does not stop
+     fast-mlsirm identifier in fast-mlsirm's dotted form
+     (`fast-mlsirm.<name>.v<N>`); the hyphenated form is intentionally not
+     accepted (see "Receipt identity format"). The pattern does not stop
      verdict-looking URIs; step-2 check 10 admits only an allowlisted
      identity and fails closed until step 4. Identical observation entries
      are rejected.
@@ -393,28 +393,32 @@ fast-mlsirm, so that the real receipt cannot force a v2.
     [`fast-mlsirm.lineage_channel_weight_evidence.v1`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/crates/mlsirm-core/src/lineage_channel_weight.rs#L20-L21),
     and `fast-mlsirm.sampling-design.v2` as a
     [rejected-version test input](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/tests/test_sampling_design.py#L175);
-  - hyphenated, in the Python rubric:
+  - hyphenated, in the Python rubric only:
     [`fast-mlsirm-item-bank-report-v2`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/python/fast_mlsirm/rubric/item_bank_report.py#L31);
   - one URI `$id`:
     [`https://contextualwisdomlab.github.io/fast-mlsirm/contracts/tepp-lineage-pair-criterion-posterior-v2.schema.json`](https://github.com/ContextualWisdomLab/fast-mlsirm/blob/00f5cb91b417e40102036eb31ab8a4b843c76076/contracts/tepp-lineage-pair-criterion-posterior-v2.schema.json#L3);
   - bare version strings such as `"1.0"` and `"1.1"`, which are versions,
     not identities.
 - **Finding:** the earlier v1 rule accepted only URIs, so it would have
-  rejected every dotted or hyphenated identity above. #2035 is Rust-first,
-  and the Rust core uses the dotted form, so a receipt identity such as
+  rejected every dotted identity above. #2035 is Rust-first, and the Rust
+  core uses the dotted form, so a receipt identity such as
   `fast-mlsirm.release-decision-receipt.v1` was the likely outcome and would
   have forced a v2.
-- **Decision:** before release, v1 accepts three forms:
+- **Decision:** before release, v1 accepts two forms:
   - a URI, as before;
   - the dotted form `fast-mlsirm(\.<name>)+\.v<N>`, where each `<name>` is
-    lowercase letters and digits joined by `-` or `_`;
-  - the hyphenated form `fast-mlsirm(-<name>)+-v<N>`.
+    lowercase letters and digits joined by `-` or `_`.
 
   `<N>` starts at 1. Spaces, `=`, `;`, upper case and other free text do not
-  fit the fast-mlsirm forms. Bare versions such as `"1.0"` stay rejected.
-  Every identity listed above is accepted (tested). If #2035 publishes an
-  identity in yet another form, v1 cannot carry it and a new schema version
-  is needed.
+  fit the dotted form. Bare versions such as `"1.0"` stay rejected. The URI
+  and dotted identities listed above are accepted (tested).
+- **The hyphenated form is intentionally not accepted in v1** (review
+  round 4). The Python rubric's `fast-mlsirm-item-bank-report-v2` exists,
+  but nothing needs a hyphenated receipt identity today, and loosening
+  beyond what is needed waits until it is needed. It and
+  `fast-mlsirm-release-decision-receipt-v1` are rejected fixture cases. If
+  #2035 publishes a hyphenated identity, or one in yet another form, v1
+  cannot carry it and a new schema version is needed (Decision 7).
 - The pattern is not the guard against verdict text; check 10 is.
 
 ## Step 2 validator cross-checks
