@@ -144,38 +144,24 @@ def opencode_go_model_endpoint(model_id: str) -> str | None:
     return OPENCODE_GO_MODEL_ENDPOINTS.get(model_id)
 
 
-# Deployments have used three spellings for the Experiential Labs key. The KV
-# label stays ``EXPERIENTAL_LABS_API_KEY`` (existing stored secrets and pool
-# policy use it), while bootstrap reads the environment in this order: the
-# correct spelling first, then the historical typo, then the provider's own
-# documented ``EXPLABS_API_KEY``.
-CREDENTIAL_ENV_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType({
-    "EXPERIENTAL_LABS_API_KEY": (
-        "EXPERIENTIAL_LABS_API_KEY",
-        "EXPERIENTAL_LABS_API_KEY",
-        "EXPLABS_API_KEY",
-    ),
-})
-
-
-def credential_env_names(credential_name: str) -> tuple[str, ...]:
-    """Return the environment names that may carry one KV credential, in order."""
-    return CREDENTIAL_ENV_ALIASES.get(credential_name, (credential_name,))
-
-
 def bootstrap_credential_value(
     environ: Mapping[str, str], credential_name: str
 ) -> str:
-    """Return the first non-blank environment value for one KV credential.
+    """Return the non-blank bootstrap environment value for one KV credential.
 
-    Only trailing CR/LF bytes from mounted secret files are removed; every
-    other byte is preserved. Returns ``""`` when no spelling is set.
+    Only the exact registered name is read -- no alternate spelling. For
+    Experiential Labs that is ``EXPERIENTAL_LABS_API_KEY``, the organization
+    Secret name as registered (see
+    ``docs/doctoring/current-main-provider-bootstrap.md``); reading another
+    spelling first could pick up a different key from a developer shell and
+    spend that account's paid credits. Only trailing CR/LF bytes from mounted
+    secret files are removed; every other byte is preserved. Returns ``""``
+    when the name is unset or blank.
     """
-    for env_name in credential_env_names(credential_name):
-        raw = environ.get(env_name, "")
-        value = raw.rstrip("\r\n") if isinstance(raw, str) else ""
-        if value and value.strip():
-            return value
+    raw = environ.get(credential_name, "")
+    value = raw.rstrip("\r\n") if isinstance(raw, str) else ""
+    if value and value.strip():
+        return value
     return ""
 
 
@@ -1737,6 +1723,11 @@ def _url_with_task_filter(url: str, task_filter: str) -> str:
     )
 
 
+# Bytez answers an invalid or unauthorized key with one of these; retrying the
+# same key against the unfiltered catalog cannot succeed.
+_BYTEZ_AUTH_FAILURE_STATUSES = frozenset({401, 403})
+
+
 def _fetch_provider_json_with_retry(
     fetch: Callable[..., Any],
     url: str,
@@ -1783,6 +1774,12 @@ def _discover_bytez_task_catalog(
         dict.fromkeys((source.task_filter, *source.fallback_task_filters))
     )
     last_exc: Exception | None = None
+    # The first HTTP failure from a task-filtered call is the error this
+    # provider reports if nothing is discovered: the unfiltered fallback below
+    # must never replace a real ``http_status_500`` with its own timeout,
+    # oversized/invalid body, different status, or empty result.
+    first_http_failure: urllib.error.HTTPError | None = None
+    auth_rejected = False
     for task_filter in task_filters:
         if not task_filter:
             continue
@@ -1794,6 +1791,11 @@ def _discover_bytez_task_catalog(
         )
         if failure is not None:
             last_exc = failure
+            if isinstance(failure, urllib.error.HTTPError):
+                if first_http_failure is None:
+                    first_http_failure = failure
+                if failure.code in _BYTEZ_AUTH_FAILURE_STATUSES:
+                    auth_rejected = True
             _LOGGER.info(
                 "discovery_task_result account=%s task=%s outcome=failed error_code=%s",
                 source.provider_name,
@@ -1811,47 +1813,60 @@ def _discover_bytez_task_catalog(
         )
         if discovered:
             return discovered
-    # Last resort: Bytez has answered HTTP 500 to both task-filtered list calls
-    # while the key was valid (an invalid key answers 401). Ask once for the
-    # unfiltered catalog and keep only rows whose own ``task`` field names one
-    # of the chat-compatible tasks above, so no non-chat model slips in.
-    payload, failure = _fetch_provider_json_with_retry(
-        fetch,
-        source.list_url,
-        timeout=timeout,
-        fetch_kwargs=fetch_kwargs,
-    )
-    if failure is not None:
-        last_exc = failure
-        _LOGGER.info(
-            "discovery_task_result account=%s task=unfiltered outcome=failed error_code=%s",
-            source.provider_name,
-            _provider_discovery_error_code(failure),
+    if not auth_rejected:
+        # Last resort: Bytez has answered HTTP 500 to both task-filtered list
+        # calls while the key was valid. Ask once for the unfiltered catalog
+        # and keep only rows whose own ``task`` field is one of the
+        # chat-compatible tasks above, so no non-chat model slips in. A
+        # 401/403 means the key itself was refused, so the fallback is
+        # skipped rather than spending another call on the same key. The
+        # unfiltered catalog is large and may exceed
+        # MAX_DISCOVERY_RESPONSE_BYTES; that surfaces as a fallback failure
+        # and the original filtered-call error is still reported.
+        payload, failure = _fetch_provider_json_with_retry(
+            fetch,
+            source.list_url,
+            timeout=timeout,
+            fetch_kwargs=fetch_kwargs,
         )
-    else:
-        allowed_tasks = {task for task in task_filters if task}
-        rows = payload.get("output") if isinstance(payload, dict) else None
-        filtered_payload = {
-            "output": [
-                row
-                for row in (rows if isinstance(rows, list) else [])
-                if isinstance(row, dict) and row.get("task") in allowed_tasks
-            ]
-        }
-        discovered = _parse_bytez(filtered_payload, source)
-        _LOGGER.info(
-            "discovery_task_result account=%s task=unfiltered outcome=%s model_count=%d",
-            source.provider_name,
-            "succeeded" if discovered else "empty",
-            len(discovered),
-        )
-        if discovered:
-            return discovered
-        last_exc = None
-    if last_exc is not None:
+        if failure is not None:
+            if last_exc is None:
+                last_exc = failure
+            _LOGGER.info(
+                "discovery_task_result account=%s task=unfiltered outcome=failed error_code=%s",
+                source.provider_name,
+                _provider_discovery_error_code(failure),
+            )
+        else:
+            allowed_tasks = {task for task in task_filters if task}
+            rows = payload.get("output") if isinstance(payload, dict) else None
+            filtered_payload = {
+                "output": [
+                    row
+                    for row in (rows if isinstance(rows, list) else [])
+                    # A list/dict ``task`` is unhashable; the ``str`` check
+                    # keeps the set lookup from raising TypeError, which is
+                    # not a ProviderDiscoveryError and would abort discovery
+                    # for every provider.
+                    if isinstance(row, dict)
+                    and isinstance(row.get("task"), str)
+                    and row["task"] in allowed_tasks
+                ]
+            }
+            discovered = _parse_bytez(filtered_payload, source)
+            _LOGGER.info(
+                "discovery_task_result account=%s task=unfiltered outcome=%s model_count=%d",
+                source.provider_name,
+                "succeeded" if discovered else "empty",
+                len(discovered),
+            )
+            if discovered:
+                return discovered
+    reported_exc = first_http_failure if first_http_failure is not None else last_exc
+    if reported_exc is not None:
         raise ProviderDiscoveryError(
             source.provider_name,
-            _provider_discovery_error_code(last_exc),
+            _provider_discovery_error_code(reported_exc),
             source.credential_name,
         ) from None
     raise ProviderDiscoveryError(
