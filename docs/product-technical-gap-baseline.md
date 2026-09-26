@@ -7256,30 +7256,34 @@ constant, an unhashable VCS requirement under `--require-hashes`, and pinned
 Rust 1.97.1 without rustfmt. The dependent PR #1273 inherited that stale base.
 
 The stack is repaired without force. PR #1231 now targets
-`fix/test-drift-main-red`; exact successor
-`1d51487111992c14bbce5922968eb857f0399921` has #1266 exact
-`ea48d4ec13be241ae85850d3d83a48edb3d28bf6` as an ancestor and preserves only
-the five-path streaming-receipt delta (`+159/-2`, ahead 8/behind 0). PR #1273
-exact `6e012a62586f798809186e36201cbb7e2f5c9124` remains open, mergeable, and
-retains its sole `tests/test_decision_receipts.py` delta (`+72/-0`). Exact
-remote AST parsing passed for all five Python paths. Draft-triggered runs
-36274940061 and 36275008940 were SKIPPED and are not GREEN evidence. The stale
-#1231 CHANGES_REQUESTED review tied to `b267f897`/run 36086231637 was dismissed
-because it explicitly contained no source-backed finding; fresh non-skipped
-checks and independent approval remain required. Status stays Proposed.
+`fix/test-drift-main-red`; exact repaired head
+`741f36029e12a7e07d5fe57a9a0c2ad65b74ddff` has #1266 exact
+`ea48d4ec13be241ae85850d3d83a48edb3d28bf6` as an ancestor and preserves an
+eight-path streaming-receipt and terminal-authority delta (`+235/-3`). PR
+#1273 ordinary two-parent merge-forward
+`5d00d48dc61487908352015fddc646c66ef3e20c` preserves #1231 and its sole
+product delta, `tests/test_decision_receipts.py` (`+72/-0`).
 
+Exact remote API/stream/error/documentation contracts pass 48/48; Ruff,
+compileall, and diff checks pass. The #1273 native cancellation acceptance case
+fails closed before execution because the isolated runner lacks the required
+`contextual_orchestrator._decision_receipt` Rust extension and has no
+cargo/maturin toolchain. Draft-triggered hosted execution is SKIPPED, not GREEN.
+Fresh native hosted execution and independent approval remain required. Status
+stays Proposed.
 
 ### Typed terminal-reason authority — Proposed
 
-Exact head `1d514871` published OpenAPI 0.3.1 documentation and production
-receipts that treated `terminal_reason` as the routing-termination authority,
-but the schema neither required the field nor constrained its value. A consumer
-could therefore validate a receipt with no termination semantics or an
-undocumented reason and would have to invent its own fallback interpretation.
+At exact head `1d514871`, OpenAPI 0.3.1 documentation and production receipts
+treated `terminal_reason` as the routing-termination authority, but the schema
+neither required the field nor constrained its value. A consumer could
+therefore validate a receipt with no termination semantics or an undocumented
+reason and would have to invent its own fallback interpretation.
 
 RED `7a0183d8` records both invalid cases. GREEN `f1af21d7` makes
 `terminal_reason` required and restricts it to the three production values:
-`served`, `fail_closed`, and `eligible_set_exhausted`. Focused route-schema
-tests pass 4/4; the wider API/stream/error suite and exact-head hosted checks
-remain required. This is PR-head evidence only; protected-main integration,
-independent approval, immutable release, and consumer bump remain outstanding.
+`served`, `fail_closed`, and `eligible_set_exhausted`. Final repaired head
+`741f3602` passes the exact remote API/stream/error/documentation suite 48/48,
+Ruff, compileall, schema assertions, and diff checks. Protected-main
+integration, independent approval, immutable release, and consumer bump remain
+outstanding.
