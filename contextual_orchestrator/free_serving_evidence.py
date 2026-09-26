@@ -70,6 +70,7 @@ the provider publishes an authoritative pre-send entitlement API.
 from __future__ import annotations
 
 import enum
+import hashlib
 import math
 import re
 import threading
@@ -102,6 +103,23 @@ body ``usage.cost``, classifies the call as ``UNKNOWN`` (fail-closed).
 
 IDEMPOTENCY_KEY_HEADER = "idempotency-key"
 """Request header whose responses omit ``usage.cost`` (documented); skipped."""
+
+
+def credential_route_identity(
+    provider_name: str, credential_name: str, endpoint_url: str
+) -> str:
+    """Return a secret-free identity for one credential and provider endpoint.
+
+    The credential name and endpoint, never the credential value, distinguish
+    accounts that expose the same provider/model pair. A short digest keeps
+    evidence snapshots free of credential labels and URLs.
+    """
+    provider = provider_name.strip()
+    if not provider:
+        return ""
+    material = f"{credential_name.strip()}\\0{endpoint_url.strip().rstrip('/')}"
+    fingerprint = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    return f"{provider}:credential_route:{fingerprint}"
 
 EXPERIENTIAL_PROMOTIONS_URL = "https://api.experientiallabs.ai/api/models?limit=1"
 """Public keyless catalog whose ``promotions[]`` nominates free candidates.
@@ -331,7 +349,14 @@ class FreeServingLedger:
         """
         return key in self._demoted_at
 
-    def record(self, provider_name: str, model_id: str, verdict: CostVerdict) -> bool:
+    def record(
+        self,
+        provider_name: str,
+        model_id: str,
+        verdict: CostVerdict,
+        *,
+        route_identity: str | None = None,
+    ) -> bool:
         """Record one verdict and return whether it was stored.
 
         ``UNKNOWN`` is kept only for evidence-required providers: a provider
@@ -342,7 +367,8 @@ class FreeServingLedger:
         A ``PAID``/``EXHAUSTED`` demotion persists until an explicit
         process-level reset. A later ``FREE`` verdict is rejected.
         """
-        if not provider_name or not model_id:
+        identity = route_identity or provider_name
+        if not provider_name or not identity or not model_id:
             return False
         if (
             verdict is CostVerdict.UNKNOWN
@@ -351,7 +377,7 @@ class FreeServingLedger:
             return False
         with self._lock:
             now = self.now()
-            key = (provider_name, model_id)
+            key = (identity, model_id)
             if verdict is CostVerdict.FREE and self._demotion_active(key):
                 return False
             if verdict in _DEMOTING_VERDICTS:
@@ -423,6 +449,7 @@ def record_reported_cost(
     *,
     request_headers: object = None,
     ledger: FreeServingLedger | None = None,
+    route_identity: str | None = None,
 ) -> CostVerdict | None:
     """Classify one response and record the verdict for its route.
 
@@ -431,7 +458,9 @@ def record_reported_cost(
     if request_has_idempotency_key(request_headers):
         return None
     verdict = classify_reported_cost(usage, headers)
-    (ledger or FREE_SERVING_LEDGER).record(provider_name or "", model_id or "", verdict)
+    (ledger or FREE_SERVING_LEDGER).record(
+        provider_name or "", model_id or "", verdict, route_identity=route_identity
+    )
     return verdict
 
 
@@ -443,6 +472,7 @@ def record_provider_error(
     *,
     request_headers: object = None,
     ledger: FreeServingLedger | None = None,
+    route_identity: str | None = None,
 ) -> CostVerdict | None:
     """Record the verdict an HTTP error response implies for its route.
 
@@ -471,7 +501,9 @@ def record_provider_error(
         return None
     else:
         verdict = CostVerdict.UNKNOWN
-    (ledger or FREE_SERVING_LEDGER).record(provider, model_id or "", verdict)
+    (ledger or FREE_SERVING_LEDGER).record(
+        provider, model_id or "", verdict, route_identity=route_identity
+    )
     return verdict
 
 
@@ -481,6 +513,7 @@ def record_failed_call(
     *,
     request_headers: object = None,
     ledger: FreeServingLedger | None = None,
+    route_identity: str | None = None,
 ) -> CostVerdict | None:
     """Record ``UNKNOWN`` for an evidence-required call that produced no parsed cost.
 
@@ -493,7 +526,10 @@ def record_failed_call(
     if (provider_name or "") not in COST_EVIDENCE_REQUIRED_PROVIDERS:
         return None
     (ledger or FREE_SERVING_LEDGER).record(
-        provider_name or "", model_id or "", CostVerdict.UNKNOWN
+        provider_name or "",
+        model_id or "",
+        CostVerdict.UNKNOWN,
+        route_identity=route_identity,
     )
     return CostVerdict.UNKNOWN
 
@@ -504,6 +540,7 @@ def free_serving_admitted(
     *,
     catalog_free: bool,
     ledger: FreeServingLedger | None = None,
+    route_identity: str | None = None,
 ) -> bool:
     """Return whether a route may serve a free selector right now.
 
@@ -514,12 +551,13 @@ def free_serving_admitted(
     store = ledger or FREE_SERVING_LEDGER
     provider = provider_name or ""
     model = model_id or ""
+    identity = route_identity or provider
     if provider in COST_EVIDENCE_REQUIRED_PROVIDERS:
         return False
     return (
         bool(catalog_free)
-        and store.verdict(provider, model) not in _DEMOTING_VERDICTS
-        and not store.demoted(provider, model)
+        and store.verdict(identity, model) not in _DEMOTING_VERDICTS
+        and not store.demoted(identity, model)
     )
 
 
