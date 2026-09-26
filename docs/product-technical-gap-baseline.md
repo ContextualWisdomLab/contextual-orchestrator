@@ -19,11 +19,18 @@ numeric deadlines as the same explicit unbounded contract; documentation
 successor `ea1ac223bd8eb8c137c490ef7871734a27558a69` records that boundary.
 This is source evidence only until fresh exact-head hosted tests execute.
 
+Hosted RED run [36147466940](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36147466940)
+selected the repository's pinned Rust 1.97.1 directory override, whose
+`profile = "minimal"` omitted `rustfmt` and `clippy`; the Rust gate therefore
+failed before formatting or linting. GREEN source
+`6e70a196d715fd3c9ba9b89bc8698f252ead04e5` declares both components in
+`rust-toolchain.toml`. This is configuration evidence only until its fresh
+exact-head hosted Rust gate completes.
+
 Status remains **Proposed**. Missing #1074 production carryover, typed EgressWeave
-allowlist errors, ADR/citation inventory repairs, the pinned Rust component
-installation, and replacement of the unhashable fast-mlsirm VCS dependency
-remain separate causal gates. Protected integration, immutable release, and
-consumer pins have not occurred.
+allowlist errors, ADR/citation inventory repairs, and replacement of the
+unhashable fast-mlsirm VCS dependency remain separate causal gates. Protected
+integration, immutable release, and consumer pins have not occurred.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
