@@ -20,7 +20,7 @@ from contextual_orchestrator.batch_routing import (
     ProviderEmbeddingBatchBackend,
     _DaemonWorkerPool,
 )
-from contextual_orchestrator.cost_router import _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+from contextual_orchestrator.cost_router import _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
@@ -58,7 +58,7 @@ def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> N
 
     backend = coordinator._provider_embedding_backend()
 
-    assert backend._execution_timeout_seconds == 604_800
+    assert backend._execution_timeout_seconds is None
     assert backend._claim_lease_seconds is None
     backend.close()
 
@@ -231,6 +231,27 @@ def test_provider_batch_wait_survives_infinite_deadline() -> None:
     assert backend.wait(job, timeout=float("inf"))["status"] == "completed"
     assert backend.retrieve(job)[0].embedding == [15.0]
     backend.close()
+
+
+def test_provider_batch_wait_survives_finite_timeout_above_threading_limit() -> None:
+    """A large caller deadline must not overflow the platform wait limit."""
+    release = threading.Event()
+
+    def runner(requests):
+        release.wait(timeout=1)
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    request = EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")
+    job = backend.submit([request])
+    timer = threading.Timer(0.02, release.set)
+    timer.start()
+    try:
+        assert backend.wait(job, timeout=threading.TIMEOUT_MAX * 2)["status"] == "completed"
+    finally:
+        release.set()
+        timer.join(timeout=1)
+        backend.close()
 
 
 def test_queued_document_exposes_backend_poll_and_registry_retention_contract() -> None:
@@ -593,7 +614,7 @@ def test_durable_provider_embedding_backend_survives_unbounded_client_timeout() 
     coordinator = CostRoutingCoordinator(orchestrator, job_registry=registry)
 
     backend = coordinator._embedding_backends["provider"]
-    assert backend._claim_lease_seconds == _DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS
+    assert backend._claim_lease_seconds == _DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS
     backend.close()
 
 

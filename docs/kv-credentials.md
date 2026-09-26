@@ -334,8 +334,11 @@ from `os.getenv`):
 OpenCode Go reuses `OPENCODE_ZEN_API_KEY`. Registering that one credential
 discovers both `https://opencode.ai/zen/v1` and `https://opencode.ai/zen/go/v1`;
 the two catalogs stay separate provider accounts. The trusted review sidecar
-admits honest-free rows from those catalogs into `orchestrator/free` when that
+admits honest-free Zen rows into `orchestrator/free` when that
 credential is present; `OPENAI_API_KEY` stays out of that pool.
+Only models.dev rows assigned to the OpenAI-compatible protocol enter Go's chat
+endpoint; Responses- and Anthropic-protocol rows are excluded. Go requires a
+paid subscription, so zero token rates do not make its models free.
 
 For a configured gateway, the one-shot discovery/bootstrap boundary accepts
 `LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
@@ -390,4 +393,3 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
-

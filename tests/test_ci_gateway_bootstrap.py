@@ -64,6 +64,12 @@ def test_seed_credentials_copies_present_provider_keys_into_kv(monkeypatch) -> N
     assert module.PROVIDER_KEY_ENV_NAMES == tuple(
         dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
     )
+    assert sum(
+        source.credential_name == "OPENCODE_ZEN_API_KEY"
+        for source in PROVIDER_MODEL_SOURCES
+        if source.provider_name in {"opencode_zen", "opencode_go"}
+    ) == 2
+    assert module.PROVIDER_KEY_ENV_NAMES.count("OPENCODE_ZEN_API_KEY") == 1
     for name in module.PROVIDER_KEY_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")

@@ -1347,18 +1347,26 @@ class ProviderEmbeddingBatchBackend:
                 self._errors[job_id] = error
             self._states[job_id] = status
 
-    def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
+    def wait(self, job: BatchJob, *, timeout: float | None) -> Dict[str, Any]:
         """Wait within the caller's explicit deadline for a terminal state.
 
-        ``timeout`` may be ``float("inf")`` when the caller has no wall-clock
+        ``timeout`` may be ``None`` or ``float("inf")`` when the caller has no wall-clock
         deadline (contextual-orchestrator's no-implicit-deadline default);
-        ``threading.Event.wait`` raises ``OverflowError`` for a non-finite
-        timeout on CPython, so a non-finite value is translated to ``None``
-        (block indefinitely) rather than passed through.
+        ``threading.Event.wait`` cannot accept non-finite values or finite
+        values above ``threading.TIMEOUT_MAX``. Keep the caller's deadline
+        while waiting in platform-bounded intervals.
         """
         event = self._terminal_events.get(job.job_id)
         if event is not None:
-            event.wait(timeout=timeout if math.isfinite(timeout) else None)
+            if timeout is None or not math.isfinite(timeout):
+                event.wait()
+            else:
+                deadline = time.monotonic() + timeout
+                remaining = max(0.0, timeout)
+                while not event.wait(timeout=min(remaining, threading.TIMEOUT_MAX)):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
         return self.poll(job)
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
