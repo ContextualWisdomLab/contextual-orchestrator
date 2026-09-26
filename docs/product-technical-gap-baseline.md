@@ -7214,3 +7214,22 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+## 2026-09-27 PR #1249: durable provider-embedding shutdown claim fence
+
+Observation time: 2026-09-27 Asia/Seoul. Status: **Proposed** until exact-head
+hosted checks and independent approval complete.
+
+- **Gap:** `ProviderEmbeddingBatchBackend.close()` woke local waiters but the
+  durable execution lease kept renewing while an in-flight provider runner
+  remained blocked. A replacement worker therefore could not reclaim the job,
+  and a result returning immediately after close could still be published by
+  the closing worker.
+- **RED:** `a406675cc13e879dabdf81a150fd97536f74b944` proves renewal continues
+  after close; `2bd7b70387c62a16b15e9b0bca7f613c2d69739c` proves the
+  pre-renewal race can publish a late result.
+- **Action:** `e6707f72421860817114d13ade7c6daa0c8b9e6b` makes durable claim
+  renewal observe backend liveness; `a89f269a5633e9c60dbbcd3336234634e0bc9524`
+  marks the claim lost before any post-close provider result can publish.
+- **Evidence:** the exact-source batch-registry harness passes 23 tests,
+  including both shutdown races. This is focused evidence, not a full-suite
+  or hosted-GREEN claim.
