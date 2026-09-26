@@ -1796,7 +1796,7 @@ def apply_free_promotions(
     """Mark one provider's rows whose exact model id has a free promotion.
 
     Only evidence-required providers are eligible: the promotion nominates a
-    candidate, and per-call cost evidence still decides admission.
+    candidate, but post-response cost cannot authorize the next request.
     """
     if not slugs or provider_name not in COST_EVIDENCE_REQUIRED_PROVIDERS:
         return discovered
@@ -2523,10 +2523,10 @@ def general_free_serving_candidates(
     count never overstates how many free models the general chat pool could
     actually serve.
     """
-    # A zero catalog price only nominates a route; per-call cost evidence
-    # decides whether it is servable free *now* (Experiential's paid waterfall
-    # overflow, a demoted route that started billing). Shared with
-    # ``TaskOrchestrator._is_free_agent`` so the two selectors cannot diverge.
+    # A zero catalog price only nominates a route. Evidence-required providers
+    # remain closed without authoritative pre-send entitlement; passive cost
+    # evidence can only demote. Shared with ``TaskOrchestrator._is_free_agent``
+    # so the two selectors cannot diverge.
     candidates = [
         model
         for model in discovered
