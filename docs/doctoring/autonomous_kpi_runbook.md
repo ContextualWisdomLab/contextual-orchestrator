@@ -817,3 +817,15 @@ fixtures also lacked provider timing. After correcting only their timing
 evidence, session `7172` passed all 34 action-fallback tests. The 203 unchanged
 release/review cases were not repeated. These are local integration receipts,
 not hosted or published evidence.
+
+Mixed unknown-timing follow-up: the root integration test in session `97584`
+failed the existing mixed-failure taxonomy control after protected main added
+mixed-pool recovery. Session `84704` independently reproduced the structured
+counterpart: no-header 429 plus 502 became a storm 429 despite no authorized
+recovery time. Mixed-pool recovery now requires finite provider timing, while
+all-429 unknown-timing exhaustion remains an honest storm. The two mixed
+400/429 final-error fixtures retain the original classified 429, rather than
+claiming an all-provider storm or inventing a wait. Session `92108`: 176 passed
+with strict warnings across taxonomy, admission, structured fallback,
+exhausted-pool ordering and actual HTTP action fallback. No unknown-outcome
+candidate was granted replay authority.
