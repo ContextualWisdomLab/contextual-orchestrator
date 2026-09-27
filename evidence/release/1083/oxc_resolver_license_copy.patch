@@ -1,0 +1,16 @@
+diff --git a/.github/workflows/release-napi.yml b/.github/workflows/release-napi.yml
+index 3b4e2df..0fdf42a 100644
+--- a/.github/workflows/release-napi.yml
++++ b/.github/workflows/release-napi.yml
+@@ -236,6 +236,11 @@ jobs:
+           cp package.json napi/package.json
+           ./node_modules/.bin/napi create-npm-dirs
+           ./node_modules/.bin/napi artifacts --npm-dir npm --build-output-dir napi
++          cp LICENSE napi/LICENSE
++          for package_manifest in npm/*/package.json; do
++            test -f "$package_manifest"
++            cp LICENSE "${package_manifest%/package.json}/LICENSE"
++          done
+ 
+       - name: Publish npm packages as latest
+         run: |
