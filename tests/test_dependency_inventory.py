@@ -35,8 +35,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 def test_inventory_covers_every_lockfile_resolved_scope(tmp_path) -> None:
     output = tmp_path / "dependency-inventory.json"
 
-    # Missing artifact evidence remains a refusal even with registry-only sources.
-    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 1
+    # Source enumeration succeeds; artifact adjudication is a separate gate.
+    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 0
 
     inventory = json.loads(output.read_text(encoding="utf-8"))
     by_ecosystem = {entry["ecosystem"]: entry for entry in inventory["ecosystems"]}

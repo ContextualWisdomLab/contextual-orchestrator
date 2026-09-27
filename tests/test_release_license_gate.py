@@ -106,7 +106,7 @@ def test_release_workflow_runs_the_gate_before_publishing() -> None:
     # Two adjudications, in this order: the inventory before any environment is
     # built, and the full gate once the SBOM for this commit is in hand.
     preinstall = verify_block.index("--mode preinstall")
-    environment = verify_block.index("run: uv run --locked")
+    environment = verify_block.index("uv sync --locked")
     sbom_fetch = verify_block.index("Fetch the required CycloneDX SBOM")
     release_gate = verify_block.index("--sbom sbom-download/cyclonedx-sbom.json")
     assert preinstall < environment < sbom_fetch < release_gate
