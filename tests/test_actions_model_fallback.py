@@ -390,7 +390,10 @@ def test_http_virtual_free_tools_reselect_worker_on_retryable_failure() -> None:
     assert _TOOLS in client.tool_payloads
 
 
-def test_http_virtual_free_tool_session_continues_after_failover() -> None:
+@pytest.mark.parametrize("provider_status", [502, 429])
+def test_http_virtual_free_tool_session_continues_after_failover(
+    provider_status: int,
+) -> None:
     """A caller can execute a returned tool and continue on the serving worker."""
 
     class ToolSessionClient(_ToolCallClient):
@@ -407,12 +410,17 @@ def test_http_virtual_free_tool_session_continues_after_failover() -> None:
                     raise ProviderUpstreamError(
                         agent_id=agent.id,
                         model=agent.model,
-                        error_code="server_error",
+                        error_code=(
+                            "rate_limit_exceeded" if provider_status == 429 else "server_error"
+                        ),
                         message="provider failed",
-                        client_status=502,
-                        provider_status=502,
+                        client_status=provider_status,
+                        provider_status=provider_status,
                         retryable=True,
                         transport="chat",
+                        extra_detail=(
+                            {"retry_after_seconds": 1.0} if provider_status == 429 else None
+                        ),
                     )
                 self._extras = {
                     "tool_calls": [{
