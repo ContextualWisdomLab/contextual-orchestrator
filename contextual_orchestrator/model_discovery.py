@@ -297,17 +297,23 @@ def probe_discovered_model_tool_call_capability(
         with client._open_provider(request, destination, timeout=timeout) as response:
             body = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        if exc.code != 400:
-            return None
-        error_body = exc.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
-        if len(error_body) > MAX_DISCOVERY_RESPONSE_BYTES:
-            return None
-        body = error_body.decode("utf-8", errors="replace")
         try:
-            error_payload = json.loads(body)
-        except json.JSONDecodeError:
-            error_payload = {"message": body}
-        return _tool_call_parallelism_from_error(error_payload)
+            if exc.code != 400:
+                return None
+            error_body = exc.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+            if len(error_body) > MAX_DISCOVERY_RESPONSE_BYTES:
+                return None
+            body = error_body.decode("utf-8", errors="replace")
+            try:
+                error_payload = json.loads(body)
+            except json.JSONDecodeError:
+                error_payload = {"message": body}
+            return _tool_call_parallelism_from_error(error_payload)
+        finally:
+            try:
+                exc.close()
+            except Exception:
+                pass  # Cleanup must not replace the classified probe outcome.
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
     if len(body) > MAX_DISCOVERY_RESPONSE_BYTES:
