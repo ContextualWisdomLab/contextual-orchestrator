@@ -74,3 +74,18 @@ Exit 0 requires all paths and bytes to match. Run the same command with native
 zic 2022g as the failure control: it returns 1 and records 202 mismatches.
 This evidence does not clear the archive or the ambiguous parent declaration;
 the full inventory still has 159 held components.
+
+## SBOM archive projection
+
+The binder previously discarded `bundled_archives` despite their presence in
+inventory. Each payload now has a CycloneDX file component with SHA-256, parent
+artifact digest, path, size and explicit unresolved license scope. Each matching
+parent component has an edge to this one file identity. No package URL or license
+is inferred. Invalid paths, hashes, sizes, missing parent references and duplicate
+payload identities fail closed.
+
+The three affected test files pass 187 tests. Rebinding the retained exact-source
+full inventory and scanner SBOM produces 616 components, including one explicit
+`dateutil/zoneinfo/dateutil-zoneinfo.tar.gz` file and its parent edges. This is
+projection proof using the recorded inventory revision, not a newly scanned
+release or complete license adjudication. The 159 holds remain.

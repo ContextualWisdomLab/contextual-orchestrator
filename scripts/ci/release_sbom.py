@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
 
 
@@ -83,6 +83,38 @@ def bind_inventory(bom: dict, inventory: dict, source_sha: str) -> dict:
             matches = identities.get((ecosystem, name, package["version"]), [])
             if not matches:
                 raise ValueError(f"SBOM omits {ecosystem}:{name}@{package['version']}")
+            for archive in package.get("bundled_archives", []):
+                path = archive.get("name", "")
+                digest = archive.get("sha256", "")
+                parent_digest = package.get("artifact_sha256", "")
+                size = archive.get("size")
+                if (not isinstance(path, str) or not path or PurePosixPath(path).is_absolute()
+                        or ".." in PurePosixPath(path).parts
+                        or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                        or not isinstance(parent_digest, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", parent_digest)
+                        or type(size) is not int or size < 0 or any(not item.get("bom-ref") for item in matches)):
+                    raise ValueError("bundled archive lacks valid identity or parent evidence")
+                path_digest = hashlib.sha256(path.encode()).hexdigest()
+                ref = f"urn:co:archive:{parent_digest}:{path_digest}:{digest}"
+                if any(item.get("bom-ref") == ref for item in bom["components"]):
+                    raise ValueError("duplicate bundled archive reference")
+                bom["components"].append({
+                    "type": "file", "name": path, "bom-ref": ref,
+                    "hashes": [{"alg": "SHA-256", "content": digest}],
+                    "properties": [
+                        {"name": "contextual-orchestrator:parent-artifact-sha256", "value": parent_digest},
+                        {"name": "contextual-orchestrator:archive-size", "value": str(size)},
+                        {"name": "contextual-orchestrator:license-scope", "value": "unresolved"},
+                    ],
+                })
+                for component in matches:
+                    dependencies = bom.setdefault("dependencies", [])
+                    row = next((item for item in dependencies if item.get("ref") == component["bom-ref"]), None)
+                    if row is None:
+                        row = {"ref": component["bom-ref"], "dependsOn": []}
+                        dependencies.append(row)
+                    row.setdefault("dependsOn", []).append(ref)
             for component in matches:
                 # Publisher declarations remain declarations; the separate gate adjudicates them.
                 if package.get("licenses") and not component.get("licenses"):
