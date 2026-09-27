@@ -352,8 +352,9 @@ def test_free_structured_synthesis_exhausted_wait_preserves_429_and_route() -> N
 
 
 
-def test_free_structured_synthesis_does_not_replay_a_mixed_failure() -> None:
-    """Only the explicit quota rejection gets one retry in a mixed failure."""
+@pytest.mark.parametrize("retry_after_seconds", [0.001, None])
+def test_free_structured_synthesis_does_not_replay_a_mixed_failure(retry_after_seconds: float | None) -> None:
+    """Only a quota rejection with provider timing gets one mixed-pool retry."""
     agents = [
         ModelAgent(f"agent_{index}", f"model-{index}", f"mock://{index}", tags=("cost:free",))
         for index in range(2)
@@ -375,7 +376,7 @@ def test_free_structured_synthesis_does_not_replay_a_mixed_failure() -> None:
             provider_status=status,
             retryable=True,
             transport="structured_synthesis",
-            extra_detail={"retry_after_seconds": 0.001} if status == 429 else {},
+            extra_detail={"retry_after_seconds": retry_after_seconds} if status == 429 else {},
         )
 
     with (
@@ -387,9 +388,12 @@ def test_free_structured_synthesis_does_not_replay_a_mixed_failure() -> None:
     ):
         orchestrator.proxy_completion(_request(TaskOrchestrator.FREE_MODEL), single_agent=False)
 
-    assert calls == [agents[0].id, agents[1].id, agents[0].id]
-    assert caught.value.provider_status == 429
-    assert [row["provider_status"] for row in caught.value.extra_detail["route"]["attempted"]] == [429, 502, 429]
+    expected_statuses = [429, 502] if retry_after_seconds is None else [429, 502, 429]
+    assert calls == [agents[0].id, agents[1].id] + (
+        [agents[0].id] if retry_after_seconds is not None else []
+    )
+    assert caught.value.provider_status == expected_statuses[-1]
+    assert [row["provider_status"] for row in caught.value.extra_detail["route"]["attempted"]] == expected_statuses
 
 
 def test_unknown_transport_then_two_429s_exposes_structured_stage_without_replay() -> None:

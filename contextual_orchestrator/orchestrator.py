@@ -7555,6 +7555,12 @@ class TaskOrchestrator:
                         and row.get("outcome") != "request_too_large"
                         for row in round_attempts
                     )
+                    if retried_mixed_failure and not any(
+                        math.isfinite(self._rate_limit_remaining(candidate.id) or math.inf)
+                        for candidate in synthesis_candidates
+                        if candidate.id not in request_exclusions
+                    ):
+                        raise
                     prior_retryable_error = exc
                     if wait_deadline is None:
                         wait_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
@@ -12952,6 +12958,7 @@ class TaskOrchestrator:
                     cooling = [
                         candidate for candidate in cooling
                         if candidate.id in rejected_agent_ids
+                        and math.isfinite(self._rate_limit_remaining(candidate.id) or math.inf)
                     ]
                     if not cooling:
                         raise_with_recovered_route()
