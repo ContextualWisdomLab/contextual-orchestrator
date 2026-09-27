@@ -74,12 +74,14 @@ LifeOS and other consumers must verify their specific owner contracts too.
    not a covered one. A partial SBOM is silence about the scopes it never
    collected, not evidence.
 
-   Known gap, which keeps releases blocked until it is closed: `security.yml`
-   builds the SBOM with `cyclonedx-py environment` in an Ubuntu/Python 3.12
-   environment installed from `requirements.lock` (`api`, `db`, `queue`), so the
-   `dev`, `fuzz` and `native-build` groups, the Rust workspace, the npm packages
-   and the container image layers are not collected. Extending that collection is
-   the prerequisite for any release, not a reason to relax this gate.
+   The source collection now uses Trivy with development dependencies and custom
+   CI requirement files, then verifies every inventory name/version before
+   accepting its CycloneDX output. This covers the declared Python, Rust and npm
+   component sets; the evidence is recorded in
+   `docs/doctoring/release_sbom_toolchain.md`. Container image layers and bundled
+   dependencies inside published wheels still need separate complete evidence.
+   Component coverage alone does not establish licence clearance or release
+   acceptance; those unresolved scopes continue to block publication.
 
    The inventory the gate reads is produced by `scripts/ci/dependency_inventory.py`
    in the same job, on the same checkout, immediately before the gate runs; that
