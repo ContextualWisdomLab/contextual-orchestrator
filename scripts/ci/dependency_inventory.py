@@ -236,7 +236,7 @@ def _metadata_license_terms(metadata: Any) -> list[str]:
     return terms
 
 
-def _installed_license_terms(name: str, version: str) -> tuple[list[str], str]:
+def _installed_license_terms(name: str, version: str) -> tuple[list[str], str, list[dict[str, str]]]:
     """Read one distribution's licence terms from metadata already on disk.
 
     The job that runs this has already installed the shipped set, so its
@@ -248,11 +248,26 @@ def _installed_license_terms(name: str, version: str) -> tuple[list[str], str]:
     try:
         distribution = importlib.metadata.distribution(name)
     except importlib.metadata.PackageNotFoundError:
-        return [], "absent from this environment"
+        return [], "absent from this environment", []
     metadata = distribution.metadata
     if str(metadata.get("Version") or "") != version:
-        return [], f"environment holds {metadata.get('Version')!r}, not the locked version"
-    return _metadata_license_terms(metadata), "installed distribution metadata"
+        return [], f"environment holds {metadata.get('Version')!r}, not the locked version", []
+    terms = _metadata_license_terms(metadata)
+    files = []
+    root = Path(distribution.locate_file("")).resolve()
+    try:
+        for member in distribution.files or []:
+            if not member.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE")):
+                continue
+            path = Path(distribution.locate_file(member)).resolve()
+            if not path.is_relative_to(root):
+                return terms, "license file outside installed distribution root", []
+            raw = path.read_bytes()
+            files.append({"name": member.name, "sha256": hashlib.sha256(raw).hexdigest(),
+                          "text": raw.decode("utf-8", errors="replace")})
+    except OSError:
+        return terms, "unreadable installed license file", []
+    return terms, "installed distribution metadata", files
 
 
 def _git(repository_root: Path, *arguments: str) -> str:
@@ -377,8 +392,7 @@ def build_inventory(
                         artifact_dir, package["name"], package["version"]
                     )
                 else:
-                    terms, source = _installed_license_terms(package["name"], package["version"])
-                    license_files = []
+                    terms, source, license_files = _installed_license_terms(package["name"], package["version"])
                 package["licenses"] = terms
                 package["license_files"] = license_files
                 package["license_source"] = source if terms else f"unresolved: {source}"

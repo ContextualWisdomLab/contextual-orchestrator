@@ -571,3 +571,23 @@ def test_every_license_text_must_evidence_the_declared_family(files):
     groups = classify_inventory_licenses(_inventory(packages=[package]))
     assert not groups["permitted"]
     assert len(groups["undecidable"]) == 1
+
+
+def test_nested_scoped_npm_identity_matches_sbom(tmp_path):
+    from scripts.ci.release_license_gate import _lock_packages_from_npm, _sbom_packages
+    lock = tmp_path / "package-lock.json"
+    lock.write_text(json.dumps({"packages": {"node_modules/a/node_modules/@types/node": {"version": "1.0"}}}))
+    expected = _lock_packages_from_npm(lock)
+    present, mismatches = _sbom_packages([{"group": "@types", "name": "node", "version": "1.0",
+                                        "purl": "pkg:npm/%40types/node@1.0"}], "pkg:npm/")
+    assert expected == present == {("@types/node", "1.0")}
+    assert mismatches == []
+
+
+def test_malformed_npm_dependency_is_not_silently_dropped(tmp_path):
+    from scripts.ci.dependency_inventory import InventoryError
+    from scripts.ci.release_license_gate import _lock_packages_from_npm
+    lock = tmp_path / "package-lock.json"
+    lock.write_text(json.dumps({"packages": {"node_modules/library": None}}))
+    with pytest.raises(InventoryError):
+        _lock_packages_from_npm(lock)

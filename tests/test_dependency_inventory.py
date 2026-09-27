@@ -35,12 +35,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 def test_inventory_covers_every_lockfile_resolved_scope(tmp_path) -> None:
     output = tmp_path / "dependency-inventory.json"
 
-    # This repository currently refuses: requirements.lock still carries a
-    # `fast-mlsirm @ git+https://...` requirement, which --no-index does not
-    # stop and which is built from source. The gap stays visible rather than
-    # being closed by repinning it elsewhere; the enumeration below is still
-    # written, so the sets can be checked while the refusal stands.
-    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 1
+    # The released fast-mlsirm wheel pin replaced the former VCS requirement.
+    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 0
 
     inventory = json.loads(output.read_text(encoding="utf-8"))
     by_ecosystem = {entry["ecosystem"]: entry for entry in inventory["ecosystems"]}
@@ -321,3 +317,31 @@ def test_wheel_version_prefix_is_not_exact_artifact_evidence(tmp_path):
     assert terms == []
     assert "no wheel" in source
     assert files == []
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkeypatch, linked):
+    import importlib.metadata
+    repository = _repository(tmp_path)
+    site = tmp_path / "site"
+    info = site / "only_library-1.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text("Name: only_library\nVersion: 1.0\nLicense-Expression: MIT\n")
+    raw = b"Permission is hereby granted, free of charge.\r\n"
+    license_path = info / "LICENSE"
+    if linked:
+        outside = tmp_path / "outside-license"
+        outside.write_bytes(raw)
+        license_path.symlink_to(outside)
+    else:
+        license_path.write_bytes(raw)
+    (info / "RECORD").write_text("only_library-1.0.dist-info/LICENSE,,\n")
+    distribution = importlib.metadata.Distribution.at(info)
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
+    inventory = build_inventory(repository, resolve_licenses=True)
+    package = next(e for e in inventory["ecosystems"] if e["ecosystem"] == "python")["packages"][0]
+    if linked:
+        assert package["license_files"] == []
+    else:
+        assert package["license_files"] == [{"name": "LICENSE", "sha256": hashlib.sha256(raw).hexdigest(),
+                                            "text": raw.decode("utf-8")}]

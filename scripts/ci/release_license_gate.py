@@ -39,6 +39,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+if __package__:
+    from .dependency_inventory import InventoryError, _npm_packages
+else:
+    from dependency_inventory import InventoryError, _npm_packages
+
 # GPL/LGPL/AGPL in any spelling, including ``GPLv3``. No trailing separator is
 # required: free-text spellings run the version straight onto the family name.
 _COPYLEFT_PATTERN = re.compile(
@@ -184,15 +189,8 @@ def _lock_packages_from_toml(path: Path, key: str) -> set[tuple[str, str]]:
 
 def _lock_packages_from_npm(path: Path) -> set[tuple[str, str]]:
     """Read installed package name/version pairs from an npm lockfile."""
-    with open(path, encoding="utf-8") as handle:
-        document = json.load(handle)
-    packages: set[tuple[str, str]] = set()
-    for location, entry in (document.get("packages") or {}).items():
-        if not location or not isinstance(entry, dict):
-            continue  # the "" entry is the project itself, not a dependency
-        name = entry.get("name") or location.split("node_modules/", 1)[-1]
-        packages.add((_normalize(str(name)), str(entry.get("version", ""))))
-    return packages
+    return {(_normalize(package["name"]), package["version"])
+            for package in _npm_packages(path, path.read_bytes())}
 
 
 def _parse_purl(purl: str, purl_prefix: str) -> tuple[str, str]:
@@ -219,7 +217,10 @@ def _sbom_packages(components: list[dict[str, Any]], purl_prefix: str) -> tuple[
         if not purl.startswith(purl_prefix):
             continue
         purl_name, purl_version = _parse_purl(purl, purl_prefix)
-        field_name = _normalize(str(component.get("name") or ""))
+        name = str(component.get("name") or "")
+        if purl_prefix == "pkg:npm/" and component.get("group"):
+            name = f"{component['group']}/{name}"
+        field_name = _normalize(name)
         field_version = str(component.get("version") or "")
         packages.add((purl_name, purl_version))
         if (purl_name, purl_version) != (field_name, field_version):
@@ -573,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::error::CycloneDX SBOM is malformed and cannot be adjudicated ({error}); refusing to release.",
               file=sys.stderr)
         return 1
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (InventoryError, OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         print(f"::error::Release licence gate could not read the declared dependency scopes ({error}).",
               file=sys.stderr)
         return 1
