@@ -62,6 +62,7 @@ def test_security_workflow_covers_core_repository_security_process():
         'uv sync --locked --extra api --extra db --extra queue --group dev --no-install-project',
         'uv sync --locked --extra api --extra db --extra queue --group dev --no-build-isolation',
         '"$RUNNER_TEMP/security-tools/bin/python" -m pip install --require-hashes -r requirements-security-ci.txt',
+        '"$RUNNER_TEMP/security-tools/bin/pip-audit" --require-hashes -r requirements-security-ci.txt',
         "uv pip install --python .venv/bin/python --require-hashes -r requirements-opencode-review-ci.txt",
         "uv pip install --python .venv/bin/python --require-hashes -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt",
         '"$RUNNER_TEMP/security-tools/bin/pip-audit" --path "$PWD/.venv/lib/python3.12/site-packages" --format json',
