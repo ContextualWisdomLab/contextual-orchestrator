@@ -132,3 +132,18 @@ and keeps that identity unresolved. Bundled distributions, container image
 layers and unknown native instruments remain separate publication requirements.
 The final release gate still reads the exact built root wheel, never prebuild
 source evidence. Export options: [uv CLI reference](https://docs.astral.sh/uv/reference/cli/#uv-export).
+
+## Installation markers versus licence scope (2026-09-27)
+
+The first shared collector retained installation markers, so Linux omitted
+`tzdata` even though the complete inventory required its evidence. The collector
+now validates each source before creating temporary evidence-only requirement
+copies. It removes environment markers from pinned requirement lines in those
+copies, preserving the version, continuation and every locked hash. Original
+lockfiles and installation semantics stay unchanged. No optional or unexecuted
+package is exempted. Binary-only downloads and missing-wheel failures remain.
+
+Conflicting conditional versions in one scope still fail dependency resolution,
+rather than selecting one and shrinking the inventory. A future lock with that
+shape needs separate artifact collection per exact identity before publication.
+This does not establish all-platform bundled licensing or runtime compatibility.

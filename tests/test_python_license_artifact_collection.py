@@ -13,21 +13,24 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize("failure", [None, "input", "export", "download"])
 def test_all_python_scopes_are_collected_before_installation(tmp_path, failure):
     pins = ["requirements.lock", "requirements-security-ci.txt", "fuzz/requirements-property.txt"]
-    for name in pins:
+    for index, name in enumerate(pins):
         path = tmp_path / name
         path.parent.mkdir(exist_ok=True)
-        path.write_text("safe-library==1.0 --hash=sha256:aa\n")
+        path.write_text(f"safe-library-{index}==1.0 ; sys_platform == 'win32' \\\n    --hash=sha256:aa\n")
     if failure == "input":
         (tmp_path / pins[-1]).write_text("unsafe @ https://example.invalid/package.whl\n")
+    originals = {name: (tmp_path / name).read_bytes() for name in pins}
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "downloads.jsonl"
     python = bin_dir / "python"
     python.write_text(f'''#!{sys.executable}
 import json, os, subprocess, sys
+from pathlib import Path
 if sys.argv[1:4] == ["-m", "pip", "download"]:
     with open({str(log)!r}, "a") as out:
-        out.write(json.dumps(sys.argv[1:]) + "\\n")
+        text = Path(sys.argv[sys.argv.index("-r") + 1]).read_text()
+        out.write(json.dumps({{"args": sys.argv[1:], "text": text}}) + "\\n")
     raise SystemExit(9 if {failure!r} == "download" else 0)
 raise SystemExit(subprocess.call([{sys.executable!r}, *sys.argv[1:]]))
 ''')
@@ -48,6 +51,9 @@ Path(sys.argv[-1]).write_text({("unsafe @ git+https://example.invalid/pkg.git\n"
     assert (result.returncode == 0) == (failure is None), result.stderr
     assert len(calls) == ({None: 4, "input": 0, "export": 0, "download": 1}[failure])
     if failure is None:
-        assert [call[call.index("-r") + 1] for call in calls[1:]] == pins
+        assert [call["text"].split("==")[0] for call in calls[1:]] == [f"safe-library-{index}" for index in range(3)]
+    assert {name: (tmp_path / name).read_bytes() for name in pins} == originals
     for call in calls:
-        assert {"--require-hashes", "--no-deps", "--only-binary=:all:"} <= set(call)
+        assert {"--require-hashes", "--no-deps", "--only-binary=:all:"} <= set(call["args"])
+        assert ";" not in call["text"]
+        assert "--hash=sha256:aa" in call["text"]
