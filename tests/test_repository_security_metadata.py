@@ -61,7 +61,7 @@ def test_security_workflow_covers_core_repository_security_process():
         "python -m pip install --require-hashes -r requirements.lock",
         "python -m pip install --no-deps -e .",
         "python -m pip_audit -r requirements.lock",
-        "cyclonedx-py environment",
+        "trivy fs --format cyclonedx --include-dev-deps",
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
@@ -263,7 +263,8 @@ def test_security_tool_lockfile_uses_hash_pinning():
     assert "uv pip compile" in lock_text
     assert "--hash=sha256:" in lock_text
     assert "pip-audit==2.10.1" in lock_text
-    assert "cyclonedx-bom==7.3.0" in lock_text
+    assert "cyclonedx-bom==" not in lock_text
+    assert "chardet==" not in lock_text
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -277,6 +278,11 @@ if __name__ == "__main__":  # pragma: no cover
     test_security_tool_lockfile_uses_hash_pinning()
     print("ok")
 
+
+def test_security_tool_inputs_do_not_reintroduce_the_lgpl_sbom_cli():
+    """Every declared tool input counts, including obsolete duplicate locks."""
+    for path in ROOT_DIR.glob("requirements*.in"):
+        assert not re.search(r"^cyclonedx-bom(?:[<>=\s]|$)", path.read_text(), re.MULTILINE), path.name
 
 def test_native_workflows_bootstrap_the_repository_pinned_rust_toolchain():
     """Fresh runners must install Rust before any native command."""

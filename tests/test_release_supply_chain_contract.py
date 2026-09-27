@@ -77,17 +77,20 @@ def test_sbom_lookup_ignores_successful_scheduled_run_on_same_commit(tmp_path: P
 
 
 def test_release_builds_wheel_without_system_setuptools() -> None:
-    """A clean verifier must install its build backend in isolation."""
+    """The verifier reuses its pinned backend and adjudicates the exact wheel."""
     workflow = _workflow_text()
     build = workflow.split("      - name: Build the installable package for this exact commit\n", 1)[1]
     build = build.split("\n      - name:", 1)[0]
-    assert "uv build --wheel --python 3.12 --out-dir dist" in build
+    assert "uv build --wheel --offline --no-build-isolation --python 3.12 --out-dir dist" in build
     assert 'SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${TARGET_SHA}")"' in build
     assert "export SOURCE_DATE_EPOCH" in build
-    assert 'uv build --wheel --python 3.12 --out-dir "${RUNNER_TEMP}/release-rebuild"' in build
+    assert 'uv build --wheel --offline --no-build-isolation --python 3.12 --out-dir "${RUNNER_TEMP}/release-rebuild"' in build
     assert 'cmp "${wheel}" "${RUNNER_TEMP}/release-rebuild/${wheel##*/}"' in build
     assert "uv pip install --no-deps --python 3.12 --target" in build
-    assert "--no-build-isolation" not in build
+    assert 'cp "${wheel}" license-artifacts/' in build
+    assert workflow.index("Build the installable package") < workflow.index("Refuse to release a GPL-family")
+    final_gate = workflow.split("Refuse to release a GPL-family", 1)[1].split("Upload rendered notes", 1)[0]
+    assert "--prebuild-local-project" not in final_gate
     assert "importlib.metadata.distributions(path=[str(site)])" in build
 
 

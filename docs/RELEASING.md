@@ -74,7 +74,53 @@ check those contracts separately before replacing a source pin.
    on runner-global `setuptools` or `pip`. This wheel
    is the installable Python package; the separately built Rust decision
    measurement wheel remains a distinct dependency and is not bundled here.
-6. A repository administrator has enabled GitHub release immutability before
+
+6. That same SBOM passes the fail-closed licence gate
+   (`scripts/ci/release_license_gate.py`): no component may carry a GPL-family
+   licence (GPL, LGPL or AGPL in any spelling) and none may have an absent,
+   placeholder or unknown licence. The SBOM is the scope, so transitive,
+   optional and build-only components count; being unexecuted is not an
+   exemption. A dual-licensed component passes only when its SPDX expression
+   really offers a permissive alternative with `OR`: `AND` imposes both, and an
+   undecidable operand (`GPL-3.0-only OR UNKNOWN`) offers no reviewable choice.
+   Separate `licenses[]` entries are conjunctive, so each must pass on its own,
+   and nested components are adjudicated like any other. A malformed SBOM, or
+   one with no components, is refused rather than read as clean.
+
+   The same gate also proves *coverage*, by set comparison rather than by
+   spot-checking. For each shipped ecosystem it reads that ecosystem's own
+   lockfile -- `uv.lock`, `rust/Cargo.lock`, `package-lock.json` -- which is the
+   resolved transitive closure, and requires every `name==version` pair in it to
+   be present in the SBOM under the matching `pkg:pypi/`, `pkg:cargo/` or
+   `pkg:npm/` purl. Every distribution declared in `pyproject.toml` (runtime,
+   each optional extra, each dependency group) must appear as well. One
+   component per ecosystem proves nothing and no longer passes. A manifest whose
+   lockfile is missing or unreadable is also a finding: an unprovable scope is
+   not a covered one. A partial SBOM is silence about the scopes it never
+   collected, not evidence.
+
+   The source collection now uses Trivy with development dependencies and custom
+   CI requirement files, then verifies every inventory name/version before
+   accepting its CycloneDX output. This covers the declared Python, Rust and npm
+   component sets; the evidence is recorded in
+   `docs/doctoring/release_sbom_toolchain.md`. Container image layers and bundled
+   dependencies inside published wheels still need separate complete evidence.
+   Component coverage alone does not establish licence clearance or release
+   acceptance; those unresolved scopes continue to block publication.
+
+   The inventory the gate reads is produced by `scripts/ci/dependency_inventory.py`
+   in the same job, on the same checkout, immediately before the gate runs; that
+   is the only supported producer. The gate rejects a malformed, unbound or
+   self-contradicting document from it -- wrong schema, no commit id, a commit
+   other than the released one, absent provenance, unusable hashes, blob ids that
+   disagree, or a `matches_commit` that is anything but boolean true. Those checks
+   are not independent verification of an inventory from elsewhere: that would
+   require re-reading each lockfile at the released commit and re-deriving its
+   blob id inside the gate, which it does not do.
+
+   The gate runs inside `verify`, which `publish` depends on, so a failure stops
+   the run before any tag exists. It is never waived to get a release out.
+7. A repository administrator has enabled GitHub release immutability before
    publication. The normal workflow token has no Administration permission;
    do not add an administrative secret or expand the publisher's authority
    merely to read or change this setting. The publisher validates the actual
@@ -82,7 +128,7 @@ check those contracts separately before replacing a source pin.
    reporting success. A setting that was disabled or changed during publication
    can leave a complete but mutable public release; that is a **failed** run
    and is ineligible for consumption, not an automatic deletion/retagging case.
-7. The runner's GitHub CLI supports `gh release verify` and
+8. The runner's GitHub CLI supports `gh release verify` and
    `gh release verify-asset`. Missing verification capability fails closed;
    do not replace it with a filename or hash-only success claim.
 

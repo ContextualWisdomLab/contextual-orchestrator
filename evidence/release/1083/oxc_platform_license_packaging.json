@@ -1,0 +1,363 @@
+{
+  "producer_source_sha": "8d8c1fc288cdc67482297077adff1c1a6ef44fb3",
+  "packages": [
+    {
+      "name": "@oxc-parser/binding-android-arm-eabi",
+      "version": "0.127.0",
+      "original_archive_sha256": "14e60a1caebb0dc2e96e4cd5ae6e24e0cc2c8a1065f64e79a45743853ebb81ea",
+      "original_archive_integrity": "sha512-0LC7ye4hvqbIKxAzThzvswgHLFu2AURKzYLeSVvLdu2TBOYWQDmHnTqPLeA597BcUCxiLqLsS4CJ5uoI5WYWCQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/0",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "5a02a10186e7ef3ee9553dbbf1abd655b2c2906acb7390f788a459bafbb9f170"
+    },
+    {
+      "name": "@oxc-parser/binding-android-arm64",
+      "version": "0.127.0",
+      "original_archive_sha256": "f8bc226fcba3ce539b15b96a073dfe63a9b5be271a699193d007e047e759d8e5",
+      "original_archive_integrity": "sha512-b5jtVTH6AU5CJXHNdj7Jj9IEiR9yVjjnwHzPJhGyHGPdcsZSzBCkS9GBbV33niRMvKthDwQRFRJfI4a+k4PvYg==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/1",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "eea1b7115536418b1ebe6874b37f5178947a79918f08d84f2ba9dac9f4aa3c4b"
+    },
+    {
+      "name": "@oxc-parser/binding-darwin-arm64",
+      "version": "0.127.0",
+      "original_archive_sha256": "2db0aa463f72c19eaef18b7dd10baafa23e6272e4f20580ce98e55588224bb21",
+      "original_archive_integrity": "sha512-obCE8B7ISKkJidjlhv9xRGJPOSDG2Yu6PRga9Ruaz35uintHxbp1Ki/Yc71wx4rj3Edrm0a1kzG1TAwit0wFpg==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/2",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "e0c43160bd8b2f69d29e543a710ff189b8abf97725f9c111610a6545777f0e0e"
+    },
+    {
+      "name": "@oxc-parser/binding-darwin-x64",
+      "version": "0.127.0",
+      "original_archive_sha256": "c8b98a2b19963992f99e77dee011c7aa7657eaffc7acf98884292e7189b9cd47",
+      "original_archive_integrity": "sha512-JL6Xb5IwPQT8rUzlpsX7E+AgfcdNklXNPFp8pjCQQ5MQOQo5rtEB2ui+3Hgg9Sn7Y9Egj6YOLLiHhLpdAe12Aw==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/3",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "d17d18823c8abfc2e88d0480573d121aec2efa7b3336978dc469b6c16aee701a"
+    },
+    {
+      "name": "@oxc-parser/binding-freebsd-x64",
+      "version": "0.127.0",
+      "original_archive_sha256": "b5c9bb1c9be0842dcdb215a0a2aeeaf1ffc57b1c34f34166e256e77864883bab",
+      "original_archive_integrity": "sha512-SDQ/3MQFw58fqQz3Z1PhSKFF3JoCF4gmlNjziDm8X02tTahCw0qJbd7FGPDKw1i4VTBZene9JPyC3mHtSvi+wA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/4",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "2a43fdcdf62f45cd4b21796501e8f1ce864e0904bebf972d46b3f8f0314d3194"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-arm-gnueabihf",
+      "version": "0.127.0",
+      "original_archive_sha256": "264a56288edf2c5a0981858f1fa24b4c5ea9b1b4906ee9ae6b358f09b7c837cb",
+      "original_archive_integrity": "sha512-Av+D1MIqzV0YMGPT9we2SIZaMKD7Cxs4CvXSx/yxaWHewZjYEjScpOf5igc8IILASViw4WTnjlwUdI1KzVtDHQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/5",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "0457ff0e417aadd0c42f73e91a3389d33a1391c53f11d2975e532f20187a65e2"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-arm-musleabihf",
+      "version": "0.127.0",
+      "original_archive_sha256": "9061456cd96661968b5ca9c921b7f20d66c5633f416ff45b00f3b8b5b82feece",
+      "original_archive_integrity": "sha512-Cs2fdJ8cPpFdeebj6p4dag8A4+56hPvZ0AhQQzlaLswGz1tz7bXt1nETLeorrM9+AMcWFFkqxcXwDGfTVidY8g==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/6",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "7ab3fe3071de09a4dc7ac5743cf463609ef311fa57dd95b8cde4bc4c89caa44f"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-arm64-gnu",
+      "version": "0.127.0",
+      "original_archive_sha256": "f16cd9e11b1c16b73b3a61d5d8f9cb9e396f2f4e1a71f4eeca2b4b31dfa3fa51",
+      "original_archive_integrity": "sha512-qdOfTcT6SY8gsJrrV92uyEUyjqMGPpIB5JZUG6QN5dukYd+7/j0kX6MwK1DgQj39jtUYixxPiaRUiEN1+0CXgQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/7",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "157d1bdade40c6cd11fd8442da592b8f0ea64d8f60a1d34e60d28fa64fbf637d"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-arm64-musl",
+      "version": "0.127.0",
+      "original_archive_sha256": "85d03ac7386af79368fb32eb5b943fb6b45fcced707e138453e4738263ea8022",
+      "original_archive_integrity": "sha512-EoTCZneNFU/P2qrpEM+RHmQwt+CvDkyGESG6qhr7KaegXLZwePfbrkCDfAk8/rhxbDUVGsZILX+2tqPzFtoFWA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/8",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "2633a0fae4ba5a687f3c812af72c6ac042d63900e7b020c979011a3f37cd7431"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-ppc64-gnu",
+      "version": "0.127.0",
+      "original_archive_sha256": "7f9cd2e36248a1ce83e5f3cdb9fdbc7ab74f432474c382128a7a76987234d159",
+      "original_archive_integrity": "sha512-zALjmZYgxFLHjXeudcDF0xFGNydTAtkAeXAr2EuC17ywCyFxcmQra4w0BMde0Yi/re4Bi4iwEoEXtYN7l6eBLQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/9",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "33ec3130ce24d12d3692f6157d8c51c6e9e02a9d3e37d37674e82c871b0b3a93"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-riscv64-gnu",
+      "version": "0.127.0",
+      "original_archive_sha256": "9b46b9bea81164a3304fcb6f1df932b11adbf8e8b901533c4024c0628695cbce",
+      "original_archive_integrity": "sha512-fPP8M6zQLS7Jz7o9d5ArUSuAuSK3e+WCYVrCpdzeCOejidtZExJ9tjhDrAd3HEPqARBCPmdpqxESPFqy44vkBQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/10",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "fa43eca4a0e1a11cb08faa86832ae9113fc77e70e8c33e619e6fc085eaf157bf"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-riscv64-musl",
+      "version": "0.127.0",
+      "original_archive_sha256": "a0a1c17a86b6f6582e7ad8090a4254c036866d6130d14d2577c302ef3111a66d",
+      "original_archive_integrity": "sha512-7IcC4Ao02oGpfnjt+X/oF4U2mllo2qoSkw5xxiXNKL9MCTsTiAC6616beOuehdxGcnz1bRoPC1RQ2f1GQDdN+g==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/11",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "b3f0015b364d78a76276215361d7ae395789d804a5fbeae9461f47db92d29f88"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-s390x-gnu",
+      "version": "0.127.0",
+      "original_archive_sha256": "dfe672b04dfad742a32e8f89780806c3e0056acc634263a8e69c4c76b09ebb13",
+      "original_archive_integrity": "sha512-pbXIhiNFHoqWeqDNLiJ9JkpHz1IM9k4DXa66x+1GTWMG7iLxtkXgE53iiuKSXwmk3zIYmaPVfBvgcAhS583K4Q==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/12",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "cf4839eeb57f50a0d0cd769555d71bc00cc249ba5bdce4d9dc79b5f746217f65"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-x64-gnu",
+      "version": "0.127.0",
+      "original_archive_sha256": "2874538b47e5f37fe6cee8d5ad73931aaa8ca7ce0c8661f7070d1c6ba80cdfa3",
+      "original_archive_integrity": "sha512-MYCguB9RvBvlSd6gbuNI7QwiLoCCAlGnlRJFPrzLI6U1/9wkC/WK6LtBAUln55H1Ctqw45PWmqrobKoMhsYQzQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/13",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "bd092df5b36c0ef949e3805a72d24bcf321d07a333d09d5e0a28be5bd8820cc5"
+    },
+    {
+      "name": "@oxc-parser/binding-linux-x64-musl",
+      "version": "0.127.0",
+      "original_archive_sha256": "e15d61abb398a6b28fa94d4ffe05e4651f88a33e15c5c0df336a3e3c69140e52",
+      "original_archive_integrity": "sha512-5eY0B/bxf1xIUxb4NOTvOI3KWtBQfPWYyKAzgcrCt0mDibSZygVpO1Pz8bkeiSZ5Jj9+M09dkggG3H8I5d0Uyg==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/14",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "87fef9eaa740c9d1eaa2fdad9b4df64752a683bad84a535c431c0f130bf488ec"
+    },
+    {
+      "name": "@oxc-parser/binding-openharmony-arm64",
+      "version": "0.127.0",
+      "original_archive_sha256": "7abd34e09b56c1c580f740b89a1704c831baaaaffc07f8d1d59182f513bb0735",
+      "original_archive_integrity": "sha512-Gld0ajrFTUXNtdw20fVBuTQx66FA75nIVg+//pPfR3sXkuABB4mTBhl3r9JNzrJpgW//qiwxf0nWXUWGJSL3UQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/15",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "f2234b2d0a7b2856ab513f355255df5fe93eee6a244dbca78770d111bc027c1b"
+    },
+    {
+      "name": "@oxc-parser/binding-wasm32-wasi",
+      "version": "0.127.0",
+      "original_archive_sha256": "43fbfe0ed007080fdbe40e247ec5e3fbe121c43911e0466cd251e1d98d7a74a9",
+      "original_archive_integrity": "sha512-T6KVD7rhLzFlwGRXMnxUFfkCZD8FHnb968wVXW1mXzgRFc5RNXOBY2mPPDZ77x5Ln76ltLMgtPg0cOkU1NSrEQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/16",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "c020003202ff434489fad65ca3e838bce8c64743ac047aee1117ef27a822e086"
+    },
+    {
+      "name": "@oxc-parser/binding-win32-arm64-msvc",
+      "version": "0.127.0",
+      "original_archive_sha256": "266a1edaf211d53631af27af09596de9b26dce3ed60e54b4d5912201d55cee10",
+      "original_archive_integrity": "sha512-Ujvw4X+LD1CCGULcsQcvb4YNVoBGqt+JHgNNzGGaCImELiZLk477ifUH53gIbE7EKd933NdTi25JWEr9K2HwXw==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/17",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "745d642f9e294572ead48d6e7f5f1147bd9a0f7f0b6f6568b09e024dcc918e02"
+    },
+    {
+      "name": "@oxc-parser/binding-win32-ia32-msvc",
+      "version": "0.127.0",
+      "original_archive_sha256": "7f81682eb0bf33522eee9f95ba8fa5569884945ba8b7ed9190af859e7182aa20",
+      "original_archive_integrity": "sha512-0cwxKO7KHQQQfo4Uf4B2SQrhgm+cJaP9OvFFhx52Tkg4bezsacu83GB2/In5bC415Ueeym+kXdnge/57rbSfTw==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/18",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "f6aa6bb0dc37ae9de3844074bc675ed599133559930786023565878f1deef51b"
+    },
+    {
+      "name": "@oxc-parser/binding-win32-x64-msvc",
+      "version": "0.127.0",
+      "original_archive_sha256": "2839dbd106b9b716ea99880a8648aaa6a49e6e20d4e553e1f7da2cbb1ba01664",
+      "original_archive_integrity": "sha512-rOrnSQSCbhI2kowr9XxE7m9a8oQXnBHjnS6j95LxxAnEZ0+Fz20WlRXG4ondQb+ejjt2KOsa65sE6++L6kUd+w==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/19",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "e259a87fab1e07bcf3f3f36031a448efda6da312809e038aeb56530a90c73819"
+    },
+    {
+      "name": "@oxlint/binding-android-arm-eabi",
+      "version": "1.80.0",
+      "original_archive_sha256": "37d77aabdfd8157343c897537e109922c7d9d5a3ad0ce19560ac5eda8ddb510b",
+      "original_archive_integrity": "sha512-RM3Plj+biQpxa5d1GOOX6ciDlcUROmm4OZ/pLTpitkQt2mJv4jhtY4cbgaetOm5UKWZe05/TGQ6o1Vl8EOHkrA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/20",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "ac6c29f42533bf0379393698685ec03e6f76fb7129bb626179a540fa3d18a3d2"
+    },
+    {
+      "name": "@oxlint/binding-android-arm64",
+      "version": "1.80.0",
+      "original_archive_sha256": "eeb025b1c0a84a8e5db36e4ee19f3253fc4825993c63a05dbb3db727937c65c6",
+      "original_archive_integrity": "sha512-YlO5JEf0Yr2bUUlu8O8daVcUxtcGGbcSmyV7E7nSbJbfAdxTE0PFPwgnIlw7wXJaTYjb+qs5hI5q3jxUkI7cAw==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/21",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "0327bad1b5ffc5319102dccb797e6b03570ad2053e14c80d26eebbf61e2baab9"
+    },
+    {
+      "name": "@oxlint/binding-darwin-arm64",
+      "version": "1.80.0",
+      "original_archive_sha256": "677583a718023180c7208f10c1dab4fdf46a6774c704f5ca7ca13188fa402e5f",
+      "original_archive_integrity": "sha512-BULDOyO3AhsmdWfQeIUCykDt3dd7XZBGLhp1eIh56skRv01O+cNjNPwXMIbeW1x4+pxcln5if72wcRgViVo7PA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/22",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "18aed8a3b5829a81e6ca8c9f6489a6295f77c1aaa6cd5e560ddb0ff203e328b2"
+    },
+    {
+      "name": "@oxlint/binding-darwin-x64",
+      "version": "1.80.0",
+      "original_archive_sha256": "d240ef2467bfcd3cd8ee4579ae2a0a38394c33a42e7fa799cd01851fc2917010",
+      "original_archive_integrity": "sha512-YJ4JzLw7N5TDSQFlA0hAQGHvnDZgyypm1yunObVWcWiF9KM7eGCJKYKLgTC2Fi/57OdnBhbj4OkzPGdFQJ6HyA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/23",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "557d16a07dc835e5622f14dad9cac4d5a146c7658cca272739a7223dcf625c73"
+    },
+    {
+      "name": "@oxlint/binding-freebsd-x64",
+      "version": "1.80.0",
+      "original_archive_sha256": "c220de0518880a48dcd69e3bf10f30feb57bf4fe5769df2bf1c1b4f8979e3133",
+      "original_archive_integrity": "sha512-AYUIk5QnL0s8oWAYsREZwkRYy1SupJTXALo93J1TgzHywxQtdM99FecRMQ87MXEdPQ0j1TmEpeeq3fGNkpvMqg==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/24",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "d5f087b240c46a2468563e73bcee8402fadc915a1d40ae3b665165e424a84267"
+    },
+    {
+      "name": "@oxlint/binding-linux-arm-gnueabihf",
+      "version": "1.80.0",
+      "original_archive_sha256": "048a726aabb64faff63f0f9c0591dd6aac5f29f304b6b6c07c46cc6afc5efdd0",
+      "original_archive_integrity": "sha512-9hBZVANupQ89W9dXyE0n8doCyaW5pDyGn3y6XlIMPZ+rIKuyqkr3SNUXmVJIhuvUq0NBU3RBiSXXE69l4XI6KA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/25",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "eb5648404f03a8df128ca69f47718687333720b9dfa3742f7fd740e81a3dd2a7"
+    },
+    {
+      "name": "@oxlint/binding-linux-arm-musleabihf",
+      "version": "1.80.0",
+      "original_archive_sha256": "01064de26fecc3c5d04b945cb3674e3922079dbc32b9578cf64a45f3b78ce844",
+      "original_archive_integrity": "sha512-SvS2uKqzY+pbfuvAHzH4338R6Zwo805GAwrIMVvK1KxoOWCIjZUdfzTCvilD7z6JK91v011+zYMryabhDo2AsQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/26",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "3c2abe04638c437d7a6c7c9d5843285b63a3f10238608aaab32987d6f61cf4dc"
+    },
+    {
+      "name": "@oxlint/binding-linux-arm64-gnu",
+      "version": "1.80.0",
+      "original_archive_sha256": "133329d9fc2242b547e38e1b7a4f6e09dbc67e96e9a6464125b890a5e12d05ac",
+      "original_archive_integrity": "sha512-tCLadyqRVL3pQTRPNg7cjXKvcvS4fbyXeQHhKk5BTJ1oftQln5/yIIWbu/Xom/DX41zv2P9QGt6+D/TtQVtY3A==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/27",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "e0974220d5a3ec562639dfb3352e822475e6d9a5c79c001783882ef1f31d104b"
+    },
+    {
+      "name": "@oxlint/binding-linux-arm64-musl",
+      "version": "1.80.0",
+      "original_archive_sha256": "d8ad033d17228cba45828d45d06f6dafc331a5baf5c7b162004a7bcc6aa5992f",
+      "original_archive_integrity": "sha512-XfpCNRlOPcLlJl4Bn/FUhjqlR6BVavEykERBf/MV7YA9VZDa5g5znVqYhyviMafcxS9Pe/i/kPvHNO0U6svEHQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/28",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "9731cbb0fa714e4e09dd0442ae591086573d4a9e56666c252410e3f63504cb1f"
+    },
+    {
+      "name": "@oxlint/binding-linux-ppc64-gnu",
+      "version": "1.80.0",
+      "original_archive_sha256": "607face86f7f88987ba24da4c3c5a59e07b889fdf58c987f9abc3baa2c8dd875",
+      "original_archive_integrity": "sha512-3I4yMwcFG9NeO8ioY6JBBuKsIm5GL/x7MATt1S4tVWaxPu5HcJ+XnLUbcVBTxG8q2Wu56HSj+NmXQiVYb1lp6A==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/29",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "c0e82bb562ba9b9c42d2fa7e808cd4e991c6e3ad9747cae18048a31d0326cacb"
+    },
+    {
+      "name": "@oxlint/binding-linux-riscv64-gnu",
+      "version": "1.80.0",
+      "original_archive_sha256": "1606d4cc10a6ed1bd7079750a34d8ee717576977c3be3ef80ddb7c696134f164",
+      "original_archive_integrity": "sha512-E1wAKymkpe1/E8helzBKdm81OBOF+ezxRyXRMEuik3ZpWDER5CPOKZwF66RsdwW98uwZv8UTFremUQtC1CzdJA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/30",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "de76bd228f5a81817504010d05def1c88234c92f3163a8b22d072d2efa4a2bca"
+    },
+    {
+      "name": "@oxlint/binding-linux-riscv64-musl",
+      "version": "1.80.0",
+      "original_archive_sha256": "c24aac87531233a559a164ec913a231b97eee6028559da9ec403eac1af931593",
+      "original_archive_integrity": "sha512-+gLRGD4sIo3+VA++iham5UxD9tKSoJ/VOrROCEXIcknrYtQg6iIQgvjN0cpiRF7N6UYC7pJbvHJlDnMge5LRpQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/31",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "6ef393b166a164a28e5926b723a11bcbb68c0ca24404dcd3ae7070acd9676859"
+    },
+    {
+      "name": "@oxlint/binding-linux-s390x-gnu",
+      "version": "1.80.0",
+      "original_archive_sha256": "749df5de7c9fe70ee329f029047e6f3a3dce322c3327776700312651b6ba58ca",
+      "original_archive_integrity": "sha512-aR0PrzHj9leW3NmzBAAP4EzdoBNoJcs9sjnIQPIwyRnBGYrRbXUIpEB5Q39AqK3PLY5JK5uEhDQDiUa1QSAstw==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/32",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "d18df7e36636abe70db51b440dff2b12c6d007d71c3ac6ba3b034ad339592bc8"
+    },
+    {
+      "name": "@oxlint/binding-linux-x64-gnu",
+      "version": "1.80.0",
+      "original_archive_sha256": "e85e5e6447223099ec9aff54a2759f7b337484b9380b6055f2994fb86c046b3b",
+      "original_archive_integrity": "sha512-vSVh5cSo3Xxs6ghBCcFJlpbkbENzDog1qXtoXLa/HC3aCrR4XO76GZbXmQoCPHnu99nQpdCeC3H9tdNICfDh7A==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/33",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "f843c9677bcd1d741e80c16b2eb576c6878282360c6172c38d4ae5917ae7e217"
+    },
+    {
+      "name": "@oxlint/binding-linux-x64-musl",
+      "version": "1.80.0",
+      "original_archive_sha256": "9ed7de8951cca848486f9aae2e5a5f9ccefb4c4addb0a8900b92803310287308",
+      "original_archive_integrity": "sha512-FfzBXpNQ8u7/ZI/p8bl73MeZ508Ax3hxWp3SiJpEFiC+BB9XcXy5FAZHTLKDPSzrUpxQZSZJAVdDmuJp/+HDBQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/34",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "2773dbf02958aa6dee86e862f11253bda8bd81d958bfd16d2406d2eef7b7f805"
+    },
+    {
+      "name": "@oxlint/binding-openharmony-arm64",
+      "version": "1.80.0",
+      "original_archive_sha256": "7df6072419e42f5d5c9a05caf7a838f524c45c8964cb9532eee690b280c821a2",
+      "original_archive_integrity": "sha512-zMzbkumtmprCgRwoYNzcB3iC39fXdJIMLMU33KdCjEGLlJGOEt1+LwQ4LF8ndLzAEKVz4BR0y3V6Xrkk3Nm3yA==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/35",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "8615d3a9b18c9fa298848fb9f21ec656a5b7ca8ef711d41a9e74aead2c64e96f"
+    },
+    {
+      "name": "@oxlint/binding-win32-arm64-msvc",
+      "version": "1.80.0",
+      "original_archive_sha256": "f940f48642c975f2da182f88d191ab48ab20246727ace0bbc43ff8054beff25c",
+      "original_archive_integrity": "sha512-ib6iRcrXsk4t1fm3iKcwksyWh1ZkZXC/2mEzakl0ai2+6HZunf1WWMZ/xP9EJAvw9g9K4UVTC3NF/+G2qLrbTQ==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/36",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "61740d728fd313a488c921e49dbde311a73c7bb08ecd721bff7a3f4a7a879fda"
+    },
+    {
+      "name": "@oxlint/binding-win32-ia32-msvc",
+      "version": "1.80.0",
+      "original_archive_sha256": "0f73c071448244e34a89004e03706231cd2a80c129c3be7b92849805e357f42b",
+      "original_archive_integrity": "sha512-xhRWBMpLxZvgKAH6+DJZmpP+W8Y8UdQOSU1JfxSWNXsaBaRGW77j+1hCuNHlzj7OH4SPN8fYd1q0o2qrDtoVyw==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/37",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "3f45a029f7862376c5532bcab6b8a0a865576658a038220f1c0a45d03de6d5b1"
+    },
+    {
+      "name": "@oxlint/binding-win32-x64-msvc",
+      "version": "1.80.0",
+      "original_archive_sha256": "676da18ef036d194cd637441a72f3718706ed79c8f76bbb9b371b8bd4f6040e3",
+      "original_archive_integrity": "sha512-yAnO7lwBYQnz2pcfBPIGQQZWIX5zd5R/1aAKIF3oE+TVj7IhoHcROjOkz3sRDngzqhfPKfFaXqug5j5rE5dn6Q==",
+      "probe_directory": "/private/tmp/co-oxc-packaging-probe-1083/packages/38",
+      "scope": "package metadata only; original binaries omitted, original archive unchanged",
+      "probe_archive_sha256": "a74013fd2aae458fe178c4581da8eec6788188dd8eb523971b14fb223fb80433"
+    }
+  ],
+  "copied_instruments": {
+    "LICENSE": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "THIRD-PARTY-LICENSE": "77643247a04db72198cea3c8b73751091821b4d51b5448fd65501127a9db5111"
+  },
+  "scope": "Actual cached archive identity/missing-license verification and metadata-only offline packaging probes. No native rebuild, published registry mutation, locked-artifact reclassification or complete compiled dependency/license provenance.",
+  "workflow_lint": "47 pre-existing actionlint diagnostics reproduced at unmodified HEAD; identical kind/messages after patch. New isolated shell passes shellcheck.",
+  "rejected_filename": "LICENSE-THIRD-PARTY excluded by actual npm pack under files allowlist; corrected LICENSE.third-party included."
+}

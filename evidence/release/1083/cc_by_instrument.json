@@ -1,0 +1,30 @@
+{
+  "source_inventory_sha256": "412823941e81cb2142a1b5bf7579dfb7060eca93cd15573bf8bb1e865482511c",
+  "source_inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "name": "caniuse-lite",
+  "version": "1.0.30001810",
+  "license_source": "https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001810.tgz (sha512 4c84d03d491acfe69593918be8d84e77093568468d4d20cfb06156ad3ba1286b634c5ef48cbfce86dd96e1ceab5d47b97eeec87b5f5521a8405c720889658d7a)",
+  "fixture": "tests/fixtures/license_text/CC-BY-4.0.txt",
+  "official_source": "https://creativecommons.org/licenses/by/4.0/legalcode.txt",
+  "official_raw_sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+  "official_normalized_sha256": "1f5a529dc95849305307f0d6861169d8cae9e99807e4abcec68ef9ad19235652",
+  "artifact_text_normalized_sha256": "25a40a30d753162c4026b87a389b9534c72436327abcd083f90da00ead6d6869",
+  "full_text_difference": {
+    "official": "More considerations",
+    "artifact": "More_considerations",
+    "scope": "introductory informational paragraph; entire remaining text whitespace-identical"
+  },
+  "scope": "Exact complete instrument adjudication; attribution obligations retained; not release approval",
+  "verification": {
+    "focused_tests": 214,
+    "process_exit": 0,
+    "retained_inventory_counts": {
+      "permitted": 363,
+      "copyleft": 0,
+      "held": 150
+    },
+    "changed_packages": [
+      "npm:caniuse-lite@1.0.30001810"
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "pytest-cov",
+  "version": "7.1.0",
+  "artifact_sha256": "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678",
+  "metadata_path": "pytest_cov-7.1.0.dist-info/METADATA",
+  "metadata_sha256": "d670e42439ea5a87c46d5659cfcbf64e29aaf7da3aca69dc03eecdafe7e4894c",
+  "source_inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "source_inventory_sha256": "412823941e81cb2142a1b5bf7579dfb7060eca93cd15573bf8bb1e865482511c",
+  "licenses": [
+    "MIT",
+    "MIT License"
+  ],
+  "files": [
+    {
+      "name": "pytest_cov-7.1.0.dist-info/licenses/AUTHORS.rst",
+      "raw_sha256": "d7390c793c73c36265497ffac90a886a235c8b50948454c9af98f1aef2a00d2a",
+      "normalized_sha256": "8c319ea357316cadb17350ef988afaefa44f9b635acb78d757a4048fd00ce2e2"
+    },
+    {
+      "name": "pytest_cov-7.1.0.dist-info/licenses/LICENSE",
+      "raw_sha256": "835586ae156766a24e3c103fbc55d9af6b1a16df57ca932c97482a2737fd83d5",
+      "normalized_sha256": "e6690babf4bc31029ccffd0fe1f35c698007d81008ff576274435aae1102d232"
+    }
+  ],
+  "scope": "Exact complete MIT grant and full authors attribution; copyright obligations retained; not release/provenance acceptance",
+  "verification": {
+    "focused_tests": 227,
+    "process_exit": 0,
+    "exact_wheel_raw_files_verified": true,
+    "retained_inventory_counts": {
+      "permitted": 366,
+      "copyleft": 0,
+      "held": 147
+    },
+    "changed_packages": [
+      "python:pytest-cov@7.1.0"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "wheel_sha256": "00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf",
+  "source_tar_sha256": "12689cf1ac5bd12edb7c3d06facd9e04ca1c0bcf8971eed291469d5fbe5c066a",
+  "backend_wheel_sha256": "1e0bf8d15464358a093165b342f0c3ceddf4c3f8d9eea9d3e4d7d4c506e72f80",
+  "byte_identical": true,
+  "source_sha": "67dec775973896d1db30c78ade8cc76d64d0cf6b",
+  "source_paths": [
+    "contextual_orchestrator",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE"
+  ],
+  "image_digest": "sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e",
+  "platform": "linux/amd64 under qemu on Colima aarch64",
+  "backend": "uv_build==0.12.5",
+  "network": "none",
+  "command": [
+    "/co1083-venv/bin/python",
+    "-m",
+    "pip",
+    "wheel",
+    "--no-index",
+    "--no-deps",
+    "--no-build-isolation",
+    "/tmp/reproduction-source",
+    "-w",
+    "/tmp/rebuilt-wheel"
+  ],
+  "backend_path_prefix": "/co1083-venv/bin",
+  "driver_sha256": "69573d9c506aeb44af4ffae07df1b12916b9dc7ef705a4570a2d2394e393487f",
+  "container_exit": 0,
+  "scope": "pure Python core wheel build inputs only; not native rebuild, image reproducibility, complete license/provenance or publication"
+}

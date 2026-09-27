@@ -1,0 +1,34 @@
+{
+  "artifact": "cyclonedx_python_lib-11.11.0-py3-none-any.whl",
+  "artifact_sha256": "3049fc83e06a059b5c5907a527625a8ed5073caab10607ed4c9e5503b590fd44",
+  "files": [
+    {
+      "path": "cyclonedx_python_lib-11.11.0.dist-info/licenses/LICENSE",
+      "raw_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "whitespace_normalized_sha256": "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645"
+    },
+    {
+      "path": "cyclonedx_python_lib-11.11.0.dist-info/licenses/NOTICE",
+      "raw_sha256": "1c3bd67b96888a4ca25f3a94683d929b3f66d7e4cdfe6c04d24f16501a9375c3",
+      "whitespace_normalized_sha256": "b70d362542e47e70df8e7ae570c48dee966450e73d06bdf236edf9446165e5e3"
+    }
+  ],
+  "complete_grant_fixture": "tests/fixtures/license_text/sniffio-instrument-1.txt",
+  "complete_grant_whitespace_equal": true,
+  "notice_fixture": "tests/fixtures/license_text/cyclonedx-notice.txt",
+  "scope": "Exact artifact text adjudication only; not release/provenance acceptance",
+  "source_inventory_sha256": "412823941e81cb2142a1b5bf7579dfb7060eca93cd15573bf8bb1e865482511c",
+  "source_inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "verification": {
+    "focused_tests": 207,
+    "process_exit": 0,
+    "retained_inventory_counts": {
+      "permitted": 362,
+      "copyleft": 0,
+      "held": 151
+    },
+    "changed_packages": [
+      "python:cyclonedx-python-lib@11.11.0"
+    ]
+  }
+}
