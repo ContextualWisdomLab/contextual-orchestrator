@@ -415,7 +415,23 @@ def _spend_settle_command(argv: list[str]) -> None:
     parser.add_argument("--settled-cost-usd", required=True,
                         help="Authoritative charged cost for the call (use 0 only with evidence).")
     parser.add_argument("--reason", required=True, help="Why this settlement is authoritative.")
-    parser.add_argument("--operator", required=True, help="Who is settling (audit trail).")
+    parser.add_argument(
+        "--operator",
+        required=True,
+        help=(
+            "Who is settling, recorded in the audit trail. Free text, not "
+            "authentication: anyone who can write the ledger can settle."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Settle a reservation whose call has not finished yet (no linked usage "
+            "entry), e.g. one left by a crashed process. Without it such a "
+            "reservation is refused because its run may still be in flight."
+        ),
+    )
     args = parser.parse_args(argv)
     if not os.path.isfile(args.spend_ledger_path):
         parser.error(f"spend ledger not found: {args.spend_ledger_path}")
@@ -428,6 +444,7 @@ def _spend_settle_command(argv: list[str]) -> None:
             reason=args.reason,
             settled_by=args.operator,
             now=int(time.time()),
+            force=args.force,
         )
     except (LookupError, ValueError, OSError) as exc:
         parser.error(str(exc))

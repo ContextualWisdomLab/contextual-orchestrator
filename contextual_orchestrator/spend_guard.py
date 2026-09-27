@@ -8,18 +8,33 @@ This is the application service around the pure rules in
 :class:`contextvars.ContextVar`, so concurrent server requests never share a
 run budget and worker threads started with ``copy_context`` see their run.
 
-``ModelClient`` calls three thin hooks at its transport boundary:
+``ModelClient`` routes every paid provider send through one of these hooks:
 
-* :func:`guarded_provider_call` / :func:`guarded_provider_stream` for chat and
-  streamed chat: refuse a call to a provider already dropped in this run,
-  refuse a call no active budget can afford (tightest limit wins), then meter
-  the call and classify a limit-exhaustion error (drop that provider).
-* :func:`metered_passthrough_call` for passthrough/binary calls: meter and
-  classify only (admission for passthrough happens once per request).
+* :func:`guarded_provider_call` / :func:`guarded_provider_stream` for chat,
+  streamed chat, and the capability ``probe``: refuse a call to a provider
+  already dropped in this run, refuse a call no active budget can afford
+  (reservation of the admission bound, tightest limit wins, 50% baseline
+  headroom rule), pin the sent ``max_tokens`` to the bound
+  (:func:`enforce_admitted_output_cap`), then meter the call and classify a
+  limit-exhaustion error (drop that provider).
+* :func:`metered_passthrough_call` for passthrough, binary, embeddings, and
+  Batch API calls: the same admission, with the bound derived from the request
+  body (:func:`passthrough_token_bounds`) or supplied by the caller.
 * :func:`raise_if_stream_limit_event` for an error object arriving inside a
   streamed HTTP 200 response.
 
-Outside a run scope every hook is a no-op pass-through. See ADR 0138.
+A call whose outcome is unknown (timeout, dropped connection, no usage)
+counts at its admission bound and marks the run's measurement incomplete;
+a failure raised before provider egress (:func:`declare_pre_egress` /
+:func:`mark_provider_egress`) provably cost nothing.
+
+"Per run" means the outermost scope: a nested decorated entry point, a
+nested :meth:`SpendGuard.run_scope`, and an implicit scope all join an
+already-active scope (same run id, cap, and ledger), so a caller can wrap a
+whole session in one ``run_scope`` to share one cap. A paid call made with no
+active scope runs in an implicit single-call scope of the client's guard
+(recorded, see :meth:`SpendGuard.last_implicit_run_summary`); only a
+``ModelClient`` with no guard attached passes through unmetered. See ADR 0138.
 """
 
 from __future__ import annotations
@@ -97,6 +112,72 @@ _PENDING_IDENTITY: ContextVar["_Identity | None"] = ContextVar(
 )
 _CALL_PURPOSE: ContextVar[CallPurpose] = ContextVar(
     "spend_guard_call_purpose", default=CallPurpose.PRIMARY
+)
+#: Output-token total the current call's admission bound assumed (narrow bound
+#: only); the transport must not send a larger ``max_tokens``.
+_ADMITTED_OUTPUT_TOKENS: ContextVar[int | None] = ContextVar(
+    "spend_guard_admitted_output_tokens", default=None
+)
+
+
+class _EgressState:
+    """Whether the current guarded call's transport reached provider egress.
+
+    A transport that calls :func:`declare_pre_egress` at its start and
+    :func:`mark_provider_egress` immediately before handing the request to the
+    network is *instrumented*: a failure raised before the mark (missing
+    credential, local validation, a refused destination) provably sent
+    nothing and costs zero. An uninstrumented transport (a fake, a patched
+    sender) stays unknown, so its failure counts at the admission bound.
+    """
+
+    __slots__ = ("instrumented", "sent")
+
+    def __init__(self) -> None:
+        self.instrumented = False
+        self.sent = False
+
+    @property
+    def provably_not_sent(self) -> bool:
+        """True when an instrumented transport failed before provider egress."""
+        return self.instrumented and not self.sent
+
+
+_EGRESS: ContextVar[_EgressState | None] = ContextVar("spend_guard_egress", default=None)
+
+#: Request-body keys that do not add billed prompt tokens beyond ``messages``
+#: and ``tools`` (both counted by the exact counter) and whose output is capped
+#: by ``max_tokens``/``max_completion_tokens``. Any other key (for example
+#: ``response_format``, ``reasoning``, ``plugins``, ``web_search_options``,
+#: ``prediction``, ``audio``) makes the prompt count non-authoritative, so
+#: admission falls back to the context-window ceiling.
+_PROMPT_NEUTRAL_KEYS = frozenset(
+    {
+        "model",
+        "messages",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "top_p",
+        "n",
+        "stream",
+        "stream_options",
+        "stop",
+        "seed",
+        "presence_penalty",
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+        "user",
+        "metadata",
+        "reasoning_effort",
+        "provider",
+        "chat_template_kwargs",
+    }
 )
 
 
@@ -201,6 +282,23 @@ def _error_status_and_evidence(exc: BaseException) -> tuple[int | None, dict[str
     return None, {}
 
 
+@dataclass(frozen=True)
+class Admission:
+    """The outcome of one admitted provider call.
+
+    ``estimate`` is the proved cost upper bound (``None`` when unknown and no
+    hard cap required one); ``output_cap`` is the output-token total that
+    bound assumed, set only when the narrow prompt + max-output bound was
+    used, so the transport can verify the ``max_tokens`` it actually sends.
+    """
+
+    price: Price | None
+    reservation: SpendReservation | None
+    estimate: Money | None
+    estimate_source: str | None
+    output_cap: int | None = None
+
+
 class RunSpendScope:
     """Budget, dropped providers, and metered calls for one run (thread-safe)."""
 
@@ -229,6 +327,12 @@ class RunSpendScope:
         #: In-run provider failures whose cost stayed unknown, newest last.
         self.unmeasured_failures: list[dict[str, Any]] = []
         self._last_unmeasured_error: BaseException | None = None
+        #: Calls whose actual charge exceeded the admission bound.
+        self.bound_overruns: list[dict[str, Any]] = []
+        #: Transport payloads whose output cap was lowered to the admitted bound.
+        self.output_cap_clamps: list[dict[str, Any]] = []
+        #: True for an implicit single-call scope opened by a guard hook.
+        self.implicit = False
 
     # -- budget -------------------------------------------------------------
     def positions(self, now: int) -> list[SpendPosition]:
@@ -337,7 +441,18 @@ class RunSpendScope:
         *,
         token_bounds: AdmissionTokenBounds | None = None,
     ) -> tuple[Price | None, SpendReservation | None]:
-        """Atomically reserve an affordable call's cost upper bound and return it with price.
+        """Atomically reserve an affordable call's cost upper bound and return it with price."""
+        admission = self.admit_call(agent, token_bounds=token_bounds)
+        return admission.price, admission.reservation
+
+    def admit_call(
+        self,
+        agent: Any,
+        *,
+        token_bounds: AdmissionTokenBounds | None = None,
+        channel: str = "sync",
+    ) -> Admission:
+        """Atomically reserve an affordable call's cost upper bound (ADR 0138).
 
         The bound is ``prompt_tokens x prompt price + max_output_tokens x
         completion price`` when ``token_bounds`` proves both, else the
@@ -359,7 +474,9 @@ class RunSpendScope:
         total_token_ceiling = getattr(agent, "context_window", None)
         bounds = token_bounds if isinstance(token_bounds, AdmissionTokenBounds) else None
         has_ceiling = type(total_token_ceiling) is int and total_token_ceiling > 0
+        ceiling_calls = bounds.ceiling_multiplier() if bounds is not None else 1
         estimate_source: str | None = None
+        output_cap: int | None = None
         if price is None:
             estimate = None
             unknown_estimate_reason = "price_unknown"
@@ -372,13 +489,15 @@ class RunSpendScope:
                 price, bounds.prompt_tokens or 0, bounds.max_output_tokens or 0
             )
             estimate_source = "prompt_and_max_output"
+            output_cap = bounds.max_output_tokens
             if has_ceiling:
-                ceiling = estimate_call_cost(price, total_token_ceiling)
+                ceiling = estimate_call_cost(price, total_token_ceiling * ceiling_calls)
                 if ceiling is not None and estimate is not None and ceiling < estimate:
                     estimate, estimate_source = ceiling, "context_window_ceiling"
+                    output_cap = None
             unknown_estimate_reason = "price_unknown"
         elif has_ceiling:
-            estimate = estimate_call_cost(price, total_token_ceiling)
+            estimate = estimate_call_cost(price, total_token_ceiling * ceiling_calls)
             unknown_estimate_reason = "price_unknown"
             estimate_source = "context_window_ceiling"
         else:
@@ -457,6 +576,7 @@ class RunSpendScope:
                     total_token_ceiling if type(total_token_ceiling) is int else None
                 ),
                 "estimate_source": estimate_source,
+                "channel": channel,
                 "prompt_tokens_bound": bounds.prompt_tokens if bounds is not None else None,
                 "max_output_tokens_bound": (
                     bounds.max_output_tokens if bounds is not None else None
@@ -500,7 +620,13 @@ class RunSpendScope:
                         detail=exc.detail,
                     ) from None
                 raise
-        return price, reservation
+        return Admission(
+            price=price,
+            reservation=reservation,
+            estimate=estimate,
+            estimate_source=estimate_source,
+            output_cap=output_cap if type(output_cap) is int and output_cap > 0 else None,
+        )
 
     def _unmeasured_call_evidence(self, decision: AffordabilityDecision) -> list[dict[str, Any]]:
         """List the unknown-cost calls behind a ``measurement_unavailable`` refusal.
@@ -652,12 +778,19 @@ class RunSpendScope:
         known_zero_cost: bool = False,
         reservation: SpendReservation | None = None,
         error: BaseException | None = None,
+        bound: Money | None = None,
     ) -> MeteredUsage:
         """Record one provider call and charge its cost to the run.
 
         ``known_zero_cost`` marks a call the provider refused before any
         response body (a pre-response HTTP 402 spend-limit refusal), which
         providers do not bill; it is charged zero rather than left unknown.
+
+        An unmeasured call (no authoritative cost: a timeout, a connection
+        reset after send, a 5xx or a success without usage) counts at its
+        admission bound -- the reservation when a hard cap made one, else
+        ``bound`` -- and marks the run's measurement incomplete. The ledger
+        keeps the charged cost unknown (ADR 0138).
         """
         usage = Usage.from_provider_usage(usage_payload)
         reported = provider_reported_cost(usage_payload)
@@ -697,6 +830,7 @@ class RunSpendScope:
             provider_status=(_error_status_and_evidence(error)[0] if error is not None else None),
         )
         reserved_cost = reservation.reserved_cost if reservation is not None else None
+        assumed_bound = reserved_cost if reserved_cost is not None else bound
         with self._lock:
             if reserved_cost is not None:
                 self.reserved = self.reserved.minus_floor_zero(reserved_cost)
@@ -720,17 +854,43 @@ class RunSpendScope:
                 self._last_unmeasured_error = error
             if charged is not None and charged.currency == self.spent.currency:
                 self.spent = self.spent + charged
-            elif charged is None and reserved_cost is not None:
-                # The call crossed the provider boundary, but no authoritative
-                # charge came back. Consume the already-proved upper bound for
-                # admission and block later billable calls; never release the
-                # reservation as if the failed/unknown outcome were free.
-                self.spent = self.spent + reserved_cost
+            elif charged is None:
+                # The call crossed (or may have crossed) the provider boundary
+                # but no authoritative charge came back. Count the proved upper
+                # bound -- the reservation under a hard cap, else the admission
+                # estimate -- and block later billable calls; never treat the
+                # failed/unknown outcome as free.
+                if (
+                    assumed_bound is not None
+                    and assumed_bound.currency == self.spent.currency
+                ):
+                    self.spent = self.spent + assumed_bound
                 self.measurement_complete = False
-            elif charged is None and call_status == "ok":
-                # Without a hard cap there is no reservation to consume, but
-                # retain the incomplete-measurement evidence in the receipt.
-                self.measurement_complete = False
+            if (
+                charged is not None
+                and assumed_bound is not None
+                and charged.currency == assumed_bound.currency
+                and charged > assumed_bound
+            ):
+                # The provider billed more than the admission bound allowed
+                # (for example fees outside prompt/completion pricing). Keep
+                # the evidence; the actual charge already counts above.
+                self.bound_overruns.append(
+                    {
+                        "usage_record_id": record.usage_record_id,
+                        "provider_name": provider,
+                        "model_name": str(getattr(agent, "model", "")),
+                        "channel": channel,
+                        "admission_bound": str(assumed_bound.amount),
+                        "charged_cost": str(charged.amount),
+                        "cost_source": source,
+                    }
+                )
+                LOGGER.warning(
+                    "spend charge exceeded its admission bound: provider=%s model=%s",
+                    provider,
+                    getattr(agent, "model", ""),
+                )
         store = self.guard.store
         if store is not None:
             try:
@@ -758,6 +918,8 @@ class RunSpendScope:
             spent = self.spent
             reserved = self.reserved
             complete = self.measurement_complete
+            overruns = [dict(item) for item in self.bound_overruns]
+            clamps = [dict(item) for item in self.output_cap_clamps]
         cap = self.guard.config.run_max_cost
         budget = {
             "run_max_cost": cap.as_float() if cap is not None else None,
@@ -787,6 +949,9 @@ class RunSpendScope:
             ],
             "refusals": refusals,
             "spend_store_failures": store_failures,
+            "admission_bound_overruns": overruns,
+            "output_cap_clamps": clamps,
+            "implicit_scope": self.implicit,
         }
         return summarize_run(
             entries,
@@ -820,6 +985,9 @@ class SpendGuard:
             )
         self.catalog = PriceBookCatalog(self.price_book)
         self._last_summary: dict[str, Any] | None = None
+        self._last_implicit_summary: dict[str, Any] | None = None
+        #: Implicit single-call scopes opened so far (ADR 0138 defense in depth).
+        self.implicit_scope_count = 0
         self._summary_lock = threading.Lock()
 
     def now(self) -> int:
@@ -883,14 +1051,63 @@ class SpendGuard:
         )
 
     def close_run_scope(self, scope: RunSpendScope) -> None:
-        """Remember the finished run's summary for :meth:`last_run_summary`."""
+        """Remember the finished run's summary for :meth:`last_run_summary`.
+
+        Implicit single-call scopes are recorded separately
+        (:meth:`last_implicit_run_summary`) so they never replace the summary
+        of the caller's own run.
+        """
         summary = scope.summary()
         with self._summary_lock:
-            self._last_summary = summary
+            if scope.implicit:
+                self._last_implicit_summary = summary
+                self.implicit_scope_count += 1
+            else:
+                self._last_summary = summary
+
+    def open_implicit_scope(self) -> RunSpendScope:
+        """A single-call scope for a paid call that reached a hook with no run.
+
+        Defense in depth (ADR 0138): configured caps and metering still apply
+        to readiness probes, capability calls, or any future send path that
+        was not wrapped in a run scope. The call is logged and summarized.
+        """
+        scope = self.open_run_scope(f"spend_implicit_{uuid.uuid4().hex}")
+        scope.implicit = True
+        LOGGER.info("spend guard opened an implicit single-call run scope %s", scope.run_id)
+        return scope
+
+    @contextmanager
+    def implicit_run_scope(self) -> Iterator[RunSpendScope]:
+        """Enter an implicit single-call scope, or join the active run."""
+        existing = _ACTIVE_RUN.get()
+        if existing is not None:
+            yield existing
+            return
+        scope = self.open_implicit_scope()
+        token = _ACTIVE_RUN.set(scope)
+        try:
+            yield scope
+        finally:
+            _ACTIVE_RUN.reset(token)
+            self.close_run_scope(scope)
+
+    def last_implicit_run_summary(self) -> dict[str, Any] | None:
+        """Summary of the most recent implicit single-call scope."""
+        with self._summary_lock:
+            summary = self._last_implicit_summary
+            return None if summary is None else dict(summary)
 
     @contextmanager
     def run_scope(self, run_id: str | None = None) -> Iterator[RunSpendScope]:
-        """Enter a run scope, reusing the active one when runs nest."""
+        """Enter a run scope, reusing the active one when runs nest.
+
+        "Per run" means the outermost scope: every top-level entry point,
+        implicit single-call scope, and nested ``run_scope`` inside an active
+        one joins it (same run id, cap, and ledger). Wrap a whole session --
+        for example many ``route_once`` calls or batch rows -- in one
+        ``run_scope`` to share one run cap across them.
+        """
         existing = _ACTIVE_RUN.get()
         if existing is not None:
             yield existing
@@ -1009,6 +1226,224 @@ def _read_usage(usage_reader: Callable[[], Any] | None) -> Any:
         return None
 
 
+def _drive_in_context(
+    inner: Iterator[Any], enter: Callable[[], Callable[[], None]]
+) -> Iterator[Any]:
+    """Iterate ``inner`` with ``enter()``'s context active only inside each ``next()``.
+
+    ``enter`` sets context variables and returns the function restoring them,
+    so values never leak into the consumer between items; ``inner`` is closed
+    under the same context.
+    """
+    try:
+        while True:
+            restore = enter()
+            try:
+                item = next(inner)
+            except StopIteration as stop:
+                return stop.value
+            finally:
+                restore()
+            yield item
+    finally:
+        restore = enter()
+        try:
+            close = getattr(inner, "close", None)
+            if callable(close):
+                close()
+        finally:
+            restore()
+
+
+def _enter_egress(
+    state: _EgressState, cap: int | None = None
+) -> Callable[[], Callable[[], None]]:
+    def enter() -> Callable[[], None]:
+        egress_token = _EGRESS.set(state)
+        cap_token = _ADMITTED_OUTPUT_TOKENS.set(cap)
+
+        def restore() -> None:
+            _ADMITTED_OUTPUT_TOKENS.reset(cap_token)
+            _EGRESS.reset(egress_token)
+
+        return restore
+
+    return enter
+
+
+def declare_pre_egress() -> None:
+    """Mark the current guarded call's transport as egress-instrumented.
+
+    Real transports call this first; see :class:`_EgressState`. A no-op
+    outside a guarded call.
+    """
+    state = _EGRESS.get()
+    if state is not None:
+        state.instrumented = True
+
+
+def mark_provider_egress() -> None:
+    """Record that the current guarded call is about to reach the provider.
+
+    Called immediately before the request is handed to the network (the
+    retrying sender, the provider opener). Every failure after this point is
+    an unknown outcome and counts at the admission bound.
+    """
+    state = _EGRESS.get()
+    if state is not None:
+        state.sent = True
+
+
+def _enter_scope(scope: RunSpendScope) -> Callable[[], Callable[[], None]]:
+    def enter() -> Callable[[], None]:
+        token = _ACTIVE_RUN.set(scope)
+        return lambda: _ACTIVE_RUN.reset(token)
+
+    return enter
+
+
+def enforce_admitted_output_cap(payload: dict[str, Any], *, field: str = "max_tokens") -> dict[str, Any]:
+    """Keep the sent output cap within what the call's admission bound assumed.
+
+    Called by transports after every payload rewrite (effort profile, shared
+    context budget) and immediately before egress. Outside a narrow-bound
+    admission this is a no-op. A missing cap is set to the admitted value; a
+    larger cap is lowered to it and the clamp is recorded on the run scope.
+    """
+    cap = _ADMITTED_OUTPUT_TOKENS.get()
+    if cap is None or not isinstance(payload, dict):
+        return payload
+    requested = payload.get(field)
+    if type(requested) is int and 0 < requested <= cap:
+        return payload
+    payload[field] = cap
+    if requested is not None:
+        scope = _ACTIVE_RUN.get()
+        if scope is not None:
+            with scope._lock:
+                scope.output_cap_clamps.append(
+                    {"field": field, "requested": requested, "admitted": cap}
+                )
+        LOGGER.warning(
+            "spend guard lowered %s from %r to the admitted %d output tokens",
+            field,
+            requested,
+            cap,
+        )
+    return payload
+
+
+def passthrough_token_bounds(
+    agent: Any, payload: Any, token_counter: Any = None
+) -> AdmissionTokenBounds | None:
+    """Derive admission token bounds from a passthrough request body.
+
+    The prompt count is exact only for a chat ``messages`` body whose other
+    keys are prompt-neutral (:data:`_PROMPT_NEUTRAL_KEYS`) and whose content
+    the provenance-bound counter can frame; the output cap is the body's
+    ``max_tokens`` / ``max_completion_tokens`` / ``max_output_tokens``
+    (largest wins) times ``n``. Embedding ``input`` lists count one call per
+    input for the ceiling fallback. Anything unknown stays ``None`` so
+    admission falls back to the context-window ceiling or refuses.
+    """
+    if not isinstance(payload, dict):
+        return None
+    calls = 1
+    n = payload.get("n")
+    if type(n) is int and n > 1:
+        calls = n
+    inputs = payload.get("input")
+    if isinstance(inputs, list) and inputs and "messages" not in payload:
+        calls = max(calls, len(inputs))
+    caps = [
+        payload.get(key)
+        for key in ("max_tokens", "max_completion_tokens", "max_output_tokens")
+        if type(payload.get(key)) is int and payload.get(key) > 0
+    ]
+    max_output = max(caps) * calls if caps else None
+    prompt_tokens: int | None = None
+    messages = payload.get("messages")
+    if (
+        isinstance(messages, list)
+        and token_counter is not None
+        and set(payload).issubset(_PROMPT_NEUTRAL_KEYS)
+    ):
+        from .token_counting import describe_message_count
+
+        try:
+            prompt_tokens = describe_message_count(
+                token_counter,
+                messages,
+                str(payload.get("model") or getattr(agent, "model", "")),
+                tools=payload.get("tools"),
+            ).token_count
+        except Exception:  # noqa: BLE001 - an unframeable body falls back to the ceiling
+            prompt_tokens = None
+        if type(prompt_tokens) is not int or prompt_tokens < 0:
+            prompt_tokens = None
+    return AdmissionTokenBounds(
+        prompt_tokens=prompt_tokens, max_output_tokens=max_output, calls=calls
+    )
+
+
+def _passthrough_usage(result: Any) -> Any:
+    """A passthrough response's ``usage``, completing embeddings-style usage.
+
+    Embedding responses report ``prompt_tokens`` and ``total_tokens`` only;
+    when they are equal, the call produced no output tokens, so completion is
+    measured as zero rather than making the whole call unmeasured.
+    """
+    usage = result.get("usage") if isinstance(result, dict) else None
+    if (
+        isinstance(usage, dict)
+        and "completion_tokens" not in usage
+        and "output_tokens" not in usage
+    ):
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+        total = usage.get("total_tokens")
+        if type(prompt) is int and type(total) is int and total == prompt:
+            return {**usage, "completion_tokens": 0}
+    return usage
+
+
+@contextmanager
+def _call_scope(guard: SpendGuard | None) -> Iterator[RunSpendScope | None]:
+    """The active run, else an implicit single-call scope from ``guard``, else none."""
+    scope = _ACTIVE_RUN.get()
+    if scope is not None or guard is None:
+        yield scope
+        return
+    with guard.implicit_run_scope() as implicit:
+        yield implicit
+
+
+def _settle_failure(
+    scope: RunSpendScope,
+    agent: Any,
+    exc: BaseException,
+    admission: Admission,
+    *,
+    usage_payload: Any,
+    channel: str,
+    egress: _EgressState | None = None,
+) -> ProviderLimitSignal:
+    not_sent = egress is not None and egress.provably_not_sent
+    signal = NOT_A_LIMIT if not_sent else scope.observe_failure(agent, exc)
+    scope.settle(
+        agent,
+        usage_payload=usage_payload,
+        price=admission.price,
+        channel=channel,
+        call_status=_call_status(signal),
+        limit_reason=signal.reason or None,
+        known_zero_cost=not_sent or _refused_before_billing(signal, exc),
+        reservation=admission.reservation,
+        error=exc,
+        bound=admission.estimate,
+    )
+    return signal
+
+
 def guarded_provider_call(
     agent: Any,
     messages: Any,
@@ -1017,44 +1452,48 @@ def guarded_provider_call(
     usage_reader: Callable[[], Any] | None,
     channel: str = "sync",
     token_bounds: Callable[[], AdmissionTokenBounds | None] | None = None,
+    guard: SpendGuard | None = None,
 ) -> T:
-    """Admit, execute, meter, and limit-classify one chat call in the active run."""
-    scope = _ACTIVE_RUN.get()
-    if scope is None:
-        return call()
-    price, reservation = scope.admit(
-        agent, messages, token_bounds=_read_token_bounds(token_bounds)
-    )
-    try:
-        result = call()
-    except Exception as exc:
-        signal = scope.observe_failure(agent, exc)
+    """Admit, execute, meter, and limit-classify one chat call in the active run.
+
+    Without an active run the call runs in an implicit single-call scope of
+    ``guard`` (configured caps and metering still apply); only a client with
+    no guard at all passes through unmetered.
+    """
+    del messages  # admission prices the token bounds, not the raw messages
+    with _call_scope(guard) as scope:
+        if scope is None:
+            return call()
+        admission = scope.admit_call(
+            agent, token_bounds=_read_token_bounds(token_bounds), channel=channel
+        )
+        egress = _EgressState()
+        restore = _enter_egress(egress, admission.output_cap)()
+        try:
+            result = call()
+        except Exception as exc:
+            signal = _settle_failure(
+                scope, agent, exc, admission,
+                usage_payload=_read_usage(usage_reader), channel=channel, egress=egress,
+            )
+            if signal.drops_provider:
+                status, _evidence = _error_status_and_evidence(exc)
+                raise scope._provider_exhausted(
+                    agent, signal.reason, provider_status=status, transport="chat", original=exc
+                ) from None
+            raise
+        finally:
+            restore()
         scope.settle(
             agent,
             usage_payload=_read_usage(usage_reader),
-            price=price,
+            price=admission.price,
             channel=channel,
-            call_status=_call_status(signal),
-            limit_reason=signal.reason or None,
-            known_zero_cost=_refused_before_billing(signal, exc),
-            reservation=reservation,
-            error=exc,
+            call_status="ok",
+            reservation=admission.reservation,
+            bound=admission.estimate,
         )
-        if signal.drops_provider:
-            status, _evidence = _error_status_and_evidence(exc)
-            raise scope._provider_exhausted(
-                agent, signal.reason, provider_status=status, transport="chat", original=exc
-            ) from None
-        raise
-    scope.settle(
-        agent,
-        usage_payload=_read_usage(usage_reader),
-        price=price,
-        channel=channel,
-        call_status="ok",
-        reservation=reservation,
-    )
-    return result
+        return result
 
 
 def guarded_provider_stream(
@@ -1064,31 +1503,46 @@ def guarded_provider_stream(
     *,
     usage_reader: Callable[[], Any] | None,
     token_bounds: Callable[[], AdmissionTokenBounds | None] | None = None,
+    guard: SpendGuard | None = None,
 ) -> Iterator[T]:
     """Streaming counterpart of :func:`guarded_provider_call`."""
+    del messages
     scope = _ACTIVE_RUN.get()
     if scope is None:
-        yield from open_stream()
+        if guard is None:
+            yield from open_stream()
+            return
+        implicit = guard.open_implicit_scope()
+        try:
+            yield from _drive_in_context(
+                _guarded_stream_body(implicit, agent, open_stream, usage_reader, token_bounds),
+                _enter_scope(implicit),
+            )
+        finally:
+            guard.close_run_scope(implicit)
         return
-    price, reservation = scope.admit(
-        agent, messages, token_bounds=_read_token_bounds(token_bounds)
+    yield from _guarded_stream_body(scope, agent, open_stream, usage_reader, token_bounds)
+
+
+def _guarded_stream_body(
+    scope: RunSpendScope,
+    agent: Any,
+    open_stream: Callable[[], Iterator[Any]],
+    usage_reader: Callable[[], Any] | None,
+    token_bounds: Callable[[], AdmissionTokenBounds | None] | None,
+) -> Iterator[Any]:
+    admission = scope.admit_call(
+        agent, token_bounds=_read_token_bounds(token_bounds), channel="stream"
     )
     settled = False
+    egress = _EgressState()
     try:
-        yield from open_stream()
+        yield from _drive_in_context(open_stream(), _enter_egress(egress, admission.output_cap))
     except Exception as exc:
-        signal = scope.observe_failure(agent, exc)
         settled = True
-        scope.settle(
-            agent,
-            usage_payload=_read_usage(usage_reader),
-            price=price,
-            channel="stream",
-            call_status=_call_status(signal),
-            limit_reason=signal.reason or None,
-            known_zero_cost=_refused_before_billing(signal, exc),
-            reservation=reservation,
-            error=exc,
+        signal = _settle_failure(
+            scope, agent, exc, admission,
+            usage_payload=_read_usage(usage_reader), channel="stream", egress=egress,
         )
         if signal.drops_provider:
             status, _evidence = _error_status_and_evidence(exc)
@@ -1101,10 +1555,11 @@ def guarded_provider_stream(
             scope.settle(
                 agent,
                 usage_payload=_read_usage(usage_reader),
-                price=price,
+                price=admission.price,
                 channel="stream",
                 call_status="ok",
-                reservation=reservation,
+                reservation=admission.reservation,
+                bound=admission.estimate,
             )
 
 
@@ -1113,36 +1568,57 @@ def metered_passthrough_call(
     call: Callable[[], T],
     *,
     channel: str = "passthrough",
+    payload: Any = None,
+    token_counter: Any = None,
+    token_bounds: AdmissionTokenBounds | None = None,
+    usage_from_result: Callable[[Any], Any] | None = None,
+    guard: SpendGuard | None = None,
 ) -> T:
-    """Meter and limit-classify one passthrough call; never refuses or rewrites errors."""
-    scope = _ACTIVE_RUN.get()
-    if scope is None:
-        return call()
-    price = effective_price(
-        scope.guard.catalog,
-        provider=str(getattr(agent, "provider_name", "") or ""),
-        model=str(getattr(agent, "model", "")),
-        base_url=str(getattr(agent, "base_url", "")),
-        tags=tuple(getattr(agent, "tags", ()) or ()),
-    )
-    try:
-        result = call()
-    except Exception as exc:
-        signal = scope.observe_failure(agent, exc)
+    """Admit, execute, and meter one passthrough / binary / embedding / batch call.
+
+    Admission is the same as for chat (reservation, tightest limit, baseline
+    headroom rule): the bound comes from ``token_bounds`` or is derived from
+    the request ``payload`` (:func:`passthrough_token_bounds`), else the
+    context-window ceiling, else the call is refused before it is sent.
+    Provider errors are metered and classified but never rewritten.
+    """
+    with _call_scope(guard) as scope:
+        if scope is None:
+            return call()
+        bounds = (
+            token_bounds
+            if isinstance(token_bounds, AdmissionTokenBounds)
+            else passthrough_token_bounds(agent, payload, token_counter)
+        )
+        admission = scope.admit_call(agent, token_bounds=bounds, channel=channel)
+        egress = _EgressState()
+        restore = _enter_egress(egress, admission.output_cap)()
+        try:
+            result = call()
+        except Exception as exc:
+            _settle_failure(
+                scope, agent, exc, admission, usage_payload=None, channel=channel, egress=egress
+            )
+            raise
+        finally:
+            restore()
+        if usage_from_result is not None:
+            try:
+                usage_payload = usage_from_result(result)
+            except Exception:  # noqa: BLE001 - usage evidence is optional
+                usage_payload = None
+        else:
+            usage_payload = _passthrough_usage(result)
         scope.settle(
             agent,
-            usage_payload=None,
-            price=price,
+            usage_payload=usage_payload,
+            price=admission.price,
             channel=channel,
-            call_status=_call_status(signal),
-            limit_reason=signal.reason or None,
-            known_zero_cost=_refused_before_billing(signal, exc),
-            error=exc,
+            call_status="ok",
+            reservation=admission.reservation,
+            bound=admission.estimate,
         )
-        raise
-    usage_payload = result.get("usage") if isinstance(result, dict) else None
-    scope.settle(agent, usage_payload=usage_payload, price=price, channel=channel, call_status="ok")
-    return result
+        return result
 
 
 def raise_if_stream_limit_event(agent: Any, chunk: Any) -> None:
@@ -1192,24 +1668,14 @@ def with_run_scope(method: Callable[..., T]) -> Callable[..., T]:
             if guard is None or _ACTIVE_RUN.get() is not None:
                 return (yield from method(self, *args, **kwargs))
             scope = guard.open_run_scope(kwargs.get("workflow_run_id"))
-            inner = method(self, *args, **kwargs)
             try:
-                while True:
-                    token = _ACTIVE_RUN.set(scope)
-                    try:
-                        item = next(inner)
-                    except StopIteration as stop:
-                        return stop.value
-                    finally:
-                        _ACTIVE_RUN.reset(token)
-                    yield item
+                return (
+                    yield from _drive_in_context(
+                        method(self, *args, **kwargs), _enter_scope(scope)
+                    )
+                )
             finally:
-                token = _ACTIVE_RUN.set(scope)
-                try:
-                    inner.close()
-                finally:
-                    _ACTIVE_RUN.reset(token)
-                    guard.close_run_scope(scope)
+                guard.close_run_scope(scope)
 
         return generator_wrapper  # type: ignore[return-value]
 
@@ -1227,15 +1693,20 @@ def with_run_scope(method: Callable[..., T]) -> Callable[..., T]:
 __all__ = [
     "PROVIDER_BUDGET_EXHAUSTED_CODE",
     "SPEND_GUARD_CONFIG_CATEGORY",
+    "Admission",
     "PriceBookCatalog",
     "ProviderBudgetExhaustedError",
     "RunSpendScope",
     "SpendGuard",
     "SpendGuardConfig",
     "VirtualKeyError",
+    "declare_pre_egress",
+    "enforce_admitted_output_cap",
     "guarded_provider_call",
     "guarded_provider_stream",
+    "mark_provider_egress",
     "metered_passthrough_call",
+    "passthrough_token_bounds",
     "raise_if_stream_limit_event",
     "with_run_scope",
 ]

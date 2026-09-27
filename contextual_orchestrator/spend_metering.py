@@ -743,6 +743,10 @@ def reserved_in_scope(
     return total
 
 
+class ReservationInFlightError(ValueError):
+    """An operator tried to settle a reservation whose call has not finished."""
+
+
 def operator_settle_reservation(
     store: SpendLedgerStore,
     reservation_id: str,
@@ -751,6 +755,7 @@ def operator_settle_reservation(
     reason: str,
     settled_by: str,
     now: int,
+    force: bool = False,
 ) -> SpendSettlement:
     """Close one active reservation with an explicit, reasoned operator settlement.
 
@@ -759,6 +764,13 @@ def operator_settle_reservation(
     linked unknown usage cost with ``settled_cost`` in every budget sum.
     Raises ``LookupError`` when the reservation is not active (already
     settled, released, or unknown) so a typo never writes a stray event.
+
+    A reservation with no linked usage entry belongs to a call that has not
+    finished (it may still be in flight in a live run, whose own settlement
+    would then race this one); that raises :class:`ReservationInFlightError`
+    unless ``force`` is set, for example to clear a reservation left by a
+    crashed process. ``settled_by`` is free-text audit data, not
+    authentication: whoever can write the ledger can settle.
     """
     with store.budget_transaction():
         reservation = next(
@@ -771,6 +783,14 @@ def operator_settle_reservation(
         )
         if reservation is None:
             raise LookupError(f"no active spend reservation {reservation_id!r}")
+        if not force and not any(
+            entry.reservation_id == reservation_id for entry in store.usage_entries()
+        ):
+            raise ReservationInFlightError(
+                f"spend reservation {reservation_id!r} has no finished call yet and may "
+                "still be in flight; settle it only after its run has ended (force to "
+                "clear a reservation left by a crashed process)"
+            )
         settlement = SpendSettlement.for_reservation(
             reservation,
             settled_cost=settled_cost,
@@ -966,6 +986,7 @@ __all__ = [
     "active_reservation_report",
     "aggregate_usage",
     "operator_settle_reservation",
+    "ReservationInFlightError",
     "reserved_in_scope",
     "settled_in_scope",
     "spent_in_scope",

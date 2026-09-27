@@ -59,23 +59,68 @@ this guard, never by discovery.
 
 | Limit | Where it lives | Default | Resets |
 |---|---|---|---|
-| Run cap (`run_max_cost`) | in memory, one `RunSpendScope` per entry-point call | **none** (no per-run cap until an operator sets one) | never; it is per run |
+| Run cap (`run_max_cost`) | in memory, one `RunSpendScope` per **outermost** scope (see below) | **none** (no per-run cap until an operator sets one) | never; it is per run |
 | Virtual key budget (`max_budget`, `soft_budget`, `budget_duration`) | `SpendLedgerStore` | none | every `budget_duration` (`s`/`m`/`h`/`d`) from key creation |
 | Tenant budget (same fields) | `SpendLedgerStore` | none | same |
 
-Before every provider chat call (including `route_once`, streaming, and the
-sampled baseline) the guard computes a conservative total-cost upper bound
-from the single PriceBook-backed catalogue:
+**"Per run" means the outermost scope.** A decorated entry point
+(`complete`, `run`, `route_once`, `conduct`, `stream_route`,
+`proxy_completion`, `compare_to_baseline`, `batch_route`, `proxy_capability`)
+opens a run scope only when none is active. A nested decorated call, a nested
+`SpendGuard.run_scope()`, and the implicit single-call scope below all *join*
+the active scope: same run id, same cap, same ledger. A caller that wants one
+cap across a whole session (for example a paid routing test run with many
+`route_once` or `batch_route` rows) wraps it in one
+`with orchestrator.spend_guard.run_scope(): ...`; without that wrapper each
+top-level call gets its own fresh run cap. `run_evaluation` is deliberately
+not decorated, so each prompt's `run` keeps its own cap unless the caller
+wraps the evaluation. The virtual-key and tenant budgets are the cross-run
+limits; the run cap is never a substitute for them.
+
+**No scope never means no guard.** A paid send reached with no active run
+(a direct `ModelClient` call, a readiness `probe`, a library caller) runs in
+an *implicit* single-call scope of the client's `SpendGuard`
+(`ModelClient.spend_guard`, attached by `TaskOrchestrator`): the configured
+run cap, key and tenant budgets, the reservation and the metering all apply.
+Implicit scopes are counted (`SpendGuard.implicit_scope_count`) and their last
+summary is kept separately (`last_implicit_run_summary()`, `budget.implicit_scope:
+true`) so they never overwrite the last real run summary. Only a `ModelClient`
+with no guard attached at all (constructed outside a `TaskOrchestrator`)
+passes through unmetered.
+
+Before every paid provider send the guard computes a conservative total-cost
+upper bound from the single PriceBook-backed catalogue. That covers chat,
+streamed chat, passthrough (`proxy_send`, `proxy_send_once`,
+`probe_structured_chat`, the fast-mlsirm judge), binary passthrough
+(`proxy_send_bytes`), embeddings, one Batch API submission, the readiness
+`probe`, and the sampled baseline:
 
 - **Narrow bound (preferred).** When the request carries an exact,
   provenance-bound prompt token count (`describe_message_count`, never a lower
-  bound) and the `max_output_tokens` the transport sends as `max_tokens`
-  (`ModelClient.effective_max_output_tokens`), the bound is
+  bound) and the final `max_tokens` the transport sends, the bound is
   `prompt_tokens x prompt price + max_output_tokens x completion price`
-  (`estimate_request_cost`, `AdmissionTokenBounds`). The provider cannot bill
-  more output than the `max_tokens` it was sent. The bound is additionally
+  (`estimate_request_cost`, `AdmissionTokenBounds`). For chat the output cap
+  is the effort profile's `max_output_tokens` when a profile applies (it
+  overwrites `max_tokens`), otherwise `ModelClient.effective_max_output_tokens`.
+  The transport then calls `enforce_admitted_output_cap` after every payload
+  rewrite and immediately before egress: a missing `max_tokens` is set to the
+  admitted value and a larger one is lowered to it, recorded in the run
+  summary (`budget.output_cap_clamps`) and logged. The provider therefore
+  cannot bill more output than the bound assumed. The bound is additionally
   capped by the context-window ceiling when that is lower
   (`estimate_source`: `prompt_and_max_output` or `context_window_ceiling`).
+- **Passthrough bodies.** `passthrough_token_bounds` derives the bound from
+  the caller's request body: the output cap is the largest of `max_tokens`,
+  `max_completion_tokens` and `max_output_tokens`, times `n`; the prompt count
+  is exact only for a chat `messages` body whose other keys are all in a
+  conservative prompt-neutral whitelist (`model`, `messages`, `tools`,
+  sampling knobs, `n`, `stream`, ...). Any other key (`response_format`,
+  `reasoning`, `plugins`, `web_search_options`, `prediction`, `audio`, ...)
+  makes the prompt count non-authoritative, so the ceiling applies. An
+  embeddings `input` list counts one call per input for the ceiling. One
+  Batch API submission is admitted as one call whose bound sums every row
+  (`calls` = number of rows), priced at the full synchronous rate: the Batch
+  API discount is not assumed.
 - **Ceiling fallback.** Only when either value is unknown, the selected
   route's total-token ceiling (`context_window`) is priced with every token at
   the more expensive of the prompt and completion rates, because the
@@ -116,11 +161,29 @@ headroom. A call is refused, before it is sent, when for any limit:
   applicable hard cap (run, virtual key, tenant) must keep that share.
   Zero-cost baselines are not subject to the ratio.
 
-An unmeasured provider outcome consumes its in-flight upper-bound reservation
-for budget admission and marks measurement incomplete. The ledger still stores
-the charged cost as unknown; the reservation is not mislabeled as an actual
-provider charge. The unknown usage entry records the reservation id, the
-provider error class (`error_type`) and HTTP status (`provider_status`).
+**An unmeasured call is never free.** Every call whose outcome has no
+measurable cost (timeout, dropped connection, provider 5xx, a success without
+usage) counts at its admission bound, in capped and uncapped runs alike, on
+every channel including passthrough, and marks measurement incomplete. In a
+capped scope that is the in-flight reservation; in an uncapped run it is the
+computed bound. The ledger still stores the charged cost as unknown; the bound
+is not mislabeled as an actual provider charge. The unknown usage entry
+records the reservation id, the provider error class (`error_type`) and HTTP
+status (`provider_status`).
+
+The one exception is a failure that provably happened before provider
+egress. Real transports call `declare_pre_egress()` first and
+`mark_provider_egress()` immediately before the request is handed to the
+network (the retrying sender or the provider opener). A failure raised in
+between (missing credential `NotConfigured`, local validation, a refused
+destination, a local shared-context `ProviderRequestTooLargeError`) sent
+nothing and is metered as `zero_cost`. A transport that does not declare
+egress (a fake, a patched sender) stays unknown and counts at its bound.
+
+When a provider reports a charge larger than the admission bound (for
+example a fee outside prompt/completion pricing), the actual charge counts,
+and the overrun is recorded in `budget.admission_bound_overruns` with the
+channel and logged.
 
 A `measurement_unavailable` refusal surfaces the original provider failure,
 not only the budget symptom: the refusal detail lists `unmeasured_calls`
@@ -195,7 +258,48 @@ incomplete. That is correct fail-closed behaviour, but it must end:
   A settlement replaces the reservation and the linked unknown cost with the
   settled cost in every budget sum, so the settled cost stays charged; it is
   not a forgiveness switch. Settlements are windowed by the reservation time.
+  - A reservation with no linked usage entry belongs to a call that has not
+    finished and may still be in flight in a live run, whose own settlement
+    would race the operator's. `spend-settle` refuses it
+    (`ReservationInFlightError`) unless `--force` is given, which is for a
+    reservation left behind by a crashed process.
+  - `--operator` is free-text audit data, not authentication: anyone who can
+    write the ledger file can settle. Protect the ledger path accordingly.
 - No elapsed-time expiry is inferred inside a window.
+- At a window boundary spend can exceed a windowed cap by at most one
+  in-flight reservation per concurrent call: a reservation made just before
+  the boundary stops counting in the new window while its call may still be
+  billed.
+
+### 2b. Every paid send path is admitted
+
+| Entry point | Hook | Channel | Bound source |
+|---|---|---|---|
+| `ModelClient.chat` | `guarded_provider_call` | `sync` | exact prompt + effort-profile / effective `max_tokens`, else ceiling |
+| `ModelClient.stream_chat` | `guarded_provider_stream` | `stream` | same |
+| `ModelClient.probe` (readiness) | `guarded_provider_call` | `probe` | exact prompt + `max_tokens=1` |
+| `proxy_send`, `proxy_send_once` (judge) | `metered_passthrough_call` | `passthrough` | request body |
+| `probe_structured_chat` | `metered_passthrough_call` | `probe` | request body |
+| `proxy_send_bytes` | `metered_passthrough_call` | `passthrough_bytes` | request body |
+| `embed`, `embed_with_usage` | `metered_passthrough_call` | `embeddings` | ceiling x inputs |
+| `batch_chat` (remote Batch API) | `metered_passthrough_call` | `batch` | sum of rows |
+| `TaskOrchestrator.proxy_capability`, `batch_route` | `@with_run_scope` | - | via the calls above |
+
+A spend refusal is never rewritten as a provider failure: `proxy_capability`
+and `batch_chat` re-raise `BudgetExceededError` instead of classifying it and
+failing over. `tests/test_spend_admission_paths.py` enforces the table: a
+static scan of `ModelClient` proves every public path to the HTTP opener
+passes through one of the three hooks, and a runtime test calls each entry
+point outside any scope with a tiny cap and asserts no send primitive runs.
+
+Allowlisted non-inference calls (no token-priced cost, no PriceBook row):
+the local `/models` registry GET in `probe`, async job status/media GETs
+(`proxy_get_json`, `proxy_get_bytes`), provider file DELETE
+(`proxy_delete_json`) and Files API upload (`proxy_upload`). Outside
+`ModelClient`, the Wardnet policy fetch and SearXNG search are not model
+providers. Operator model discovery (`model_discovery.py`) sends a
+`max_tokens=32` tool-call probe on its own guard-less client; it is a known
+limitation (see Consequences).
 
 ### 3. Provider-limit exhaustion drops only that provider for the rest of the run
 
@@ -311,7 +415,8 @@ The new logic lives in new modules (`domain/*`, `spend_guard.py`,
 
 - `ModelClient.chat`, `stream_chat` and the passthrough senders delegate to
   guarded wrappers around the renamed transports.
-- Entry points are decorated with `@with_run_scope`. Where main's
+- Entry points are decorated with `@with_run_scope` (including `batch_route`
+  and `proxy_capability`); a nested decorated call joins the outer scope. Where main's
   `@_request_execution_scoped` also applies, it is the outer decorator: the
   request scope validates and snapshots policy/effort state before a spend run
   scope opens, and for generators it captures the context in which the run
@@ -350,6 +455,25 @@ that PR.
 - CLI ledger open/read/lock failures use the argument-error surface instead of
   exposing an operator traceback. Untrusted recursive provider JSON degrades
   to empty limit evidence and cannot abort failure classification.
+- **Known limitation: fees outside token pricing.** The PriceBook holds only
+  prompt and completion prices per 1K tokens. OpenRouter per-request fees,
+  image input/output pricing, `web_search` / web plugin fees, prompt-cache
+  write surcharges, and non-token products (image generation, audio, video
+  jobs) are not in it and are not invented here, so admission bounds do not
+  include them. When the provider reports `usage.cost`, the actual charge is
+  metered and any excess over the bound is recorded as an admission-bound
+  overrun; when it does not, spend on such calls is under-estimated.
+  Operators who route to these features under a hard cap should set a
+  conservative cap or tag the model accordingly until those prices exist.
+- Operator model discovery (`probe_discovered_model_tool_call_capability`)
+  sends one `max_tokens=32` chat request per discovered model on a
+  guard-less client. It is not metered by this guard.
+- `ModelClient`'s transient retries inside one transport call
+  (`_send_with_retry`, `_send_raw_with_retry`) share one admission: a call
+  retried after an unknown first attempt may be billed more than once while
+  only one bound is reserved.
+- An uncapped run now reports unmeasured calls at their bound (and
+  `measurement_complete: false`) instead of silently at zero.
 
 ## Deferred
 
@@ -359,7 +483,6 @@ that PR.
 - Per-request cheapest-paid-first ranking (audit Gap 5). ADR 0032 bootstrap
   `--enable-cheapest` stays the pool-level mechanism.
 - Removing `price_per_million`.
-- Metering for embedding and Batch API calls.
 - Limit errors inside non-stream HTTP 200 bodies.
 - A SQL-backed high-throughput adapter; JSONL intentionally serializes budget
   transactions and scans its append-only projection.

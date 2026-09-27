@@ -62,6 +62,15 @@ class AdmissionTokenBounds:
 
     prompt_tokens: int | None = None
     max_output_tokens: int | None = None
+    #: Independent provider generations covered by one admission (``n``
+    #: choices, embedding inputs, or Batch API rows). ``max_output_tokens`` is
+    #: already the total across them; the context-window ceiling fallback is
+    #: multiplied by this count.
+    calls: int = 1
+
+    def ceiling_multiplier(self) -> int:
+        """How many context-window ceilings the fallback bound must cover."""
+        return self.calls if type(self.calls) is int and self.calls > 1 else 1
 
     def usable(self) -> bool:
         """Whether both bounds are known and valid."""
