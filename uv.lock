@@ -363,7 +363,7 @@ requires-dist = [
     { name = "atheris", marker = "python_full_version >= '3.12' and extra == 'fuzz'", specifier = "==3.1.0" },
     { name = "cryptography", specifier = ">=43.0" },
     { name = "egressweave", specifier = ">=0.1.0,<0.2.0" },
-    { name = "fast-mlsirm", marker = "python_full_version >= '3.12'", git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git?rev=09f762ded35786dd1078222a4577ff09d649816f" },
+    { name = "fast-mlsirm", specifier = "==0.11.4" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.128.0" },
     { name = "greenlet", marker = "extra == 'db'", specifier = ">=3.2" },
     { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.100" },
@@ -460,10 +460,25 @@ wheels = [
 
 [[package]]
 name = "fast-mlsirm"
-version = "0.9.1"
-source = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git?rev=09f762ded35786dd1078222a4577ff09d649816f#09f762ded35786dd1078222a4577ff09d649816f" }
+version = "0.11.4"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/36/0b/abc04f519f48a2b4be5993f8c560b0cd5724ad00b1eef367526816cbf985/fast_mlsirm-0.11.4.tar.gz", hash = "sha256:761f13783484ba7ef82c810c9c740f113d20cf52f879556056dfae9b36e39731", size = 1565067, upload-time = "2026-09-19T00:56:43.729Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/45/d26550e22b2de5281f8faa122bfb73ec75216ed3541e9a4316181748ffb1/fast_mlsirm-0.11.4-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:d026033bc4f649534c1f4d9516c7cd081fc064bd292a4e2d302acdb9f2ee060e", size = 9347973, upload-time = "2026-09-19T00:56:24.873Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/ed/611a8e627677a9ec54c3fbad8fa24eac94e1e5a318bcaa0ec60515599d07/fast_mlsirm-0.11.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a42038ee72a23220b3153153b3e290f454f5dee098ee0fbfc17d94aefbb215fa", size = 5741091, upload-time = "2026-09-19T00:56:26.811Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/2c/b07949481dbc3db5ee6499b64446135e76fefc60e1117cfe3759248e5920/fast_mlsirm-0.11.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1e65070ffab835a8af7e3eef3f67740b5146e9325d1a52b84b72f30e8b23998e", size = 5851206, upload-time = "2026-09-19T00:56:28.372Z" },
+    { url = "https://files.pythonhosted.org/packages/59/59/4ed8ec58561935d65f3485e46b315df93b69919f6b1c2efa4b2ccf323d99/fast_mlsirm-0.11.4-cp312-cp312-win_amd64.whl", hash = "sha256:1ce70211d8f837e489d456863cba5c163d0d27972ecc1689b7787af0b40daed6", size = 5872474, upload-time = "2026-09-19T00:56:29.979Z" },
+    { url = "https://files.pythonhosted.org/packages/68/5e/d71da24faddc710e13b198556e9f57277d39c8c375abba69d5b7606573da/fast_mlsirm-0.11.4-cp313-cp313-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:24bf3f0edd8a23a53a3e6ff4e9291f4574644c6e10b44c43294703dc97f0ebf8", size = 9346987, upload-time = "2026-09-19T00:56:31.4Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/cc/45bd74a88606866317c9b6d37d4fd6a59eba1ed44cdcd6ccffb51b7255b4/fast_mlsirm-0.11.4-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c7af04c0d01e1a8c802d39278fac6edff7263f67a039a6e293fcbe42ecb440a1", size = 5740279, upload-time = "2026-09-19T00:56:33.141Z" },
+    { url = "https://files.pythonhosted.org/packages/61/c5/a844e5e715bc732f0df7d28ad3e04a4ce3b16f06147fe03a91560e4d12d9/fast_mlsirm-0.11.4-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9ee76243c95a548a5f988c070588256d8e8d3bc747356991588a1f0a22b04a2c", size = 5850603, upload-time = "2026-09-19T00:56:34.67Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/d3/078fdc2457ce91ab894f85bb4f312963a86b2d10dcbc77304efdd90aa3fd/fast_mlsirm-0.11.4-cp313-cp313-win_amd64.whl", hash = "sha256:f010df97a1f8bc7e4800c1b341f40204e8b42ac467a4d96948886144a3a3575a", size = 5871406, upload-time = "2026-09-19T00:56:36.207Z" },
+    { url = "https://files.pythonhosted.org/packages/57/3c/c2b6cd12b0decce604fb8929bc33165af98d7d8b3023456412116cd712aa/fast_mlsirm-0.11.4-cp314-cp314-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:1779228af4c5d932514e465e57e137fd88f0d7e51d9463e69f1c6efa901bc179", size = 9351595, upload-time = "2026-09-19T00:56:37.732Z" },
+    { url = "https://files.pythonhosted.org/packages/75/81/93605db43d1e43718790b2bb906e3c6cc08e4c098ca1a4d9311ad7434f68/fast_mlsirm-0.11.4-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f0980d90d2094ef01d482915b1786b8654445fde5d5ba97446eedac573aca1e0", size = 5743475, upload-time = "2026-09-19T00:56:39.292Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/aa/8810e7da6e2b8f3b7144d0ec5e8af94fae7bba78214f64d6afb5678a870a/fast_mlsirm-0.11.4-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f4923dfae8db5407d20cc9ce0a08baaf6273824a22d01709b4b0cbc8ccfdbb87", size = 5852631, upload-time = "2026-09-19T00:56:40.705Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/62/b4a5430ba804619963cdf09376618e189c6778cab4be448f79cbeb8b9dbe/fast_mlsirm-0.11.4-cp314-cp314-win_amd64.whl", hash = "sha256:c3aaa8a526de58842dd2cddc759e25b765da3b6a2c36257de66db35ef191e664", size = 5873026, upload-time = "2026-09-19T00:56:42.227Z" },
 ]
 
 [[package]]
