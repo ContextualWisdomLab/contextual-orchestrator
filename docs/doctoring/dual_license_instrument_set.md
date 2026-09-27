@@ -136,3 +136,29 @@ caniuse-lite: 363 permitted, zero copyleft, 150 held. Attribution and notice
 obligations remain; this is not release or container/native provenance approval.
 
 Primary source: https://creativecommons.org/licenses/by/4.0/legalcode.txt
+
+## Complete historical Python license instrument
+
+typing-extensions 4.15.0 and 4.16.0 each carry one pure Python module and one
+license instrument. Both entire texts match CPython 3.12.0's LICENSE after
+whitespace normalization. The annotated tag was peeled to immutable source
+commit `0fb18b02c8ad56299d6a2910be0bab8ad601ef24`; fetching LICENSE at that commit
+confirmed the versioned-tag bytes. The complete text was read, including
+historical PSF, BeOpen, CNRI, CWI and documentation grants. The prior keyword
+matcher rejected historical GPL-compatibility mentions rather than a GPL grant.
+
+Reuse the complete-instrument path for the exact `PSF-2.0` declaration and
+full-text digest, preserving the entire fixture and all historical conditions.
+An altered or truncated instrument, an extra unknown/GPL file and a GPL
+declaration still fail. No short family-name or GPL-mention exception is added.
+The record `evidence/release/1083/psf_instrument.json` binds both exact wheel
+digests, archive contents, full primary-source digest and original inventory
+source SHA. This does not classify CPython's separate embedded libraries.
+
+The real positive control failed before repair. All 220 affected tests pass
+with process exit 0. Reclassification changes exactly the two typing-extensions
+identities: 365 permitted, zero copyleft, 148 held. Release and full native/
+container/toolchain provenance remain separate.
+
+Primary source:
+https://raw.githubusercontent.com/python/cpython/0fb18b02c8ad56299d6a2910be0bab8ad601ef24/LICENSE

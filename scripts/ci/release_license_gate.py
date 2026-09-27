@@ -341,6 +341,7 @@ _CANONICAL_TEXT_HASHES = {
         "1f5a529dc95849305307f0d6861169d8cae9e99807e4abcec68ef9ad19235652",
         "25a40a30d753162c4026b87a389b9534c72436327abcd083f90da00ead6d6869",
     }),
+    "PSF-2.0": frozenset({"350fbb5f093f61337b130b56e5a7119129c68975bebc1e7dd247d0206313d0e1"}),
     "MPL-2.0": frozenset({"e8ba82e63ba908724aaee6043943c5a2629b9ebf1af581ea0eea19a713123685"}),
     "BlueOak-1.0.0": frozenset({
         "61c644f13191f65c6ff4e58322c5d92ca44702c37ef0e1bc36f08af1021835a7",
