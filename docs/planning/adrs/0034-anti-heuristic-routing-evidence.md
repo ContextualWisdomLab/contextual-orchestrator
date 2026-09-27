@@ -365,7 +365,8 @@ rejection (ADR 0001: `accepted` stays `false`), but it is marked
 - `misconfigured`: no judge can run (fast-mlsirm missing, broken, or not
   constructible, or no eligible judge agent). Logged at error level.
 - `unavailable`: the judge's own provider call failed transiently (timeout,
-  `OSError`, upstream 5xx or rate limit, `EndpointUnavailableError`,
+  `OSError`, an upstream error the canonical RFC-backed provider taxonomy
+  marks retryable, `EndpointUnavailableError`,
   `BudgetExceededError`), classified from the exception the gateway's judge
   adapter observed. Logged at warning level.
 

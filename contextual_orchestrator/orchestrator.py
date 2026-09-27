@@ -56,7 +56,6 @@ from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_fi
 from .reasoning_effort_profile import EffortProfileError
 from .provider_errors import (
     PROVIDER_OUTCOME_UNKNOWN_CODE,
-    PROVIDER_RATE_LIMITED_CODE,
     MAX_PROVIDER_ERROR_BODY_BYTES,
     ProviderUpstreamError,
     classify_provider_failure,
@@ -584,37 +583,26 @@ JUDGE_STATUS_MISCONFIGURED = "misconfigured"
 JUDGE_STATUS_UNAVAILABLE = "unavailable"
 UNJUDGED_JUDGE_STATUSES = frozenset({JUDGE_STATUS_MISCONFIGURED, JUDGE_STATUS_UNAVAILABLE})
 
-_TRANSIENT_JUDGE_UPSTREAM_CODES = frozenset(
-    {
-        "rate_limit_exceeded",
-        PROVIDER_RATE_LIMITED_CODE,
-        "service_unavailable",
-        "provider_timeout",
-        "provider_connection_error",
-    }
-)
-
-
 def _is_transient_judge_failure(exc: BaseException) -> bool:
     """Return whether one judge provider-call exception is transient infrastructure.
 
-    Only these count: timeouts/OSError, a classified upstream 5xx or rate
-    limit, an unavailable endpoint, or an exhausted spend budget. A request
-    the candidate answer made too large, missing assistant content, exhausted
-    structured output, and anything unknown are *not* transient: they stay
-    ordinary rejections (ledger failure + cascade), exactly as before.
+    Only these count: timeouts/OSError, an upstream error the canonical
+    provider taxonomy marks retryable, an unavailable endpoint, or an
+    exhausted spend budget. A request the candidate answer made too large,
+    missing assistant content, exhausted structured output, and anything
+    unknown are *not* transient: they stay ordinary rejections (ledger failure
+    + cascade), exactly as before.
     """
     if isinstance(exc, ProviderRequestTooLargeError):
         return False
     if isinstance(exc, (BudgetExceededError, EndpointUnavailableError)):
         return True
     if isinstance(exc, ProviderUpstreamError):
-        status = exc.provider_status
-        if exc.error_code == "request_too_large" or status == 413:
-            return False
-        if type(status) is int and (500 <= status <= 599 or status in (408, 425, 429)):
-            return True
-        return exc.error_code in _TRANSIENT_JUDGE_UPSTREAM_CODES
+        # ProviderUpstreamError is the package's RFC-backed, single-writer
+        # taxonomy. Do not reconstruct retryability from status/code here:
+        # doing so made non-retryable 501 transient and retryable 409
+        # permanent, changing route and quality-ledger decisions.
+        return exc.retryable
     if isinstance(exc, ProviderResponseError):
         return False
     return isinstance(exc, (TimeoutError, OSError))

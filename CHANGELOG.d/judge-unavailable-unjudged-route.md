@@ -7,7 +7,8 @@ verdict is now also classified by what the failure says about the answer:
   be constructed, or there is no eligible judge agent (previously a
   `StopIteration` that fell into the catch-all). Logged at error level.
 - `judge_status: "unavailable"`: the judge's own provider call hit a transient
-  failure (timeout, `OSError`, upstream 5xx or rate limit,
+  failure (timeout, `OSError`, an upstream error the canonical provider
+  taxonomy marks retryable,
   `EndpointUnavailableError`, `BudgetExceededError`). The gateway's judge
   adapter records the exception at the provider-call boundary, because
   fast-mlsirm re-raises adapter failures as `JudgeFormatError` without a

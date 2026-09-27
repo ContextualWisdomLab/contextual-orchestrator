@@ -6,8 +6,8 @@ What differs is whether the failure says anything about the *candidate*:
 * ``judge_status == "misconfigured"`` -- no judge can run at all (fast-mlsirm
   missing/broken, the judge cannot be constructed, or no eligible judge agent).
 * ``judge_status == "unavailable"`` -- the judge's own provider call hit a
-  transient infrastructure failure (timeout, OSError, 5xx / rate limit,
-  endpoint unavailable, spend budget).
+  transient infrastructure failure (timeout, OSError, an error the canonical
+  provider taxonomy marks retryable, endpoint unavailable, spend budget).
 * no ``judge_status`` -- everything else, including failures the candidate
   answer can cause (request too large, missing assistant content, structured
   output exhausted, parse/encoding errors) and unknown exceptions. These stay
@@ -62,6 +62,7 @@ TRANSIENT_ERRORS = {
     "upstream-503": lambda: _upstream("service_unavailable", 503),
     "upstream-502": lambda: _upstream("api_error", 502),
     "upstream-429": lambda: _upstream("rate_limit_exceeded", 429),
+    "upstream-retryable-409": lambda: _upstream("conflict", 409),
     "upstream-rate-limited-storm": lambda: _upstream("provider_rate_limited", None),
     "upstream-connection": lambda: _upstream("provider_connection_error", None),
     "endpoint-unavailable": lambda: EndpointUnavailableError("endpoint_unavailable"),
@@ -80,6 +81,7 @@ CANDIDATE_OR_UNKNOWN_ERRORS = {
         "every structured candidate violated the contract"
     ),
     "upstream-400": lambda: _upstream("invalid_request_error", 400, retryable=False),
+    "upstream-nonretryable-501": lambda: _upstream("api_error", 501, retryable=False),
     "unicode": lambda: UnicodeEncodeError("utf-8", "x", 0, 1, "bad"),
     "value-error": lambda: ValueError("judge answer exceeds the maximum length"),
     "unknown-runtime": lambda: RuntimeError("all 1 candidate agents failed for role=judge"),
