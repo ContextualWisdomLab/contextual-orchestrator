@@ -722,7 +722,7 @@ jobs:
           cp "${inputs}/${wheel}" dist/
           cp "${inputs}/SHA256SUMS" "${RUNNER_TEMP}/SHA256SUMS"
           (cd dist && sha256sum --strict -c "${RUNNER_TEMP}/SHA256SUMS")
-          staged="$(find dist -mindepth 1 -printf '%f\n')"
+          staged="$(find dist -mindepth 1 -exec basename {} \;)"
           if [ "${staged}" != "${wheel}" ]; then
             echo "::error::dist/ must contain only ${wheel}; found: ${staged}." >&2
             exit 1
