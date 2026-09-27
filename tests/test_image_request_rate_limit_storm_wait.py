@@ -1,10 +1,7 @@
-"""An image-bearing request waits out a rate-limit storm like a text request.
+"""Eligible text and image candidates honor rate-limit storm cooldowns.
 
-``_invoke`` runs an image request on the text candidates when no candidate for
-the step is vision-capable. The storm-wait admission recomputed the vision-only
-set, found it empty, and failed the whole conduct request at once with 429,
-while the same storm on a text request is waited out. The admission must judge
-the storm on the candidates ``_invoke`` actually used.
+Image review candidates explicitly advertise vision capability. Text-only
+fallback is covered separately by the fail-closed multimodal regressions.
 """
 
 from __future__ import annotations
@@ -30,7 +27,6 @@ from contextual_orchestrator.server import SecurityConfig, build_server
 _TOKEN = "image_request_storm_wait_token"  # noqa: S105
 _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 _TEXT_TAGS = ("cost:free", "verification", "review", "reasoning", "writing", "planning", "coding", "input:text", "output:text")
-_VISION_TAGS = ("cost:free", "reasoning", "writing", "planning", "coding", "vision", "input:image", "input:text", "output:text")
 
 
 class _Response:
@@ -72,7 +68,7 @@ def _conduct(
     monkeypatch, *, with_image: bool, retry_after: str | None,
     wait_seconds: float = 3.0,
 ) -> tuple[int, list[tuple[str, float, bool]]]:
-    """Run one conduct request while the text-only models are in a 429 storm."""
+    """Run one conduct request while eligible review models are in a 429 storm."""
     set_backend(InMemoryCredentialBackend())
     register_credential("NVIDIA_NIM_API_KEY", "synthetic-not-a-key")
     attempts: list[tuple[str, float, bool]] = []
@@ -99,13 +95,12 @@ def _conduct(
 
     monkeypatch.setattr(ModelClient, "_validate_provider", lambda self, agent: None)
     monkeypatch.setattr(ModelClient, "_open_provider", storm_open)
+    review_tags = _TEXT_TAGS + (("vision", "input:image") if with_image else ())
     agents = [
-        ModelAgent("vision_worker", "vendor/vision", base_url="https://provider.invalid/v1",
-                   api_key_env="NVIDIA_NIM_API_KEY", tags=_VISION_TAGS, priority=30),
         ModelAgent("text_a", "vendor/text-a", base_url="https://provider.invalid/v1",
-                   api_key_env="NVIDIA_NIM_API_KEY", tags=_TEXT_TAGS, priority=10),
+                   api_key_env="NVIDIA_NIM_API_KEY", tags=review_tags, priority=10),
         ModelAgent("text_b", "vendor/text-b", base_url="https://provider.invalid/v1",
-                   api_key_env="NVIDIA_NIM_API_KEY", tags=_TEXT_TAGS, priority=5),
+                   api_key_env="NVIDIA_NIM_API_KEY", tags=review_tags, priority=5),
     ]
     content: list[dict] = [{"type": "text", "text": "Review this change set in depth: plan, implement, verify."}]
     if with_image:

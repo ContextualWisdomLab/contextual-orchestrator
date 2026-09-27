@@ -136,11 +136,10 @@ def test_embedding_request_too_large_does_not_quarantine_endpoint() -> None:
     orchestrator = TaskOrchestrator([agent])
 
     for _ in range(orchestrator.circuit_failure_threshold + 1):
-        orchestrator._record_embedding_failure(
-            agent,
-            "/v1/embeddings",
-            urllib.error.HTTPError("https://provider.invalid", 413, "too large", {}, None),
-        )
+        with urllib.error.HTTPError(
+            "https://provider.invalid", 413, "too large", {}, None
+        ) as error:
+            orchestrator._record_embedding_failure(agent, "/v1/embeddings", error)
 
     assert orchestrator._circuit_open(agent.id) is False
     failures = [
@@ -176,6 +175,7 @@ def test_explicit_embedding_model_returns_503_while_all_circuits_are_open() -> N
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() -> None:
@@ -198,13 +198,14 @@ def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() 
     orchestrator = TaskOrchestrator([first, second])
     coordinator = CostRoutingCoordinator(orchestrator)
     attempted: list[str] = []
+    rejected_response = urllib.error.HTTPError(
+        "https://provider.invalid/embeddings", 400, "Bad Request", {}, None
+    )
 
     def complete_embeddings_batch(_inputs, *, agent_id, **_kwargs):
         attempted.append(agent_id)
         if agent_id == first.id:
-            raise urllib.error.HTTPError(
-                "https://provider.invalid/embeddings", 400, "Bad Request", {}, None
-            )
+            raise rejected_response
         return {
             "status": "completed",
             "embeddings": [{"index": 0, "embedding": [0.25]}],
@@ -245,6 +246,8 @@ def test_http_embeddings_quarantines_repeated_400_endpoint_with_safe_evidence() 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
+        rejected_response.close()
 
 
 def test_http_embeddings_quarantines_repeated_incomplete_document_with_failure_evidence() -> None:
@@ -310,6 +313,7 @@ def test_http_embeddings_quarantines_repeated_incomplete_document_with_failure_e
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_batch_embedding_submission_success_clears_prior_endpoint_failures() -> None:
@@ -342,6 +346,7 @@ def test_batch_embedding_submission_success_clears_prior_endpoint_failures() -> 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_rejects_model_outside_agent_pool() -> None:
@@ -442,6 +447,7 @@ def test_http_embeddings_uses_selected_model_timeout_policy() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_embeddings_null_model_is_rejected() -> None:
