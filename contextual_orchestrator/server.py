@@ -859,6 +859,9 @@ def _tool_fallback_error_detail(error: ToolFallbackStoppedError) -> dict[str, An
     observed_kind = decision.observed_kind or decision.kind
     if observed_kind is not decision.kind:
         detail["observed_failure_kind"] = observed_kind.value
+    route = error.detail.get("route")
+    if isinstance(route, dict):
+        detail["route"] = route
     return detail
 
 
@@ -8254,7 +8257,7 @@ def build_server(
                     _tool_fallback_error_detail(exc),
                 )
             except ProviderRequestTooLargeError as exc:
-                self._send_error(413, "request_too_large", str(exc))
+                self._send_error(413, "request_too_large", str(exc), exc.detail)
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except BatchModelSelectionError:
