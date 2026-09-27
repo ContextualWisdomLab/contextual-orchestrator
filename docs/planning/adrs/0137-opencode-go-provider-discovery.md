@@ -1,5 +1,5 @@
 ---
-id: "0136"
+id: "0137"
 title: "OpenCode Go discovery with a shared credential"
 status: proposed
 proposed_date: "2026-09-25"
@@ -13,7 +13,7 @@ related:
     relation: "extends cost evidence rules"
 ---
 
-# ADR 0136: OpenCode Go discovery with a shared credential
+# ADR 0137: OpenCode Go discovery with a shared credential
 
 Status: Proposed. This records the current discovery contract; live subscription entitlement and exact-head CI acceptance remain unverified.
 
@@ -25,7 +25,7 @@ used for both, while Go still requires its own paid subscription. The earlier
 [#1008 proposal](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1008)
 assumed a second key and is superseded on that point. Its ADR number 0130 is
 already used on `main` for output-budget evidence; 0135 is assigned to
-whole-request partitioning in the integration branch, so this record uses 0136.
+whole-request partitioning in the integration branch, so this record uses 0137.
 
 ## Decision
 
