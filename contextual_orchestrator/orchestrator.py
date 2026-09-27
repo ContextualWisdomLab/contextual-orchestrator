@@ -7469,6 +7469,14 @@ class TaskOrchestrator:
                         for row in round_attempts
                     ):
                         raise
+                    if wait_deadline is not None and time.monotonic() >= wait_deadline:
+                        continue
+                    if not any(
+                        self._rate_limit_remaining(candidate.id) is not None
+                        for candidate in synthesis_candidates
+                        if candidate.id not in request_exclusions
+                    ):
+                        raise
                     if wait_deadline is None:
                         wait_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
                     final_agent = preferred

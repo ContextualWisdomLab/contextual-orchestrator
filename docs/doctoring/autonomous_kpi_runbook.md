@@ -155,6 +155,17 @@ This is source-side evidence; a protected merged
 revision, immutable release, updated consumer pin, and a fresh hosted Noema
 run are still needed for delivery and acceptance.
 
+
+Independent #1251 review on `aa00d635` identified zero-cooldown replay.
+With an assumed cooldown of zero, two-candidate all-429 and mixed 429/413
+regressions produced 210 and 257 extra calls during a 20ms wait budget (RED).
+The shared round transition now preserves the original error when no eligible
+candidate is still cooling; an already expired wait retains the storm terminal.
+The prior-cooldown regression also checks cooldown expiry at transport entry.
+The structured regression file passes 45 tests with process exit 0; the minimal
+local interpreter emits one missing pytest-asyncio configuration warning.
+This is transport-spy source evidence, not wire delivery or protected acceptance.
+
 ## Stacked quality-trigger repair
 
 Lineage correction: existing PR #1066 at
