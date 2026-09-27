@@ -199,3 +199,30 @@ The real two complete pairs failed before repair. The license-gate suite
 passes 153 tests with process exit 0. Full inventory comparison changes only
 these two Pygments identities: 368 permitted, zero copyleft, 145 held.
 Distribution attribution obligations and separate release requirements remain.
+
+## Requests full Apache terms and NOTICE
+
+Requests 2.34.2 contains all Apache-2.0 terms, sections 1–9, plus its
+copyright NOTICE. Its LICENSE omits the end marker and application appendix.
+Every normalized word before the official ASF end marker matches the
+retained wheel LICENSE; no substantive term is missing or changed. The
+ASF definition identifies sections 1–9 as the license, while its application
+page describes the appendix as instructions for applying the license.
+This is a source comparison, not a general permission to truncate licenses.
+
+Primary sources:
+https://www.apache.org/licenses/LICENSE-2.0.txt
+https://www.apache.org/legal/apply-license.html
+
+The actual wheel and both raw files were reverified. Their identities and
+the primary-source hash are in `evidence/release/1083/requests_apache_terms.json`.
+Reuse the existing exact full-grant/attribution matcher for this complete
+pair. Missing section, modified grant, changed NOTICE, extra GPL text,
+notice-only, duplicate and wrong declaration controls remain rejected.
+The existing legacy single-grant path already accepted this LICENSE alone;
+that behavior is preserved, not introduced by the new pair registration.
+Neither the fixture nor the registration removes redistribution obligations.
+
+The real complete pair failed before repair. Full retained inventory changes
+only requests: 369 permitted, zero copyleft, 144 held. Native/container,
+provenance, hosted CI and release clearance remain separate.

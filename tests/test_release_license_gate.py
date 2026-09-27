@@ -796,3 +796,40 @@ def test_cc_by_fixture_matches_full_official_instrument():
     assert hashlib.sha256(" ".join(official.split()).encode()).hexdigest() == (
         "1f5a529dc95849305307f0d6861169d8cae9e99807e4abcec68ef9ad19235652"
     )
+
+
+@pytest.mark.parametrize("change", ["none", "missing-section", "changed-section", "notice-only", "missing-notice", "changed-notice", "extra", "duplicate", "wrong-declaration"])
+def test_requests_complete_apache_terms_and_notice(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures/license_text"
+    texts = [(directory / f"requests-{name}.txt").read_text() for name in ("license", "notice")]
+    terms = ["Apache-2.0", "Apache Software License"]
+    if change == "missing-section":
+        texts[0] = texts[0].split("   9. Accepting Warranty")[0]
+    elif change == "changed-section":
+        texts[0] = texts[0].replace("royalty-free", "royalty-bearing")
+    elif change == "notice-only":
+        texts = texts[1:]
+    elif change == "missing-notice":
+        texts = texts[:1]
+    elif change == "changed-notice":
+        texts[1] += "Commercial use forbidden."
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "duplicate":
+        texts.append(texts[1])
+    elif change == "wrong-declaration":
+        terms = ["MIT"]
+    assert _declaration_matches_text(terms, [{"text": text} for text in texts]) is (change in {"none", "missing-notice"})
+
+
+def test_requests_terms_match_complete_official_apache_sections():
+    import hashlib
+    directory = Path(__file__).parent / "fixtures/license_text"
+    official = (directory / "sniffio-instrument-1.txt").read_text()
+    assert hashlib.sha256(" ".join(official.split()).encode()).hexdigest() == (
+        "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645"
+    )
+    terms = official.split("END OF TERMS AND CONDITIONS")[0]
+    actual = (directory / "requests-license.txt").read_text()
+    assert " ".join(actual.split()) == " ".join(terms.split())
