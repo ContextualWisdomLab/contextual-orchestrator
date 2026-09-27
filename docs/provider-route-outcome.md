@@ -10,18 +10,29 @@ response header. The gateway owns candidate selection and fallback. A successful
 streaming response places `orchestration.route` in its final completion chunk;
 the route uses the same `OrchestrationRoute` and `OrchestrationRouteAttempt`
 schemas published by the OpenAPI 0.3.1 contract. The `attempted` entries are in
-execution order. `terminal_reason` is mandatory and has exactly three values:
-`served`, `eligible_set_exhausted`, or `fail_closed`; a missing or unknown value
-is not a valid receipt. A `served` reason requires exactly one `served` attempt,
-while either non-served reason forbids a `served` attempt. The final `served`
-entry identifies the candidate that returned the completion; earlier entries
-describe failed candidates. The final frame is
+execution order. `terminal_reason` is mandatory. Its values are `served`,
+`eligible_set_exhausted`, `fail_closed`, `request_too_large_exhausted`,
+`rate_limit_wait_budget_exhausted`, and `rate_limited_storm`; a missing or unknown
+value is not a valid receipt. A `served` reason requires exactly one `served` attempt,
+while every non-served reason forbids a `served` attempt. The final `served`
+entry identifies the candidate that returned the completion; earlier entries distinguish failed candidates from `completed` answers that
+were returned but not selected. `completed` does not establish answer quality
+or provider health, and does not claim that the caller received that answer.
+If a later round fails, the failure receipt retains those completed attempts
+alongside the later failures and makes no final served claim. The final frame is
 the success receipt. If the connection ends before it, the caller has no
 authoritative served-candidate receipt and must treat the outcome as unknown.
 If eligible candidates fail before sending content, the terminal SSE error detail
 contains the same typed route with `terminal_reason: "eligible_set_exhausted"` or
 `"fail_closed"`. A failure after content has begun may leave a partial stream;
 the caller must not infer a served completion from those bytes.
+Quota exhaustion can return `rate_limit_wait_budget_exhausted` or
+`rate_limited_storm`. These reasons do not establish when a provider recovers:
+only finite provider timing authorizes a wait. Unknown timing remains
+unavailable and supplies no Retry-After. Size exhaustion uses
+`request_too_large_exhausted`. All preserve ordered failed attempts and forbid
+a final served claim.
+
 A provider connection that closes without the Chat Completions `[DONE]` marker
 reports `provider_stream_incomplete` with a `fail_closed` route and no served
 receipt, even if an earlier provider frame carried `finish_reason: "stop"`.

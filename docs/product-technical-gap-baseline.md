@@ -7675,3 +7675,64 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## Proposed: exhausted and multi-round provider outcome schema — 2026-09-27
+
+Structure: #1231 owns the proposed OpenAPI 0.3.1 route contract on top of
+#1266; #1273 adds request-bound stream cancellation evidence. Protected merge,
+independent approval and immutable publication remain separate acceptance gates.
+
+Gap: the schema admitted only three terminal reasons, but actual free-route
+quota and size exhaustion emitted three additional reasons. A judge-rejected
+completed answer followed by a selected answer produced two final `served`
+claims. If the later round instead ended with a provider error, invalid response
+or tool safety stop, route_once discarded the earlier call history.
+
+RED at source base `bb72303a`: session `99076` generated real route_once 429,
+structured 429 and route_once 413 failures; all three receipts were rejected by
+the advertised schema. The real judge-rejected-round reproduction failed the
+schema's one-served invariant. Session `10618` reproduced lost prior history for
+response/tool stops; its provider variant first exposed an additional eligible
+candidate retry, so the fixture now explicitly exercises the existing circuit
+threshold to isolate the later provider stop. A constructor-keyword experiment
+was rejected because this policy is an instance attribute, not a constructor
+option; no production option was added.
+
+Repair: admit the three existing exhaustion reasons without changing routing,
+wait budgets or provider classifications. The shared receipt projection marks
+returned but unselected answers `completed`, and keeps only the final selected
+answer `served`. This does not judge answer quality, establish provider health,
+claim wire delivery, or mutate the original attempt dictionaries. Later typed
+failures retain both earlier completed calls and current failures in execution
+order, preserving their original exception subtype and other error detail.
+
+GREEN: session `61339`, 193 passed with strict warnings across API conformance,
+admission, streaming, taxonomy and structured fallback. Session `41291`, 43
+passed across HTTP action fallback, tool controls and wrapped tool metadata.
+
+```sh
+.venv/bin/python -m pytest -c pyproject.toml tests/test_api_contract.py tests/test_rate_limit_aware_admission.py tests/test_true_streaming.py tests/test_provider_error_taxonomy.py tests/test_structured_output_distinct_fallback.py -q --tb=short -W error
+.venv/bin/python -m pytest -c pyproject.toml tests/test_actions_model_fallback.py tests/test_chat_tools_passthrough_controls_http_honesty.py tests/test_tool_fallback_wrapped_metadata.py -q --tb=short -W error
+```
+
+Ruff 0.16.9 baseline comparison found no new F/E9 finding: the source already
+has five findings on `bb72303a` (one unused import, two unused variables, two
+closure-related undefined-name reports). The full lint baseline remains
+nonclean; focused test success is not a lint, full-suite or hosted success claim.
+
+Publication audit: #1083 is closed and #1229 is merged, but the current GitHub
+Releases API is empty and the package declaration remains 0.2.0. #1257 is a
+draft evidence-schema step, explicitly not a version decision. No tag, package
+version decision, protected contract delivery or consumer migration is inferred
+from those issue/PR states.
+
+Loop ledger: `loop_id=co1016_terminal_schema_20260927`, `parent_id=co1016`,
+`owner=#1231`, `depends_on=#1266_then_current_head_review_then_owner_release`,
+`status=LOCAL_VERIFIED`, `pass=real_failure_schema_and_complete_ordered_history`,
+`retry=source_backed_conformance_failure`, `evidence_base=bb72303a`,
+`next_action=publish_batched_contract_repair_and_restack_1273`,
+`return_to=co1016_protected_versioned_owner_delivery`.
+
+Todo: current-head independent review and required CI; protected integration;
+reviewed package version and immutable owner publication; leaf migration proof
+remains owned by OriginWeave#276.

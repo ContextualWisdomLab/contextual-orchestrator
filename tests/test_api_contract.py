@@ -15,8 +15,18 @@ from dataclasses import replace
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.api_contract import OPENAPI_SPEC  # noqa: E402
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
-from contextual_orchestrator.orchestrator import chat_completion_response  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ProviderRequestTooLargeError,
+    ProviderResponseError,
+    chat_completion_response,
+)
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
+from contextual_orchestrator.tool_fallback import (
+    ToolExecutionError,
+    ToolFailureKind,
+    ToolFallbackStoppedError,
+    classify_tool_failure,
+)
 
 
 _OPENAPI_REGISTRY_URI = "urn:cwl:openapi"
@@ -387,6 +397,10 @@ def test_orchestration_route_schema_requires_a_known_terminal_reason(
     [
         ("served", "retryable_transport"),
         ("eligible_set_exhausted", "served"),
+        ("fail_closed", "served"),
+        ("request_too_large_exhausted", "served"),
+        ("rate_limit_wait_budget_exhausted", "served"),
+        ("rate_limited_storm", "served"),
     ],
 )
 def test_orchestration_route_schema_rejects_contradictory_terminal_evidence(
@@ -560,3 +574,151 @@ def test_route_once_preserves_worker_failover_evidence_across_realtime_judge() -
         "retryable_transport",
         "served",
     ]
+
+
+@pytest.mark.parametrize(
+    "path, status, expected_reason",
+    [
+        ("route_once", 429, "rate_limit_wait_budget_exhausted"),
+        ("structured", 429, "rate_limited_storm"),
+        ("route_once", 413, "request_too_large_exhausted"),
+    ],
+)
+def test_orchestration_route_schema_validates_exhausted_free_pool(
+    path: str, status: int, expected_reason: str,
+) -> None:
+    """Actual quota/size exhaustion receipts must be consumable by the advertised schema."""
+    calls: list[str] = []
+
+    def reject(agent: ModelAgent) -> None:
+        calls.append(agent.id)
+        if status == 413:
+            raise ProviderRequestTooLargeError("provider rejected request size")
+        raise ProviderUpstreamError(
+            agent_id=agent.id, model=agent.model,
+            error_code="rate_limit_exceeded", message="provider rejected request",
+            client_status=429, provider_status=429, retryable=True,
+            transport="chat" if path == "route_once" else "structured_synthesis",
+        )
+
+    class RejectingClient(_StructuredFailThenServeClient):
+        def chat(self, agent, messages, **kwargs):
+            if path == "route_once":
+                reject(agent)
+            return super().chat(agent, messages, **kwargs)
+
+        def proxy_send_once(self, agent, endpoint, payload):
+            reject(agent)
+
+    agents = _free_agents()
+    orchestrator = TaskOrchestrator(
+        agents, client=RejectingClient(), rate_limit_wait_seconds=0.0,
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    try:
+        with pytest.raises(ProviderUpstreamError) as caught:
+            if path == "structured":
+                orchestrator.proxy_completion(
+                    {"model": TaskOrchestrator.FREE_MODEL,
+                     "messages": [{"role": "user", "content": "return a json verdict"}],
+                     "response_format": _JSON_SCHEMA},
+                    single_agent=False,
+                )
+            else:
+                orchestrator.route_once(
+                    [{"role": "user", "content": "route this"}],
+                    model_name=TaskOrchestrator.FREE_MODEL,
+                )
+        route = caught.value.extra_detail["route"]
+        assert route["terminal_reason"] == expected_reason
+        assert calls == [agent.id for agent in agents]
+        assert [row["agent_id"] for row in route["attempted"]] == calls
+        assert all(row["outcome"] != "served" for row in route["attempted"])
+        _validate_openapi_component(route, "OrchestrationRoute")
+    finally:
+        orchestrator.close()
+
+
+def test_orchestration_route_schema_validates_judge_rejected_rounds(monkeypatch) -> None:
+    """Returned but rejected answers do not claim multiple final served candidates."""
+    client = _RouteOnceFailThenServeClient()
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=client)
+    verdicts = iter((False, True))
+    monkeypatch.setattr(orchestrator, "_triage_fn", lambda text: False)
+    monkeypatch.setattr(
+        orchestrator, "_realtime_route_judge",
+        lambda **kwargs: {"accepted": next(verdicts), "reason": "test verdict",
+                          "verifier_output": "", "judge": "model"},
+    )
+    try:
+        result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+        route = result["route"]
+        assert result["answer"] == "served by fallback"
+        assert len(route["attempted"]) == len(client.calls)
+        _validate_openapi_component(route, "OrchestrationRoute")
+        assert [row["outcome"] for row in route["attempted"]] == [
+            "retryable_transport", "retryable_transport", "completed", "served",
+        ]
+    finally:
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("failure_kind", ["provider", "response", "tool"])
+def test_route_once_preserves_completed_round_before_terminal_failure(
+    monkeypatch, failure_kind: str,
+) -> None:
+    """A later stop retains prior rejected completion without claiming final delivery."""
+    class StopAfterCompletion(_RouteOnceFailThenServeClient):
+        def chat(self, agent, messages, **kwargs):
+            if agent.id == "fallback_worker" and self.calls.count(agent.id):
+                self.calls.append(agent.id)
+                if failure_kind == "response":
+                    raise ProviderResponseError("malformed response")
+                if failure_kind == "tool":
+                    raise ToolFallbackStoppedError(
+                        agent.id,
+                        classify_tool_failure(ToolExecutionError(
+                            "unknown tool outcome", tool_name="provider_tool_runtime",
+                            kind=ToolFailureKind.TRANSPORT_ERROR, outcome_unknown=True,
+                        )),
+                    )
+                raise ProviderUpstreamError(
+                    agent_id=agent.id, model=agent.model,
+                    error_code="permission_error", message="provider denied request",
+                    client_status=403, provider_status=403, retryable=False, transport="chat",
+                )
+            return super().chat(agent, messages, **kwargs)
+
+    client = StopAfterCompletion()
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=client)
+    monkeypatch.setattr(orchestrator, "circuit_failure_threshold", 2)
+    monkeypatch.setattr(orchestrator, "_triage_fn", lambda text: False)
+    monkeypatch.setattr(
+        orchestrator, "_realtime_route_judge",
+        lambda **kwargs: {"accepted": False, "reason": "test verdict",
+                          "verifier_output": "", "judge": "model"},
+    )
+    expected_type = {
+        "provider": ProviderUpstreamError,
+        "response": ProviderResponseError,
+        "tool": ToolFallbackStoppedError,
+    }[failure_kind]
+    try:
+        with pytest.raises(expected_type) as caught:
+            orchestrator.route_once([{"role": "user", "content": "route this"}])
+        detail = (
+            caught.value.extra_detail
+            if isinstance(caught.value, ProviderUpstreamError) else caught.value.detail
+        )
+        route = detail["route"]
+        assert client.calls == ["primary_worker", "primary_worker", "fallback_worker", "fallback_worker"]
+        assert [row["agent_id"] for row in route["attempted"]] == client.calls
+        assert [row["outcome"] for row in route["attempted"]] == [
+            "retryable_transport", "retryable_transport", "completed", "fail_closed",
+        ]
+        assert route["terminal_reason"] == (
+            "eligible_set_exhausted" if failure_kind == "provider" else "fail_closed"
+        )
+        _validate_openapi_component(route, "OrchestrationRoute")
+    finally:
+        orchestrator.close()
