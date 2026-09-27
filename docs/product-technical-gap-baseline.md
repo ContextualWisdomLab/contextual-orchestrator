@@ -7736,3 +7736,17 @@ Loop ledger: `loop_id=co1016_terminal_schema_20260927`, `parent_id=co1016`,
 Todo: current-head independent review and required CI; protected integration;
 reviewed package version and immutable owner publication; leaf migration proof
 remains owned by OriginWeave#276.
+
+Package preparation at `a22ca68de3843b983413749a4b72b4f6ffef38a7`:
+`SOURCE_DATE_EPOCH` was fixed to that commit's timestamp and
+`uv build --offline --wheel --python 3.12` succeeded (session `79513`). The
+candidate wheel remains `contextual_orchestrator-0.2.0-py3-none-any.whl`, SHA-256
+`ac410cf98d3b43a432f7d4d89c3ee862b1c3ceca4a13436cecb91f176e56ad1b`.
+Its API and orchestrator modules are byte-identical to the tested source; its
+OpenAPI 0.3.1 advertises all six actual terminal reasons and `completed` among
+six attempt outcomes. This is one local candidate build, not an installed
+runtime test, reproducibility proof, SBOM/attestation verification, SemVer
+authorization or published artifact. The proof explicitly marks it unprotected
+and unpublished. #1273's merge of this source passed the 59 API/streaming tests
+with strict warnings (session `5175`); its unchanged native cancellation source
+and separate native dependency still require their hosted gate.
