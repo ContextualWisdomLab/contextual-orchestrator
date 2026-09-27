@@ -723,3 +723,31 @@ Dedicated CodeQL/OpenCode/control pools, security commands, permissions,
 concurrency and approval gates stay intact. Existing pool eligibility admits
 the general runners; no solver dependency or guessed duration weight is added.
 Actual runner assignment and terminal job results remain required proof.
+
+## Full-suite DIF fixture reconciliation, 2026-09-27
+
+Structure: #1266 carries the released fast-mlsirm 0.11.4 migration. The
+held-out diagnostic now requires the declared FDR, iteration, purification
+round and anchor controls explicitly; production callers already supply them.
+Two sample-size boundary tests still omitted those controls.
+
+RED at `ef7230193cd245ba496f4a8341c98989cc94f23a`: after locked dependency
+sync and the locked native receipt build, `uv run --no-sync python -m pytest
+-q -ra` exited 1 with 2 failed, 5,169 passed and 5 native-tokenizer skips
+(session 43349, 613.10 seconds). Both failures were argument binding errors in
+`tests/test_psychometric_benchmark_boundaries.py`, before the intended
+sample-size validation or diagnostic population construction.
+
+The repair passes the existing declared controls from the diagnostic module
+in those tests. It preserves the required function parameters and all three
+invalid sample-size cases; it does not add estimator defaults or change the
+synthetic evidence's authority. The complete affected file passes 38 tests
+(session 29288, exit 0, 6.46 seconds). This focused GREEN is not a new-head
+full-suite or hosted verdict.
+
+Loop ledger: `loop_id=co1016_dif_fixture_20260927`, `parent_id=co1016`,
+owner/scope=#1266 diagnostic fixtures, dependency=protected owner integration,
+status=LOCAL_REPAIR_VERIFIED, RED evidence SHA=`ef723019`, pass condition=
+current-head hosted full suite plus independent approval, retry condition=
+a source-backed new failure, `next_action=publish fixture repair and inspect
+current-head hosted checks`, `return_to=co1016_owner_delivery`.
