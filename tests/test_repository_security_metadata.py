@@ -296,3 +296,32 @@ def test_native_workflows_bootstrap_the_repository_pinned_rust_toolchain():
                     job.index(token) for token in ("rustup ", "cargo fmt ")
                     if token in job
                 )
+
+
+def test_rust_gate_selects_shared_python_for_pyo3_linking():
+    """Rust test binaries must link against the configured Python runtime."""
+    rust_job = (
+        read_text(".github/workflows/security.yml")
+        .split("  rust:\n", 1)[1]
+        .split("\n  security:\n", 1)[0]
+    )
+    assert "id: python" in rust_job
+    assert 'python-version: "3.12"' in rust_job
+    assert rust_job.index("actions/setup-python@") < rust_job.index("cargo clippy")
+    assert 'directory = Path(sys.base_prefix) / "lib"' in rust_job
+    assert 'if not library.is_file():' in rust_job
+    assert rust_job.index("Locate relocated Python shared library") < rust_job.index("cargo clippy")
+    for step in ("Clippy (deny warnings)", "Test workspace"):
+        block = rust_job.split(f"- name: {step}\n", 1)[1].split("      - name:", 1)[0]
+        assert "PYO3_PYTHON: ${{ steps.python.outputs.python-path }}" in block
+        assert "RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}" in block
+
+
+def test_full_suite_workflows_prepare_compose_before_render_checks():
+    """Full suites need Compose independently of the runner's plugin state."""
+    action = "docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a"
+    for path in (".github/workflows/security.yml", ".github/workflows/release.yml"):
+        text = read_text(path)
+        assert action in text
+        assert 'version: "v5.4.0"' in text
+        assert text.index(action) < text.index("docker compose version") < text.index("-m pytest")
