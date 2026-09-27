@@ -28,8 +28,10 @@ contains the same typed route with `terminal_reason: "eligible_set_exhausted"` o
 the caller must not infer a served completion from those bytes.
 Quota exhaustion can return `rate_limit_wait_budget_exhausted` or
 `rate_limited_storm`. These reasons do not establish when a provider recovers:
-only finite provider timing authorizes a wait. Unknown timing remains
-unavailable and supplies no Retry-After. Size exhaustion uses
+the gateway waits on provider timing when supplied, or on its configured
+finite cooldown when the provider supplies none. In the latter case the
+failure detail labels `cooldown_source` as `assumed`; any returned retry
+interval is a gateway estimate, not a provider promise. Size exhaustion uses
 `request_too_large_exhausted`. All preserve ordered failed attempts and forbid
 a final served claim.
 
