@@ -544,3 +544,29 @@ def test_npm_archive_root_name_is_not_package_identity(tmp_path, archive_root):
     terms, _, files = _native_license_terms("npm", package, tmp_path, False)
     assert terms == ["MIT"]
     assert files[0]["name"] == f"{archive_root}/LICENSE"
+
+
+def test_wheel_license_evidence_does_not_use_a_longer_version_prefix(tmp_path):
+    _wheel(tmp_path, "example", "1.0.1", ["License-Expression: MIT"])
+    terms, _, _ = _artifact_license_terms(tmp_path, "example", "1.0")
+    assert terms == []
+
+
+@pytest.mark.parametrize("malformation", ["identity", "duplicate_metadata", "foreign_license", "ambiguous_wheels"])
+def test_wheel_license_evidence_refuses_ambiguous_or_foreign_identity(tmp_path, malformation):
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    if malformation == "identity":
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr("example-1.0.dist-info/METADATA",
+                             "Name: another\nVersion: 1.0\nLicense-Expression: MIT\n")
+    elif malformation == "ambiguous_wheels":
+        (tmp_path / "example-1.0-cp312-cp312-linux_x86_64.whl").write_bytes(wheel.read_bytes())
+    else:
+        with zipfile.ZipFile(wheel, "a") as archive:
+            if malformation == "duplicate_metadata":
+                archive.writestr("another-1.0.dist-info/METADATA",
+                                 "Name: another\nVersion: 1.0\nLicense-Expression: MIT\n")
+            else:
+                archive.writestr("another-1.0.dist-info/LICENSE", "MIT License")
+    with pytest.raises(InventoryError):
+        _artifact_license_terms(tmp_path, "example", "1.0")

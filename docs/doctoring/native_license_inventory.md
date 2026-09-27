@@ -92,3 +92,45 @@ is inferred from these local results.
 Native scan `full-inventory.json` SHA256: `8aad87013314e782d813865552e644797bb49bfb491f265c6e13b4ead707f887`.
 
 Native scan `full-classification.json` SHA256: `d8a491278a94f7c78c813bf62f0806297fc41b6b9ab61beb4cddc5edb776d4a4`.
+
+## Publisher and Python artifact follow-up (2026-09-27)
+
+`tiktoken-rs` 0.7.0 really omits the license instrument: its explicit package
+include list contains assets, source and README only. Its archived VCS record
+names commit `7c20dc69d6d71efceecd20daa7067fa92edea3ba`; that revision's root
+MIT text has SHA256 `f7c6ddf9d84fd7b8ad5917e4074d4c05e4c1dfb752a28a0058f06bd0f5e2edcc`.
+This is not enough to prove binary/archive provenance: Cargo documents the VCS
+record as best-effort, not verified. The shipped 0.7.0 archive stays held.
+
+Upstream main `72a5a800651a1cea1ad609292446ba02c80e3bcd` still omits the file.
+An isolated one-line repair, `license-file = "../LICENSE"`, changed
+`cargo +1.98.0 package --list --offline` from 20 files without LICENSE to 21
+with LICENSE. A real `cargo package --allow-dirty --no-verify` then produced
+an unpublished 0.12.1 archive with that exact root license text. Package code
+was not built or run. Offline archive creation failed on an uncached optional
+index entry; ordinary index resolution followed by no-verify packaging exited
+0. This is packaging proof, not a published dependency replacement or API
+compatibility proof. No third-party archive/checksum was rewritten. Posting
+that patch to the external upstream awaits explicit messaging authorization.
+
+On protected-main snapshot `aaa4dfdd9d3744f303436ae23e67cf0e06536347`,
+requirements.lock and requirements-security-ci.txt were downloaded with
+`pip download --require-hashes --no-deps --only-binary=:all:` for CPython 3.12
+Linux wheels. Nothing was installed. Of the complete 121-entry Python union,
+65 were permitted, 3 carried GPL-family declarations and 53 remained held
+(unstaged or unmatched evidence). The three declared findings are psycopg,
+psycopg-binary (the existing #1225 owner) and chardet 5.2.0 in the security
+CI toolchain. CI-tool scope is not exempted. This is not all-Python clearance.
+
+The wheel reader previously selected a longer-version filename prefix and
+accepted another distribution's metadata/instrument or the first of multiple
+wheel variants. Five RED cases reproduced these defects. The repair requires
+an exact filename version boundary, one wheel and one METADATA record,
+matching normalized Name/exact Version, and license files under that same
+distribution's metadata root. All inventory callers use the repaired reader.
+The combined inventory/classifier/workflow/install-gate command passed 199
+tests, exit 0, with the inherited minimal-interpreter config warning retained.
+No hosted or release acceptance is claimed.
+
+Primary contracts: [Cargo package and VCS limitations](https://doc.rust-lang.org/cargo/commands/cargo-package.html),
+[Python wheel metadata layout](https://packaging.python.org/en/latest/specifications/binary-distribution-format/).
