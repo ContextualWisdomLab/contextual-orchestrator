@@ -74,3 +74,22 @@ one npm hold, leaving 153 held entries. Of the remaining npm holds, 128 have no
 license text in their exact archives and seven need further instrument/scope
 evidence. Glob's instrument explicitly excludes its `src/` scope; it remains
 held. No platform package inherits its parent's permission.
+
+## Explicit complete MIT/Apache metadata set
+
+sniffio 1.3.1 declares `MIT OR Apache-2.0`, `MIT License` and
+`Apache Software License`, and contains a selection notice plus complete MIT
+and Apache grants. The notice and MIT grant were read in full; comparison of
+the complete Apache grant with the previously reviewed instrument differs only
+in the two HTTP/HTTPS links. Exact full hashes are pinned independently.
+
+The reviewed set recognizes exactly these three metadata terms and all three
+complete instruments. It does not coerce unknown aliases or permit an
+unrecognized notice. Missing either grant, notice-only, additional GPL or an
+altered notice remains rejected. The wheel SHA-256 is
+`2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2`.
+Complete texts are retained as `sniffio-instrument-*.txt` fixtures.
+
+The prior matcher rejects this real complete set. All 211 affected tests pass;
+actual inventory changes exactly sniffio 1.3.1: 361 permitted, zero copyleft,
+152 held. Linux installed-pair execution is still separate and pending.

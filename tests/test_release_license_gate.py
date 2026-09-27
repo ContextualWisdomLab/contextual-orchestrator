@@ -742,3 +742,22 @@ def test_complete_blueoak_markdown_variant_preserves_all_terms():
     assert " ".join(rendered.split()) == " ".join(canonical.split())
     assert _declaration_matches_text(["BlueOak-1.0.0"], [{"text": text}])
     assert not _declaration_matches_text(["BlueOak-1.0.0"], [{"text": text + "Commercial use forbidden."}])
+
+
+@pytest.mark.parametrize("change", ["none", "missing-mit", "missing-apache", "notice-only", "extra", "changed"])
+def test_complete_multi_term_instrument_set(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / f"sniffio-instrument-{i}.txt").read_text() for i in range(3)]
+    if change == "missing-mit":
+        del texts[2]
+    elif change == "missing-apache":
+        del texts[1]
+    elif change == "notice-only":
+        texts = texts[:1]
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "changed":
+        texts[0] += "Commercial use forbidden."
+    terms = ["MIT OR Apache-2.0", "MIT License", "Apache Software License"]
+    assert _declaration_matches_text(terms, [{"text": t} for t in texts]) is (change == "none")

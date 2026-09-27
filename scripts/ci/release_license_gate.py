@@ -362,6 +362,11 @@ _REVIEWED_INSTRUMENT_SETS = {
         '59d8f0ba87ad9a2f1a431123c8d16646e5b89ba53653e818f16d136d77263c99',
         '13c6a3608faee72d1b3a7aad6d1c8036408ed82d9a28a7cf0ef87d6acc4f91c9',
     }),
+    ('Apache Software License', 'MIT License', 'MIT OR Apache-2.0'): frozenset({
+        '5e776b61ef48708fd6760085a01c9acddc107b6a071f745b5969d1d5a97899d1',
+        '0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645',
+        'dcdd5bec314a2c06621a42d529b6c1e6705301c076bb641fff909129fbca8897',
+    }),
 }
 
 
@@ -382,8 +387,9 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
     if not texts or len(texts) != len(license_files):
         # A record with an empty or non-dict licence entry is incomplete.
         return False
-    if len(terms) == 1 and terms[0] in _REVIEWED_INSTRUMENT_SETS:
-        required = _REVIEWED_INSTRUMENT_SETS[terms[0]]
+    reviewed_key = terms[0] if len(terms) == 1 else tuple(sorted(terms))
+    if reviewed_key in _REVIEWED_INSTRUMENT_SETS:
+        required = _REVIEWED_INSTRUMENT_SETS[reviewed_key]
         actual = {hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
                   for text in texts}
         return len(texts) == len(required) and actual == required
