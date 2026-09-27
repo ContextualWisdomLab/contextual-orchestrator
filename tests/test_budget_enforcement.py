@@ -274,7 +274,8 @@ def test_http_over_budget_returns_429() -> None:
             with urllib.request.urlopen(request, timeout=5) as response:
                 status, body = response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            status, body = exc.code, json.loads(exc.read().decode("utf-8"))
+            with exc:
+                status, body = exc.code, json.loads(exc.read().decode("utf-8"))
     finally:
         server.shutdown()
         server.server_close()
