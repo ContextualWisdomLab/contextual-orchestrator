@@ -7148,26 +7148,27 @@ suite: 3663 passed, 1 skipped, 5 known local-only failures (the openai SDK
 `python -m interrogate -v contextual_orchestrator/` remains 100% (no production
 code touched).
 
-## 2026-09-27 Proposed multi-model selection authority repair — PR #1267
+## 2026-09-27 Proposed multi-model authority boundary — PR #1267
 
-**Observed exact-head gap.** PR #1267 head `a4183535` added a new decision
-surface whose documentation explicitly described plurality `min_support` and
-rank tie-breaking as repository choices rather than results of its cited
-self-consistency algorithm. `ScoredBestOfN` also used rank when the scorer's
-maximum tied. The fan-out API required every caller to supply a finite
-wall-clock deadline, contradicting the default-null upstream-completion
-boundary. These affect answer admission, model selection, and termination, so
-they cannot remain uncalibrated policy controls.
+**Observed exact-head gap.** Exact head `0aab320e` exposed answer selection
+through caller rank, cross-worker plurality, and an arbitrary float scorer.
+It also accepted caller-selected proposer sets and concurrency. The cited
+self-consistency study samples one model, while the PR's own doctoring stated
+that real providers have correlated errors and that no live paired evidence
+exists. The scorer port carried no released fast-mlsirm schema, calibration
+identity, uncertainty, or provenance. Fan-out carried no Fugu/Conductor/
+TRINITY-compatible allocation receipt.
 
-**Action and evidence.** RED `e34a038b` records 12 focused failures for the
-missing contracts. GREEN `0940e654` removes `min_support`, selects only a
-unique plurality mode, abstains on equal maximum scores, and makes
-`deadline_seconds=None` the default. A finite proposer deadline remains an
-explicit administrative input; the completion port owns actual upstream
-cancellation. Focused combination/fan-out tests are 58/58 GREEN and the four
-changed Python files compile. Status remains **Proposed / PR-head only** until
-exact-head hosted Security and Quality checks and an independent approval are
-terminal GREEN; no merge or release claim follows from local evidence.
+**Decision.** Tie abstention did not establish selection authority. RED
+`a6ea21ab` proves the unreleased selection and allocation modules remained
+importable. The safe boundary is deletion: the Proposed modules, synthetic
+mechanism claim, tests, and stale paper mapping are removed while the
+independent constant-SQL and CI dependency/toolchain repairs remain intact.
+Reintroduction requires an immutable owner contract, released fast-mlsirm
+evidence, typed `no_decision`, explicit allocation provenance, and a paired
+evaluation against the best single worker. Status remains **Proposed / PR-head
+only** until exact-head hosted Checks and independent approval are terminal
+GREEN.
 
 ## 2026-09-14 Generated-plan step bound origin (section 3.1 / 5.1 fidelity)
 
