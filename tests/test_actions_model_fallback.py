@@ -390,6 +390,82 @@ def test_http_virtual_free_tools_reselect_worker_on_retryable_failure() -> None:
     assert _TOOLS in client.tool_payloads
 
 
+def test_http_virtual_free_tool_session_continues_after_failover() -> None:
+    """A caller can execute a returned tool and continue on the serving worker."""
+
+    class ToolSessionClient(_ToolCallClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.messages_seen: list[list[dict[str, Any]]] = []
+
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: Any) -> str:
+            del kwargs
+            self.calls.append(agent.id)
+            self.messages_seen.append(messages)
+            if not any(message.get("role") == "tool" for message in messages):
+                if agent.id == "primary_free_agent":
+                    raise ProviderUpstreamError(
+                        agent_id=agent.id,
+                        model=agent.model,
+                        error_code="server_error",
+                        message="provider failed",
+                        client_status=502,
+                        provider_status=502,
+                        retryable=True,
+                        transport="chat",
+                    )
+                self._extras = {
+                    "tool_calls": [{
+                        "id": "call_inspect",
+                        "type": "function",
+                        "function": {"name": "inspect_repository", "arguments": "{}"},
+                    }],
+                    "finish_reason": "tool_calls",
+                }
+                return ""
+            self._extras = {"finish_reason": "stop"}
+            return "inspection complete"
+
+    client = ToolSessionClient()
+    orchestrator = TaskOrchestrator(_free_agents(), client=client)
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    messages: list[dict[str, Any]] = [{"role": "user", "content": "inspect the repository"}]
+    try:
+        first_status, first, _ = _post(server.server_address[1], {
+            "model": TaskOrchestrator.FREE_MODEL, "messages": messages, "tools": _TOOLS,
+        })
+        assert first_status == 200, first
+        assert isinstance(first, dict)
+        assistant = first["choices"][0]["message"]
+        assert first["choices"][0]["finish_reason"] == "tool_calls"
+        messages.extend([assistant, {
+            "role": "tool", "tool_call_id": assistant["tool_calls"][0]["id"],
+            "content": "repository inspected",
+        }])
+        first_call_count = len(client.calls)
+        second_status, second, _ = _post(server.server_address[1], {
+            "model": TaskOrchestrator.FREE_MODEL, "messages": messages, "tools": _TOOLS,
+        })
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert second_status == 200, second
+    assert isinstance(second, dict)
+    assert second["choices"][0]["message"]["content"] == "inspection complete"
+    first_attempts = first["orchestration"]["route"]["attempted"]
+    assert [attempt["agent_id"] for attempt in first_attempts] == client.calls[:first_call_count]
+    assert all(attempt["outcome"] == "retryable_transport" for attempt in first_attempts[:-1])
+    assert first_attempts[-1]["outcome"] == "served"
+    assert client.calls[first_call_count] == "fallback_free_agent"
+    assert client.messages_seen[first_call_count][-1]["content"] == "repository inspected"
+
+
 def test_http_virtual_chat_completions_stream_has_no_responses_reasoning_events() -> None:
     """Chat Completions cannot carry Responses think/reasoning events."""
     orchestrator = TaskOrchestrator(_free_agents())
