@@ -183,6 +183,14 @@ def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     return packages
 
 
+def _is_license_evidence(path: PurePosixPath) -> bool:
+    """Select candidate instruments and provenance, never infer their grant."""
+    if path.suffix.lower() in (".py", ".pyi", ".pyc", ".pyo", ".so", ".pyd", ".js", ".mjs", ".cjs", ".ts", ".rs", ".c", ".h", ".cpp"):
+        return False
+    name = path.name.upper()
+    return name.startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")) or name.endswith((".LICENSE", ".LICENCE", ".ABOUT"))
+
+
 def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list[dict[str, Any]]:
     """Read the root and every bundled Python distribution from one wheel."""
     normalized = _NAME_SEPARATORS.sub("_", name.strip().lower())
@@ -221,9 +229,9 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
         unscoped_license_files = []
         for member in members:
             path = PurePosixPath(member)
-            if archive.getinfo(member).is_dir() or path.suffix.lower() in (".py", ".pyi", ".pyc", ".pyo", ".so", ".pyd") or any(part.endswith(".dist-info") for part in path.parts):
+            if archive.getinfo(member).is_dir() or any(part.endswith(".dist-info") for part in path.parts):
                 continue
-            if path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")) or path.name.upper().endswith((".LICENSE", ".LICENCE", ".ABOUT")):
+            if _is_license_evidence(path):
                 if archive.getinfo(member).file_size > _NATIVE_TEXT_LIMIT:
                     raise InventoryError("wheel package-body licence exceeds text evidence limit")
                 raw = archive.read(member)
@@ -419,9 +427,7 @@ def _native_license_terms(
             expanded += member.size
             if expanded > 2 * 1024 * 1024 * 1024:
                 raise InventoryError("native archive exceeds the 2 GiB expanded evidence limit")
-            selected = str(path) == f"{prefix}/{metadata_name}" or path.name.upper().startswith(
-                ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")
-            )
+            selected = str(path) == f"{prefix}/{metadata_name}" or _is_license_evidence(path)
             if not member.isfile() or not selected:
                 continue
             if str(path) in files or member.size > _NATIVE_TEXT_LIMIT:

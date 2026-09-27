@@ -855,3 +855,28 @@ def test_package_body_license_evidence_cannot_be_hidden_by_root_metadata(tmp_pat
     groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": records}]})
     assert not groups["permitted"]
     assert "package-body license scope unresolved" in groups["undecidable"][0]["license"]
+
+
+@pytest.mark.parametrize("ecosystem", ["cargo", "npm"])
+def test_native_suffix_instruments_cannot_be_omitted(tmp_path, ecosystem):
+    from scripts.ci.dependency_inventory import _native_license_terms
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    prefix = "example-1.0" if ecosystem == "cargo" else "package"
+    payloads = {
+        f"{prefix}/data/extra.LICENSE": "separately scoped terms",
+        f"{prefix}/data/index.ABOUT": "about_resource: index.json\nlicense_expression: LicenseRef-unknown\n",
+        f"{prefix}/license.js": "// source module, not a grant\n",
+        f"{prefix}/license.rs": "// source module, not a grant\n",
+    }
+    package, _ = _native_archive(tmp_path, ecosystem, "example", "1.0",
+                                "Permission is hereby granted, free of charge.", extra=payloads)
+    terms, source, files = _native_license_terms(ecosystem, package, tmp_path, False)
+    assert {f["name"] for f in files} == {f"{prefix}/LICENSE", *list(payloads)[:2]}
+    for f in files:
+        if f["name"] in payloads:
+            assert f["sha256"] == hashlib.sha256(payloads[f["name"]].encode()).hexdigest()
+    package.update(licenses=terms, license_source=source, license_files=files)
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": ecosystem, "packages": [package]}]})
+    assert not groups["permitted"]
+    assert groups["undecidable"]

@@ -431,3 +431,22 @@ The retained full inventory still classifies 370 permitted, zero copyleft and
 tests afterward. This does not cover every arbitrary instrument filename or
 source-header grant. Receipt:
 `evidence/release/1083/package_body_license_collection.json`.
+
+### Shared Cargo/npm instrument selection
+
+The native archive selector had the same suffix omission as the wheel path,
+and incorrectly treated source modules named license.js/license.rs as license
+instruments. Wheel package-body and Cargo/npm collection now reuse one candidate
+selector: known instrument prefixes and .LICENSE/.LICENCE/.ABOUT suffixes,
+excluding common source/binary module extensions. Explicit Cargo license-file
+paths remain authoritative and keep their independent bounded read validation.
+No identity, digest, archive path, link, size or registry-origin gate changed.
+
+Both Cargo/npm regression cases fail before repair and the affected suites
+pass 258 tests afterward. A fresh offline scan verified 388 cached registry
+archives against their lock digests and recovered seven suffix instruments
+from lz-string, playwright and playwright-core. No old evidence files were
+removed in that actual scan. No registry download or package hook was executed.
+The retained full inventory remains 370 permitted, zero copyleft and 143 held;
+this is collection evidence, not complete bundled-code license clearance.
+Receipt: `evidence/release/1083/native_instrument_selector.json`.
