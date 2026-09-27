@@ -55,3 +55,15 @@ def test_gateway_build_copies_complete_rust_workspace(tmp_path) -> None:
         root = tmp_path / "rust" / member
         manifest = tomllib.loads((root / "Cargo.toml").read_text())
         assert (root / manifest["package"]["license-file"]).read_bytes() == Path("LICENSE").read_bytes()
+
+
+def test_container_lock_admits_locked_linux_python312_numpy_wheels() -> None:
+    """Both Linux architectures can use the reviewed NumPy wheel artifacts."""
+    packages = tomllib.loads(Path("uv.lock").read_text())["package"]
+    numpy = next(package for package in packages if package["name"] == "numpy")
+    requirements = Path("requirements.lock").read_text()
+    wheels = [wheel for wheel in numpy["wheels"]
+              if "cp312-cp312-manylinux" in wheel["url"]]
+    assert wheels
+    for wheel in wheels:
+        assert f"--hash={wheel['hash']}" in requirements
