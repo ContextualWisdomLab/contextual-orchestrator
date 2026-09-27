@@ -7334,8 +7334,42 @@ before the call and revalidated under the same lock before mutation and
 persistence, so stale observations remain fail-closed without holding a shared
 lock across network I/O. The concurrent retirement regression test was RED on
 the reviewed head and GREEN after the change; the three affected test modules
-then reported `121 passed`. The existing pytest configuration warning and
-deprecated `logistic_dif_purified` call remain separate tracked debt. Hosted
+then reported `121 passed`. The released fast-mlsirm consumer update below
+replaces the deprecated DIF call with `detect_dif_logistic_purified` and removes
+the stale pytest-asyncio option that emitted an unknown-configuration warning
+without the plugin. Hosted
 exact-head checks and independent approval remain required; status stays
 Proposed. All three reviewed threads are resolved and the PR is Ready; queued
 hosted checks are still non-terminal and do not establish merge authority.
+
+## 2026-09-27 PR #1266 lockfile-audit restoration — Proposed
+
+Codex review of successor head `24dd16188ca679a06caba1a4682feabe973ffa86`
+found that the Python supply-chain job audited only the environment installed
+from `uv.lock`, although repository governance defines `requirements.lock` as
+the audit authority. The two locks could diverge while the gate remained GREEN.
+The previous `requirements.lock` audit had been replaced because its
+commit-pinned fast-mlsirm VCS requirement could not participate in pip's hash
+checking mode.
+
+The canonical owner has since published immutable
+[fast-mlsirm v0.11.4](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
+from commit `e44b52d851596910dc7a8fa3f174f2aff03872fa`, 399 commits after the
+consumer's old `09f762ded35786dd1078222a4577ff09d649816f` pin. This repair bumps
+the consumer to exact `fast-mlsirm==0.11.4`, regenerates `uv.lock` and the
+hash-complete `requirements.lock`, and restores
+`pip_audit --require-hashes -r requirements.lock`. The CycloneDX artifact still
+describes the installed `.venv`, so lockfile vulnerability admission and
+runtime SBOM evidence remain separate. RED showed both the weakened workflow
+and VCS dependency contract. The first restored full audit then found
+`anyio==4.14.1` vulnerable to CVE-2026-63374, CVE-2026-64847, and
+CVE-2026-63349; regenerating the audit lock upgraded the package to the fixed
+`anyio==4.14.2`. GREEN resolved and hash-validated all 46 locked packages and
+reported no known vulnerabilities; `uv lock --check` passed and the synced
+environment reports `fast-mlsirm 0.11.4`. The constrained Atheris and property
+fuzz locks were regenerated with the runtime lock so their common
+`typing-extensions==4.16.0` pin remains jointly installable. The held-out DIF
+benchmark uses the release's non-deprecated `detect_dif_logistic_purified`
+entry point, records that exact method identity and its explicit compatibility
+configuration, and emits neither predecessor warning. Fresh exact-head hosted Security,
+CodeQL, Semgrep, and review results remain required; status stays Proposed.
