@@ -394,3 +394,18 @@ Full-suite and protected delivery remain unverified.
 
 The repaired ten-module suite improved to 272 passed, 2 failed (148.26s).
 One late 503 response owner was `test_timeout_history_read_requires_durable_authorization_audit`: its `pytest.raises` retained the real urllib response without closing it. Closing that test-owned handle in `finally` preserves assertion failures. Focused `tests/test_model_timeout_policy.py` then returned 52 passed in 48.61s, exit 0, with the same strict-warning command prefix. A late 401 owner remains under allocation tracing; the expanded suite is not clean acceptance.
+
+The late 401 was a production consumer defect, reproduced independently with
+`test_local_candidate_registry_keeps_all_discovered_entries` (1 failed, 2.64s).
+Creation-stack instrumentation bound it to `_select_agent` → semantic affinity
+→ `_embed_cached` → `embed_with_usage` → `_send_raw` → the actual loopback
+embedding response at port 8082. This is distinct from test listener cleanup.
+Both task-vector and descriptor-vector consumers now close direct HTTPError
+responses they convert to unavailable evidence, while cleanup Exception cannot
+replace that outcome. Propagated provider errors retain caller ownership.
+Four regressions cover both consumers and cleanup success/failure.
+The measured-routing module plus the original catalog reproduction returned
+38 passed in 2.59s, exit 0, with strict warnings. The diagnostic two-module
+tracemalloc run also exposed an HTTP client timeout under tracing overhead;
+it is not evidence of a security assertion defect. Full-suite acceptance
+remains pending.

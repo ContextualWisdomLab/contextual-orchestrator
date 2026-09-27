@@ -10871,6 +10871,12 @@ class TaskOrchestrator:
         try:
             with observe_auxiliary_dispatch([embedding_member], "routing_evidence_embedding"):
                 vectors = self.client.embed(self._agent(embedding_member), [text])
+        except urllib.error.HTTPError as exc:
+            try:
+                exc.close()
+            except Exception:
+                pass  # Preserve the unavailable evidence outcome.
+            return None
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -10901,6 +10907,12 @@ class TaskOrchestrator:
                 vectors = self.client.embed(
                     self._agent(embedding_member), [self._agent_descriptor_text(agent)]
                 )
+        except urllib.error.HTTPError as exc:
+            try:
+                exc.close()
+            except Exception:
+                pass  # Preserve the unavailable evidence outcome.
+            return None
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
