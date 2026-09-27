@@ -1,0 +1,17 @@
+{
+  "defect_source": "stacked native licence declarations, not current main",
+  "red": {
+    "tool": "76fc12",
+    "exit": 1,
+    "message": "license file ../../LICENSE resolves outside Cargo workspace root"
+  },
+  "repair": "Both workspace crates reference ../LICENSE; rust/LICENSE equals root MIT instrument byte for byte.",
+  "green": {
+    "decision_wheel_tool": "28b438",
+    "exit": 0,
+    "wheel_sha256": "f13322a44b01d5c8f2f0da7c4b2d8e9fc523e29e31673d96f414225841d1cd29",
+    "instrument_verification": "c8d6e6",
+    "tests": "9a8216 exit0: 261 passed"
+  },
+  "limits": "Token-packer build and whole integrated source suite pending. Not immutable publication or complete dependency clearance."
+}
