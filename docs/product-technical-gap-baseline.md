@@ -7799,3 +7799,27 @@ evidence, not hosted checks or independent approval.
 Ledger: loop `1016-main-refresh`, parent `1016`, owner #1266 integration,
 status locally verified; next_action push once and restack descendants, then
 verify current-head CI/review; return_to #1016 protected/versioned contract.
+
+## 2026-09-27 full-suite contract drift repair — Proposed
+
+At #1231 `4bfe89a9`, the CI full-test command with Python 3.12 and the
+locked decision extension ended **4 failed, 5344 passed, 5 skipped**, exit 1
+(session `54149`, 286.58s; log `/private/tmp/co-1231-full-suite-4bfe89a9.log`).
+The skips concern the separate tokenizer extension. This is not full-suite
+success or strict-warning acceptance.
+
+The two text/image tests expected synthetic recovery for headerless 429;
+their unavailable-timing rows now assert 429 and one call per candidate while
+provider-timed recovery remains tested. The subprocess shutdown test assumed
+a memory-only job remained running after close; it now asserts cancellation
+and terminal visibility while the provider runner remains genuinely stalled,
+preserving the normal-process-exit proof. These parent-owned corrections passed
+24 strict tests across image storms, process exit, HTTP wait and batch routing
+(session `48689`). No production policy or provider timeout changed.
+
+The separate #1231 stream assertion expected silent success without DONE;
+its focused successor retains both partial deltas, then asserts typed
+provider_stream_incomplete and retryable false. Client-boundary and streaming
+suites passed 88 strict tests (session `31181`). Current-head hosted full
+tests and independent review remain required; prior whole-suite counts are
+historical evidence, never transferred into a green claim.
