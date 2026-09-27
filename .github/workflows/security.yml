@@ -245,9 +245,7 @@ jobs:
       - name: Audit pinned dependencies and generate SBOM
         run: |
           set -euo pipefail
-          audit_lock="${RUNNER_TEMP}/requirements-audit.txt"
-          python scripts/ci/prepare_runtime_lock_audit.py requirements.lock uv.lock "$audit_lock"
-          python -m pip_audit --require-hashes --no-deps --disable-pip -r "$audit_lock"
+          python -m pip_audit --require-hashes -r requirements.lock
           python -m pip_audit --path .venv/lib/python3.12/site-packages
           cyclonedx-py environment .venv/bin/python --output-format json --output-file cyclonedx-sbom.json
 
