@@ -18,7 +18,7 @@ RUN apt-get update \
 COPY --from=maturin-tools /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=maturin-tools /usr/bin/maturin /usr/local/bin/maturin
 COPY requirements.lock /build/requirements.lock
-COPY rust/Cargo.toml rust/Cargo.lock rust/LICENSE /build/rust/
+COPY rust/Cargo.toml rust/Cargo.lock /build/rust/
 COPY rust/token_counter/ /build/rust/token_counter/
 COPY rust/decision_receipt/ /build/rust/decision_receipt/
 COPY contextual_orchestrator/ /build/contextual_orchestrator/
