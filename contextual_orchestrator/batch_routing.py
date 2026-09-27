@@ -1350,8 +1350,8 @@ class ProviderEmbeddingBatchBackend:
     def wait(self, job: BatchJob, *, timeout: float | None) -> Dict[str, Any]:
         """Wait within the caller's explicit deadline for a terminal state.
 
-        ``timeout`` may be ``None`` or ``float("inf")`` when the caller has no wall-clock
-        deadline (contextual-orchestrator's no-implicit-deadline default);
+        ``timeout`` may be ``None`` or ``float("inf")`` when the caller has no
+        wall-clock deadline (contextual-orchestrator's no-implicit-deadline default);
         ``threading.Event.wait`` cannot accept non-finite values or finite
         values above ``threading.TIMEOUT_MAX``. Keep the caller's deadline
         while waiting in platform-bounded intervals.

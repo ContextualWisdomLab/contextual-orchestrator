@@ -436,12 +436,15 @@ def test_server_shutdown_closes_embedding_workers() -> None:
         coordinator=coordinator,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread.start()
 
-    server.shutdown()
-    thread.join(timeout=1)
+        server.shutdown()
+        thread.join(timeout=1)
 
-    assert backend.closed is True
+        assert backend.closed is True
+    finally:
+        server.server_close()
 
 
 def test_server_close_closes_embedding_workers_after_abnormal_exit() -> None:
