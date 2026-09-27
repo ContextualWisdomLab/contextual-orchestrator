@@ -661,3 +661,22 @@ def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkey
     else:
         assert package["license_files"] == [{"name": "LICENSE", "sha256": hashlib.sha256(raw).hexdigest(),
                                             "text": raw.decode("utf-8")}]
+
+
+@pytest.mark.parametrize("empty_file", [False, True])
+def test_wheel_license_directory_is_not_an_empty_instrument(tmp_path, empty_file):
+    """ZIP directories are structure; an empty regular licence still holds."""
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example-1.0.dist-info/licenses/", b"")
+        archive.writestr("example-1.0.dist-info/licenses/LICENSE",
+                         "Permission is hereby granted, free of charge")
+        if empty_file:
+            archive.writestr("example-1.0.dist-info/licenses/NOTICE", b"")
+    terms, _, files = _artifact_license_terms(tmp_path, "example", "1.0")
+    assert {file['name'] for file in files} == ({"LICENSE", "NOTICE"} if empty_file else {"LICENSE"})
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": [
+        {"name": "example", "version": "1.0", "licenses": terms, "license_files": files}]}]})
+    assert bool(groups["permitted"]) is not empty_file

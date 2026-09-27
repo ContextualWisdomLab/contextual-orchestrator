@@ -223,6 +223,8 @@ def _artifact_license_terms(
         terms = _metadata_license_terms(metadata)
         distribution_root = metadata_path.removesuffix("METADATA")
         for member in archive.namelist():
+            if archive.getinfo(member).is_dir():
+                continue
             if ".dist-info/" in member and Path(member).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE")
             ):
