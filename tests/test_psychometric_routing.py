@@ -1399,6 +1399,61 @@ def test_empty_pool_retention_discards_evidence_without_catalog_validation() -> 
         orchestrator.close()
 
 
+def test_slow_observation_embedding_does_not_block_candidate_retirement(monkeypatch) -> None:
+    """A slow embedding must not hold up pool changes or revive a removed member."""
+    agent = ModelAgent("departing_agent", "model-departing")
+    orchestrator = TaskOrchestrator([agent])
+    entered = threading.Event()
+    release = threading.Event()
+    retiring = threading.Event()
+    retired = threading.Event()
+    errors: list[Exception] = []
+
+    def slow_embedding(_text: str) -> list[float]:
+        entered.set()
+        assert release.wait(timeout=5)
+        return [1.0]
+
+    def observe() -> None:
+        try:
+            orchestrator._observe_contextual_quality(
+                "departing context", agent.id, accepted=True,
+                latency_seconds=None, output_tokens=None,
+            )
+        except Exception as error:
+            errors.append(error)
+
+    def retire() -> None:
+        try:
+            retiring.set()
+            orchestrator._retain_psychometric_candidates()
+        except Exception as error:
+            errors.append(error)
+        finally:
+            retired.set()
+
+    monkeypatch.setattr(orchestrator, "_embed_cached", slow_embedding)
+    observer = threading.Thread(target=observe)
+    retainer = threading.Thread(target=retire)
+    observer.start()
+    try:
+        assert entered.wait(timeout=5)
+        orchestrator.candidates = []
+        retainer.start()
+        assert retiring.wait(timeout=5)
+        assert retired.wait(timeout=1)
+    finally:
+        release.set()
+        observer.join(timeout=5)
+        if retainer.ident is not None:
+            retainer.join(timeout=5)
+        orchestrator.close()
+
+    assert not observer.is_alive() and not retainer.is_alive()
+    assert errors == []
+    assert orchestrator._psychometric_router.records() == []
+
+
 def test_changed_deployment_cannot_inherit_exact_context_score() -> None:
     """Prevent an obsolete deployment score from overriding current static ordering."""
     old_agent = ModelAgent("reused_agent", "model-old", base_url="https://old.example/v1")

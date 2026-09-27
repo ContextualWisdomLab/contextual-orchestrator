@@ -22,7 +22,7 @@ def test_finite_provider_embedding_wait_returns_before_terminal() -> None:
     release = threading.Event()
 
     def runner(requests):
-        release.wait(timeout=2)
+        release.wait()
         return [[1.0] for _request in requests], len(requests)
 
     backend = ProviderEmbeddingBatchBackend(runner)

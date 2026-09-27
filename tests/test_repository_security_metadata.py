@@ -1,6 +1,10 @@
 import re
 from pathlib import Path
 
+import pytest
+
+from scripts.ci.prepare_runtime_lock_audit import prepare_runtime_lock_audit
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
@@ -63,6 +67,8 @@ def test_security_workflow_covers_core_repository_security_process():
         "uv pip install --python .venv/bin/python --require-hashes -r requirements-opencode-review-ci.txt",
         "uv pip install --python .venv/bin/python --require-hashes -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt",
         "python -m pip_audit --path .venv/lib/python3.12/site-packages",
+        "python -m pip_audit --require-hashes --no-deps --disable-pip -r",
+        "prepare_runtime_lock_audit.py requirements.lock uv.lock",
         "cyclonedx-py environment .venv/bin/python",
         "uv build --wheel --out-dir dist",
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
@@ -267,6 +273,42 @@ def test_security_tool_lockfile_uses_hash_pinning():
     assert "--hash=sha256:" in lock_text
     assert "pip-audit==2.10.1" in lock_text
     assert "cyclonedx-bom==7.3.0" in lock_text
+
+
+def test_runtime_lock_audit_keeps_every_unexpected_requirement(tmp_path):
+    """Only the one exact VCS pin may leave the hashed lock audit input."""
+    source = tmp_path / "requirements.lock"
+    uv_lock = tmp_path / "uv.lock"
+    output = tmp_path / "audit.txt"
+    vcs_pin = (
+        "fast-mlsirm @ git+https://github.com/ContextualWisdomLab/"
+        "fast-mlsirm.git@09f762ded35786dd1078222a4577ff09d649816f\n"
+    )
+    retained = "anyio==4.14.2 --hash=sha256:" + "a" * 64 + "\n"
+    unexpected = "other @ git+https://example.org/other.git@1234567890\n"
+    source.write_text(retained + vcs_pin + unexpected, encoding="utf-8")
+    uv_lock.write_text(
+        '[[package]]\nname = "fast-mlsirm"\n'
+        'source = { git = "https://github.com/ContextualWisdomLab/'
+        'fast-mlsirm.git?rev=09f762ded35786dd1078222a4577ff09d649816f'
+        '#09f762ded35786dd1078222a4577ff09d649816f" }\n',
+        encoding="utf-8",
+    )
+
+    prepare_runtime_lock_audit(source, uv_lock, output)
+    assert output.read_text(encoding="utf-8") == retained + unexpected
+
+    for malformed in (retained, retained + vcs_pin[:-41] + "short\n", retained + vcs_pin * 2):
+        source.write_text(malformed, encoding="utf-8")
+        output.unlink(missing_ok=True)
+        with pytest.raises(ValueError, match="one pinned fast-mlsirm source"):
+            prepare_runtime_lock_audit(source, uv_lock, output)
+        assert not output.exists()
+
+    source.write_text(retained + vcs_pin, encoding="utf-8")
+    uv_lock.write_text('[[package]]\nname = "fast-mlsirm"\nsource = { git = "wrong" }\n')
+    with pytest.raises(ValueError, match="same fast-mlsirm source"):
+        prepare_runtime_lock_audit(source, uv_lock, output)
 
 
 if __name__ == "__main__":  # pragma: no cover
