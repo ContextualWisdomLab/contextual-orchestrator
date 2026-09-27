@@ -370,6 +370,15 @@ _REVIEWED_INSTRUMENT_SETS = {
 }
 
 
+# Exact complete grant plus attribution; single-instrument grants keep their path.
+_REVIEWED_ATTRIBUTION_SETS = frozenset({
+    (("Apache Software License", "Apache-2.0"), frozenset({
+        "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
+        "b70d362542e47e70df8e7ae570c48dee966450e73d06bdf236edf9446165e5e3",
+    })),
+})
+
+
 def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> bool:
     """Whether the bundled licence text evidences a declared, non-copyleft term.
 
@@ -388,10 +397,12 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
         # A record with an empty or non-dict licence entry is incomplete.
         return False
     reviewed_key = terms[0] if len(terms) == 1 else tuple(sorted(terms))
+    actual = frozenset(hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+                       for text in texts)
+    if len(texts) == len(actual) and (reviewed_key, actual) in _REVIEWED_ATTRIBUTION_SETS:
+        return True
     if reviewed_key in _REVIEWED_INSTRUMENT_SETS:
         required = _REVIEWED_INSTRUMENT_SETS[reviewed_key]
-        actual = {hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
-                  for text in texts}
         return len(texts) == len(required) and actual == required
     evidenced = False
     canonical_terms = set(terms) & _CANONICAL_TEXT_HASHES.keys()

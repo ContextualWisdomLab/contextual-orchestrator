@@ -761,3 +761,25 @@ def test_complete_multi_term_instrument_set(change):
         texts[0] += "Commercial use forbidden."
     terms = ["MIT OR Apache-2.0", "MIT License", "Apache Software License"]
     assert _declaration_matches_text(terms, [{"text": t} for t in texts]) is (change == "none")
+
+
+@pytest.mark.parametrize("change", ["none", "notice-only", "missing-notice", "changed", "grant-changed", "extra", "duplicate"])
+def test_complete_apache_attribution_set(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / "sniffio-instrument-1.txt").read_text(),
+             (directory / "cyclonedx-notice.txt").read_text()]
+    if change == "notice-only":
+        texts = texts[1:]
+    elif change == "missing-notice":
+        texts = texts[:1]
+    elif change == "changed":
+        texts[1] += "Different attribution."
+    elif change == "grant-changed":
+        texts[0] = texts[0].replace("perpetual", "temporary")
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "duplicate":
+        texts.append(texts[1])
+    terms = ["Apache-2.0", "Apache Software License"]
+    assert _declaration_matches_text(terms, [{"text": t} for t in texts]) is (change in {"none", "missing-notice"})

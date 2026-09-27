@@ -93,3 +93,21 @@ Complete texts are retained as `sniffio-instrument-*.txt` fixtures.
 The prior matcher rejects this real complete set. All 211 affected tests pass;
 actual inventory changes exactly sniffio 1.3.1: 361 permitted, zero copyleft,
 152 held. Linux installed-pair execution is still separate and pending.
+
+## Complete Apache grant and attribution
+
+CycloneDX Python Lib 11.11.0 carries the complete Apache grant, identical after
+whitespace normalization to the previously reviewed Apache fixture, plus a
+NOTICE containing only copyright and community attribution. Exact artifact and
+text digests are recorded in `evidence/release/1083/apache_attribution_set.json`;
+the NOTICE is retained as a fixture. Both full hashes and exactly two files
+are required for this additional path. An altered grant, altered attribution,
+notice-only, extra terms or duplicate file is rejected. Existing single-grant
+archives keep their prior path; no generic notice exemption is added.
+
+The original matcher rejected the actual complete pair. Full retained inventory
+comparison changes exactly CycloneDX: 362 permitted, zero copyleft, 151 held.
+All 207 affected tests pass with process exit 0.
+Requests remains held: its license file omits the Apache appendix and end marker,
+so it is not this complete instrument. This evidence does not waive retained
+notices, establish native/container provenance or authorize release.
