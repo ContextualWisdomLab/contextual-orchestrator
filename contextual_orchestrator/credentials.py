@@ -25,9 +25,12 @@ Backend selection is a bootstrap setting read from
 
 from __future__ import annotations
 
+from contextlib import closing
 import os
 import threading
 from typing import Protocol
+
+from .postgres_connection import PostgresDriverUnavailable, connect_pg8000
 
 
 class NotConfigured(RuntimeError):
@@ -145,18 +148,17 @@ class PostgresCredentialBackend:
 
     def _connect(self):
         try:
-            import psycopg
-        except ImportError as exc:
+            return connect_pg8000(self._dsn)
+        except PostgresDriverUnavailable as exc:
             raise NotConfigured(
-                "PostgresCredentialBackend needs the 'db' extra (psycopg); "
+                "PostgresCredentialBackend needs the 'db' extra (pg8000); "
                 "install contextual-orchestrator[db]"
             ) from exc
-        return psycopg.connect(self._dsn)
 
     def _ensure_schema(self, conn) -> None:
         if self._ensured:
             return
-        with conn.cursor() as cur:
+        with closing(conn.cursor()) as cur:
             cur.execute(CREATE_PROVIDER_CREDENTIALS_SQL)
         conn.commit()
         self._ensured = True
@@ -165,7 +167,7 @@ class PostgresCredentialBackend:
         """Decrypt and return the secret for ``name`` via pgcrypto, or ``None``."""
         with self._connect() as conn:
             self._ensure_schema(conn)
-            with conn.cursor() as cur:
+            with closing(conn.cursor()) as cur:
                 cur.execute(
                     "SELECT pgp_sym_decrypt(encrypted_value, %s) "
                     "FROM provider_credentials WHERE credential_name = %s",
@@ -181,7 +183,7 @@ class PostgresCredentialBackend:
         """Encrypt ``value`` with pgcrypto and upsert it under ``name``."""
         with self._connect() as conn:
             self._ensure_schema(conn)
-            with conn.cursor() as cur:
+            with closing(conn.cursor()) as cur:
                 cur.execute(
                     "INSERT INTO provider_credentials (credential_name, encrypted_value, updated_at) "
                     "VALUES (%s, pgp_sym_encrypt(%s, %s), now()) "
@@ -195,7 +197,7 @@ class PostgresCredentialBackend:
         """Delete one encrypted credential after a failed candidate promotion."""
         with self._connect() as conn:
             self._ensure_schema(conn)
-            with conn.cursor() as cur:
+            with closing(conn.cursor()) as cur:
                 cur.execute(
                     "DELETE FROM provider_credentials WHERE credential_name = %s",
                     (name,),

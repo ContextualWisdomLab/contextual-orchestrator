@@ -95,11 +95,8 @@ class _FakeCursor:
     def execute(self, sql: str, params: tuple[Any, ...]) -> None:
         self._log.append((sql.split()[0], params))
 
-    def __enter__(self) -> "_FakeCursor":
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakeConnection:
