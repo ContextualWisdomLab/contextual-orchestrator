@@ -31,5 +31,31 @@
     }
   ],
   "finding": "Root MPL excludes explicitly noted other projects. Actual pretty.py separately identifies BSD copyright/license; sole packaged license text contains MPL, not a complete BSD grant. Keep held pending exact upstream origin/license and bundled component evidence. CPython copied/adapted annotations are provenance leads, not verified attribution or grant conclusions.",
-  "scan_limit": "Lexical source-header/license/origin scan and targeted excerpts; not complete program/source license audit."
+  "scan_limit": "Lexical source-header/license/origin scan and targeted excerpts; not complete program/source license audit.",
+  "provenance_trace": {
+    "released_tag": "v6.165.10",
+    "released_commit": "6384deef469a88c147dab205f093b2d16d652785",
+    "released_source_path": "hypothesis/src/hypothesis/vendor/pretty.py",
+    "released_source_sha256": "61c6fd35617e46ec4d18d731118e67f4e102c1c713a8bfb59a6a2aa00874bf98",
+    "released_source_equals_actual_wheel_member": true,
+    "initial_vendor_commit": "7f4dd55ff01cbd5e9aa24a500f10dfc8eda91b0f",
+    "initial_vendor_commit_message": "Add pretty printer vendor\n\nThis is based on IPython's, lightly altered and reformatted to\nmeet Hypothesis code standards and dependencies.",
+    "initial_source_path": "src/hypothesis/vendor/pretty.py",
+    "initial_source_sha256": "baa65fbf15fb2773e48ede5e3b5e232bbb577c0350f9d51917a9d49fc78f363e",
+    "rename_commit": "ff5de7032db0ff7dd9632ace489dc2da597e3870",
+    "rename_previous_path": "src/hypothesis/vendor/pretty.py",
+    "rename_path": "hypothesis-python/src/hypothesis/vendor/pretty.py",
+    "ipython_project_origin_confirmed": true,
+    "exact_ipython_origin_revision": null,
+    "contemporaneous_candidate": {
+      "tag": "4.1.2",
+      "tag_object": "3d9313875cb0e0f80a7e09d417befa071ec8bc29",
+      "commit": "b5734353b6d697be2bc4bc98333b0d29462533f9",
+      "tag_date": "2016-03-01T11:33:39Z",
+      "pretty_sha256": "350e6607a6ff6862c025fb80c71d00288d9cce88e1ecf210900b002772b3c61b",
+      "copying_sha256": "a5d87689342ec47cebdf623af06cec734c607666c696fe48271f2ff91752443d",
+      "license": "BSD-3-Clause",
+      "limitation": "Contemporaneous candidate only. No claim this exact IPython revision was copied; no instrument transplanted or retained-artifact clearance."
+    }
+  }
 }

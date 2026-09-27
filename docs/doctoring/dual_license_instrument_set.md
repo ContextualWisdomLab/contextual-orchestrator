@@ -295,3 +295,24 @@ component attribution and any separately applicable distribution terms, then
 verify the actual artifact's complete evidence. No root matcher change or
 license waiver is introduced. The full inventory remains 370 permitted,
 zero copyleft, 143 held; artifact release is still unverified.
+
+### Pretty printer source trace
+
+The retained wheel member equals the source at Hypothesis `v6.165.10`, commit
+6384deef469a88c147dab205f093b2d16d652785, byte for byte. The current path is
+`hypothesis/src/hypothesis/vendor/pretty.py`; checking only the former
+`hypothesis-python/src` path misses current source. Historical rename
+ff5de7032db0ff7dd9632ace489dc2da597e3870 leads back to the original root-src
+path. Initial vendoring commit 7f4dd55ff01cbd5e9aa24a500f10dfc8eda91b0f
+explicitly says the printer is based on IPython with light changes.
+
+The exact IPython origin revision is not stated there. Contemporaneous
+IPython 4.1.2 resolves to b5734353b6d697be2bc4bc98333b0d29462533f9 and
+contains full BSD-3-Clause terms, but this is a candidate, not proved copied
+source. Its source/grant hashes and this limitation are recorded in the same
+receipt. No candidate license was inserted or used to clear the artifact.
+
+Primary history:
+https://github.com/HypothesisWorks/hypothesis/commit/7f4dd55ff01cbd5e9aa24a500f10dfc8eda91b0f
+https://github.com/HypothesisWorks/hypothesis/blob/6384deef469a88c147dab205f093b2d16d652785/hypothesis/src/hypothesis/vendor/pretty.py
+https://github.com/ipython/ipython/blob/b5734353b6d697be2bc4bc98333b0d29462533f9/COPYING.rst
