@@ -134,3 +134,15 @@ No hosted or release acceptance is claimed.
 
 Primary contracts: [Cargo package and VCS limitations](https://doc.rust-lang.org/cargo/commands/cargo-package.html),
 [Python wheel metadata layout](https://packaging.python.org/en/latest/specifications/binary-distribution-format/).
+
+## Wheel directory records (2026-09-27)
+
+The uv-built core wheel and eleven dependency identities were held because the
+collector read a zero-byte `*.dist-info/licenses/` ZIP directory as an empty
+licence instrument. Skip ZIP directory entries using their archive metadata;
+empty regular LICENSE/NOTICE files remain evidence failures, and all foreign
+identity and unknown sibling controls remain intact. Reusing the exact staged
+107-entry Python set changes classification from 77 permitted / 2 GPL-family /
+28 held to 89 / 2 / 16. This fixes collection, not publication acceptance.
+The held identities still include bundled metadata, missing declarations/text,
+platform-excluded wheels and unmatched instruments.
