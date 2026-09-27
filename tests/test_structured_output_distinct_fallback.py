@@ -575,7 +575,7 @@ def test_free_structured_repair_recovers_after_all_429() -> None:
 
     assert calls == [agents[0].id, agents[0].id, agents[1].id, agents[0].id]
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
-    assert [row["provider_status"] for row in result["orchestration"]["route"]["attempted"] if row["outcome"] != "served"] == [429, 429]
+    assert [row["provider_status"] for row in result["orchestration"]["route"]["attempted"] if row["outcome"] not in ("served", "completed")] == [429, 429]
     assert result["orchestration"]["route"]["stage"] == "structured_repair"
 
 
@@ -738,7 +738,7 @@ def test_structured_repair_tool_stop_keeps_initial_synthesis_route(model: str) -
     route = excinfo.value.detail["route"]
     assert [row["outcome"] for row in route["attempted"]] == [
         "retryable_transport",
-        "served",
+        "completed",
         "fail_closed",
     ]
     assert route["attempted"][0]["agent_id"] == first.id

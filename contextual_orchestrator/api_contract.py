@@ -135,13 +135,16 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": [
                             "served",
+                            "completed",
                             "request_too_large",
                             "retryable_transport",
                             "deadline_exceeded",
                             "fail_closed",
                         ],
                         "description": (
-                            "served: this candidate returned the completion. "
+                            "served: this candidate supplied the final selected completion. "
+                            "completed: this candidate returned an answer that was not "
+                            "selected for the final response; this does not establish answer quality or provider health. "
                             "request_too_large: the payload exceeded a provider "
                             "limit (HTTP 413). retryable_transport: a transient "
                             "transport/provider failure (429/5xx/network) eligible "
@@ -231,8 +234,15 @@ OPENAPI_SPEC = {
                             "served",
                             "fail_closed",
                             "eligible_set_exhausted",
+                            "request_too_large_exhausted",
+                            "rate_limit_wait_budget_exhausted",
+                            "rate_limited_storm",
                         ],
-                        "description": "Why the route stopped, e.g. served, fail_closed, eligible_set_exhausted.",
+                        "description": (
+                            "Why the route stopped. Quota terminal reasons retain the "
+                            "failure's separate provider timing evidence; they do not "
+                            "establish a retry instant or an inference deadline."
+                        ),
                     },
                 },
             },

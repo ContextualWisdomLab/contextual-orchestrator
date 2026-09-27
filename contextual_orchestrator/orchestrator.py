@@ -1568,10 +1568,14 @@ def _route_evidence_payload(
     terminal_reason: str,
     stage: str | None = None,
 ) -> dict[str, Any]:
-    """Build the shared ``orchestration.route`` evidence object."""
+    """Build shared route evidence with at most one final served candidate."""
+    attempts = [dict(row) for row in attempted]
+    served = [row for row in attempts if row.get("outcome") == "served"]
+    for row in (served[:-1] if terminal_reason == "served" else served):
+        row["outcome"] = "completed"
     evidence = {
         "eligible_agent_ids": eligible_agent_ids,
-        "attempted": list(attempted),
+        "attempted": attempts,
         "terminal_reason": terminal_reason,
     }
     if stage is not None:
@@ -9719,18 +9723,36 @@ class TaskOrchestrator:
             start = time.perf_counter()
             selection_design: list[dict[str, Any]] = []
             selection_start = len(_REQUEST_SELECTION_ATTEMPTS.get() or ())
-            attempt_answer, attempt_served_id, attempt_served_model, attempt_usage = (
-                self._invoke_with_rate_limit_recovery(
-                    candidate,
-                    messages,
-                    text=text,
-                    role="worker",
-                    allowed_agent_ids=allowed_agent_ids,
-                    virtual_selector=virtual_selector,
-                    prompt_token_lower_bound=prompt_bound,
-                    selection_design_sink=selection_design.append,
+            try:
+                attempt_answer, attempt_served_id, attempt_served_model, attempt_usage = (
+                    self._invoke_with_rate_limit_recovery(
+                        candidate,
+                        messages,
+                        text=text,
+                        role="worker",
+                        allowed_agent_ids=allowed_agent_ids,
+                        virtual_selector=virtual_selector,
+                        prompt_token_lower_bound=prompt_bound,
+                        selection_design_sink=selection_design.append,
+                    )
                 )
-            )
+            except (ProviderUpstreamError, ProviderResponseError, ToolFallbackStoppedError) as exc:
+                if isinstance(route_evidence, dict):
+                    detail = exc.extra_detail if isinstance(exc, ProviderUpstreamError) else exc.detail
+                    current_route = detail.get("route")
+                    if isinstance(current_route, dict):
+                        detail["route"] = _route_evidence_payload(
+                            eligible_agent_ids=list(dict.fromkeys([
+                                *route_evidence.get("eligible_agent_ids", ()),
+                                *current_route.get("eligible_agent_ids", ()),
+                            ])),
+                            attempted=[
+                                *route_evidence.get("attempted", ()),
+                                *current_route.get("attempted", ()),
+                            ],
+                            terminal_reason=str(current_route.get("terminal_reason") or "fail_closed"),
+                        )
+                raise
             if not selection_design:
                 selection_design.append(self._selection_design_receipt(
                     ranked_pool, [candidate], self._agent(attempt_served_id)
