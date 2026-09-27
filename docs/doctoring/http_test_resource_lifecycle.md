@@ -1,5 +1,91 @@
 # HTTP test resource lifecycle
 
+## Review follow-up, 2026-09-20
+
+Base `26b71dbbef11f1779a83495b0b2096a6bd7e2c3d` (#1210): seven
+previously identified strict failures reproduced, exit 1 (6.25s). All seven
+are test-owned HTTPError objects: three header inspections, the stopped/generic
+409 classifier, and three fake chat implementations that convert responses
+into typed failures without handing the raw response to ModelClient.
+The classifiers borrow responses; they must not close their callers' handles.
+
+Explicit response scopes now close these objects, including sibling logging,
+status-classification, exhausted-pool and tool-shaped-message tests. Closing
+assertions run after each scope; reused responses remain open across retries.
+No production cleanup, endpoint, retry or security policy changes in this slice.
+
+Isolated Python 3.14 source command (no cargo/maturin build):
+`python -m pytest -q -W error --tb=short tests/test_rate_limit_aware_admission.py tests/test_provider_reliability.py tests/test_http_resource_lifecycle.py`.
+The two original modules alone were 21 failed/63 passed (25.66s, exit 1).
+After repair, the three-module command is 117 passed/4 failed (25.67s, exit 1).
+The seven named failures and sibling resource failures are absent. All 37
+HTTP lifecycle tests passed, including final cleanup, close-before-backoff,
+cleanup-error preservation, and raw caller-owned response handoff. These use
+transport doubles; they are not deployed endpoint or wire-delivery evidence.
+The four remaining failures are three allowlist error-taxonomy assertions and
+one missing selection_design field, not ResourceWarnings. Full-suite and
+protected-delivery acceptance remain unverified.
+
+## Separate allowlist endpoint follow-up, 2026-09-20
+
+The resource-cleanup slice above exposed three independent taxonomy failures:
+`_validate_allowlisted_provider` replaced EgressWeave rejection with plain
+RuntimeError, bypassing existing ProviderUpstreamError handling. The shared
+validator now emits a bounded, non-retryable provider_connection_error with
+client status 502 and unknown provider status. The deny decision, resolved
+address reuse, and no-send boundary remain unchanged; passthrough keeps its
+existing transport reclassification.
+
+Two real loopback HTTP regressions call Chat Completions and Responses through
+build_server and the real ModelClient admission path. With the unchanged
+production source at `e77087a131f1347d943215c9b3a55645d0f407a1`, both return
+500/internal_error (2 failed, exit 1). With the repair, both return JSON 502;
+transport sentinels record zero upstream calls and all client/listener handles
+close. Together with the four existing allowlist regressions: 6 passed, 46
+deselected, exit 0. These are local non-streaming endpoint checks, not deployed
+provider health or successful inference. An exploratory streaming assertion was
+removed because concrete Responses streaming is rejected as invalid_stream and
+Chat streaming uses SSE rather than the assumed non-streaming JSON contract;
+no streaming fix or acceptance is claimed.
+
+## Request receipt and virtual-response follow-up, 2026-09-20
+
+At #1212 `898a7cb97fac7b10d35e7ca6e5e0d2484d3a29cf`, the remaining
+selection_design KeyError comes from dropped implementation: the tests remain,
+but request snapshot scoping, selection attempt collection, and receipt
+construction are absent. Reuse the request/receipt hunks of existing #1088
+commit `e569cefa70079a64734ac0f5e47965f9efec3f3d` and its deployment-hash
+fixture update. Do not copy its dependency, ranking/prior, or persistence changes.
+Worker receipts capture attempts before the nested judge and exclude earlier
+worker rounds. A strengthened API regression checks that the judge is absent.
+
+An expanded strict run passed 175 test bodies but exited 1 during final cleanup:
+five raw 429 responses leaked from the virtual proxy caller of proxy_send_once.
+This is production ownership, distinct from #1211's test-owned classifiers.
+The virtual loop converts those raw responses to typed errors; it now closes
+in finally after classification/cooldown diagnostics, before failover or return.
+Cleanup Exception does not replace the original outcome; BaseException remains
+unmasked. Two direct closure assertions fail on the unchanged #1212 source and
+pass after repair, including an injected cleanup OSError. Together with the
+original KeyError, this bounded RED is 3 failed, exit 1.
+
+A wait-round test used a 10ms real cooldown with a fake sleep. Under host pressure
+the cooldown expired during execution and the test missed its intended branch.
+It now advances a controlled monotonic clock with its sleep hook; production
+cooldown policy is unchanged.
+
+Historical non-target source validation at commit
+`fea207fc4dde4a0bd6bb45ad75baebc21b9cbd19`: 179 passed, 21.91s,
+process exit 0, under -W error across
+rate-limit admission, provider reliability, HTTP resource lifecycle, API contract,
+request policy/effort snapshots, and the existing stream receipt and race-failover
+receipt cases. Four selection-receipt identity tests separately pass, exit 0.
+The isolated environment used binary-only numpy 2.5.3 and fast-mlsirm 0.11.3
+wheels to collect the latter module; no native build or numerical experiment ran.
+That differs from this head's locked fast-mlsirm 0.11.4 runtime. These
+historical dependency versions do not establish locked-install, complete-suite,
+hosted-gate, independent-review or protected-merge acceptance.
+
 ## Trace HTTP fixture successor, 2026-09-13
 
 Base: #1140 at `38c0603af2fd8fcb204f65be47081ada9d6bd35c`.
@@ -277,3 +363,57 @@ The prior optimizer full-suite result (1306 failures, 15 errors) is not wholly
 explained by these examples. No full rerun, hosted acceptance, release or real
 accuracy/latency gain is claimed. PR #1137 remains unchanged. Rendered-document
 visual inspection is pending; this runbook is not a completed visual receipt.
+
+## Review PR #1203 integration resource repair (2026-09-27)
+
+The local ordinary-forward integration of #1203 `beb3bfe9` and #1209
+`84736f4d` reproduced 19 strict-warning failures across ten modules after
+building the real native extension. Exact #1209 reproduced the same count
+(18 identical test IDs; one finalizer timing shift). This was an inherited
+resource baseline, not permission to suppress warnings.
+
+Three test owners explain the remaining focused failures: embeddings and
+security HTTP tests stopped listeners without closing them; security request
+helpers consumed HTTPError bodies without closing the response; the no-usage
+tool provider stopped its server without joining and closing it. Test-created
+413/400 HTTPError objects also require test-owned closure. Production provider
+cleanup and daemon policy are unchanged.
+
+RED: the ten-module native baseline returned 255 passed, 19 failed. Initial
+focused cleanup returned 58 passed, 2 failed, exposing the synthetic 413/400
+response owners. GREEN after closing those owners:
+
+```sh
+.venv/bin/python -m pytest -p no:cacheprovider -c /dev/null -q -W error --tb=short tests/test_embeddings_model_pool_http_honesty.py tests/test_security_hardening.py tests/test_stream_options_null_flags_noop_http_honesty.py
+```
+
+Result: 60 passed in 7.62s, exit 0, CPython 3.14.6, real native extension.
+The explicit config path avoids an unavailable pytest-asyncio configuration
+plugin; this is local strict-warning evidence, not the exact hosted command.
+Full-suite and protected delivery remain unverified.
+
+The repaired ten-module suite improved to 272 passed, 2 failed (148.26s).
+One late 503 response owner was `test_timeout_history_read_requires_durable_authorization_audit`: its `pytest.raises` retained the real urllib response without closing it. Closing that test-owned handle in `finally` preserves assertion failures. Focused `tests/test_model_timeout_policy.py` then returned 52 passed in 48.61s, exit 0, with the same strict-warning command prefix. A late 401 owner remains under allocation tracing; the expanded suite is not clean acceptance.
+
+The late 401 was a production consumer defect, reproduced independently with
+`test_local_candidate_registry_keeps_all_discovered_entries` (1 failed, 2.64s).
+Creation-stack instrumentation bound it to `_select_agent` → semantic affinity
+→ `_embed_cached` → `embed_with_usage` → `_send_raw` → the actual loopback
+embedding response at port 8082. This is distinct from test listener cleanup.
+Both task-vector and descriptor-vector consumers now close direct HTTPError
+responses they convert to unavailable evidence, while cleanup Exception cannot
+replace that outcome. Propagated provider errors retain caller ownership.
+Four regressions cover both consumers and cleanup success/failure.
+The measured-routing module plus the original catalog reproduction returned
+38 passed in 2.59s, exit 0, with strict warnings. The diagnostic two-module
+tracemalloc run also exposed an HTTP client timeout under tracing overhead;
+it is not evidence of a security assertion defect. Full-suite acceptance
+remains pending.
+
+Combined post-repair verification of the same ten previously failing modules
+returned **274 passed in 35.66s**, process exit 0, CPython 3.14.6 with the real
+native extension and warnings as errors. This closes that bounded 19-failure
+resource baseline. The separate full-suite process started before these final
+repairs and is historical diagnostic evidence, not current-head acceptance.
+
+The complete pre-final-repair native diagnostic exited 1: 5055 passed, 78 failed, 5 skipped, 6 errors (1597.04s). Most failures were resource warnings, including test helper responses and separately consumed production discovery/capability errors; two deprecated DIF alias calls also failed under warnings as errors. These are not all source assertions or hosted failures. Closing 15 consuming HTTP helper paths in twelve affected test modules produced 100 passed, 5 failed (104.15s), exit 1. The five remaining failures are synthetic capability HTTPError owners, not permission to close propagated responses in transport code. Default-suite verification is a separate required boundary.

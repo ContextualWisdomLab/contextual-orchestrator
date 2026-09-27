@@ -283,7 +283,10 @@ def test_timeout_history_read_requires_durable_authorization_audit(tmp_path: Pat
         monkeypatch.setattr(router, "record_authorization_decision", reject_audit)
         with pytest.raises(HTTPError) as error:
             urlopen(request, timeout=5)
-        assert error.value.code == 503
+        try:
+            assert error.value.code == 503
+        finally:
+            error.value.close()
     finally:
         server.shutdown()
         server.server_close()

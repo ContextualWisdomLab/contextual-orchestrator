@@ -27,7 +27,7 @@ jobs:
     if: >-
       github.event_name != 'schedule' &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -43,6 +43,12 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: "1.97.1" # Keep aligned with mise.toml.
+          components: rustfmt, clippy
 
       - name: Build locked native decision measurement
         run: |
@@ -97,7 +103,7 @@ jobs:
     if: >-
       (github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2') &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -150,7 +156,7 @@ jobs:
     if: >-
       github.event_name != 'schedule' &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: rust
@@ -160,13 +166,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        run: |
-          set -euo pipefail
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
-          rustc --version
-          cargo --version
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: "1.97.1" # Keep aligned with mise.toml.
+          components: rustfmt, clippy
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -202,7 +206,7 @@ jobs:
         (github.event.action != 'closed' &&
          github.event.pull_request.draft == false &&
          github.event.pull_request.head.repo.full_name == github.repository))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     permissions:
       actions: read
       contents: read
