@@ -41,6 +41,7 @@ def _step_script(step_name: str) -> str:
 def _stub_python(directory: Path, log: Path, inventory_payload: dict) -> None:
     """A `python` that logs pip calls and runs the real licence gate."""
     inventory_json = json.dumps(inventory_payload)
+    (directory.parent / "requirements.lock").touch(exist_ok=True)
     collector = directory.parent / "scripts/ci/collect_python_license_artifacts.sh"
     collector.parent.mkdir(parents=True, exist_ok=True)
     collector.write_bytes((REPOSITORY_ROOT / "scripts/ci/collect_python_license_artifacts.sh").read_bytes())
