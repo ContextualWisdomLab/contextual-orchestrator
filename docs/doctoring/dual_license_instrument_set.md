@@ -50,3 +50,27 @@ The prior-head matcher rejects both positive sets; the repaired matcher accepts
 them. All 203 affected tests pass. Reclassification changes exactly cryptography
 50.0.1 and packaging 26.2/26.3: holds 157 to 154, with no other change. This is
 license-text adjudication, not an audit of embedded native library provenance.
+
+## Complete BlueOak Markdown rendering
+
+minimatch 10.2.6 carries the full BlueOak-1.0.0 instrument with `**_…_**`
+emphasis in place of `***…***`, plus whitespace changes. The entire text was
+read and compared with the pinned SPDX fixture: after replacing only those two
+specific emphasis markers in the comparison, all normalized text is identical.
+Production adds only the complete rendering's SHA-256, not a Markdown parser
+or partial-text rule. The extra fixture and mutation rejection make this
+comparison repeatable. An altered clause or additional file remains held.
+
+Source: https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz
+
+Locked archive SHA-512:
+`be92d012cf952c2af59d4d015d2d3b99a628170943007d209e042ebadb71230bad0c510c1ead9b957fbcbe98310dd2b72753f08c22627a9efb3a2b536782e5d4`
+
+Complete whitespace-normalized text SHA-256:
+`d1d8b7a22428eba7e46e7e373d014141266ead51a00c9291a4792278110a8997`
+
+204 affected tests pass (exit 0). The retained inventory changes exactly this
+one npm hold, leaving 153 held entries. Of the remaining npm holds, 128 have no
+license text in their exact archives and seven need further instrument/scope
+evidence. Glob's instrument explicitly excludes its `src/` scope; it remains
+held. No platform package inherits its parent's permission.

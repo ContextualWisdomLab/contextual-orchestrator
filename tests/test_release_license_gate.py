@@ -731,3 +731,14 @@ def test_complete_apache_bsd_instrument_sets(name, term, change):
     elif change == "extra":
         texts.append("Unreviewed additional terms")
     assert _declaration_matches_text([term], [{"text": t} for t in texts]) is (change == "none")
+
+
+def test_complete_blueoak_markdown_variant_preserves_all_terms():
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    text = (directory / "BlueOak-1.0.0-markdown.txt").read_text()
+    canonical = (directory / "BlueOak-1.0.0.txt").read_text()
+    rendered = text.replace("**_As far as", "***As far as").replace("claim._**", "claim.***")
+    assert " ".join(rendered.split()) == " ".join(canonical.split())
+    assert _declaration_matches_text(["BlueOak-1.0.0"], [{"text": text}])
+    assert not _declaration_matches_text(["BlueOak-1.0.0"], [{"text": text + "Commercial use forbidden."}])
