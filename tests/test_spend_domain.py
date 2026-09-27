@@ -154,16 +154,43 @@ def test_incomplete_measurement_blocks_billable_but_not_free_calls() -> None:
 
 
 def test_baseline_calls_are_skipped_first() -> None:
-    """A paid baseline under a hard cap needs separate allocation authority."""
+    """A paid baseline is refused once remaining headroom drops below the ratio; primary still runs."""
     positions = [_position(BudgetScope.RUN, "1", "0.45")]
     assert decide_affordability(positions, estimate=Money.usd("0.1"), now=0).allowed
     baseline = decide_affordability(
         positions, estimate=Money.usd("0.1"), now=0, purpose=CallPurpose.BASELINE
     )
-    assert baseline.reason == "baseline_allocation_unavailable"
+    assert baseline.reason == "baseline_headroom_exhausted"
+    assert decide_affordability(
+        positions, estimate=Money.usd("0.01"), now=0, purpose=CallPurpose.BASELINE,
+        baseline_min_remaining_ratio=Decimal("0.1"),
+    ).allowed
+    # Evidence-backed zero-cost baselines are not subject to the ratio.
     assert decide_affordability(
         positions, estimate=Money.usd(0), now=0, purpose=CallPurpose.BASELINE
     ).allowed
+
+
+def test_paid_baseline_needs_the_ratio_on_every_hard_cap() -> None:
+    """The tightest applicable cap decides baseline headroom."""
+    positions = [
+        _position(BudgetScope.RUN, "10", "0"),
+        _position(BudgetScope.TENANT, "1", "0.4"),
+    ]
+    decision = decide_affordability(
+        positions, estimate=Money.usd("0.2"), now=0, purpose=CallPurpose.BASELINE
+    )
+    assert decision.reason == "baseline_headroom_exhausted"
+    assert decision.scope is BudgetScope.TENANT
+    assert decide_affordability(
+        positions[:1], estimate=Money.usd("0.2"), now=0, purpose=CallPurpose.BASELINE
+    ).allowed
+
+
+def test_invalid_baseline_ratio_is_rejected() -> None:
+    """The baseline ratio must be a share in [0, 1]."""
+    with pytest.raises(ValueError):
+        decide_affordability([], estimate=None, now=0, baseline_min_remaining_ratio=Decimal("1.5"))
 
 
 def test_tightest_limit_wins_across_run_key_and_tenant() -> None:

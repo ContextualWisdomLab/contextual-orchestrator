@@ -27,6 +27,7 @@ def test_cli_wires_guard_tenant_ledger_and_summary(tmp_path: Path) -> None:
     ):
         main([
             "--run-max-cost-usd", "1.5",
+            "--baseline-min-remaining-ratio", "0.25",
             "--tenant-id", "ContextualWisdomLab/example",
             "--spend-ledger-path", str(ledger_path),
             "--run-usage-summary", str(summary_path),
@@ -34,6 +35,7 @@ def test_cli_wires_guard_tenant_ledger_and_summary(tmp_path: Path) -> None:
         ])
     guard = orchestrator_cls.call_args.kwargs["spend_guard"]
     assert guard.config.run_max_cost.as_float() == 1.5
+    assert float(guard.config.baseline_min_remaining_ratio) == 0.25
     summary = json.loads(summary_path.read_text())
     assert summary["tenant_id"] == "ContextualWisdomLab/example"
     assert summary["budget"]["run_max_cost"] == 1.5
@@ -59,7 +61,7 @@ def test_cli_reports_an_unusable_spend_ledger_path_as_argument_error(
         main(["--spend-ledger-path", str(tmp_path), "hello"])
 
 
-def test_cli_rejects_removed_heuristic_baseline_ratio_option() -> None:
-    """No caller-supplied numeric threshold can control baseline admission."""
+def test_cli_rejects_out_of_range_baseline_ratio() -> None:
+    """The baseline ratio must be a share in [0, 1]."""
     with pytest.raises(SystemExit):
-        main(["--baseline-min-remaining-ratio", "0.25", "hello"])
+        main(["--baseline-min-remaining-ratio", "2", "hello"])

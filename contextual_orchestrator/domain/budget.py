@@ -10,8 +10,12 @@ evaluated with the same semantics regardless of scope:
   longer fits. The estimate is supplied by the caller.
 * An unknown price for a billable call refuses under any active cost cap
   (fail closed; unknown is never zero).
-* A paid sampled baseline has no allocation authority merely because a hard
-  cap exists. It fails closed; evidence-backed zero-cost baselines still run.
+* A paid sampled baseline needs extra headroom: under a hard cap it is
+  admitted only while the budget remaining after the call (priced at its
+  total-cost upper bound) stays at or above ``baseline_min_remaining_ratio``
+  (default 0.5) of **every** applicable cap, so paid baselines are the first
+  work skipped when a budget runs short. Evidence-backed zero-cost baselines
+  are not subject to the ratio. Baselines are charged to the same limits.
 * ``soft_max`` never refuses; crossing it is reported so callers can alert.
 
 This module is pure: callers pass the current spend and ``now``.
@@ -26,6 +30,9 @@ import re
 from typing import Any, Iterable
 
 from .money import Money
+
+#: Default share of every hard cap that must remain after a paid sampled baseline.
+DEFAULT_BASELINE_MIN_REMAINING_RATIO = Decimal("0.5")
 
 _DURATION = re.compile(r"^\s*([1-9][0-9]{0,6})\s*([smhd])\s*$")
 _DURATION_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -211,6 +218,7 @@ def decide_affordability(
     now: int,
     purpose: CallPurpose = CallPurpose.PRIMARY,
     unknown_estimate_reason: str = "price_unknown",
+    baseline_min_remaining_ratio: Decimal = DEFAULT_BASELINE_MIN_REMAINING_RATIO,
 ) -> AffordabilityDecision:
     """Admit or refuse one provider call against every active limit.
 
@@ -219,8 +227,13 @@ def decide_affordability(
     price from a known price whose total-token ceiling is unavailable. A known
     zero estimate is a free or local call. When several limits refuse, the one
     with the least remaining budget (the tightest) is reported; ties follow
-    run, virtual key, tenant order.
+    run, virtual key, tenant order. A paid ``BASELINE`` call is refused with
+    ``baseline_headroom_exhausted`` unless at least
+    ``baseline_min_remaining_ratio`` of each hard cap would remain after it.
     """
+    ratio = Decimal(str(baseline_min_remaining_ratio))
+    if ratio < 0 or ratio > 1:
+        raise ValueError("baseline_min_remaining_ratio must be within [0, 1]")
     refusals: list[tuple[Decimal, int, AffordabilityDecision]] = []
     soft_crossed: list[str] = []
     for position in positions:
@@ -256,9 +269,11 @@ def decide_affordability(
             )
             continue
         if purpose is CallPurpose.BASELINE and billable:
-            refusals.append(
-                _refusal(position, "baseline_allocation_unavailable", now, estimate, purpose)
-            )
+            remaining_after = maximum.minus_floor_zero(after_call)
+            if remaining_after < maximum.scaled(ratio):
+                refusals.append(
+                    _refusal(position, "baseline_headroom_exhausted", now, estimate, purpose)
+                )
     if refusals:
         refusals.sort(key=lambda item: (item[0], item[1]))
         decision = refusals[0][2]
@@ -274,6 +289,7 @@ def decide_affordability(
 
 
 __all__ = [
+    "DEFAULT_BASELINE_MIN_REMAINING_RATIO",
     "AffordabilityDecision",
     "BudgetExceededError",
     "BudgetScope",

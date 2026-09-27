@@ -105,14 +105,19 @@ def _no_judge(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # -- defaults ----------------------------------------------------------------
 
-def test_default_config_has_no_run_cap_or_heuristic_baseline_threshold() -> None:
-    """The default adds neither a cap nor a numeric baseline admission rule."""
+def test_default_config_has_no_run_cap_and_half_baseline_headroom() -> None:
+    """The documented defaults: no per-run cap; paid baselines need 50% headroom."""
     config = SpendGuardConfig()
     assert config.run_max_cost is None
-    assert not hasattr(config, "baseline_min_remaining_ratio")
+    assert str(config.baseline_min_remaining_ratio) == "0.5"
     store = InMemoryConfigStore()
     store.set("spend_guard_settings", "run_max_cost_usd", "2.5")
-    assert SpendGuardConfig.from_config_store(store).run_max_cost.as_float() == 2.5
+    store.set("spend_guard_settings", "baseline_min_remaining_ratio", "0.25")
+    loaded = SpendGuardConfig.from_config_store(store)
+    assert loaded.run_max_cost.as_float() == 2.5
+    assert str(loaded.baseline_min_remaining_ratio) == "0.25"
+    with pytest.raises(ValueError):
+        SpendGuardConfig.from_values(baseline_min_remaining_ratio="1.5")
 
 
 def test_orchestrator_defaults_to_an_uncapped_guard_on_mock_agents() -> None:
@@ -175,8 +180,55 @@ def test_run_cap_fails_closed_when_total_token_ceiling_is_unknown() -> None:
     with pytest.raises(BudgetExceededError) as refused:
         orch.route_once(PROMPT)
 
-    assert refused.value.detail["reason"] == "cost_upper_bound_unavailable"
+    assert refused.value.detail["reason"] == "missing_context_window"
     assert transport.calls == []
+    refusal = guard.last_run_summary()["budget"]["refusals"][0]
+    assert refusal["reason"] == "missing_context_window"
+    assert refusal["agent_id"] == "openai_paid_agent"
+    assert refusal["model_name"] == "gpt-paid"
+    assert refusal["context_window"] is None
+
+
+def test_hard_cap_run_proceeds_on_free_models_when_a_paid_agent_lacks_context_window() -> None:
+    """Missing context_window refuses only the paid route; free and zero-cost routes still run."""
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd="5"),
+        price_book=_price_book(),
+    )
+    guard.price_book.set_price(PriceEntry("zeropriced", "zero-model", 0.0, 0.0))
+    unbounded = replace(PAID, context_window=None)
+    local = ModelAgent(
+        "local_mock_agent", "local-model", base_url="mock://local", provider_name="localmock"
+    )
+    tagged_free = ModelAgent(
+        "tagged_free_agent", "free-model", base_url="https://free.test/v1",
+        provider_name="freetier", tags=("cost:free",),
+    )
+    zero_priced = ModelAgent(
+        "zero_priced_agent", "zero-model", base_url="https://zero.test/v1",
+        provider_name="zeropriced",
+    )
+    behaviour = {"openai": "paid", "localmock": "local", "freetier": "free", "zeropriced": "zero"}
+    paid_orch, paid_transport, _ = _orchestrator([unbounded], behaviour, guard=guard)
+    free_orchs = [
+        _orchestrator([agent], behaviour, guard=guard) for agent in (local, tagged_free, zero_priced)
+    ]
+
+    with guard.run_scope("capped_mixed_run") as scope:
+        with pytest.raises(BudgetExceededError) as refused:
+            paid_orch.route_once(PROMPT)
+        answers = [orch.route_once(PROMPT)["answer"] for orch, _, _ in free_orchs]
+
+    assert refused.value.detail["reason"] == "missing_context_window"
+    assert paid_transport.calls == []
+    assert [transport.calls for _, transport, _ in free_orchs] == [
+        ["localmock"], ["freetier"], ["zeropriced"]
+    ]
+    assert all(answers)
+    assert scope.spent.as_float() == 0.0
+    summary = guard.last_run_summary()
+    assert [call["cost_source"] for call in summary["calls"]] == ["zero_cost"] * 3
+    assert [item["reason"] for item in summary["budget"]["refusals"]] == ["missing_context_window"]
 
 
 def test_run_cap_reserves_in_flight_upper_bounds_atomically() -> None:
@@ -685,16 +737,69 @@ def test_mid_stream_limit_error_in_http_200_drops_the_provider() -> None:
 # -- baselines -----------------------------------------------------------------
 
 def test_baseline_is_skipped_first_and_charged_to_the_same_guard() -> None:
-    """compare_to_baseline drops the sampled baseline when headroom runs short."""
+    """compare_to_baseline drops the paid baseline when 50% headroom would not remain."""
     guard = SpendGuard(
-        config=SpendGuardConfig.from_values(run_max_cost_usd=3),
+        config=SpendGuardConfig.from_values(run_max_cost_usd=7, baseline_min_remaining_ratio=0.5),
         price_book=_price_book(),
     )
-    orch, transport, _ = _orchestrator([PAID], {"openai": "answer"}, guard=guard)
+    orch, _, _ = _orchestrator([PAID], {"openai": "answer"}, guard=guard)
     report = orch.compare_to_baseline(["compare this prompt"], mode="route")
+    # Primary spends $2 of $7; the $2 baseline ceiling would leave $3 < $3.50.
     assert report["aggregate"]["baseline_skipped_count"] == 1
     assert report["results"][0]["baseline"] == {"skipped": True, "reason": "spend_budget"}
-    assert all(call["purpose"] == "primary" for call in guard.last_run_summary()["calls"])
+    summary = guard.last_run_summary()
+    assert all(call["purpose"] == "primary" for call in summary["calls"])
+    refusal = summary["budget"]["refusals"][-1]
+    assert refusal["reason"] == "baseline_headroom_exhausted"
+    assert refusal["purpose"] == "baseline"
+    assert refusal["scope"] == "run"
+    assert summary["budget"]["baseline_min_remaining_ratio"] == 0.5
+
+
+def test_paid_baseline_runs_under_a_hard_cap_while_half_the_budget_remains() -> None:
+    """Capped runs keep recording ensemble-vs-single comparisons while headroom lasts."""
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd=10),
+        price_book=_price_book(),
+    )
+    orch, _, _ = _orchestrator([PAID], {"openai": "answer"}, guard=guard)
+    report = orch.compare_to_baseline(["compare this prompt"], mode="route")
+    # Primary spends $2 of $10; the $2 baseline ceiling leaves $6 >= $5.
+    assert report["aggregate"]["baseline_skipped_count"] == 0
+    purposes = [call["purpose"] for call in guard.last_run_summary()["calls"]]
+    assert purposes.count(CallPurpose.BASELINE.value) == 1
+    assert guard.last_run_summary()["budget"]["refusals"] == []
+
+
+def test_paid_baseline_needs_half_of_every_applicable_cap() -> None:
+    """A tenant budget below 50% headroom skips the baseline even with run headroom."""
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd=100),
+        price_book=_price_book(),
+        store=InMemorySpendLedgerStore(),
+    )
+    guard.set_tenant_budget("acme", max_budget_usd=7)
+    orch, _, _ = _orchestrator([PAID], {"openai": "answer"}, guard=guard)
+    with guard.tenant_context(tenant_id="acme"):
+        report = orch.compare_to_baseline(["compare this prompt"], mode="route")
+    assert report["aggregate"]["baseline_skipped_count"] == 1
+    refusal = guard.last_run_summary()["budget"]["refusals"][-1]
+    assert refusal["reason"] == "baseline_headroom_exhausted"
+    assert refusal["scope"] == "tenant"
+
+
+def test_zero_cost_baseline_runs_without_headroom_ratio() -> None:
+    """Evidence-backed zero-cost baselines are never skipped by the ratio."""
+    local = ModelAgent(
+        "local_mock_agent", "local-model", base_url="mock://local", provider_name="localmock"
+    )
+    guard = SpendGuard(
+        config=SpendGuardConfig.from_values(run_max_cost_usd="0.01", baseline_min_remaining_ratio=1),
+        price_book=_price_book(),
+    )
+    orch, _, _ = _orchestrator([local], {"localmock": "answer"}, guard=guard)
+    report = orch.compare_to_baseline(["compare this prompt"], mode="route")
+    assert report["aggregate"]["baseline_skipped_count"] == 0
 
 
 def test_baseline_runs_with_headroom_and_is_tagged() -> None:

@@ -81,15 +81,22 @@ headroom. A call is refused, before it is sent, when for any limit:
 - the price is unknown for a billable endpoint (`price_unknown`, fail closed);
 - the price and active hard limit use different currencies and no exchange-rate
   evidence exists (`price_currency_mismatch`, fail closed);
-- a priced route lacks an authoritative total-token ceiling
-  (`cost_upper_bound_unavailable`, fail closed);
+- a priced route lacks an authoritative total-token ceiling, i.e. a positive
+  `agent.context_window` (`missing_context_window`, fail closed). The refusal
+  is recorded with its reason, agent id, model and `context_window` in the
+  run usage summary (`budget.refusals`) and in the `BudgetExceededError`
+  detail. Free and evidence-backed zero-cost routes need no ceiling and still
+  run under the same hard cap;
 - an earlier paid call in the run, virtual-key, or tenant scope finished
   without measurable cost (`measurement_unavailable`, fail closed; free and
   local calls still run);
 - the reserved total-cost upper bound would cross the cap
   (`insufficient_remaining_budget`);
-- it is a paid sampled baseline under a hard cap without a separate versioned
-  allocation authority (`baseline_allocation_unavailable`, fail closed).
+- it is a paid sampled baseline and, after the call priced at its total-cost
+  upper bound, less than `baseline_min_remaining_ratio` (default `0.5`) of
+  that hard cap would remain (`baseline_headroom_exhausted`). Every
+  applicable hard cap (run, virtual key, tenant) must keep that share.
+  Zero-cost baselines are not subject to the ratio.
 
 An unmeasured provider outcome consumes its in-flight upper-bound reservation
 for budget admission and marks measurement incomplete. The ledger still stores
@@ -101,9 +108,11 @@ ties go run, then virtual key, then tenant. Soft budgets log a warning once per
 run and never block. A refusal raises the existing `BudgetExceededError`, which
 the server already maps to `429 budget_exceeded`.
 
-Configuration: CLI `--run-max-cost-usd` or the KV category
-`spend_guard_settings` (`run_max_cost_usd`) via
-`SpendGuardConfig.from_config_store`. There is no numeric baseline threshold.
+Configuration: CLI `--run-max-cost-usd` and `--baseline-min-remaining-ratio`,
+or the KV category `spend_guard_settings` (`run_max_cost_usd`,
+`baseline_min_remaining_ratio`) via `SpendGuardConfig.from_config_store`. The
+baseline ratio is an explicit owner decision (default `0.5`, range `[0, 1]`),
+not an inferred value; the run usage summary reports the ratio in force.
 
 The existing process-wide budget is extended, not duplicated:
 `_raise_if_spend_budget_exceeded` now also consults the active run scope.
@@ -115,9 +124,21 @@ baseline is skipped (not failed) when the scope says it is not admissible or
 when its call is refused. Skipped rows are reported as
 `{"skipped": true, "reason": "spend_budget"}`, averages use only compared rows,
 and `aggregate.baseline_skipped_count` counts the skips. Primary work keeps the
-remaining budget. Under a hard cap, a paid baseline requires a future explicit,
-versioned allocation authority; absent that authority it fails closed. A
-zero-cost baseline or a baseline with no active hard cap can still run.
+remaining budget. Under a hard cap, a paid baseline runs only while at least
+`baseline_min_remaining_ratio` (default `0.5`) of every applicable cap (run,
+virtual key, tenant) would remain after the call, priced at its total-cost
+upper bound. Otherwise it is skipped, and the refusal is recorded in the run
+usage summary with reason `baseline_headroom_exhausted` and purpose
+`baseline`. A zero-cost baseline or a baseline with no active hard cap always
+runs. Ensemble-vs-single-model comparisons are an owner requirement, so a
+capped run keeps comparing while it has headroom instead of dropping every
+paid baseline; a skipped comparison is never silent.
+
+*Revision 2026-09-27.* Review commits `d2aae636`..`c76e6cfe` had replaced
+this rule with "paid baselines under a hard cap need a future allocation
+authority", which skipped every paid baseline in every capped run. The owner
+restored the original ratio rule; the total-cost upper-bound admission and
+zero-cost baseline admission from those commits are kept.
 
 ### 3. Provider-limit exhaustion drops only that provider for the rest of the run
 

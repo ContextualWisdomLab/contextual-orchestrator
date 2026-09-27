@@ -27,6 +27,7 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from decimal import Decimal
 import logging
 import secrets
 import threading
@@ -37,6 +38,7 @@ from typing import Any, Callable, Iterator, TypeVar
 
 from .cost_ledger import CostLedger, PriceBook, UsageRecord
 from .domain.budget import (
+    DEFAULT_BASELINE_MIN_REMAINING_RATIO,
     AffordabilityDecision,
     BudgetScope,
     CallPurpose,
@@ -45,7 +47,7 @@ from .domain.budget import (
     decide_affordability,
     parse_budget_duration,
 )
-from .domain.money import Money, Price, Usage, provider_reported_cost
+from .domain.money import Money, Price, Usage, provider_reported_cost, to_decimal
 from .domain.pricing import effective_price, estimate_call_cost
 from .domain.provider_limits import (
     NOT_A_LIMIT,
@@ -110,29 +112,47 @@ class SpendGuardConfig:
     ``run_max_cost`` defaults to ``None``: no per-run cap, so existing
     deployments keep their behavior until an operator sets one (CLI
     ``--run-max-cost-usd`` or KV ``spend_guard_settings/run_max_cost_usd``).
-    Paid sampled baselines fail closed under an active hard cap unless a
-    future versioned allocation authority is supplied; no numeric threshold
-    is inferred here.
+    ``baseline_min_remaining_ratio`` defaults to 0.5: under a hard cap a paid
+    sampled baseline runs only while at least half of every applicable cap
+    (run, virtual key, tenant) would remain after the call, priced at its
+    total-cost upper bound. Zero-cost baselines are not subject to the ratio.
     """
 
     run_max_cost: Money | None = None
+    baseline_min_remaining_ratio: Decimal = DEFAULT_BASELINE_MIN_REMAINING_RATIO
+
+    def __post_init__(self) -> None:
+        """Validate the ratio range."""
+        ratio = to_decimal(self.baseline_min_remaining_ratio)
+        if ratio > 1:
+            raise ValueError("baseline_min_remaining_ratio must be within [0, 1]")
+        object.__setattr__(self, "baseline_min_remaining_ratio", ratio)
 
     @classmethod
     def from_values(
         cls,
         *,
         run_max_cost_usd: object | None = None,
+        baseline_min_remaining_ratio: object | None = None,
     ) -> "SpendGuardConfig":
         """Build a config from plain numbers (``None`` keeps the default)."""
         return cls(
             run_max_cost=None if run_max_cost_usd is None else Money.usd(run_max_cost_usd),
+            baseline_min_remaining_ratio=(
+                DEFAULT_BASELINE_MIN_REMAINING_RATIO
+                if baseline_min_remaining_ratio is None
+                else to_decimal(baseline_min_remaining_ratio)
+            ),
         )
 
     @classmethod
     def from_config_store(cls, store: Any) -> "SpendGuardConfig":
-        """Read ``run_max_cost_usd`` from the KV store."""
+        """Read ``run_max_cost_usd`` and ``baseline_min_remaining_ratio`` from the KV store."""
         return cls.from_values(
             run_max_cost_usd=store.get(SPEND_GUARD_CONFIG_CATEGORY, "run_max_cost_usd", None),
+            baseline_min_remaining_ratio=store.get(
+                SPEND_GUARD_CONFIG_CATEGORY, "baseline_min_remaining_ratio", None
+            ),
         )
 
 
@@ -259,6 +279,7 @@ class RunSpendScope:
             now=now,
             purpose=purpose,
             unknown_estimate_reason=unknown_estimate_reason,
+            baseline_min_remaining_ratio=self.guard.config.baseline_min_remaining_ratio,
         )
         for crossed in decision.soft_budget_crossed:
             if crossed not in self._soft_alerts:
@@ -267,7 +288,13 @@ class RunSpendScope:
         return decision
 
     def baseline_admissible(self) -> bool:
-        """Whether a sampled baseline comparison may still spend in this run."""
+        """Whether a sampled baseline comparison may still start in this run.
+
+        This pre-check uses a zero estimate, so it only rules out exhausted
+        budgets; the headroom ratio for a paid baseline is enforced in
+        :meth:`admit` against the call's total-cost upper bound, and a refusal
+        is recorded with reason ``baseline_headroom_exhausted``.
+        """
         return self.decide(Money.zero(self.spent.currency), CallPurpose.BASELINE).allowed
 
     def raise_if_exhausted(self) -> None:
@@ -301,8 +328,11 @@ class RunSpendScope:
             estimate = estimate_call_cost(price, total_token_ceiling)
             unknown_estimate_reason = "price_unknown"
         else:
+            # Fail closed: a priced route without a positive provider context
+            # window has no total-cost upper bound. The specific reason is
+            # recorded in the refusal (run usage summary budget.refusals).
             estimate = None
-            unknown_estimate_reason = "cost_upper_bound_unavailable"
+            unknown_estimate_reason = "missing_context_window"
         purpose = _CALL_PURPOSE.get()
         store = self.guard.store
         transaction = store.budget_transaction() if store is not None else nullcontext()
@@ -367,6 +397,11 @@ class RunSpendScope:
                 "tenant_id": self.tenant_id,
                 "virtual_key_id": self.virtual_key.key_id if self.virtual_key else None,
                 "provider_name": provider,
+                "agent_id": str(getattr(agent, "id", "") or ""),
+                "model_name": str(getattr(agent, "model", "") or ""),
+                "context_window": (
+                    total_token_ceiling if type(total_token_ceiling) is int else None
+                ),
             }
             with self._lock:
                 self.refusals.append(detail)
@@ -570,6 +605,7 @@ class RunSpendScope:
             "run_reserved_cost": reserved.as_float(),
             "currency": spent.currency,
             "measurement_complete": complete,
+            "baseline_min_remaining_ratio": float(self.guard.config.baseline_min_remaining_ratio),
             "limits": [
                 {
                     "scope": position.limit.scope.value,
