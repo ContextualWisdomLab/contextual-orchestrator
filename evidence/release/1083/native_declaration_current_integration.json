@@ -1,0 +1,13 @@
+{
+  "source_sha": "9db079c49d06486458f9af87cc08d4e8ac1fbfca",
+  "inventory_tool": "7a6484 exit0",
+  "counts": {
+    "python": 127,
+    "cargo": 43,
+    "npm": 359,
+    "permitted": 384,
+    "copyleft": 1,
+    "held": 144
+  },
+  "scope": "Collector diagnostic updated; archive verification does not grant missing native/bundled licences. Existing runtime proof is separate."
+}

@@ -1,0 +1,223 @@
+{
+  "source_sha": "47b6b6f5f4f9b42d2bce7af1c4e5bf6efaf22ba7",
+  "toolchain": {
+    "version": "1.3.14",
+    "url": "https://registry.npmjs.org/@oven/bun-darwin-aarch64/-/bun-darwin-aarch64-1.3.14.tgz",
+    "integrity": "sha512-Omj20SuiHBOUjUBIyqtkNjSUIjOtEOJwmbix/ZyFH4BaQ6OZTaaRWIR4TjHVz0yadHgli6lLTiAh1uarnvD49A==",
+    "sha256": "603d327a393c32fec5d9e7165c5f57afc28f1c84ef85593448870ccc41bda636"
+  },
+  "publisher": "bun pm pack --ignore-scripts",
+  "proof": "Verbatim metadata-writing block from original and patched producer; twelve target packages each. No native binaries or build acceptance. Root MIT instrument does not clear bundled dependencies.",
+  "results": [
+    {
+      "state": "red",
+      "name": "opencode-darwin-arm64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "cd1afa10f412f8496bc0415d837b1a213fe4507eb2a3e8c5f4f35a10f26a450d"
+    },
+    {
+      "state": "red",
+      "name": "opencode-darwin-x64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "d035d5fabde977b296b961dd146905f87656538bb33eef57f64fe59656071e59"
+    },
+    {
+      "state": "red",
+      "name": "opencode-darwin-x64-baseline",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "088eb9f8a23ff2b6dd6084e46ec554792e2342baf20b5ea63adf864df50f7090"
+    },
+    {
+      "state": "red",
+      "name": "opencode-linux-arm64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "bc81e96d6bcbcdb2fcb21d7760e92cab3b030ac1d40bcc056eba8dbce9980128"
+    },
+    {
+      "state": "red",
+      "name": "opencode-linux-arm64-musl",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "8def5222012e26fb25304e9b4efbefa36a4e9348511b0e22ba78839c5b2e5472"
+    },
+    {
+      "state": "red",
+      "name": "opencode-linux-x64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "01bf12d664c60bc19aa3191d97c478f8ab35a584df5fca9cb4de6c055db38dae"
+    },
+    {
+      "state": "red",
+      "name": "opencode-linux-x64-baseline",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "9119dfb87c63d4c27955646d34bb609671e2047d1e2578188c8559bf994bc4c8"
+    },
+    {
+      "state": "red",
+      "name": "opencode-linux-x64-baseline-musl",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "479658519e815d95259362e67d39ad0588ae0e4fe6f35cc22bffca8b2b87659e"
+    },
+    {
+      "state": "red",
+      "name": "opencode-linux-x64-musl",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "34738ad59db2a245cfb53169f4f45e7e7986ee94992f496f309854bad2068a73"
+    },
+    {
+      "state": "red",
+      "name": "opencode-windows-arm64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "8f4dbd50b3b557d36c0a4d1b367e53040bbe0121ab2ef76486253e24f22e6d58"
+    },
+    {
+      "state": "red",
+      "name": "opencode-windows-x64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "8956e03de67ca2ba23de1f4aa0df9b12f4bdca381bd97fc5f014baecc9ce8cd2"
+    },
+    {
+      "state": "red",
+      "name": "opencode-windows-x64-baseline",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "759a91017cf2f6f20cacb7acbfa996f2d04751fb51fb189c58adbbc2ddc31339"
+    },
+    {
+      "state": "green",
+      "name": "opencode-darwin-arm64",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "5068b266d942b439a283df84ffba009b3e4aed53242a6fe16f9cf9e4471c0a76"
+    },
+    {
+      "state": "green",
+      "name": "opencode-darwin-x64",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "f72fd6386b03923c438f9ce911b81018fa4c6e778fdf11a06086f00f9c17a6c3"
+    },
+    {
+      "state": "green",
+      "name": "opencode-darwin-x64-baseline",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "345fcccf94195abd66846a5c8061342c11b97a21c14d5a845cbf9be6a1c0e155"
+    },
+    {
+      "state": "green",
+      "name": "opencode-linux-arm64",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "dcce9a2085bb4afae65c79cae651a3cfc78c0ff4e6e8a6438d3712e0c95d939e"
+    },
+    {
+      "state": "green",
+      "name": "opencode-linux-arm64-musl",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "c8a9070ffa0d778c6237738d47d9133f9779278b9b13b6666bf545335240e581"
+    },
+    {
+      "state": "green",
+      "name": "opencode-linux-x64",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "4cbcf8e35ef2d7acaa3b1bf2d6a0f224cf77da285a4c736e72d6daeaf020f7ed"
+    },
+    {
+      "state": "green",
+      "name": "opencode-linux-x64-baseline",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "076be09cf2f0edd8a21f01df2b7985a0a3371017f965bb4436b5dee45979d8a1"
+    },
+    {
+      "state": "green",
+      "name": "opencode-linux-x64-baseline-musl",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "c6fb98a5c46e3e21adabe5731e56a274a5a5b9ed28caf4bea91d3941a0fb33cd"
+    },
+    {
+      "state": "green",
+      "name": "opencode-linux-x64-musl",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "f2464c703e97b0bd3331cbb3ca92627590b6a92e7e23c9ebd9edc83744382849"
+    },
+    {
+      "state": "green",
+      "name": "opencode-windows-arm64",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "ff2b11762adfa204a3bb9f7536b36594a8809984b876a56a4ace7b5678c0f40c"
+    },
+    {
+      "state": "green",
+      "name": "opencode-windows-x64",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "c06dbc90104a2fb15d656b38e864b97cd5cd36e960b49e3f24751059a2804f78"
+    },
+    {
+      "state": "green",
+      "name": "opencode-windows-x64-baseline",
+      "members": [
+        "package/LICENSE",
+        "package/package.json"
+      ],
+      "archive_sha256": "67346674bde50f1f93262466265791bf4df442604d73119096e542a268bda4cb"
+    }
+  ],
+  "license_sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
+  "tool_evidence": {
+    "pack": "beacc2 session97246 exit0",
+    "typecheck": "bb69f3 exit127: tsgo unavailable; no full typecheck/native acceptance",
+    "codegraph": "b2a1bd exit0"
+  }
+}
