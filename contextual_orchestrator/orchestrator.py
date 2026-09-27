@@ -11925,10 +11925,19 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Judge an answer against verifier evidence and fail closed on uncertainty.
 
-        Direct-route callers omit ``answer`` because their verifier output is
-        the response itself. Conduct callers supply the final-step response and
-        retain the verifier report as reference evidence; judging the report as
-        the answer cannot establish the quality of the response being returned.
+        Direct-route callers (``route_once``, streaming, and batch, all via
+        ``_realtime_route_judge``) omit ``answer`` because their verifier output
+        is the response itself; they keep the ``evidence_quality`` and
+        ``risk_signal`` criteria unchanged.
+
+        Conduct callers supply the final-step response as ``answer`` and pass the
+        verifier report to fast-mlsirm as ``reference_answer``, which fast-mlsirm
+        treats as a comparison standard, not as evidence. Judging the report as
+        the answer cannot establish the quality of the response being returned,
+        and criteria that ask about "the verifier output" would not describe the
+        judged object, so this path uses the ``task_alignment`` and
+        ``evidential_support`` criteria. Both paths use the same ``0.7``
+        acceptance threshold.
         """
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
@@ -11976,34 +11985,57 @@ class TaskOrchestrator:
             fast_judge = components.judge_cls(
                 judge_adapter,
                 mode="route",
-                # A score of one means every positive-weight required
-                # criterion attained its maximum. This is a conjunctive
-                # invariant, not a fitted or hand-tuned fractional cutoff.
-                accept_threshold=1.0,
+                accept_threshold=0.7,
             )
-            criteria = (
-                components.criterion_cls(
-                    criterion_id="task_alignment",
-                    description="Does the response directly and completely address the requested task?",
-                ),
-                components.criterion_cls(
-                    criterion_id="evidential_support",
-                    description=(
-                        "Are material claims supported, with every substantive verifier finding "
-                        "resolved or explicitly reported?"
+            if answer is None:
+                # Direct route: the response is the verifier output; criteria unchanged.
+                result = fast_judge.judge(
+                    task=task,
+                    answer=verifier_output,
+                    criteria=(
+                        components.criterion_cls(
+                            criterion_id="evidence_quality",
+                            description=(
+                                "Does the verifier output identify concrete evidence and "
+                                "caveats with actionable impact?"
+                            ),
+                            weight=1.0,
+                        ),
+                        components.criterion_cls(
+                            criterion_id="risk_signal",
+                            description=(
+                                "Does the verifier output mention substantive risks and "
+                                "constraints with support?"
+                            ),
+                            weight=1.0,
+                        ),
                     ),
-                ),
-            )
-            judge_arguments: dict[str, Any] = {
-                "task": task,
-                "answer": verifier_output if answer is None else answer,
-                "criteria": criteria,
-            }
-            if answer is not None:
-                judge_arguments["reference_answer"] = verifier_output
-            result = fast_judge.judge(
-                **judge_arguments,
-            )
+                )
+            else:
+                # Conduct final answer, judged against the verifier report as reference.
+                result = fast_judge.judge(
+                    task=task,
+                    answer=answer,
+                    reference_answer=verifier_output,
+                    criteria=(
+                        components.criterion_cls(
+                            criterion_id="task_alignment",
+                            description=(
+                                "Does the response directly and completely address the "
+                                "requested task?"
+                            ),
+                            weight=1.0,
+                        ),
+                        components.criterion_cls(
+                            criterion_id="evidential_support",
+                            description=(
+                                "Are material claims supported, with every substantive "
+                                "verifier finding resolved or explicitly reported?"
+                            ),
+                            weight=1.0,
+                        ),
+                    ),
+                )
             verification = {
                 "accepted": result.accepted,
                 "reason": result.rationale,

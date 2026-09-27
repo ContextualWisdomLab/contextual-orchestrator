@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from contextlib import nullcontext
 import sqlite3
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -235,14 +236,20 @@ def test_conduct_generated_plan_without_verifier_requirement_keeps_synthesis() -
     assert result["answer"].startswith("[synth_agent:synthesizer]")
 
 
-@pytest.mark.parametrize("workflow_planning", ["template", "generated"])
-def test_conduct_judges_the_final_answer_with_a_conjunctive_rule(
-    workflow_planning: str,
-) -> None:
-    """Verification must measure the return candidate, not the verifier report."""
-    from contextual_orchestrator import orchestrator as orchestrator_module
+def _capturing_judge_components(captured: dict[str, object]) -> object:
+    """fast-mlsirm stand-in that records the judge contract it is called with."""
 
-    captured: dict[str, object] = {}
+    class _Result:
+        accepted = True
+        rationale = "all required criteria attained their maximum"
+        usage: ClassVar[dict[str, int]] = {}
+        orchestration_mode = "route"
+        criterion_scores: ClassVar[dict[str, float]] = {"first": 1.0, "second": 1.0}
+
+        @staticmethod
+        def to_irt_row(*, item_type: str) -> tuple[int, int]:
+            assert item_type == "dichotomous"
+            return (1, 1)
 
     class _Components:
         class format_error(Exception):
@@ -258,35 +265,39 @@ def test_conduct_judges_the_final_answer_with_a_conjunctive_rule(
                 captured["mode"] = mode
                 captured["accept_threshold"] = accept_threshold
 
-            def judge(
-                self,
-                *,
-                task: str,
-                answer: str,
-                criteria: tuple,
-                reference_answer: str | None = None,
-            ):
-                captured.update(
-                    task=task,
-                    answer=answer,
-                    criteria_argument=criteria,
-                    reference_answer=reference_answer,
-                )
-
-                class _Result:
-                    accepted = True
-                    rationale = "all required criteria attained their maximum"
-                    usage = {}
-                    orchestration_mode = "route"
-                    criterion_scores = {"task_alignment": 1.0, "evidential_support": 1.0}
-
-                    @staticmethod
-                    def to_irt_row(*, item_type: str) -> tuple[int, int]:
-                        assert item_type == "dichotomous"
-                        return (1, 1)
-
+            def judge(self, **kwargs):
+                captured["judge_kwargs"] = kwargs
                 return _Result()
 
+    return _Components()
+
+
+DIRECT_ROUTE_CRITERIA = ["evidence_quality", "risk_signal"]
+CONDUCT_FINAL_ANSWER_CRITERIA = ["task_alignment", "evidential_support"]
+
+
+def _assert_judge_contract(captured: dict[str, object], criterion_ids: list[str]) -> None:
+    criteria = captured["criteria"]
+    assert isinstance(criteria, list)
+    assert captured["mode"] == "route"
+    assert captured["accept_threshold"] == 0.7
+    assert [criterion["criterion_id"] for criterion in criteria] == criterion_ids
+    assert [criterion["weight"] for criterion in criteria] == [1.0, 1.0]
+
+
+@pytest.mark.parametrize("workflow_planning", ["template", "generated"])
+def test_conduct_judges_the_final_answer_against_the_verifier_reference(
+    workflow_planning: str,
+) -> None:
+    """Verification must measure the return candidate, not the verifier report.
+
+    The verifier report goes to fast-mlsirm as ``reference_answer``; the
+    threshold stays the established ``0.7`` and only the criteria change to
+    describe a final answer instead of a verifier report.
+    """
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    captured: dict[str, object] = {}
     agents = [
         _agent("planner_agent"),
         _agent("builder_agent"),
@@ -303,16 +314,68 @@ def test_conduct_judges_the_final_answer_with_a_conjunctive_rule(
         if workflow_planning == "generated"
         else nullcontext()
     )
+    components = _capturing_judge_components(captured)
     with plan_scope, patch.object(
-        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: _Components()
+        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: components
     ):
         result = orch.conduct([{"role": "user", "content": "draft it"}])
 
     outputs = _template_role_outputs(result)
-    assert captured["answer"] == outputs["synthesizer"]
-    assert captured["reference_answer"] == outputs["verifier"]
-    assert captured["accept_threshold"] == 1.0
-    assert all("weight" not in criterion for criterion in captured["criteria"])
+    judge_kwargs = captured["judge_kwargs"]
+    assert isinstance(judge_kwargs, dict)
+    assert judge_kwargs["answer"] == outputs["synthesizer"]
+    assert judge_kwargs["reference_answer"] == outputs["verifier"]
+    _assert_judge_contract(captured, CONDUCT_FINAL_ANSWER_CRITERIA)
+
+
+def test_route_once_judge_keeps_the_direct_route_contract() -> None:
+    """Direct routes judge the response itself with main's threshold and criteria."""
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    captured: dict[str, object] = {}
+    orch = _orch(_agent("primary_agent"), _agent("backup_agent"))
+    assert orch.policy.realtime_judge is True
+    components = _capturing_judge_components(captured)
+    with patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: components
+    ):
+        result = orch.route_once([{"role": "user", "content": "answer it"}])
+
+    judge_kwargs = captured["judge_kwargs"]
+    assert isinstance(judge_kwargs, dict)
+    assert judge_kwargs["answer"] == result["answer"]
+    assert "reference_answer" not in judge_kwargs
+    _assert_judge_contract(captured, DIRECT_ROUTE_CRITERIA)
+    criteria = captured["criteria"]
+    assert isinstance(criteria, list)
+    assert not any("verifier finding" in criterion["description"] for criterion in criteria)
+
+
+def test_realtime_route_judge_keeps_the_direct_route_contract() -> None:
+    """Streaming and batch share ``_realtime_route_judge``; it must not use conduct's rubric."""
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    captured: dict[str, object] = {}
+    orch = _orch(_agent("primary_agent"), _agent("backup_agent"))
+    components = _capturing_judge_components(captured)
+    with patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: components
+    ):
+        verification = orch._realtime_route_judge(
+            text="answer it",
+            answer="streamed answer",
+            served_id="primary_agent",
+            latency_seconds=None,
+            usage=None,
+            free_only=False,
+        )
+
+    assert verification["accepted"] is True
+    judge_kwargs = captured["judge_kwargs"]
+    assert isinstance(judge_kwargs, dict)
+    assert judge_kwargs["answer"] == "streamed answer"
+    assert "reference_answer" not in judge_kwargs
+    _assert_judge_contract(captured, DIRECT_ROUTE_CRITERIA)
 
 
 @pytest.mark.parametrize("accepted", [True, False])

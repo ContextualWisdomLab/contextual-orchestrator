@@ -2,20 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make conduct verification evaluate the response candidate that can be returned, using a conjunctive fast-mlsirm decision rule without an arbitrary cutoff.
+**Goal:** Make conduct verification evaluate the response candidate that can be returned, without changing the acceptance threshold or direct-route judging.
 
-**Architecture:** Preserve fast-mlsirm as the only semantic judge. Pass the synthesizer/final-step candidate as the judged answer and the verifier report as reference evidence. Configure the judge so acceptance requires every positive-weight required criterion to attain its maximum score; no hand-tuned fractional threshold or decision-affecting relative weight remains.
+> **Revision (PR #1264 r3):** the conjunctive `accept_threshold=1.0` in Task 1 Step 1, Task 2 Step 3, and Task 3 Step 2 was not requested and has no evaluation behind it. It is reverted: every path uses `0.7`, direct routes keep `evidence_quality`/`risk_signal`, and only the conduct final-answer judgment uses `task_alignment`/`evidential_support` with the verifier report as `reference_answer`. See Task 5.
+
+**Architecture:** Preserve fast-mlsirm as the only semantic judge. Pass the synthesizer/final-step candidate as the judged answer and the verifier report as reference evidence. Keep the existing `accept_threshold=0.7` and equal weights; direct routes are unchanged.
 
 **Tech Stack:** Python 3.12+, pytest, contextual-orchestrator, released fast-mlsirm adapter contract.
 
-**Spec:** `docs/planning/adrs/2026-09-27-final-answer-judgment-boundary.md`
+**Spec:** `docs/planning/adrs/0137-final-answer-judgment-boundary.md`
 
 ## Global Constraints
 
 - Preserve the exact PR head lineage with ordinary commits; no force push or destructive rebase.
 - All model-response quality judgment crosses the released fast-mlsirm adapter.
 - Unknown, malformed, or unavailable judgment fails closed.
-- No arbitrary decision threshold, weighting, tie-break, or fallback.
+- No new decision threshold, weighting, tie-break, or fallback without evaluation evidence.
 
 ---
 
@@ -51,7 +53,7 @@
 
 **Files:**
 - Modify: `CHANGELOG.d/conduct-verifier-not-required-final-answer.md`
-- Create: `docs/planning/adrs/2026-09-27-final-answer-judgment-boundary.md`
+- Create: `docs/planning/adrs/0137-final-answer-judgment-boundary.md`
 - Modify: `docs/product-technical-gap-baseline.md`
 
 **Interfaces:**
@@ -75,3 +77,16 @@
 - [ ] **Step 2: Inspect the final diff for unrelated changes.**
 - [ ] **Step 3: Commit once, update the PR branch without force, and re-fetch the remote exact head.**
 - [ ] **Step 4: Leave the PR Draft until current-head required Checks and independent approval are terminal.**
+
+### Task 5: Revision r3 (scope the change to what was asked)
+
+**Files:**
+- Modify: `contextual_orchestrator/orchestrator.py`
+- Modify: `tests/test_orchestrator_dispatch_boundaries.py`, `tests/test_model_judge.py`
+- Rename/rewrite: `docs/planning/adrs/0137-final-answer-judgment-boundary.md` (was `2026-09-27-...`; numeric id required by `tests/test_planning_adr_identifiers.py` on main)
+- Modify: `CHANGELOG.d/conduct-verifier-not-required-final-answer.md`, this plan, the gap baseline
+
+- [x] **Step 1: Restore `accept_threshold=0.7` on every path, including conduct.**
+- [x] **Step 2: Restore `evidence_quality`/`risk_signal` (weight `1.0`) and the no-reference call shape for direct routes.**
+- [x] **Step 3: Keep conduct's `answer=`/`reference_answer=` wiring with conduct-only `task_alignment`/`evidential_support` criteria (weight `1.0`).**
+- [x] **Step 4: Pin both contracts with tests (conduct template/generated, `route_once`, `_realtime_route_judge`).**

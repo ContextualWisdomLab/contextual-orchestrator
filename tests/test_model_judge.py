@@ -1094,7 +1094,7 @@ def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> N
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:
             assert mode == "route"
-            assert accept_threshold == 1.0
+            assert accept_threshold == 0.7
 
         def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
             assert task == "task"

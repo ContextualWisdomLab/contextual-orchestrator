@@ -7170,35 +7170,30 @@ infer quality from verifier keywords.
 **Exact evidence:** PR #1264 predecessor head
 `235bf8fbbea7720e051245cedef9ccf7fb325f78` passed the verifier report as the
 fast-mlsirm `answer` in both fixed-template and generated conduct paths, then
-used that verdict to select a worker or synthesizer response. The same method
-hardcoded `accept_threshold=0.7` plus two equal `1.0` weights without a
-calibration artifact. A template/generated RED regression reproduced the
-object mismatch twice. The repaired local tree judges the final-step response,
-retains the verifier report as `reference_answer`, and uses a maximum-score
-conjunction whose result is independent of relative positive weights. Focused
-verification: `tests/test_orchestrator_dispatch_boundaries.py` plus
-`tests/test_model_judge.py`, **74 passed**; the environment also reports the
-pre-existing pytest configuration warning for
-`asyncio_default_fixture_loop_scope`.
-
-The 13-file direct-impact comparison under the same interpreter reports
-**443 passed / 23 failed** on the repaired tree versus **441 passed / the same
-23 failed** on predecessor `235bf8fb...`. The unchanged failures are policy
-snapshot/cache identity, one binary passthrough test-double seam, and one
-selection-design trace expectation already present on the predecessor; they
-are not promoted to success or attributed to this delta.
+used that verdict to select a worker or synthesizer response. A
+template/generated regression reproduces that object mismatch. Commit
+`350da480` fixed the wiring but also replaced `accept_threshold=0.7` with `1.0`
+and swapped the criteria on every judged path, including direct routes; that
+threshold change was not requested and had no evaluation behind it. Revision r3
+keeps only the wiring: conduct judges the final-step response with the verifier
+report as `reference_answer` (fast-mlsirm's comparison standard) under
+conduct-only `task_alignment`/`evidential_support` criteria; every path keeps
+`0.7`, and direct routes (`route_once`, streaming, batch via
+`_realtime_route_judge`) keep `evidence_quality`/`risk_signal` unchanged. Tests
+pin both contracts (conduct template/generated, `route_once`,
+`_realtime_route_judge`).
 
 | Gap | Action | Status |
 | --- | --- | --- |
-| Judgment measured a review report instead of the response candidate. | Pass the final conduct output as `answer` and the verifier report as reference evidence. | Repaired locally; PR #1264 exact-head Checks/review pending. |
-| `0.7` and equal weights changed acceptance without executable provenance. | Require every mandatory criterion to attain its maximum; omit explicit weights. | Repaired locally; conservative conjunction, not a calibrated accuracy claim. |
+| Judgment measured a review report instead of the response candidate. | Pass the final conduct output as `answer` and the verifier report as `reference_answer`. | Repaired on PR #1264; exact-head Checks/review pending. |
+| `0.7` and equal weights have no calibration artifact. | Keep them unchanged here; any new threshold (including a conjunctive `1.0`) needs its own evaluated proposal. | Open; not changed by PR #1264. |
 | fast-mlsirm lacks a released calibrated decision-policy artifact consumed by CO. | Owner RED contract must include held-out design, estimator/release identity, uncertainty, criterion provenance, immutable digest, and consumer bump. | Open upstream Gap; no source copy or mutable dependency. |
 | `verifier_required=False` can publish a response despite a rejected verdict. | Reconcile the opt-out with fail-closed publication semantics in a separate policy decision and contract migration. | Open; explicitly not claimed complete by PR #1264. |
 
 **PRD/TRD/UML/ERD status:** PRD safety goal and TRD call boundary are updated
-by the Proposed ADR
-`docs/planning/adrs/2026-09-27-final-answer-judgment-boundary.md`. No database
-schema or aggregate boundary changes, so the current ERD is unaffected. Runtime
-sequence is now task + final response + verifier reference → fast-mlsirm judge
-→ verdict → existing conduct gate. This local evidence is not a release,
-protected-branch acceptance, or held-out model-quality result.
+by the Proposed ADR `docs/planning/adrs/0137-final-answer-judgment-boundary.md`.
+No database schema or aggregate boundary changes, so the current ERD is
+unaffected. Conduct runtime sequence is now task + final response + verifier
+reference → fast-mlsirm judge → verdict → existing conduct gate. This local
+evidence is not a release, protected-branch acceptance, or held-out
+model-quality result.
