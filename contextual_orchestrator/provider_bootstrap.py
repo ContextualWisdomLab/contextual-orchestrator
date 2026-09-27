@@ -32,6 +32,7 @@ from .model_discovery import (
     _currency_is_comparable,
     agent_from_discovered,
     agent_id_for,
+    bootstrap_credential_value,
     discover_all_models,
     discovery_tool_call_tags,
     privacy_tags_for_discovered,
@@ -116,9 +117,8 @@ def collect_provider_credentials(
     values: dict[str, str] = {}
     missing: list[str] = []
     for name in PROVIDER_ACCEPTED_CREDENTIAL_NAMES:
-        raw = environ.get(name, "")
-        value = _strip_mounted_line_endings(raw) if isinstance(raw, str) else ""
-        if value and value.strip():
+        value = bootstrap_credential_value(environ, name)
+        if value:
             values[name] = value
         elif name in PROVIDER_CREDENTIAL_NAMES:
             missing.append(name)
