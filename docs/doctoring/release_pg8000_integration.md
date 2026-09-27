@@ -47,3 +47,30 @@ Installed core/native pairing, release container and embedded toolchain
 instruments, complete provenance, hosted required gates, immutable publication,
 rollback and downstream consumption remain unverified. This branch is an
 integration candidate, not a cleared or published release.
+
+## Installed core/native pair verification
+
+At source revision 67dec775, an owned project-local Python 3.12.13 environment
+was created with `uv sync --locked --no-editable --extra test --extra db`.
+The resulting CO 0.2.0 import comes from site-packages; direct-url metadata
+confirms editable=false. fast-mlsirm 0.11.4 imports its released macOS native
+extension from the same environment. The standalone wheel SHA-256 remains
+`00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf`.
+All 52 installed wheel files other than RECORD match the wheel bytes exactly.
+
+Tests ran from `/private/tmp`, with only the sibling test-helper directory on
+PYTHONPATH and pytest import-mode=importlib. The first command exercised
+no-heuristic retry, dispatch boundaries, distinct structured fallback, malformed
+synthesis usage, PostgreSQL connection, credential backends/boundaries,
+provider catalog storage and bootstrap: 203 tests, exit 0. A second command
+exercised passthrough failover, tool fallback, client boundaries and rate-limit
+admission: 315 tests, exit 0. No source package root was placed on PYTHONPATH.
+
+The native extension's `chi2_sf(2, 2)` also returned exp(-1) within 1e-12 relative
+tolerance. This proves loading and executing that native function, not numerical
+estimation accuracy. Exact versions, source/wheel/native hashes and results are
+recorded in `evidence/release/1083/installed_core_native_macos.json`.
+
+This is local macOS installed-pair evidence. Linux runtime/container pairing,
+complete license and provenance scope, protected main CI, immutable publication
+and downstream consumer acceptance remain separate requirements.
