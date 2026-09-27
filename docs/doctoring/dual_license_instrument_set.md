@@ -375,3 +375,23 @@ workflow. Reassigning labels adds no available execution capacity. Preserve
 the control group reservation. Latest-main terminal gates and immutable
 release evidence remain separate. Receipt:
 `evidence/release/1083/hosted_quality_predecessor.json`.
+
+## License-expression bundled scope
+
+The retained license_expression-30.4.4 wheel (SHA-256
+421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4)
+contains the complete Apache grant and five additional documentation/notice
+instruments. All six were checked against the actual archive, read completely,
+and retained by hash. README GPL expressions are parser examples, not grants.
+
+The wheel also ships _pyahocorasick.py with an explicit
+LicenseRef-scancode-public-domain declaration, author attribution and
+modification description. Its bytes and the bundled ScanCode index match tag
+v30.4.4 commit a3c00c09986bcca1240afd5b1844b56de3f581c1 exactly. This proves
+producer-source correspondence, not the original copied revision or complete
+redistribution scope. Catalog license keys/categories describe indexed
+licenses; they do not license the catalog data itself. The bundled Contributor
+Covenant adaptation also needs its scope accounted for. No complete-set
+registration or whole-wheel Apache clearance was made. Counts remain
+370 permitted, zero copyleft, 143 held. The source-bound receipt is
+`evidence/release/1083/license_expression_vendored_scope.json`.

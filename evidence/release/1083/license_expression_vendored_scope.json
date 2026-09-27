@@ -1,0 +1,63 @@
+{
+  "artifact": "license_expression-30.4.4-py3-none-any.whl",
+  "artifact_sha256": "421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4",
+  "source_tag": "v30.4.4",
+  "source_tag_object": "12acafe1a66b03c090743df152a01989d27b1c68",
+  "source_commit": "a3c00c09986bcca1240afd5b1844b56de3f581c1",
+  "verified_member_source_checks": [
+    {
+      "source_url": "https://raw.githubusercontent.com/aboutcode-org/license-expression/a3c00c09986bcca1240afd5b1844b56de3f581c1/src/license_expression/_pyahocorasick.py",
+      "member": "license_expression/_pyahocorasick.py",
+      "sha256": "16e261aa9bd0f8807ad1a070093e91ab97a05cc1a8eacc7cac054c0e0a93dd83",
+      "matches_wheel": true
+    },
+    {
+      "source_url": "https://raw.githubusercontent.com/aboutcode-org/license-expression/a3c00c09986bcca1240afd5b1844b56de3f581c1/src/license_expression/data/scancode-licensedb-index.json",
+      "member": "license_expression/data/scancode-licensedb-index.json",
+      "sha256": "d7594273825a68b2d5676d76d336c560210072f07a77edb193ad608694067596",
+      "matches_wheel": true
+    }
+  ],
+  "wheel_members": 16,
+  "bundled_index_records": 2579,
+  "license_instruments": [
+    {
+      "name": "license_expression-30.4.4.dist-info/licenses/AUTHORS.rst",
+      "sha256": "d281b77e2e6dd089de830c623cf1c31e029d8232d0bd762005bf69bd5417f8e9"
+    },
+    {
+      "name": "license_expression-30.4.4.dist-info/licenses/CHANGELOG.rst",
+      "sha256": "5c150f030597fda082ef81788fa6981d9993ed0a85de5f3d69ab3f316b405515"
+    },
+    {
+      "name": "license_expression-30.4.4.dist-info/licenses/CODE_OF_CONDUCT.rst",
+      "sha256": "c570d3169618dd8ec9a31ad60038a189e52f84697025cfe8c6c6e62c9681bc4e"
+    },
+    {
+      "name": "license_expression-30.4.4.dist-info/licenses/NOTICE",
+      "sha256": "ef97db07e32f6e5d34363461acf5acc7d72db924533bce3d9f3b87046313363c"
+    },
+    {
+      "name": "license_expression-30.4.4.dist-info/licenses/README.rst",
+      "sha256": "0b11cadafb5e34444e3bea9d3af608f89354a058bb46e91158f7280376c03bfb"
+    },
+    {
+      "name": "license_expression-30.4.4.dist-info/licenses/apache-2.0.LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ],
+  "findings": [
+    "Complete Apache-2.0 root instrument is present.",
+    "_pyahocorasick.py declares LicenseRef-scancode-public-domain, attributes Wojciech Mula, and describes modifications; exact original upstream revision not established.",
+    "Bundled JSON contains license catalog identifiers and classifications, not grants licensing the JSON itself.",
+    "README examples containing GPL do not establish GPL licensing of this software.",
+    "Contributor Covenant adaptation is present; its separate redistribution scope is not resolved by the root Apache declaration."
+  ],
+  "classification": "held; no exact instrument set registered",
+  "next_action": "Establish original modified-code grant and bundled database/documentation redistribution scope before registering a complete reviewed set.",
+  "limits": [
+    "Not a full legal or source audit",
+    "No GPL finding inferred from catalog entries",
+    "No source files, upstream messages, registry archives or inventory classifications altered"
+  ]
+}
