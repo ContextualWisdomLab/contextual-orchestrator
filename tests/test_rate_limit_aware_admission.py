@@ -1474,6 +1474,44 @@ def test_explicit_provider_success_clears_assumed_quota_timing() -> None:
         orchestrator.close()
 
 
+def test_older_in_flight_success_preserves_newer_quota_cooldown() -> None:
+    agent = _single_free_agent()[0]
+    orchestrator = TaskOrchestrator([agent], rate_limit_unknown_cooldown_seconds=60.0)
+    entered = threading.Event()
+    release = threading.Event()
+    answers: list[str] = []
+
+    def chat(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return "accepted"
+
+    orchestrator.client.chat = chat
+    request = [{"role": "user", "content": "hello"}]
+    worker = threading.Thread(
+        target=lambda: answers.append(
+            orchestrator.route_once(request, model_name=agent.model)["answer"]
+        )
+    )
+    try:
+        worker.start()
+        assert entered.wait(5)
+        orchestrator._record_rate_limit(agent.id, None)
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert answers == ["accepted"]
+        assert orchestrator._rate_limit_remaining(agent.id) is not None
+
+        assert orchestrator.route_once(request, model_name=agent.model)["answer"] == "accepted"
+        assert orchestrator._rate_limit_remaining(agent.id) is None
+    finally:
+        release.set()
+        worker.join(5)
+        orchestrator.close()
+
+
 def test_unknown_retry_after_agent_is_selectable_again_after_assumed_cooldown(
     monkeypatch,
 ) -> None:

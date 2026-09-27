@@ -95,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
-          uv build --wheel --out-dir dist
+          uv build --wheel --no-build-isolation --python .venv/bin/python --out-dir dist
           python scripts/verify_decision_wheel_manifest.py dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
           uv pip install --python .venv/bin/python --no-deps \
             --target "$RUNNER_TEMP/nim-wheel-site" \
