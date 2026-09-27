@@ -244,3 +244,32 @@ license declarations remain rejected. Distribution obligations remain.
 The real complete set failed before repair. Full inventory comparison changes
 only boolean.py 5.0: 370 permitted, zero copyleft, 143 held. Remaining
 native/container/provenance/CI/release requirements are not cleared.
+
+## Pip requirements parser: separately licensed vendored code
+
+Do not register the root MIT grant/documentation set for
+pip-requirements-parser 32.0.1. Its actual wheel also ships
+`packaging_legacy_version.py`, whose complete header identifies a subset of
+packaging.version 21.3 under BSD-2-Clause or Apache-2.0 and references a
+separate license file. No such file is in the retained wheel. The complete
+member inventory, wheel/source digests and header are recorded in
+`evidence/release/1083/pip_requirements_vendored_license_gap.json`.
+A root MIT declaration cannot cover this independently licensed component.
+
+Upstream HEAD 4d18bc186553ca6ce619049dfdd63d4100f504a3 contains the three
+vendored grant/wrapper files under src, but setup.cfg's explicit license_files
+omits them. A one-line glob includes those existing files; the patch and
+local build receipt are retained alongside the gap record. An unmodified
+actual local wheel omitted all three, then the repaired actual wheel included
+all three with byte-identical source contents; the vendored code is unchanged.
+Build tools were installed only into the upstream checkout's isolated .venv,
+from a pinned hash-locked tool manifest. Builds completed with exit 0.
+
+The shallow-clone SCM warning and pre-existing MANIFEST missing-file warnings
+were not suppressed. SCM emitted development versions, including its ordinary
+dirty-build date suffix after the patch; these wheels are packaging probes,
+not released 32.0.1 artifacts or reproducibility proof. No upstream PR or
+publication occurred. The retained inventory remains 370 permitted, zero
+copyleft, 143 held until the actual dependency artifact and separate scope
+are verified. Future classification must retain the vendored grant choice
+and component attribution instead of assigning MIT to all wheel contents.
