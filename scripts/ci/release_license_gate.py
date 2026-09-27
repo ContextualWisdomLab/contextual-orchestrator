@@ -378,6 +378,11 @@ _REVIEWED_INSTRUMENT_SETS = {
 
 # Exact complete grant plus attribution; single-instrument grants keep their path.
 _REVIEWED_ATTRIBUTION_SETS = frozenset({
+    ("BSD-2-Clause", frozenset({
+        "1321ad494e7b299c2f0177b6347744906eeffdb5f3a6d4b963434104495f3e8b",
+        "2f576aa10646cff90c0b2aeb0632ed45de8cdc7c1f73e43bbf2cfb3f295e7e89",
+        "9236c94ea1a21a5396a6ea0e7d19e82d587d7b64a944c7e11bf42c982a17e75c",
+    })),
     (("Apache Software License", "Apache-2.0"), frozenset({
         "09ae9bf1886f530f7338889ef805f37b288ec6adedd1e1e32058921acf05a782",
         "4dded41b5658c1d3b15c22e7515eaf5e1138b4932edb7886aa59c39dd1c901de",

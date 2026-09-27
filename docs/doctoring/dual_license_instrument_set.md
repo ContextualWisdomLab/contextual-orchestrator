@@ -226,3 +226,21 @@ Neither the fixture nor the registration removes redistribution obligations.
 The real complete pair failed before repair. Full retained inventory changes
 only requests: 369 permitted, zero copyleft, 144 held. Native/container,
 provenance, hosted CI and release clearance remain separate.
+
+## Boolean.py full grant and packaged documentation
+
+boolean.py 5.0 carries a complete BSD-2-Clause grant, a README with the same
+copyright/SPDX designation, and a release/API CHANGELOG. All three documents
+were read in full; neither auxiliary document adds a grant or restriction.
+The exact retained wheel and all three raw files were reverified, and the
+complete files remain fixtures. Their original-source identities are recorded
+in `evidence/release/1083/boolean_py_instrument_set.json`.
+
+Reuse the existing exact complete-grant/attribution set matcher for these
+three complete normalized hashes and the sole BSD-2-Clause declaration.
+There is no README/CHANGELOG filename exemption. Missing or changed grant,
+changed README or changelog, additional GPL text, duplicates and wrong
+license declarations remain rejected. Distribution obligations remain.
+The real complete set failed before repair. Full inventory comparison changes
+only boolean.py 5.0: 370 permitted, zero copyleft, 143 held. Remaining
+native/container/provenance/CI/release requirements are not cleared.

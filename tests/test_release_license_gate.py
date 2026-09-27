@@ -833,3 +833,26 @@ def test_requests_terms_match_complete_official_apache_sections():
     terms = official.split("END OF TERMS AND CONDITIONS")[0]
     actual = (directory / "requests-license.txt").read_text()
     assert " ".join(actual.split()) == " ".join(terms.split())
+
+
+@pytest.mark.parametrize("change", ["none", "missing-grant", "changed-grant", "changed-readme", "changed-changelog", "extra", "duplicate", "wrong-declaration"])
+def test_boolean_py_complete_grant_and_documentation(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures/license_text"
+    texts = [(directory / f"boolean-py-{name}.txt").read_text() for name in ("license", "readme", "changelog")]
+    terms = ["BSD-2-Clause"]
+    if change == "missing-grant":
+        texts = texts[1:]
+    elif change == "changed-grant":
+        texts[0] = texts[0].replace("with or without modification", "without modification")
+    elif change == "changed-readme":
+        texts[1] += "Commercial use forbidden."
+    elif change == "changed-changelog":
+        texts[2] += "Unreviewed terms."
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "duplicate":
+        texts.append(texts[1])
+    elif change == "wrong-declaration":
+        terms = ["MIT"]
+    assert _declaration_matches_text(terms, [{"text": text} for text in texts]) is (change == "none")
