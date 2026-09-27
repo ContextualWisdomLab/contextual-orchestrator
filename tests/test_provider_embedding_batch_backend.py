@@ -370,6 +370,49 @@ def test_close_waits_for_start_to_submit_work() -> None:
     assert shutdown_called.is_set()
 
 
+def test_close_cancels_queued_job_and_wakes_unbounded_waiter() -> None:
+    """Closing a saturated backend cannot strand a queued null-timeout waiter."""
+    runner_started = threading.Event()
+    release_runner = threading.Event()
+
+    def runner(requests):
+        runner_started.set()
+        release_runner.wait(timeout=2)
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(runner, max_concurrency=1)
+    first_job = backend.submit(
+        [EmbeddingBatchRequest(input_text="first", model="synthetic-model")]
+    )
+    assert runner_started.wait(timeout=1)
+    queued_job = backend.submit(
+        [EmbeddingBatchRequest(input_text="queued", model="synthetic-model")]
+    )
+    waiter_result: list[dict[str, object]] = []
+    waiter = threading.Thread(
+        target=lambda: waiter_result.append(backend.wait(queued_job, timeout=None))
+    )
+    waiter.start()
+    try:
+        backend.close()
+        waiter.join(timeout=1)
+
+        assert waiter.is_alive() is False
+        assert waiter_result == [
+            {
+                "job_id": queued_job.job_id,
+                "status": "cancelled",
+                "is_complete": True,
+                "cancellation": {"reason": "provider embedding backend closed"},
+            }
+        ]
+    finally:
+        release_runner.set()
+        backend.cancel(first_job, reason="test cleanup")
+        backend.cancel(queued_job, reason="test cleanup")
+        waiter.join(timeout=1)
+
+
 def test_daemon_worker_pool_submit_after_shutdown_raises_instead_of_stranding_work() -> None:
     """A post-shutdown ``submit`` must fail fast, not enqueue behind sentinels.
 

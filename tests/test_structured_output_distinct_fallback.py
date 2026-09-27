@@ -154,6 +154,68 @@ def test_virtual_structured_transport_failure_advances_to_next_candidate(model: 
     assert orchestrator._group_router.member_report(second.id)["success_count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("provider_failures", "expected_error_type", "expected_outcomes"),
+    [
+        (
+            (
+                ProviderResponseError("first malformed"),
+                ProviderResponseError("second malformed"),
+            ),
+            ProviderResponseError,
+            ["fail_closed", "fail_closed"],
+        ),
+        (
+            (
+                ProviderResponseError("first malformed"),
+                ProviderRequestTooLargeError("second request too large"),
+            ),
+            ProviderResponseError,
+            ["fail_closed", "request_too_large"],
+        ),
+        (
+            (
+                ProviderRequestTooLargeError("first request too large"),
+                ProviderRequestTooLargeError("second request too large"),
+            ),
+            ProviderRequestTooLargeError,
+            ["request_too_large", "request_too_large"],
+        ),
+    ],
+)
+def test_structured_candidate_exhaustion_keeps_complete_route_receipt(
+    provider_failures: tuple[Exception, Exception],
+    expected_error_type: type[Exception],
+    expected_outcomes: list[str],
+) -> None:
+    """Every terminal structured-candidate exhaustion preserves its full route."""
+    first = ModelAgent("first_agent", "first-model", "mock://first")
+    second = ModelAgent("second_agent", "second-model", "mock://second")
+    orchestrator = TaskOrchestrator([first, second])
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(
+            orchestrator.client,
+            "proxy_send_once",
+            side_effect=provider_failures,
+        ),
+        pytest.raises(expected_error_type) as excinfo,
+    ):
+        orchestrator.proxy_completion(
+            _request(TaskOrchestrator.AUTO_MODEL),
+            single_agent=False,
+        )
+
+    route = excinfo.value.detail["route"]
+    assert route["eligible_agent_ids"] == [first.id, second.id]
+    assert [row["outcome"] for row in route["attempted"]] == expected_outcomes
+    assert route["terminal_reason"] == "eligible_set_exhausted"
+    orchestrator.close()
+
+
 @pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
 def test_structured_tool_stop_keeps_prior_candidate_route(model: str) -> None:
     """A later tool stop must keep the earlier structured candidate on the route."""

@@ -1091,8 +1091,20 @@ class ProviderEmbeddingBatchBackend:
         self._closed.set()
         with self._executor_lock:
             executor, self._executor = self._executor, None
+            pending_job_ids = list(self._terminal_events)
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
+        for job_id in pending_job_ids:
+            requests = self._requests.get(job_id, [])
+            self.cancel(
+                BatchJob(
+                    job_id=job_id,
+                    backend=self.name,
+                    status=str(self._states.get(job_id, "failed")),
+                    request_count=len(requests),
+                ),
+                reason="provider embedding backend closed",
+            )
 
     def __enter__(self) -> "ProviderEmbeddingBatchBackend":
         return self

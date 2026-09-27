@@ -7126,18 +7126,9 @@ class TaskOrchestrator:
             def attach_route(
                 error: ProviderUpstreamError, *, terminal_reason: str
             ) -> ProviderUpstreamError:
-                extra_detail = dict(error.extra_detail)
-                extra_detail["route"] = route_evidence(terminal_reason=terminal_reason)
-                return ProviderUpstreamError(
-                    agent_id=error.agent_id,
-                    model=error.model,
-                    error_code=error.error_code,
-                    message=str(error),
-                    client_status=error.client_status,
-                    provider_status=error.provider_status,
-                    retryable=error.retryable,
-                    transport=error.transport,
-                    extra_detail=extra_detail,
+                return _attach_route_evidence_to_upstream_error(
+                    error,
+                    route_evidence(terminal_reason=terminal_reason),
                 )
 
             for candidate in ordered_candidates:
@@ -7363,13 +7354,19 @@ class TaskOrchestrator:
                     terminal_reason="eligible_set_exhausted",
                 )
             if last_response_error is not None:
-                raise last_response_error
+                raise _attach_route_evidence_to_response_error(
+                    last_response_error,
+                    route_evidence(terminal_reason="eligible_set_exhausted"),
+                )
             if last_model_not_found is not None and not saw_request_too_large:
                 raise attach_route(
                     last_model_not_found, terminal_reason="eligible_set_exhausted"
                 )
-            raise ProviderRequestTooLargeError(
-                "request body exceeds every eligible provider limit"
+            raise _attach_route_evidence_to_upstream_error(
+                ProviderRequestTooLargeError(
+                    "request body exceeds every eligible provider limit"
+                ),
+                route_evidence(terminal_reason="eligible_set_exhausted"),
             )
 
         response_format = chat_body.get("response_format")

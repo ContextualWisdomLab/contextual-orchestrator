@@ -7343,3 +7343,36 @@ The focused merged-tree run also exposed an orphaned
 asyncio-marked test exists, so pytest emitted an unknown-option warning. The
 repair deletes that unused configuration rather than adding a dependency with
 no caller; the same 248 focused tests then run without warnings.
+
+### 2026-09-27 PR #1262 exact-head review RCA
+
+Automated review of published exact head
+`ffdf68dade6b8ef354be31ec6fe373fbb3565dc9` found two source defects after the
+CI-owner reconciliation. First, the structured-synthesis candidate loop built
+typed attempt evidence but re-raised a bare `ProviderResponseError`, or created
+a bare `ProviderRequestTooLargeError`, after exhausting all candidates. RED
+tests reproduced missing `detail.route` for all-malformed, mixed
+malformed/request-too-large, and all-request-too-large pools. The repair uses
+the existing subtype-preserving route attachment helpers for each terminal
+branch and for intermediate upstream failures; the three regressions now
+retain both the concrete exception taxonomy and `eligible_set_exhausted`
+receipt.
+
+Second, `ProviderEmbeddingBatchBackend.close()` cancelled queued executor
+futures without transitioning their job states or setting their terminal
+events. A synchronous caller using the default null timeout could therefore
+wait forever after backend shutdown. A saturated one-worker RED test left the
+second queued job's waiter alive. The repair snapshots tracked jobs under the
+same executor lock, shuts down admission, then cancels each non-terminal job
+through the existing registry-aware cancellation boundary. The waiter now
+returns the explicit terminal reason `provider embedding backend closed`.
+
+The review's ADR-number comment is not a distinct-decision collision. PRs
+#1277, #1209, #1205, #1088, and #1262 carry the same Proposed
+`whole-request-partitioning` decision and the same `0135` path through the
+preserved owner stack; #1277 is the dedicated rename from the invalid
+date-derived identifier. Renumbering one copy would split one decision into
+apparently different ADRs, so the content and Proposed status remain
+unchanged. Local focused validation after the source repairs is 96 passed
+across provider-embedding, structured-output, and batch-routing suites;
+terminal hosted exact-head checks and independent approval remain required.
