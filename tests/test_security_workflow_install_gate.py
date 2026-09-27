@@ -41,6 +41,12 @@ def _step_script(step_name: str) -> str:
 def _stub_python(directory: Path, log: Path, inventory_payload: dict) -> None:
     """A `python` that logs pip calls and runs the real licence gate."""
     inventory_json = json.dumps(inventory_payload)
+    collector = directory.parent / "scripts/ci/collect_python_license_artifacts.sh"
+    collector.parent.mkdir(parents=True, exist_ok=True)
+    collector.write_bytes((REPOSITORY_ROOT / "scripts/ci/collect_python_license_artifacts.sh").read_bytes())
+    uv = directory / "uv"
+    uv.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\nPath(sys.argv[-1]).write_text('fixture==1.0 --hash=sha256:aa\\n')\n")
+    uv.chmod(0o755)
     # An absolute interpreter: a `#!/usr/bin/env python` shebang would pick
     # this very stub off PATH and recurse.
     script = f"""#!{sys.executable}
@@ -62,6 +68,8 @@ if argv[:2] == ["-m", "scripts.ci.dependency_inventory"]:
     output = argv[argv.index("--output") + 1]
     pathlib.Path(output).write_text({inventory_json!r}, encoding="utf-8")
     sys.exit(0)
+if argv[:1] == ["-"]:
+    sys.exit(subprocess.run([{sys.executable!r}, *argv], env=real_env).returncode)
 if argv[:2] == ["-m", "scripts.ci.release_license_gate"]:
     sys.exit(subprocess.run([{sys.executable!r}, *argv], env=real_env).returncode)
 if argv[:2] == ["-m", "pip"] and argv[2] == "install":
@@ -157,7 +165,7 @@ def test_an_adjudicated_pass_installs_the_wheels_it_read(tmp_path) -> None:
     shipped = [line for line in install_lines if "requirements.lock" in line]
     assert shipped, install_lines
     assert all("--no-index" in line and "--find-links license-artifacts" in line for line in shipped)
-    assert invocations.count("-m pip download") == 1, "the adjudicated wheels are fetched once"
+    assert invocations.count("-m pip download") == 2, "export and requirement lock are fetched once each"
 
 
 def test_an_external_source_stops_the_job_before_any_download(tmp_path) -> None:
