@@ -794,6 +794,24 @@ def test_legacy_identity_backfill_and_indexed_window(tmp_path):
         store.close()
 
 
+def test_decision_window_binds_request_ids_with_sql_punctuation(tmp_path):
+    """A request identifier cannot change the phase or diagnostic cohort."""
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    request_id = "request_') OR 1=1 --"
+    store = _StateStore(tmp_path / "state.db")
+    try:
+        for identity in ("outside_cohort", request_id):
+            for kind in ("accepted_request", "initial_decision", "provider_dispatch"):
+                store.save(kind, identity, {"request_id": identity}, durable=True)
+        cohort = store.load_decision_window(1)
+        assert [row["request_id"] for row in cohort["accepted"]] == [request_id]
+        assert [row["request_id"] for row in cohort["decisions"]] == [request_id]
+        assert [row["request_id"] for row in cohort["diagnostics"]] == [request_id]
+    finally:
+        store.close()
+
+
 def test_http_cold_and_cached_triage_keep_task_ack_after_auxiliary_work(tmp_path, monkeypatch):
     """Cold triage is diagnostic only; warm triage still measures the task decision."""
     from contextual_orchestrator.decision_receipts import _CURRENT_DECISION
