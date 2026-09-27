@@ -1403,7 +1403,13 @@ def test_conduct_with_unavailable_judge_keeps_adr_0001_worker_fallback() -> None
     """
     client = _ScriptedClient("unused")
     orchestrator = TaskOrchestrator(
-        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
+        [
+            ModelAgent(
+                "general_agent",
+                "model-x",
+                tags=("reasoning", "writing", "planning", "research"),
+            )
+        ],
         client=client,
     )
     with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):

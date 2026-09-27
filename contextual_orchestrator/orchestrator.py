@@ -11,7 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 import errno
 import hashlib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
+from dataclasses import field as _dataclass_field
 from decimal import Decimal
 from functools import wraps
 import http.client
@@ -56,6 +57,7 @@ from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_fi
 from .reasoning_effort_profile import EffortProfileError
 from .provider_errors import (
     PROVIDER_OUTCOME_UNKNOWN_CODE,
+    PROVIDER_RATE_LIMITED_CODE,
     MAX_PROVIDER_ERROR_BODY_BYTES,
     ProviderUpstreamError,
     classify_provider_failure,
@@ -623,29 +625,92 @@ JUDGE_STATUS_MISCONFIGURED = "misconfigured"
 JUDGE_STATUS_UNAVAILABLE = "unavailable"
 UNJUDGED_JUDGE_STATUSES = frozenset({JUDGE_STATUS_MISCONFIGURED, JUDGE_STATUS_UNAVAILABLE})
 
-def _is_transient_judge_failure(exc: BaseException) -> bool:
-    """Return whether one judge provider-call exception is transient infrastructure.
+#: Upstream error codes that describe the judge's connection, not the answer:
+#: connection/DNS failures (including non-retryable NXDOMAIN), TLS failures
+#: (including certificate verification), timeouts, and rate limits.
+_TRANSIENT_JUDGE_UPSTREAM_CODES = frozenset(
+    {
+        "rate_limit_exceeded",
+        PROVIDER_RATE_LIMITED_CODE,
+        "service_unavailable",
+        "provider_timeout",
+        "provider_connection_error",
+        "tls_failure",
+        "tls_verification_failed",
+    }
+)
 
-    Only these count: timeouts/OSError, an upstream error the canonical
-    provider taxonomy marks retryable, an unavailable endpoint, or an
-    exhausted spend budget. A request the candidate answer made too large,
-    missing assistant content, exhausted structured output, and anything
-    unknown are *not* transient: they stay ordinary rejections (ledger failure
-    + cascade), exactly as before.
+
+def _is_transient_judge_http_status(status: int) -> bool:
+    """Return whether an HTTP status is a server/rate-limit outcome (never 413)."""
+    return status != 413 and (500 <= status <= 599 or status in (408, 425, 429))
+
+
+def _judge_failure_http_status(exc: object) -> int | None:
+    """Return the HTTP status carried by a raw exception, if any.
+
+    ``urllib.error.HTTPError`` exposes it as ``code`` and is an ``OSError``
+    subclass, so it must be read before the generic OSError fallback.
+    """
+    candidates = (
+        (getattr(exc, "code", None), getattr(exc, "status", None))
+        if isinstance(exc, urllib.error.HTTPError)
+        else (getattr(exc, "status", None), getattr(exc, "status_code", None))
+    )
+    return next((value for value in candidates if type(value) is int), None)
+
+
+def _is_transient_judge_failure(exc: BaseException) -> bool:
+    """Return whether one judge provider-call exception says nothing about the answer.
+
+    Counted as judge infrastructure (``unavailable``): anything the canonical
+    provider taxonomy marks retryable, *any* judge 5xx (including 501, 505,
+    507, and Cloudflare 520-530), connection/DNS/TLS failures (including
+    NXDOMAIN and certificate errors, which the taxonomy marks non-retryable),
+    timeouts/OSError, an unavailable endpoint, or an exhausted spend budget.
+    A request the candidate answer made too large (413), missing assistant
+    content, exhausted structured output, any other 4xx, and anything unknown
+    stay ordinary rejections (ledger failure + cascade).
     """
     if isinstance(exc, ProviderRequestTooLargeError):
         return False
     if isinstance(exc, (BudgetExceededError, EndpointUnavailableError)):
         return True
     if isinstance(exc, ProviderUpstreamError):
-        # ProviderUpstreamError is the package's RFC-backed, single-writer
-        # taxonomy. Do not reconstruct retryability from status/code here:
-        # doing so made non-retryable 501 transient and retryable 409
-        # permanent, changing route and quality-ledger decisions.
-        return exc.retryable
+        status = exc.provider_status
+        if exc.error_code == "request_too_large" or status == 413:
+            return False
+        if exc.retryable:
+            return True
+        if type(status) is int and 500 <= status <= 599:
+            return True
+        return exc.error_code in _TRANSIENT_JUDGE_UPSTREAM_CODES
     if isinstance(exc, ProviderResponseError):
         return False
+    status = _judge_failure_http_status(exc)
+    if status is not None:
+        # Decided by status alone: HTTPError is an OSError, but a 400/413 is not an outage.
+        return _is_transient_judge_http_status(status)
     return isinstance(exc, (TimeoutError, OSError))
+
+
+#: A misconfigured judge fails every request identically; log ERROR at most
+#: once per distinct reason per interval (per process), DEBUG in between.
+JUDGE_MISCONFIGURED_LOG_INTERVAL_SECONDS = 300.0
+_JUDGE_MISCONFIGURED_LOG_LAST: dict[str, float] = {}
+_JUDGE_MISCONFIGURED_LOG_LOCK = threading.Lock()
+_judge_log_clock = time.monotonic
+
+
+def _judge_misconfigured_log_level(reason: str) -> int:
+    """Return ERROR for the first report of ``reason`` in an interval, DEBUG otherwise."""
+    now = _judge_log_clock()
+    with _JUDGE_MISCONFIGURED_LOG_LOCK:
+        last = _JUDGE_MISCONFIGURED_LOG_LAST.get(reason)
+        if last is not None and now - last < JUDGE_MISCONFIGURED_LOG_INTERVAL_SECONDS:
+            return logging.DEBUG
+        _JUDGE_MISCONFIGURED_LOG_LAST[reason] = now
+        return logging.ERROR
 
 
 def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
@@ -676,7 +741,7 @@ class _FastMLSIJudgeAdapter:
     # Exceptions raised by this adapter's own provider calls. fast-mlsirm
     # re-raises any adapter failure as JudgeFormatError ``from None``, so the
     # gateway classifies the failure it observed here, not the wrapped error.
-    call_errors: list[BaseException] = field(default_factory=list)
+    call_errors: list[BaseException] = _dataclass_field(default_factory=list)
 
     @property
     def contextual_orchestrator_contract(self) -> str:
@@ -9841,9 +9906,11 @@ class TaskOrchestrator:
             if verification["accepted"]:
                 break
             if verification.get("judge_status") in UNJUDGED_JUDGE_STATUSES:
-                # The next candidate would meet the same missing judge: keep the
-                # top-ranked answer (still unaccepted) instead of spending
-                # another provider call on a lower-ranked one.
+                # The next candidate would meet the same missing judge: return
+                # this attempt's answer (still unaccepted) instead of spending
+                # another provider call. Earlier candidates here were judged and
+                # rejected (failures recorded), so this is not necessarily the
+                # top-ranked candidate.
                 break
             # Rejected answers already recorded a quality-ledger failure in
             # _realtime_route_judge; keep the last (best-available) answer but
@@ -13327,7 +13394,8 @@ class TaskOrchestrator:
                     mode="route",
                     accept_threshold=0.7,
                 )
-            except Exception:  # noqa: BLE001 - construction sees no answer data: a version/contract skew
+            # Construction sees no answer data: a failure is a version/contract skew.
+            except Exception:  # noqa: BLE001
                 return self._unjudged_verdict(
                     JUDGE_STATUS_MISCONFIGURED,
                     "fast-mlsirm judge could not be constructed; verification failed closed",
@@ -13449,8 +13517,8 @@ class TaskOrchestrator:
             }
 
     @staticmethod
-    def _judge_call_failed_transiently(judge_adapter: "_FastMLSIJudgeAdapter | None") -> bool:
-        """Return whether the judge failed only because its provider call(s) hit transient outages."""
+    def _judge_call_failed_transiently(judge_adapter: _FastMLSIJudgeAdapter | None) -> bool:
+        """Return whether the judge failed only because its provider calls hit outages."""
         errors = list(judge_adapter.call_errors) if judge_adapter is not None else []
         return bool(errors) and all(_is_transient_judge_failure(error) for error in errors)
 
@@ -13459,15 +13527,19 @@ class TaskOrchestrator:
         status: str,
         reason: str,
         verifier_output: str,
-        judge_adapter: "_FastMLSIJudgeAdapter | None" = None,
+        judge_adapter: _FastMLSIJudgeAdapter | None = None,
     ) -> dict[str, Any]:
         """Build a fail-closed verdict that carries no evidence about the answer, and log it."""
         error_types = sorted(
             {type(error).__name__ for error in judge_adapter.call_errors}
         ) if judge_adapter is not None else []
         if status == JUDGE_STATUS_MISCONFIGURED:
-            _LOGGER.error(
-                "Judge misconfigured; answer returned unjudged and fail-closed: %s", reason
+            _LOGGER.log(
+                _judge_misconfigured_log_level(reason),
+                "Judge misconfigured; answer returned unjudged and fail-closed: %s "
+                "(ERROR at most once per %.0fs per reason)",
+                reason,
+                JUDGE_MISCONFIGURED_LOG_INTERVAL_SECONDS,
             )
         else:
             _LOGGER.warning(

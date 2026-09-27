@@ -350,7 +350,7 @@ class _JudgeCallFails:
     def criterion_cls(**_kwargs):
         return object()
 
-    class judge_cls:  # noqa: N801 - mirrors the resolved component attribute name
+    class judge_cls:  # mirrors the resolved component attribute name
         def __init__(self, *_args, **_kwargs):
             raise RuntimeError("judge provider down")
 
