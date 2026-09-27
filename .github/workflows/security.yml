@@ -226,10 +226,12 @@ jobs:
             "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${audit_version}/${archive}" \
             -o "${RUNNER_TEMP}/${archive}"
           tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          mkdir -p "${RUNNER_TEMP}/cargo-audit-bin"
           install -m 0755 \
             "${RUNNER_TEMP}/cargo-audit-x86_64-unknown-linux-gnu-v${audit_version}/cargo-audit" \
-            /usr/local/bin/cargo-audit
-          cargo audit --version
+            "${RUNNER_TEMP}/cargo-audit-bin/cargo-audit"
+          echo "${RUNNER_TEMP}/cargo-audit-bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/cargo-audit-bin/cargo-audit" --version
 
       - name: Audit Cargo.lock advisories
         run: cargo audit --file Cargo.lock
