@@ -1,0 +1,469 @@
+{
+  "source_sha": "7307ad449fc71eff2a8160da03272974c688a27d",
+  "image_id": "sha256:6bfa09bba069d4633c4419be268ccb318974916e088e563658593774f514b284",
+  "platform": "linux/arm64",
+  "build_exit": 0,
+  "build_tool": "50f5a2",
+  "scan_exit": 0,
+  "scan_tool": "7d94ac",
+  "sbom_sha256": "27d376d2b0da05ad27d9063be13d88902618045fa95a3adc272df3ce9990b609",
+  "components": 139,
+  "classification_counts": {
+    "permitted": 52,
+    "copyleft": 28,
+    "undecidable": 59
+  },
+  "held": {
+    "copyleft": [
+      {
+        "name": "adduser",
+        "version": "3.152",
+        "license": "GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "ca-certificates",
+        "version": "20250419",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; MPL-2.0"
+      },
+      {
+        "name": "debian-archive-keyring",
+        "version": "2025.1",
+        "license": "GPL-2.0-or-later"
+      },
+      {
+        "name": "grep",
+        "version": "3.11-4+b1",
+        "license": "GPL-3.0-or-later; GPL-3.0-only"
+      },
+      {
+        "name": "hostname",
+        "version": "3.25",
+        "license": "GPL-2.0-only"
+      },
+      {
+        "name": "init-system-helpers",
+        "version": "1.69~deb13u1",
+        "license": "BSD-3-Clause; GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "libacl1",
+        "version": "2.3.2-2+b1",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; LGPL-2.0-or-later; LGPL-2.1-only"
+      },
+      {
+        "name": "libattr1",
+        "version": "1:2.5.2-3",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; LGPL-2.0-or-later; LGPL-2.1-only"
+      },
+      {
+        "name": "libaudit-common",
+        "version": "1:4.0.2-2",
+        "license": "GPL-2.0-only; LGPL-2.1-only; GPL-1.0-only"
+      },
+      {
+        "name": "libaudit1",
+        "version": "1:4.0.2-2+b2",
+        "license": "GPL-2.0-only; LGPL-2.1-only; GPL-1.0-only"
+      },
+      {
+        "name": "libbz2-1.0",
+        "version": "1.0.8-6",
+        "license": "BSD-3-Clause; GPL-2.0-only"
+      },
+      {
+        "name": "libcap-ng0",
+        "version": "0.8.5-4+b1",
+        "license": "LGPL-2.1-or-later; GPL-2.0-or-later; GPL-3.0-only; LGPL-2.1-only; GPL-2.0-only"
+      },
+      {
+        "name": "libcap2",
+        "version": "1:2.75-10+deb13u1+b1",
+        "license": "BSD-3-Clause; GPL-2.0-only; GPL-2.0-or-later"
+      },
+      {
+        "name": "libdebconfclient0",
+        "version": "0.280",
+        "license": "BSD-2-Clause; GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "libgmp10",
+        "version": "2:6.3.0+dfsg-3",
+        "license": "GPL-2.0-or-later; LGPL-3.0-or-later; GPL-3.0-or-later; GPL-3.0-or-later WITH Bison-exception; GPL-2.0-only; GPL-3.0-only; LGPL-3.0-only"
+      },
+      {
+        "name": "liblz4-1",
+        "version": "1.10.0-4",
+        "license": "GPL-2.0-or-later; BSD-2-Clause; GPL-2.0-only"
+      },
+      {
+        "name": "libseccomp2",
+        "version": "2.6.0-2",
+        "license": "LGPL-2.1-only"
+      },
+      {
+        "name": "libsemanage-common",
+        "version": "3.8.1-1",
+        "license": "LGPL-2.1-or-later; LGPL-2.1-only; GPL-2.0-only"
+      },
+      {
+        "name": "libsemanage2",
+        "version": "3.8.1-1",
+        "license": "LGPL-2.1-or-later; LGPL-2.1-only; GPL-2.0-only"
+      },
+      {
+        "name": "libsepol2",
+        "version": "3.8.1-1",
+        "license": "LGPL-2.1-or-later; LGPL-2.1-only; Zlib; GPL-2.0-only; GPL-2.0-or-later"
+      },
+      {
+        "name": "libxxhash0",
+        "version": "0.8.3-2",
+        "license": "BSD-2-Clause; GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "libzstd1",
+        "version": "1.5.7+dfsg-1",
+        "license": "BSD-3-Clause; GPL-2.0-only; Zlib; MIT"
+      },
+      {
+        "name": "login.defs",
+        "version": "1:4.17.4-2",
+        "license": "BSD-3-Clause; GPL-1.0-only; GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "netbase",
+        "version": "6.5",
+        "license": "GPL-2.0-only"
+      },
+      {
+        "name": "passwd",
+        "version": "1:4.17.4-2",
+        "license": "BSD-3-Clause; GPL-1.0-only; GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "sqv",
+        "version": "1.3.0-3+b2",
+        "license": "LGPL-2.0-or-later; LGPL-2.0-only"
+      },
+      {
+        "name": "sysvinit-utils",
+        "version": "3.14-4",
+        "license": "GPL-2.0-or-later; LGPL-2.1-or-later; GPL-3.0-only; GPL-2.0-only; LGPL-2.1-only"
+      },
+      {
+        "name": "tar",
+        "version": "1.35+dfsg-3.1",
+        "license": "GPL-3.0-or-later; GPL-3.0-only; GPL-3.0-or-later WITH Bison-exception; LGPL-2.1-or-later; LGPL-2.1-only; LGPL-3.0-or-later; LGPL-3.0-only; GPL-2.0-or-later; GPL-2.0-only"
+      }
+    ],
+    "undecidable": [
+      {
+        "name": "debian",
+        "version": "13.5",
+        "license": "<none declared>"
+      },
+      {
+        "name": "apt",
+        "version": "3.0.3",
+        "license": "GPL-2.0-or-later; curl; BSD-3-Clause; MIT; GPL-2.0-only"
+      },
+      {
+        "name": "base-files",
+        "version": "13.8+deb13u5",
+        "license": "GPL-2.0-or-later; verbatim"
+      },
+      {
+        "name": "base-passwd",
+        "version": "3.6.7",
+        "license": "GPL-2.0-only; public-domain"
+      },
+      {
+        "name": "bash",
+        "version": "5.2.37-2+b9",
+        "license": "GPL-3.0-or-later; GPL-3.0-only; GPL-3.0-or-later WITH Bison-exception; GPL-2.0-or-later; GPL-2.0-only; GFDL-1.3-no-invariants-only; GFDL-1.3-only; Latex2e; BSD-4-Clause-UC; MIT; permissive"
+      },
+      {
+        "name": "bsdutils",
+        "version": "1:2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "coreutils",
+        "version": "9.7-3",
+        "license": "GPL-3.0-or-later; BSD-4-Clause-UC; GPL-3.0-only; ISC; FSFULLR; GFDL-1.3-no-invariants-only; GFDL-1.3-only"
+      },
+      {
+        "name": "dash",
+        "version": "0.5.12-12",
+        "license": "BSD-3-Clause; public-domain; GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "debianutils",
+        "version": "5.23.2",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; public-domain; SMAIL-GPL"
+      },
+      {
+        "name": "diffutils",
+        "version": "1:3.10-4",
+        "license": "GPL-3.0-or-later; FSFULLR; LGPL-2.1-or-later; GPL-3.0-only WITH autoconf-exception+; GPL-3.0-only; GPL-3.0-or-later WITH texinfo-exception; LGPL-2.0-or-later; GPL-2.0-or-later; X11; FSFAP; GFDL-1.3-no-invariants-only; LGPL-3.0-or-later; LGPL-3.0-only; public-domain; LGPL-2.0-only; LGPL-2.1-only; GPL-2.0-only; GFDL-1.3-only"
+      },
+      {
+        "name": "dpkg",
+        "version": "1.22.22",
+        "license": "GPL-2.0-or-later; public-domain-s-s-d; GPL-2.0-only"
+      },
+      {
+        "name": "findutils",
+        "version": "4.10.0-3",
+        "license": "GFDL-1.3-no-invariants-or-later; GPL-3.0-or-later; FSFAP; GPL-2.0-or-later WITH Autoconf-data-exception; GPL-3.0-or-later WITH Autoconf-data-exception; FSFULLR; GPL-2.0-or-later; X11; public-domain; LGPL-2.1-or-later; GPL-2.0-or-later WITH automake-exception; LGPL-2.0-or-later; LGPL-3.0-or-later; BSD-3-Clause; GPL-3.0-or-later WITH Bison-2.2-exception; LGPL-3.0-only; ISC; GFDL-1.3-only; GPL-2.0-only; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only"
+      },
+      {
+        "name": "gcc-14-base",
+        "version": "14.2.0-19",
+        "license": "GPL-2.0-or-later; GPL-3.0-only; GFDL-1.2-only; Artistic-2.0; LGPL-2.0-or-later"
+      },
+      {
+        "name": "gzip",
+        "version": "1.13-1",
+        "license": "GPL-3.0-or-later; GFDL-1.3--no-invariant; FSF-manpages; GPL-3.0-only; GFDL-3"
+      },
+      {
+        "name": "libapt-pkg7.0",
+        "version": "3.0.3",
+        "license": "GPL-2.0-or-later; curl; BSD-3-Clause; MIT; GPL-2.0-only"
+      },
+      {
+        "name": "libblkid1",
+        "version": "2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "libbsd0",
+        "version": "0.12.2-2",
+        "license": "BSD-3-Clause; BSD-3-clause-Regents; BSD-2-Clause-NetBSD; BSD-3-clause-author; BSD-3-clause-John-Birrell; BSD-5-clause-Peter-Wemm; BSD-2-Clause; BSD-2-clause-verbatim; BSD-2-clause-author; ISC; ISC-Original; MIT; public-domain; Beerware"
+      },
+      {
+        "name": "libc-bin",
+        "version": "2.41-12+deb13u3",
+        "license": "LGPL-2.1-or-later; LGPL-2.0-or-later; LGPL-2.1-or-later WITH link-exception; LGPL-3.0-or-later; GPL-2.0-or-later; GPL-2.0-or-later WITH link-exception; GPL-2.0-only; GPL-3.0-or-later; FSFAP; Carnegie; Inner-Net; MIT-like-Lord; BSD-like-Spencer; PCRE; BSD-3-clause-Carnegie; Unicode-DFS-2016; BSL-1.0; SunPro; CORE-MATH; BSD-3-clause-Berkeley; BSD-3-clause-WIDE; BSD-2-Clause; BSD-3-clause-Oracle; DEC; IBM; ISC; Univ-Coimbra; public-domain; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "libc6",
+        "version": "2.41-12+deb13u3",
+        "license": "LGPL-2.1-or-later; LGPL-2.0-or-later; LGPL-2.1-or-later WITH link-exception; LGPL-3.0-or-later; GPL-2.0-or-later; GPL-2.0-or-later WITH link-exception; GPL-2.0-only; GPL-3.0-or-later; FSFAP; Carnegie; Inner-Net; MIT-like-Lord; BSD-like-Spencer; PCRE; BSD-3-clause-Carnegie; Unicode-DFS-2016; BSL-1.0; SunPro; CORE-MATH; BSD-3-clause-Berkeley; BSD-3-clause-WIDE; BSD-2-Clause; BSD-3-clause-Oracle; DEC; IBM; ISC; Univ-Coimbra; public-domain; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "libcrypt1",
+        "version": "1:4.4.38-1",
+        "license": "<none declared>"
+      },
+      {
+        "name": "libdb5.3t64",
+        "version": "5.3.28+dfsg2-9",
+        "license": "Sleepycat; BSD-3-Clause; MS-PL; GPL-2.0-or-later; Artistic-2.0; X11; MIT-old; TCL-like; BSD-3-clause-fjord; GPL-3.0-only; Zlib"
+      },
+      {
+        "name": "libffi8",
+        "version": "3.4.8-2",
+        "license": "MIT; X11; GPL-2.0-or-later; GPL-3.0-or-later; MPL-1.1; LGPL-2.1-or-later; public-domain"
+      },
+      {
+        "name": "libgcc-s1",
+        "version": "14.2.0-19",
+        "license": "<none declared>"
+      },
+      {
+        "name": "libgdbm6t64",
+        "version": "1.24-2",
+        "license": "GPL-3.0-or-later; GPL-2.0-or-later; GFDL-1.3-no-invariants-or-later; GPL-3.0-only; GPL-2.0-only"
+      },
+      {
+        "name": "libhogweed6t64",
+        "version": "3.10.1-1",
+        "license": "LGPL-3.0-or-later; GPL-2.0-or-later; LGPL-2.0-or-later; LGPL-2.0-only; MIT; GPL-3.0-only WITH autoconf-exception+; public-domain; GPL-2.0-only; GAP"
+      },
+      {
+        "name": "liblastlog2-2",
+        "version": "2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "liblzma5",
+        "version": "5.8.1-1",
+        "license": "0BSD; GPL-2.0-or-later; LGPL-2.1-or-later; FSFULLR; GPL-3.0-or-later WITH Autoconf-exception-macro; none; PD; permissive-nowarranty; FSFUL; noderivs; PD-debian; LGPL-2.1-only; GPL-2.0-only; GPL-3.0-only"
+      },
+      {
+        "name": "libmd0",
+        "version": "1.1.0-2+b1",
+        "license": "BSD-3-Clause; BSD-3-clause-Aaron-D-Gifford; BSD-2-Clause; BSD-2-Clause-NetBSD; ISC; Beerware; public-domain-md4; public-domain-md5; public-domain-sha1"
+      },
+      {
+        "name": "libmount1",
+        "version": "2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "libncursesw6",
+        "version": "6.5+20250216-2",
+        "license": "<none declared>"
+      },
+      {
+        "name": "libnettle8t64",
+        "version": "3.10.1-1",
+        "license": "LGPL-3.0-or-later; GPL-2.0-or-later; LGPL-2.0-or-later; LGPL-2.0-only; MIT; GPL-3.0-only WITH autoconf-exception+; public-domain; GPL-2.0-only; GAP"
+      },
+      {
+        "name": "libpam-modules-bin",
+        "version": "1.7.0-5",
+        "license": "BSD-3-Clause; GPL-2.0-or-later; GPL-1.0-only; GPL-2.0-only; GPL-3.0-only; GPL-3.0-or-later WITH Bison-exception; BSD-tcp-wrappers; LGPL-2.0-or-later; LGPL-2.0-only; public-domain; Beerware"
+      },
+      {
+        "name": "libpam-modules",
+        "version": "1.7.0-5",
+        "license": "BSD-3-Clause; GPL-2.0-or-later; GPL-1.0-only; GPL-2.0-only; GPL-3.0-only; GPL-3.0-or-later WITH Bison-exception; BSD-tcp-wrappers; LGPL-2.0-or-later; LGPL-2.0-only; public-domain; Beerware"
+      },
+      {
+        "name": "libpam-runtime",
+        "version": "1.7.0-5",
+        "license": "BSD-3-Clause; GPL-2.0-or-later; GPL-1.0-only; GPL-2.0-only; GPL-3.0-only; GPL-3.0-or-later WITH Bison-exception; BSD-tcp-wrappers; LGPL-2.0-or-later; LGPL-2.0-only; public-domain; Beerware"
+      },
+      {
+        "name": "libpam0g",
+        "version": "1.7.0-5",
+        "license": "BSD-3-Clause; GPL-2.0-or-later; GPL-1.0-only; GPL-2.0-only; GPL-3.0-only; GPL-3.0-or-later WITH Bison-exception; BSD-tcp-wrappers; LGPL-2.0-or-later; LGPL-2.0-only; public-domain; Beerware"
+      },
+      {
+        "name": "libpcre2-8-0",
+        "version": "10.46-1~deb13u1",
+        "license": "BSD-3-clause-Cambridge WITH BINARY-LIBRARY-LIKE-PACKAGES-exception; BSD-3-Clause; X11; BSD-2-Clause; public-domain"
+      },
+      {
+        "name": "libreadline8t64",
+        "version": "8.2-6",
+        "license": "GPL-3.0-or-later; GPL-3.0-only; GPL-2.0-or-later; GPL-2.0-only; GFDL-1.3-no-invariants-or-later; GFDL-1.3-or-later; ISC-no-attribution"
+      },
+      {
+        "name": "libselinux1",
+        "version": "3.8.1-1",
+        "license": "public-domain; GPL-2.0-only"
+      },
+      {
+        "name": "libsmartcols1",
+        "version": "2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "libsqlite3-0",
+        "version": "3.46.1-7+deb13u1",
+        "license": "public-domain; GPL-2.0-or-later; GPL-2.0-only"
+      },
+      {
+        "name": "libssl3t64",
+        "version": "3.5.6-1~deb13u2",
+        "license": "Apache-2.0; Artistic-2.0; GPL-1.0-or-later; GPL-1.0-only"
+      },
+      {
+        "name": "libstdc++6",
+        "version": "14.2.0-19",
+        "license": "<none declared>"
+      },
+      {
+        "name": "libsystemd0",
+        "version": "257.13-1~deb13u1",
+        "license": "LGPL-2.1-or-later; CC0-1.0; GPL-2.0-only WITH Linux-syscall-note-exception; MIT; public-domain; GPL-2.0-or-later; GPL-2.0-only; LGPL-2.1-only"
+      },
+      {
+        "name": "libtinfo6",
+        "version": "6.5+20250216-2",
+        "license": "MIT-X11; X11; BSD-3-Clause"
+      },
+      {
+        "name": "libudev1",
+        "version": "257.13-1~deb13u1",
+        "license": "LGPL-2.1-or-later; CC0-1.0; GPL-2.0-only WITH Linux-syscall-note-exception; MIT; public-domain; GPL-2.0-or-later; GPL-2.0-only; LGPL-2.1-only"
+      },
+      {
+        "name": "libuuid1",
+        "version": "2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "login",
+        "version": "1:4.16.0-2+really2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "mawk",
+        "version": "1.3.4.20250131-1",
+        "license": "GPL-2.0-only; X11; CC-BY-3.0"
+      },
+      {
+        "name": "mount",
+        "version": "2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "ncurses-base",
+        "version": "6.5+20250216-2",
+        "license": "MIT-X11; X11; BSD-3-Clause"
+      },
+      {
+        "name": "ncurses-bin",
+        "version": "6.5+20250216-2",
+        "license": "MIT-X11; X11; BSD-3-Clause"
+      },
+      {
+        "name": "openssl-provider-legacy",
+        "version": "3.5.6-1~deb13u2",
+        "license": "Apache-2.0; Artistic-2.0; GPL-1.0-or-later; GPL-1.0-only"
+      },
+      {
+        "name": "openssl",
+        "version": "3.5.6-1~deb13u2",
+        "license": "Apache-2.0; Artistic-2.0; GPL-1.0-or-later; GPL-1.0-only"
+      },
+      {
+        "name": "perl-base",
+        "version": "5.40.1-6",
+        "license": "GPL-1.0-or-later; Artistic-2.0; MIT; REGCOMP; GPL-2.0-only WITH bison-exception+; Unicode; BZIP; Zlib; GPL-2.0-or-later; FSFAP; BSD-3-Clause WITH weird-numbering; CC0-1.0; TEXT-TABS; BSD-4-clause-POWERDOG; BSD-3-clause-GENERIC; BSD-3-Clause; SDBM-PUBLIC-DOMAIN; DONT-CHANGE-THE-GPL; Artistic-dist; LGPL-2.1-only; GPL-1.0-only; GPL-2.0-only; Artistic-2"
+      },
+      {
+        "name": "readline-common",
+        "version": "8.2-6",
+        "license": "GPL-3.0-or-later; GPL-3.0-only; GPL-2.0-or-later; GPL-2.0-only; GFDL-1.3-no-invariants-or-later; GFDL-1.3-or-later; ISC-no-attribution"
+      },
+      {
+        "name": "sed",
+        "version": "4.9-2+deb13u1",
+        "license": "GPL-3.0-or-later; GPL-3.0-only; X11; GFDL-1.3-no-invariants-or-later; GFDL-1.3-only; ISC; BSD-4-Clause-UC; BSL-1; pcre"
+      },
+      {
+        "name": "tzdata",
+        "version": "2026b-0+deb13u1",
+        "license": "public-domain"
+      },
+      {
+        "name": "util-linux",
+        "version": "2.41-5",
+        "license": "GPL-2.0-or-later; GPL-2.0-only; GPL-3.0-or-later; LGPL-2.1-or-later; public-domain; BSD-4-Clause; MIT; ISC; BSD-3-Clause; BSLA; LGPL-2.0-or-later; BSD-2-Clause; LGPL-3.0-or-later; GPL-3.0-only; LGPL-2.0-only; LGPL-2.1-only; LGPL-3.0-only"
+      },
+      {
+        "name": "contextual-token-packer",
+        "version": "0.1.0",
+        "license": "<none declared>"
+      }
+    ]
+  },
+  "smoke": {
+    "tool": "f39d80",
+    "exit": 0,
+    "network": "none",
+    "read_only": true,
+    "imports": [
+      "contextual_orchestrator",
+      "contextual_orchestrator._token_packer",
+      "pg8000"
+    ]
+  },
+  "scope_limits": "Local ARM64 image only. No published image, rebuild identity comparison, vulnerability clearance, live credential/provider test or immutable release is claimed. Source/development scope still requires its separate SBOM and gate."
+}
