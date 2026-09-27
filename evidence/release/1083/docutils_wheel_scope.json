@@ -1,0 +1,78 @@
+{
+  "artifact": "docutils-0.23-py3-none-any.whl",
+  "artifact_sha256": "25d013af9bf23bc1c7b2b093dff4208166c53a94786c9e447808335ef1185fea",
+  "wheel_member_count": 212,
+  "emacs_rst_el_present": false,
+  "copying_document_sha256": "6ab4f27c76c74f96e5e692da5944a6f82968f3bddaac5660a4aa723e70eb5d8f",
+  "declared_gpl_instrument_present": true,
+  "selected_member_scope_evidence": [
+    {
+      "name": "docutils/utils/math/math2html.py",
+      "sha256": "a962a4090bbd1744301179c93e7a40df1161f4f26962e85163a3e4a454e9ae30",
+      "header_evidence": [
+        {
+          "line": 4,
+          "text": "#   Copyright (C) 2009-2011 Alex Fern\u00e1ndez, 2021 G\u00fcnter Milde"
+        },
+        {
+          "line": 6,
+          "text": "#   Released under the terms of the `2-Clause BSD license'_, in short:"
+        },
+        {
+          "line": 8,
+          "text": "#   are permitted in any medium without royalty provided the copyright"
+        },
+        {
+          "line": 12,
+          "text": "# .. _2-Clause BSD license: https://opensource.org/licenses/BSD-2-Clause"
+        },
+        {
+          "line": 196,
+          "text": "        '\\\\copyright': '\u00a9',"
+        },
+        {
+          "line": 220,
+          "text": "        '\\\\textcopyright': '\u00a9',"
+        }
+      ]
+    },
+    {
+      "name": "docutils/writers/html5_polyglot/math.css",
+      "sha256": "78a46dc6d26f603cee4326d193a2e7fe4f6dafa4c2a0584da9e938d02f44add3",
+      "header_evidence": [
+        {
+          "line": 4,
+          "text": "*   Copyright (C) 2009,2010 Alex Fern\u00e1ndez"
+        },
+        {
+          "line": 7,
+          "text": "*   Released under the terms of the `2-Clause BSD license'_, in short:"
+        },
+        {
+          "line": 9,
+          "text": "*   are permitted in any medium without royalty provided the copyright"
+        },
+        {
+          "line": 13,
+          "text": "* .. _2-Clause BSD license: http://www.spdx.org/licenses/BSD-2-Clause"
+        },
+        {
+          "line": 16,
+          "text": "*   http://elyxer.nongnu.org/"
+        }
+      ]
+    }
+  ],
+  "findings": [
+    "Gate classifies GPL-family metadata as copyleft and remains blocking.",
+    "COPYING.rst identifies tools/editors/emacs/rst.el as GPL; no rst.el or editors/emacs member exists in this actual wheel.",
+    "COPYING.rst explicitly describes BSD relicensing of math2html.py and math.css formerly from GPL eLyXer.",
+    "Presence of a GPL license document and package-wide classifier is not independently verified covered-code scope."
+  ],
+  "limits": [
+    "Selected files and full wheel member names checked; not every source header adjudicated",
+    "No declaration rewriting or whole-wheel permissive waiver",
+    "Full public-domain/BSD grant scope and other included content still need exact evidence"
+  ],
+  "next_action": "Resolve producer metadata versus actual wheel file scope without weakening GPL/unknown gates."
+}
