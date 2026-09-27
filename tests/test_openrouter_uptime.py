@@ -113,7 +113,7 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def read(self) -> bytes:
+        def read(self, _size: int = -1) -> bytes:
             return json.dumps({"data": {"endpoints": []}}).encode()
 
     collector, _, _, _ = _collectors(None)
