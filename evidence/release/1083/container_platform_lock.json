@@ -1,0 +1,10 @@
+{
+  "baseline_source": "17f90780bd58ba3a967e704b1c63ca1f43729644",
+  "observation": "Actual Linux ARM64 Docker build of integrated source9faaf65b selects NumPy2.5.2 source build. uv.lock includes the CPython3.12 manylinux ARM64 wheel but requirements.lock omits its SHA256.",
+  "repair": "Regenerate requirements.lock using uv pip compile with existing requirements as version constraints and --universal. No hashes were hand edited.",
+  "version_comparison": {"old_packages": 49, "unchanged_old_versions": 49, "added": {"colorama": "0.4.6; sys_platform == win32"}, "old_hash_count": 878, "new_hash_count": 944},
+  "red": {"tool": "995ec8", "failed": 1, "passed": 3, "exit": 1},
+  "green": {"tool": "03b819", "passed": 4, "exit": 0},
+  "regeneration": {"initial_tool": "247562", "canonical_output_tool": "76e373", "exit": 0},
+  "limitations": "Original Docker build session36991 remains live; this does not claim full image success or that the source build failed. The new lock requires a separate exact-source build after the current build terminates. Security, licensing and package gates remain required."
+}
