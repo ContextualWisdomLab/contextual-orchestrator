@@ -1,0 +1,24 @@
+{
+  "source_sha": "267ddd4cd91bfb1fe09daf6851c624477a951179",
+  "wheel": "contextual_orchestrator-0.2.0-py3-none-any.whl",
+  "wheel_sha256": "00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf",
+  "wheel_size": 630818,
+  "source_python_files_verified": 49,
+  "record_entries_verified": 53,
+  "build_backend": "uv_build==0.12.5",
+  "git_clean": true,
+  "limits": [
+    "Source integration branch, not main or published release",
+    "RECORD and source identity are not installed runtime acceptance",
+    "Dependency license and bundled composition clearance remain incomplete"
+  ],
+  "metadata_sha256": "c3b41013679fc115d1664adcd27bc0ad30469868c5addb791cfc52a509a8e19c",
+  "reused_artifact_evidence": {
+    "exact_identical_sha256": "00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf",
+    "prior_source_sha": "67dec775",
+    "mac_installed_focused_tests": 518,
+    "linux_installed_focused_tests": 518,
+    "linux_reproduction_receipt": "core_wheel_linux_reproduction.json",
+    "scope": "identical wheel bytes only; no claim that current workflow/dependency inventory is cleared"
+  }
+}
