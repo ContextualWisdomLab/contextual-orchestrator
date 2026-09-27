@@ -99,8 +99,8 @@ def _serve(monkeypatch, statuses: tuple[int, int, int]) -> tuple[int, str | None
         ((504, 504, 400), (504, "provider_timeout")),
         ((400, 504, 504), (504, "provider_timeout")),
         ((504, 400, 504), (504, "provider_timeout")),
-        ((429, 400, 400), (429, "rate_limit_exceeded")),
-        ((400, 429, 400), (429, "rate_limit_exceeded")),
+        ((429, 400, 400), (429, "provider_rate_limited")),
+        ((400, 429, 400), (429, "provider_rate_limited")),
         ((504, 400, 413), (504, "provider_timeout")),
     ],
 )
