@@ -311,3 +311,13 @@ def test_rust_gate_selects_shared_python_for_pyo3_linking():
     for step in ("Clippy (deny warnings)", "Test workspace"):
         block = rust_job.split(f"- name: {step}\n", 1)[1].split("      - name:", 1)[0]
         assert "PYO3_PYTHON: ${{ steps.python.outputs.python-path }}" in block
+
+
+def test_full_suite_workflows_prepare_compose_before_render_checks():
+    """Full suites need Compose independently of the runner's plugin state."""
+    action = "docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a"
+    for path in (".github/workflows/security.yml", ".github/workflows/release.yml"):
+        text = read_text(path)
+        assert action in text
+        assert 'version: "v5.4.0"' in text
+        assert text.index(action) < text.index("docker compose version") < text.index("-m pytest")
