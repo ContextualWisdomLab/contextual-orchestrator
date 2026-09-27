@@ -13,7 +13,8 @@ CI and fuzz toolchains), `rust/Cargo.lock`, and both npm lockfiles
 (`package-lock.json` and `pnpm-lock.yaml`, whose trees differ). Each source is
 named in the output, because the union of the files read is what this can
 prove -- it is not a claim that nothing else is declared anywhere.
-Nothing is installed, resolved or fetched, so this runs anywhere the repository
+Nothing is installed or executed. Optional native archive downloads are digest-verified
+and restricted to canonical registries. This runs anywhere the repository
 is checked out, and the inventory is the resolved transitive closure rather than
 a sample of it.
 """
@@ -21,6 +22,8 @@ a sample of it.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import email
 import hashlib
 import importlib.metadata
@@ -29,9 +32,12 @@ import json
 import re
 import subprocess
 import sys
+import tarfile
 import tomllib
+import urllib.error
+import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -53,7 +59,10 @@ def _toml_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     for index, entry in enumerate(document.get("package") or []):
         if not isinstance(entry, dict) or not entry.get("name") or not entry.get("version"):
             raise InventoryError(f"{path}: package[{index}] is malformed or has no name/version")
-        packages.append({"name": str(entry["name"]), "version": str(entry["version"])})
+        package = {"name": str(entry["name"]), "version": str(entry["version"])}
+        if path.name == "Cargo.lock":
+            package.update({key: entry[key] for key in ("source", "checksum") if key in entry})
+        packages.append(package)
     return packages
 
 
@@ -73,7 +82,9 @@ def _npm_packages(path: Path, data: bytes) -> list[dict[str, str]]:
         version = entry.get("version")
         if not name or not version:
             raise InventoryError(f"{path}: entry {location!r} has no resolvable name/version")
-        packages.append({"name": str(name), "version": str(version)})
+        package = {"name": str(name), "version": str(version)}
+        package.update({key: entry[key] for key in ("resolved", "integrity") if key in entry})
+        packages.append(package)
     return packages
 
 
@@ -83,8 +94,9 @@ _PNPM_SUPPORTED_VERSIONS = frozenset({"9", "9.0"})
 def _pnpm_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     """Read the `packages:` block of a pnpm v9 lockfile.
 
-    Each key is ``name@version``, quoted when it carries a scope, which is all
-    this inventory needs, so the bounded block is read directly instead of
+    Each key is ``name@version``, quoted when it carries a scope. The inline
+    resolution integrity is retained for native archive verification. The
+    bounded block is read directly instead of
     adding a YAML dependency for it. A scoped name splits on its last ``@`` so
     ``@scope/name@1.2.3`` survives.
 
@@ -119,6 +131,9 @@ def _pnpm_packages(path: Path, data: bytes) -> list[dict[str, str]]:
         # fields (resolution, engines, peerDependencies), not package keys.
         match = re.match(r"""^  (?P<quote>['"]?)(?P<spec>[^\s'"].*?)(?P=quote):\s*$""", line)
         if not match:
+            integrity = re.fullmatch(r"    resolution: \{integrity: ([^ ,}]+)\}\s*", line)
+            if integrity and packages:
+                packages[-1]["integrity"] = integrity.group(1)
             continue
         spec = match.group("spec")
         name, separator, version = spec.rpartition("@")
@@ -219,6 +234,186 @@ def _artifact_license_terms(
     return terms, f"artefact {artifact.name} sha256 {digest}; {evidence}", license_files
 
 
+# ponytail: bounded in-memory archive reads; oversized artifacts fail closed.
+# Stream to a verified temporary file if a future locked artifact exceeds this cap.
+_NATIVE_ARCHIVE_LIMIT = 256 * 1024 * 1024
+_NATIVE_TEXT_LIMIT = 4 * 1024 * 1024
+
+
+def _native_artifact_spec(ecosystem: str, package: dict[str, Any]) -> tuple[str, str, str]:
+    """Return a canonical registry URL and the lock's strong digest, never a custom source."""
+    name, version = package["name"], package["version"]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]*", version):
+        raise InventoryError(f"{ecosystem}:{name}: unsupported version")
+    if ecosystem == "cargo":
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+            raise InventoryError("unsafe crate name")
+        if package.get("source") != "registry+https://github.com/rust-lang/crates.io-index":
+            raise InventoryError(f"cargo:{name}: registry source is not supported")
+        checksum = package.get("checksum", "")
+        if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+            raise InventoryError(f"cargo:{name}: missing SHA256 lock checksum")
+        return f"https://static.crates.io/crates/{name}/{name}-{version}.crate", "sha256", checksum
+    if not re.fullmatch(r"(?:@[a-z0-9._-]+/)?[a-z0-9][a-z0-9._-]*", name):
+        raise InventoryError("unsafe npm package name")
+    integrity = package.get("integrity", "")
+    if not isinstance(integrity, str) or not integrity.startswith("sha512-"):
+        raise InventoryError(f"npm:{name}: missing SHA512 lock integrity")
+    try:
+        digest = base64.b64decode(integrity[7:], validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise InventoryError(f"npm:{name}: malformed integrity") from error
+    if len(digest) != 64:
+        raise InventoryError(f"npm:{name}: malformed SHA512 digest")
+    url = f"https://registry.npmjs.org/{name}/-/{name.rsplit('/', 1)[-1]}-{version}.tgz"
+    if package.get("resolved", url) != url:
+        raise InventoryError(f"npm:{name}: archive URL is not the canonical registry source")
+    return url, "sha512", digest.hex()
+
+
+class _NoRegistryRedirect(urllib.request.HTTPRedirectHandler):
+    """Registry redirects are not an authorization to fetch a different origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _native_license_terms(
+    ecosystem: str, package: dict[str, Any], artifact_dir: Path | None, download: bool
+) -> tuple[list[str], str, list[dict[str, str]]]:
+    """Read exact locked Cargo/npm archive bytes without extraction or package execution."""
+    url, algorithm, expected = _native_artifact_spec(ecosystem, package)
+    if artifact_dir is None:
+        return [], "native artifact directory absent", []
+    suffix = ".crate" if ecosystem == "cargo" else ".tgz"
+    artifact = artifact_dir / (hashlib.sha256(url.encode()).hexdigest() + suffix)
+    if artifact.is_symlink():
+        raise InventoryError("native artifact cache entry is a symbolic link")
+    if artifact.exists():
+        with artifact.open("rb") as handle:
+            raw = handle.read(_NATIVE_ARCHIVE_LIMIT + 1)
+    elif download:
+        opener = urllib.request.build_opener(_NoRegistryRedirect())
+        try:
+            with opener.open(url, timeout=60) as response:
+                raw = response.read(_NATIVE_ARCHIVE_LIMIT + 1)
+        except urllib.error.HTTPError as error:
+            try:
+                error.close()
+            except Exception:
+                pass  # Cleanup cannot replace the registry failure.
+            raise InventoryError(f"registry download failed with HTTP {error.code}") from error
+        except urllib.error.URLError as error:
+            raise InventoryError("registry download failed") from error
+    else:
+        return [], f"locked native artifact absent: {artifact.name}", []
+    if len(raw) > _NATIVE_ARCHIVE_LIMIT:
+        raise InventoryError("native artifact exceeds the 256 MiB evidence limit")
+    digest = hashlib.new(algorithm, raw).hexdigest()
+    if digest != expected:
+        raise InventoryError(f"{ecosystem}:{package['name']}: artifact digest differs from lock")
+    metadata_name = "Cargo.toml" if ecosystem == "cargo" else "package.json"
+    prefix = f"{package['name']}-{package['version']}" if ecosystem == "cargo" else "package"
+    files: dict[str, bytes] = {}
+    expanded = 0
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r|gz") as archive:
+        for index, member in enumerate(archive):
+            if index >= 100000:
+                raise InventoryError("native archive exceeds the 100000-entry evidence limit")
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != prefix:
+                raise InventoryError("native archive contains an unsafe or unexpected path")
+            if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+                raise InventoryError("native archive contains a link or special entry")
+            expanded += member.size
+            if expanded > 2 * 1024 * 1024 * 1024:
+                raise InventoryError("native archive exceeds the 2 GiB expanded evidence limit")
+            selected = str(path) == f"{prefix}/{metadata_name}" or path.name.upper().startswith(
+                ("LICENSE", "LICENCE", "COPYING", "NOTICE")
+            )
+            if not member.isfile() or not selected:
+                continue
+            if str(path) in files or member.size > _NATIVE_TEXT_LIMIT:
+                raise InventoryError("native archive has duplicate or oversized evidence")
+            handle = archive.extractfile(member)
+            if handle is None:
+                raise InventoryError("native archive evidence cannot be read")
+            with handle:
+                files[str(path)] = handle.read(_NATIVE_TEXT_LIMIT + 1)
+    metadata_raw = files.pop(f"{prefix}/{metadata_name}", None)
+    if metadata_raw is None:
+        raise InventoryError("native archive contains no package metadata")
+    metadata = (tomllib.loads(metadata_raw.decode())["package"] if ecosystem == "cargo"
+                else json.loads(metadata_raw))
+    if not isinstance(metadata, dict):
+        raise InventoryError("native artifact metadata is not an object")
+    if (metadata.get("name"), metadata.get("version")) != (package["name"], package["version"]):
+        raise InventoryError("native artifact identity differs from lock")
+    filename = metadata.get("license-file") if ecosystem == "cargo" else None
+    if filename is not None:
+        if not isinstance(filename, str) or PurePosixPath(filename).is_absolute() or ".." in PurePosixPath(filename).parts:
+            raise InventoryError("native artifact declares an unsafe license file")
+        target = str(PurePosixPath(prefix) / filename)
+        if target not in files:
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r|gz") as archive:
+                for member in archive:
+                    if str(PurePosixPath(member.name)) != target:
+                        continue
+                    if target in files or not member.isfile() or member.size > _NATIVE_TEXT_LIMIT:
+                        raise InventoryError("declared license file is duplicated or not bounded regular text")
+                    handle = archive.extractfile(member)
+                    if handle is None:
+                        raise InventoryError("declared license file cannot be read")
+                    with handle:
+                        files[target] = handle.read(_NATIVE_TEXT_LIMIT + 1)
+            if target not in files:
+                raise InventoryError("declared license file is absent from native artifact")
+    declaration = metadata.get("license")
+    terms = [declaration] if isinstance(declaration, str) and declaration.strip() else []
+    license_files = [{"name": name, "sha256": hashlib.sha256(data).hexdigest(),
+                      "text": data.decode("utf-8", "replace")} for name, data in sorted(files.items())]
+    if download and not artifact.exists():
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        # Exclusive creation also refuses a cache entry replaced by a concurrent writer.
+        with artifact.open("xb") as handle:
+            handle.write(raw)
+    return terms, f"{url} ({algorithm} {digest})", license_files
+
+
+def _local_cargo_license_terms(
+    root: Path, package: dict[str, Any], commit: str, provenance: list[dict[str, Any]]
+) -> tuple[list[str], str, list[dict[str, str]]]:
+    """Bind workspace license declarations and text to committed source bytes."""
+    workspace = root / "rust" / "Cargo.toml"
+    if not workspace.is_file():
+        return [], "workspace manifest absent", []
+    data, record = _read_locked_source(root, workspace, commit)
+    provenance.append(record)
+    members = tomllib.loads(data.decode()).get("workspace", {}).get("members", [])
+    for member in members:
+        manifest = (workspace.parent / member / "Cargo.toml").resolve()
+        if not manifest.is_relative_to(root) or not manifest.is_file():
+            raise InventoryError("workspace member manifest is absent or outside repository")
+        data, record = _read_locked_source(root, manifest, commit)
+        metadata = tomllib.loads(data.decode()).get("package", {})
+        if (metadata.get("name"), metadata.get("version")) != (package["name"], package["version"]):
+            continue
+        provenance.append(record)
+        declaration, filename = metadata.get("license"), metadata.get("license-file")
+        if not isinstance(declaration, str) or not isinstance(filename, str):
+            return [], "workspace license declaration/file absent", []
+        license_path = (manifest.parent / filename).resolve()
+        if not license_path.is_relative_to(root):
+            raise InventoryError("workspace license file is outside repository")
+        raw, record = _read_locked_source(root, license_path, commit)
+        provenance.append(record)
+        return [declaration], f"committed workspace {manifest.relative_to(root)}", [
+            {"name": str(license_path.relative_to(root)), "sha256": hashlib.sha256(raw).hexdigest(),
+             "text": raw.decode("utf-8", "replace")}
+        ]
+    return [], "local crate is not a declared workspace member", []
+
+
 def _metadata_license_terms(metadata: Any) -> list[str]:
     """Licence terms declared by one distribution's METADATA, in SPDX-first order."""
     terms: list[str] = []
@@ -299,7 +494,8 @@ def _read_locked_source(repository_root: Path, lock: Path, commit: str) -> tuple
 
 
 def build_inventory(
-    repository_root: Path, resolve_licenses: bool = False, artifact_dir: Path | None = None
+    repository_root: Path, resolve_licenses: bool = False, artifact_dir: Path | None = None,
+    download_native_artifacts: bool = False,
 ) -> dict[str, Any]:
     """Collect every lockfile-resolved dependency, grouped by ecosystem."""
     # One commit is captured up front and every blob comparison uses it, so a
@@ -363,6 +559,10 @@ def build_inventory(
                     key = (package["name"], package["version"])
                     known = index.get(key)
                     if known is not None:
+                        if (known.get("integrity") and package.get("integrity")
+                                and known["integrity"] != package["integrity"]):
+                            raise InventoryError(f"npm:{package['name']}: lockfiles disagree on integrity")
+                        known.update({key: package[key] for key in ("integrity",) if key in package})
                         known["sources"].append(pnpm_provenance["path"])
                         continue
                     package["sources"] = [pnpm_provenance["path"]]
@@ -370,20 +570,39 @@ def build_inventory(
                     packages.append(package)
         for package in packages:
             package["purl"] = f"{purl_prefix}{package['name']}@{package['version']}"
-        if ecosystem == "python" and resolve_licenses:
-            for package in packages:
-                if artifact_dir is not None:
-                    terms, source, license_files = _artifact_license_terms(
-                        artifact_dir, package["name"], package["version"]
-                    )
+        entry["packages"] = sorted(packages, key=lambda package: (package["name"], package["version"]))
+        ecosystems.append(entry)
+    if resolve_licenses:
+        if download_native_artifacts and any(
+            not record.get("matches_commit") for entry in ecosystems
+            for record in entry.get("provenance", [])
+        ):
+            raise InventoryError("uncommitted lockfile bytes cannot authorize native downloads")
+        for entry in ecosystems:
+            for package in entry["packages"]:
+                if entry["ecosystem"] == "python":
+                    if artifact_dir is not None:
+                        terms, source, license_files = _artifact_license_terms(
+                            artifact_dir, package["name"], package["version"]
+                        )
+                    else:
+                        terms, source = _installed_license_terms(package["name"], package["version"])
+                        license_files = []
                 else:
-                    terms, source = _installed_license_terms(package["name"], package["version"])
-                    license_files = []
+                    try:
+                        if entry["ecosystem"] == "cargo" and "source" not in package:
+                            terms, source, license_files = _local_cargo_license_terms(
+                                repository_root, package, commit, entry["provenance"]
+                            )
+                        else:
+                            terms, source, license_files = _native_license_terms(
+                                entry["ecosystem"], package, artifact_dir, download_native_artifacts
+                            )
+                    except (InventoryError, OSError, ValueError, KeyError, EOFError, tarfile.TarError) as error:
+                        terms, source, license_files = [], str(error), []
                 package["licenses"] = terms
                 package["license_files"] = license_files
                 package["license_source"] = source if terms else f"unresolved: {source}"
-        entry["packages"] = sorted(packages, key=lambda package: (package["name"], package["version"]))
-        ecosystems.append(entry)
     return {
         "schema": "contextual-orchestrator/dependency-inventory/v1",
         "source_sha": commit,
@@ -404,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument(
         "--resolve-licenses", action="store_true",
-        help="attach licence terms read from distribution metadata already installed in this job",
+        help="attach licence terms from staged archives or installed Python metadata",
     )
     parser.add_argument(
         "--check-sources-only", action="store_true",
@@ -414,7 +633,13 @@ def main(argv: list[str] | None = None) -> int:
         "--artifact-dir",
         help="read licences from downloaded distribution artefacts here instead of installed metadata",
     )
+    parser.add_argument(
+        "--download-native-artifacts", action="store_true",
+        help="fetch hash-pinned canonical Cargo/npm archives without installing or running code",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.download_native_artifacts and not arguments.artifact_dir:
+        parser.error("--download-native-artifacts requires --artifact-dir")
     root = Path(arguments.repository_root).resolve()
     if arguments.check_sources_only:
         findings: list[str] = []
@@ -433,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
             root,
             resolve_licenses=arguments.resolve_licenses or bool(arguments.artifact_dir),
             artifact_dir=Path(arguments.artifact_dir).resolve() if arguments.artifact_dir else None,
+            download_native_artifacts=arguments.download_native_artifacts,
         )
     except (InventoryError, OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         print(f"::error::Dependency inventory could not be built ({error}).", file=sys.stderr)
