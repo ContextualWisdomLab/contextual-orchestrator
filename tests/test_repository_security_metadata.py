@@ -90,7 +90,8 @@ def test_security_workflow_covers_core_repository_security_process():
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
-    assert workflow_text.count("runs-on: ubuntu-24.04") == 4
+    selector = '${{ github.event_name == \'push\' && github.ref == \'refs/heads/main\' && fromJSON(\'["self-hosted","linux","x64","cwlab"]\') || \'ubuntu-24.04\' }}'
+    assert workflow_text.count("runs-on: " + selector) == 4
     assert "runs-on: ubuntu-latest" not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
@@ -282,3 +283,22 @@ def test_security_tool_inputs_do_not_reintroduce_the_lgpl_sbom_cli():
     """Every declared tool input counts, including obsolete duplicate locks."""
     for path in ROOT_DIR.glob("requirements*.in"):
         assert not re.search(r"^cyclonedx-bom(?:[<>=\s]|$)", path.read_text(), re.MULTILINE), path.name
+
+def test_native_workflows_bootstrap_the_repository_pinned_rust_toolchain():
+    """Fresh runners must install Rust before any native command."""
+    import tomllib
+
+    version = tomllib.loads(read_text("mise.toml"))["tools"]["rust"]
+    action = "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87"
+    for path, expected_count in ((".github/workflows/security.yml", 2),
+                                 (".github/workflows/release.yml", 1)):
+        text = read_text(path)
+        assert text.count(action) == expected_count
+        assert text.count(f'toolchain: "{version}"') == expected_count
+        assert "rustup toolchain install stable" not in text
+        for job in text.split("    steps:")[1:]:
+            if "rustup " in job or "cargo fmt " in job:
+                assert job.index(action) < min(
+                    job.index(token) for token in ("rustup ", "cargo fmt ")
+                    if token in job
+                )

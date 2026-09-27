@@ -35,12 +35,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 def test_inventory_covers_every_lockfile_resolved_scope(tmp_path) -> None:
     output = tmp_path / "dependency-inventory.json"
 
-    # This repository currently refuses: requirements.lock still carries a
-    # `fast-mlsirm @ git+https://...` requirement, which --no-index does not
-    # stop and which is built from source. The gap stays visible rather than
-    # being closed by repinning it elsewhere; the enumeration below is still
-    # written, so the sets can be checked while the refusal stands.
-    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 1
+    # Source enumeration succeeds; artifact adjudication is a separate gate.
+    assert main(["--repository-root", str(REPOSITORY_ROOT), "--output", str(output)]) == 0
 
     inventory = json.loads(output.read_text(encoding="utf-8"))
     by_ecosystem = {entry["ecosystem"]: entry for entry in inventory["ecosystems"]}
