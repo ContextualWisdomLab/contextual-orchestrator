@@ -54,7 +54,7 @@ DISCOVERY_TIMEOUT_SECONDS: float | None = None
 # discovery attempt (`discover_provider_models`, including every fetch and
 # retry it makes internally) inside `discover_all_models`'s per-provider
 # loop -- AND for the shared Models.dev / OpenRouter ZDR / OpenRouter
-# credits metadata fetches `discover_all_models` makes outside that loop
+# key-limit metadata fetches `discover_all_models` makes outside that loop
 # (`_fetch_models_dev_metadata`, `_openrouter_zdr_model_ids`,
 # `openrouter_paid_inference_available`). This is a wholly separate concern
 # from `DISCOVERY_TIMEOUT_SECONDS` (the per-HTTP-call socket timeout passed
@@ -338,7 +338,10 @@ MAX_DISCOVERY_RESPONSE_BYTES = 8 * 1024 * 1024
 # a lazy per-call fetch) from an explicitly supplied ``None`` -- the honest
 # outcome of a real fetch failure. Never compare to it with ``==``.
 _NOT_FETCHED = object()
-_OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
+# ``GET /api/v1/key`` describes the inference key making the request, including
+# its per-key spending limit. ``GET /api/v1/credits`` is not usable here: it
+# requires a management key, which discovery never holds.
+_OPENROUTER_CURRENT_KEY_URL = "https://openrouter.ai/api/v1/key"
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -1951,11 +1954,11 @@ def _run_bounded_by_deadline(
     module makes at discovery time: the whole-attempt bound around one
     provider's :func:`discover_provider_models` call
     (:func:`_discover_provider_models_bounded`), and the shared Models.dev /
-    OpenRouter ZDR / OpenRouter credits metadata fetches in
+    OpenRouter ZDR / OpenRouter key-limit metadata fetches in
     :func:`discover_all_models` that used to run outside any bound at all
     (#971 review finding: "shared metadata fetches bypass discovery
     deadline" -- Models.dev ran before the per-provider loop, the OpenRouter
-    ZDR and credits calls ran after it, none of them under
+    ZDR and key-limit calls ran after it, none of them under
     ``discovery_deadline``).
 
     Runs ``fn`` on its own daemon thread and stops waiting once
@@ -2067,7 +2070,7 @@ def discover_all_models(
     a timeout this function abandons the stalled fetch and uses that exact
     same fallback rather than waiting forever, so first-boot pool
     bootstrapping can no longer hang on a stalled Models.dev, OpenRouter ZDR,
-    or OpenRouter credits endpoint (#971 review finding: "shared metadata
+    or OpenRouter key-limit endpoint (#971 review finding: "shared metadata
     fetches bypass discovery deadline").
 
     Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
@@ -2161,24 +2164,38 @@ def discover_all_models(
 def openrouter_paid_inference_available(
     *, timeout: float | None = DISCOVERY_TIMEOUT_SECONDS
 ) -> bool | None:
-    """Return whether OpenRouter attests a strictly positive credit balance."""
+    """Return whether the OpenRouter key attests remaining paid spending headroom.
+
+    Probes ``GET /api/v1/key`` with the inference key itself (OpenRouter's
+    ``GET /api/v1/credits`` requires a management key and rejects an inference
+    key with HTTP 403). Returns ``True`` only when ``data.limit_remaining`` is
+    a finite number greater than zero; ``False`` when it is ``null`` (the key
+    has no spending limit, so paid spend would be unbounded) or is zero or
+    negative; and ``None`` when evidence is missing, malformed, or the request
+    fails. ``apply_openrouter_spend_admission`` admits paid rows only on
+    ``True``.
+    """
     api_key = get_credential("OPENROUTER_API_KEY")
     if not api_key:
         return None
     try:
         payload = _fetch_json(
-            _OPENROUTER_CREDITS_URL,
+            _OPENROUTER_CURRENT_KEY_URL,
             api_key=api_key,
             timeout=timeout,
         )
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
             return None
-        total_credits = Decimal(str(data["total_credits"]))
-        total_usage = Decimal(str(data["total_usage"]))
-        if not total_credits.is_finite() or not total_usage.is_finite():
+        limit_remaining = data["limit_remaining"]
+        if limit_remaining is None:
+            return False
+        if isinstance(limit_remaining, bool) or not isinstance(limit_remaining, (int, float)):
             return None
-        return total_credits - total_usage > 0
+        remaining = Decimal(str(limit_remaining))
+        if not remaining.is_finite():
+            return None
+        return remaining > 0
     except (
         ArithmeticError,
         KeyError,
