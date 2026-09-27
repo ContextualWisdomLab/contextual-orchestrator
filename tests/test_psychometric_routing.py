@@ -1301,7 +1301,7 @@ def test_selection_receipt_does_not_mix_catalog_revisions() -> None:
         selected_id = receipt["selected_deployment_id"]
         assert selected_id == (
             "audit_candidate:"
-            "f30639fe9ae8729e57eb659445325038a92c6c6e8d6810b8f84b36f3bce46bb9"
+            "91dad5c97d95337b359e020fd9d2636cfaeebb0257622cc5490620ed7cf5b13e"
         )
         assert receipt["candidate_deployment_ids"] == [selected_id]
         assert receipt["attempted_deployment_ids"] == [selected_id]
@@ -1344,6 +1344,25 @@ def test_empty_pool_retention_discards_evidence_without_catalog_validation() -> 
         orchestrator.candidates = []
         orchestrator.role_effort_catalog = {}
         orchestrator._retain_psychometric_candidates()
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
+
+def test_departed_served_agent_observation_is_skipped_not_raised() -> None:
+    """A pool refresh during judging must not fail a request that already has its answer."""
+    kept = ModelAgent("kept_agent", "model-kept")
+    departed = ModelAgent("departed_agent", "model-departed")
+    orchestrator = TaskOrchestrator([kept, departed])
+    try:
+        orchestrator.candidates = [kept]
+        orchestrator._observe_contextual_quality(
+            "audit context",
+            "departed_agent",
+            accepted=True,
+            latency_seconds=None,
+            output_tokens=None,
+        )
         assert orchestrator._psychometric_router.records() == []
     finally:
         orchestrator.close()
