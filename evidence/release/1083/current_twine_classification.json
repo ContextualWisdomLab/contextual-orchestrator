@@ -1,0 +1,230 @@
+{
+  "inventory_source_sha": "0d64cb01104fc3e7e573a75323a6c2ffcb8dcdd4",
+  "collector_change": "normalize wheel distribution filename before candidate matching; retain exact version boundary, metadata verification and multiple-candidate rejection",
+  "collector_source_sha256": "3df9f4e438768019145e8998ee2981b82dca298eb8b3e476228986827cde6896",
+  "regression_red_exit": 1,
+  "affected_tests_green": 259,
+  "affected_tests_exit": 0,
+  "new_wheel_evidence": [
+    {
+      "name": "docutils",
+      "version": "0.23",
+      "artifact_sha256": "25d013af9bf23bc1c7b2b093dff4208166c53a94786c9e447808335ef1185fea",
+      "metadata_path": "docutils-0.23.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "docutils-0.23.dist-info/licenses/COPYING.rst",
+          "sha256": "6ab4f27c76c74f96e5e692da5944a6f82968f3bddaac5660a4aa723e70eb5d8f"
+        },
+        {
+          "name": "docutils-0.23.dist-info/licenses/licenses/BSD-0-Clause.rst",
+          "sha256": "42ac50251ab8a6738f77d5707f2a788dbf3446a6ed68edecb6ac17489a78e163"
+        },
+        {
+          "name": "docutils-0.23.dist-info/licenses/licenses/BSD-2-Clause.rst",
+          "sha256": "b8f3b31a2f4312401fe4122fe932a333ec0d7e47d849c02da0404e8048fe74d0"
+        },
+        {
+          "name": "docutils-0.23.dist-info/licenses/licenses/gpl-3-0.txt",
+          "sha256": "e6037104443f9a7829b2aa7c5370d0789a7bda3ca65a0b904cdc0c2e285d9195"
+        }
+      ]
+    },
+    {
+      "name": "id",
+      "version": "1.6.1",
+      "artifact_sha256": "f5ec41ed2629a508f5d0988eda142e190c9c6da971100612c4de9ad9f9b237ca",
+      "metadata_path": "id-1.6.1.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "id-1.6.1.dist-info/licenses/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ]
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "artifact_sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "metadata_path": "idna-3.20.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "idna-3.20.dist-info/licenses/LICENSE.md",
+          "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        }
+      ]
+    },
+    {
+      "name": "jaraco-classes",
+      "version": "3.4.0",
+      "artifact_sha256": "f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790",
+      "metadata_path": "jaraco.classes-3.4.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "jaraco.classes-3.4.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        }
+      ]
+    },
+    {
+      "name": "jaraco-context",
+      "version": "6.1.2",
+      "artifact_sha256": "bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535",
+      "metadata_path": "jaraco_context-6.1.2.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "jaraco_context-6.1.2.dist-info/licenses/LICENSE",
+          "sha256": "9755a18519666e5f0f4cae3daad3d7012bcae48a600b31237d75e9fe134e6683"
+        }
+      ]
+    },
+    {
+      "name": "jaraco-functools",
+      "version": "4.6.0",
+      "artifact_sha256": "99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30",
+      "metadata_path": "jaraco_functools-4.6.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "jaraco_functools-4.6.0.dist-info/licenses/LICENSE",
+          "sha256": "9755a18519666e5f0f4cae3daad3d7012bcae48a600b31237d75e9fe134e6683"
+        }
+      ]
+    },
+    {
+      "name": "jeepney",
+      "version": "0.9.0",
+      "artifact_sha256": "97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683",
+      "metadata_path": "jeepney-0.9.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "jeepney-0.9.0.dist-info/licenses/LICENSE",
+          "sha256": "1b22b049b5267d6dfc23a67bf4a84d8ec04b9fdfb1a51d360e42b4342c8b4154"
+        }
+      ]
+    },
+    {
+      "name": "keyring",
+      "version": "25.7.0",
+      "artifact_sha256": "be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f",
+      "metadata_path": "keyring-25.7.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "keyring-25.7.0.dist-info/licenses/LICENSE",
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d"
+        }
+      ]
+    },
+    {
+      "name": "more-itertools",
+      "version": "11.1.0",
+      "artifact_sha256": "4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192",
+      "metadata_path": "more_itertools-11.1.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "more_itertools-11.1.0.dist-info/licenses/LICENSE",
+          "sha256": "09f1c8c9e941af3e584d59641ea9b87d83c0cb0fd007eb5ef391a7e2643c1a46"
+        }
+      ]
+    },
+    {
+      "name": "nh3",
+      "version": "0.3.7",
+      "artifact_sha256": "6c3aa50eb26e9228238271db9f983cbc3b006dfbfeca2d4dc34c33ddc6ac5ea5",
+      "metadata_path": "nh3-0.3.7.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "nh3-0.3.7.dist-info/licenses/LICENSE",
+          "sha256": "1c5bbd459c8f73e10e39602ac595e8981fb3dd3e895ecfc62e57410f9fbfd47b"
+        }
+      ]
+    },
+    {
+      "name": "readme-renderer",
+      "version": "46.0",
+      "artifact_sha256": "d0dae1f74bb273b534770cb4cccb6bb78735540afdb03c2146f4e19dcd412560",
+      "metadata_path": "readme_renderer-46.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "readme_renderer-46.0.dist-info/licenses/LICENSE",
+          "sha256": "d3174ad63e721d4c9dccb8ad4320848992d314369bc46319720b5802c9153fe9"
+        }
+      ]
+    },
+    {
+      "name": "requests-toolbelt",
+      "version": "1.0.0",
+      "artifact_sha256": "cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06",
+      "metadata_path": "requests_toolbelt-1.0.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "requests_toolbelt-1.0.0.dist-info/AUTHORS.rst",
+          "sha256": "57df198f62c9098aac95c9b8ec1f0b8efc024080f61d5a0ed89ef4c5da3cf031"
+        },
+        {
+          "name": "requests_toolbelt-1.0.0.dist-info/LICENSE",
+          "sha256": "1f8cf8bdacd98ed6d36d0fec0c07f7765acebd6e81205962ab5146023b3c858d"
+        }
+      ]
+    },
+    {
+      "name": "rfc3986",
+      "version": "2.0.0",
+      "artifact_sha256": "50b1502b60e289cb37883f3dfd34532b8873c7de9f49bb546641ce9cbd256ebd",
+      "metadata_path": "rfc3986-2.0.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "rfc3986-2.0.0.dist-info/LICENSE",
+          "sha256": "c0ddce33bfac480a66bde40c590ede2647a4c8a729dcb0d2ce46c014473d5dd8"
+        }
+      ]
+    },
+    {
+      "name": "secretstorage",
+      "version": "3.5.0",
+      "artifact_sha256": "0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137",
+      "metadata_path": "secretstorage-3.5.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "secretstorage-3.5.0.dist-info/licenses/LICENSE",
+          "sha256": "e700357592bb93704cb040ce4a6663a85292716a4041b6a267f598f21658466f"
+        }
+      ]
+    },
+    {
+      "name": "twine",
+      "version": "7.0.0",
+      "artifact_sha256": "b854164df26db268af05f49aa5c0344b10e27a494343ff05b1e0bad3b135f5a7",
+      "metadata_path": "twine-7.0.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "twine-7.0.0.dist-info/licenses/LICENSE",
+          "sha256": "14ed54990120efea26042269885df36e1b53db858bf04b40c8cfc8c5e12f6fb1"
+        }
+      ]
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "artifact_sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+      "metadata_path": "urllib3-2.8.0.dist-info/METADATA",
+      "license_instruments": [
+        {
+          "name": "urllib3-2.8.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+        }
+      ]
+    }
+  ],
+  "classification_totals": {
+    "permitted": 384,
+    "copyleft": 1,
+    "undecidable": 144
+  },
+  "scope_total": 529,
+  "limits": [
+    "Classification is gate output, not full grant or native-runtime acceptance",
+    "Multiple platform wheel candidates remain rejected; new16 tool dependency candidates were individually unambiguous",
+    "Current integration source differs from previous513scope",
+    "No release publication or protected main integration"
+  ]
+}

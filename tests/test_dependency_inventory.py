@@ -880,3 +880,16 @@ def test_native_suffix_instruments_cannot_be_omitted(tmp_path, ecosystem):
     groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": ecosystem, "packages": [package]}]})
     assert not groups["permitted"]
     assert groups["undecidable"]
+
+
+def test_legacy_dotted_wheel_name_is_normalized_without_hiding_ambiguity(tmp_path):
+    from scripts.ci.dependency_inventory import _artifact_distributions
+
+    _wheel(tmp_path, "jaraco.classes", "3.4.0", ["License-Expression: MIT"])
+    records = _artifact_distributions(tmp_path, "jaraco-classes", "3.4.0")
+    assert len(records) == 1
+    assert records[0]["metadata_path"] == "jaraco.classes-3.4.0.dist-info/METADATA"
+    assert not _artifact_distributions(tmp_path, "jaraco-classes", "3.4")
+    _wheel(tmp_path, "jaraco_classes", "3.4.0", ["License-Expression: MIT"])
+    with pytest.raises(InventoryError, match="multiple wheels"):
+        _artifact_distributions(tmp_path, "jaraco-classes", "3.4.0")

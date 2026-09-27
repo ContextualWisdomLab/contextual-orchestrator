@@ -1,0 +1,38 @@
+{
+  "tag": "1.0.0",
+  "tag_commit": "b7d1a1fcdda9ebcd9afe5011690ab860fce780c2",
+  "current_upstream_sha": "bcd5f7be229e14089052be7e3b527ebcea0ae7b8",
+  "current_upstream_license_sha256": "1f8cf8bdacd98ed6d36d0fec0c07f7765acebd6e81205962ab5146023b3c858d",
+  "original_notice_sha256": "1f8cf8bdacd98ed6d36d0fec0c07f7765acebd6e81205962ab5146023b3c858d",
+  "official_instrument_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+  "official_instrument_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "patch_sha256": "d88780b04952a61edf1a9b086e56b1b810d4116f28652a15f64414bdd785a2c3",
+  "wheel_sha256": {
+    "registry": "cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06",
+    "red": "e899b47a100f0677f1485c23d6cb1a6615a840b381ba5477026f62c724855cac",
+    "green": "537c873e32de17034162b28ddd76184496a834ae13bbf2a4b3e8bd2fe4db3191"
+  },
+  "producer_red_green_python_members_byte_identical": 33,
+  "shared_registry_tag_python_members_byte_identical": 33,
+  "registry_only_python_members": [
+    "requests_toolbelt/adapters/appengine.py"
+  ],
+  "tag_only_python_members": [],
+  "green_license_exact_source_match": true,
+  "authors_unchanged": true,
+  "build_tools": {
+    "setuptools": "80.9.0",
+    "wheel": "0.45.1",
+    "packaging": "26.2"
+  },
+  "build_tools_lock_sha256": "fb3404d7cf4a748fd383f4a108ea9c77cf07bea0d04f03b0ed2338d4848ab95c",
+  "red_build_exit": 0,
+  "green_build_exit": 0,
+  "limits": [
+    "Local producer packaging experiment; no upstream commit or publication",
+    "Existing locked registry wheel remains held",
+    "Registry wheel includes appengine.py absent from exact tag; complete registry source provenance not established",
+    "No classifier waiver or full runtime test/reproducibility claim",
+    "Build warnings unsuppressed"
+  ]
+}

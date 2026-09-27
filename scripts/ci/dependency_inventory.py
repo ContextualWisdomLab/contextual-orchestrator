@@ -194,7 +194,11 @@ def _is_license_evidence(path: PurePosixPath) -> bool:
 def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list[dict[str, Any]]:
     """Read the root and every bundled Python distribution from one wheel."""
     normalized = _NAME_SEPARATORS.sub("_", name.strip().lower())
-    candidates = sorted(artifact_dir.glob(f"{normalized}-{version}-*.whl"))
+    candidates = sorted(
+        path for path in artifact_dir.glob("*.whl")
+        if _NAME_SEPARATORS.sub("_", path.name.partition("-")[0].lower()) == normalized
+        and path.name.partition("-")[2].startswith(f"{version}-")
+    )
     if not candidates:
         return []
     if len(candidates) != 1:

@@ -472,3 +472,28 @@ and still needs separate scope review. No SBOM component or classifier waiver
 was added; the previous 370/0/143 classification is unchanged and is not a
 count of these newly identified inlined components. Next: establish grants
 and provenance for these explicit included components before release proof.
+
+## Requests-toolbelt producer instrument repair
+
+The locked requests_toolbelt 1.0.0 wheel includes AUTHORS and only the Apache
+application notice, not the full conditions. Exact tag 1.0.0 commit
+b7d1a1fcdda9ebcd9afe5011690ab860fce780c2 and current upstream
+bcd5f7be229e14089052be7e3b527ebcea0ae7b8 have the same short LICENSE notice.
+A minimal local patch appends the byte-verified complete official Apache text
+to that existing file, preserving the original notice and AUTHORS. Existing
+packaging includes it; no configuration or classifier change is required.
+
+Actual RED/GREEN wheel builds use the existing isolated, hash-locked tools
+(setuptools80.9.0/wheel0.45.1/packaging26.2). GREEN includes the exact repaired
+LICENSE and AUTHORS; all 33 Python files are byte-identical before/after patch.
+The locked registry wheel has an extra adapters/appengine.py absent from the
+exact tag. The other 33 Python files match. An initial whole-code match check
+failed on this discrepancy, so complete registry source provenance is not
+claimed. No registry archive was rewritten or reclassified.
+
+Builds finish exit0 with unsuppressed legacy packaging/classifier/universal
+wheel deprecations, MANIFEST notices and cookies package configuration warning.
+This is packaging proof, not full runtime, reproducibility or release approval.
+The one-file upstream patch remains local and unpublished. Receipt and patch:
+`evidence/release/1083/toolbelt_license_packaging.*`. Current gate totals remain
+384 permitted, one GPL-declaration blocker, 144 held for the 529-entry scope.
