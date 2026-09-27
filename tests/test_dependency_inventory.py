@@ -905,3 +905,17 @@ def test_legacy_dotted_wheel_name_is_normalized_without_hiding_ambiguity(tmp_pat
     _wheel(tmp_path, "jaraco_classes", "3.4.0", ["License-Expression: MIT"])
     with pytest.raises(InventoryError, match="multiple wheels"):
         _artifact_distributions(tmp_path, "jaraco-classes", "3.4.0")
+
+
+def test_workspace_license_instruments_stay_within_native_build_boundary():
+    """maturin must package the instrument without escaping the Cargo workspace."""
+    import tomllib
+
+    workspace = REPOSITORY_ROOT / "rust"
+    data = tomllib.loads((workspace / "Cargo.toml").read_text())
+    for member in data["workspace"]["members"]:
+        manifest = workspace / member / "Cargo.toml"
+        package = tomllib.loads(manifest.read_text())["package"]
+        instrument = (manifest.parent / package["license-file"]).resolve()
+        assert instrument.is_relative_to(workspace)
+        assert instrument.read_bytes() == (REPOSITORY_ROOT / "LICENSE").read_bytes()
