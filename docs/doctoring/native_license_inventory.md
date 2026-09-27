@@ -13,6 +13,10 @@ without extraction, installation, imports, build scripts or install hooks.
 Only the canonical crates.io/npm registry sources are supported. Redirects,
 custom sources, missing strong digests, changed archive bytes, mismatched
 package identities, links, unsafe paths and duplicate evidence are refused.
+Npm tarballs may use any single top directory; the lock digest and package.json
+identity establish the package, not the conventional `package/` directory name.
+The full live scan exposed this case in DefinitelyTyped archives, and the
+reader and regression checks were corrected before publication.
 Unknown or restricted licenses still fail the existing classifier.
 
 Archive evidence includes the complete publisher declaration, bundled license
@@ -65,4 +69,5 @@ two-package transport/reader receipt, not an all-dependency clearance or
 release acceptance. Full inventory adjudication and hosted checks remain required.
 
 Official metadata contracts: [Cargo manifest](https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields),
-[npm lockfile](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/).
+[npm lockfile](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/),
+[npm archive layout](https://docs.npmjs.com/cli/v11/commands/npm-install/#description).

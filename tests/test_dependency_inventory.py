@@ -315,7 +315,7 @@ def test_ordinary_lock_lines_are_not_refused(tmp_path, line) -> None:
 
 
 def _native_archive(directory, ecosystem, name, version, license_text, *, identity=None,
-                    extra=None, declaration="MIT", license_filename="LICENSE"):
+                    extra=None, declaration="MIT", license_filename="LICENSE", archive_prefix=None):
     """Fabricate a registry archive with inert hooks and an exact locked digest."""
     import base64
     import io
@@ -323,7 +323,7 @@ def _native_archive(directory, ecosystem, name, version, license_text, *, identi
 
     from scripts.ci.dependency_inventory import _native_artifact_spec
 
-    prefix = f"{name}-{version}" if ecosystem == "cargo" else "package"
+    prefix = archive_prefix or (f"{name}-{version}" if ecosystem == "cargo" else "package")
     identity = identity or (name, version)
     metadata = (
         f'[package]\nname = "{identity[0]}"\nversion = "{identity[1]}"\nlicense = "{declaration}"\n'
@@ -533,3 +533,14 @@ def test_explicit_cargo_license_file_is_read_without_filename_guessing(tmp_path)
     assert terms == ["MIT"]
     assert files == [{"name": "example-1.2.3/LEGAL", "sha256": hashlib.sha256(text.encode()).hexdigest(),
                       "text": text}]
+
+
+@pytest.mark.parametrize("archive_root", ["node", "node v24.13.3"])
+def test_npm_archive_root_name_is_not_package_identity(tmp_path, archive_root):
+    from scripts.ci.dependency_inventory import _native_license_terms
+
+    package, _ = _native_archive(tmp_path, "npm", "@types/node", "24.13.3", "MIT License",
+                                 archive_prefix=archive_root)
+    terms, _, files = _native_license_terms("npm", package, tmp_path, False)
+    assert terms == ["MIT"]
+    assert files[0]["name"] == f"{archive_root}/LICENSE"

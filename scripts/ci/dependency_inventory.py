@@ -313,7 +313,7 @@ def _native_license_terms(
     if digest != expected:
         raise InventoryError(f"{ecosystem}:{package['name']}: artifact digest differs from lock")
     metadata_name = "Cargo.toml" if ecosystem == "cargo" else "package.json"
-    prefix = f"{package['name']}-{package['version']}" if ecosystem == "cargo" else "package"
+    prefix = f"{package['name']}-{package['version']}" if ecosystem == "cargo" else None
     files: dict[str, bytes] = {}
     expanded = 0
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r|gz") as archive:
@@ -321,8 +321,14 @@ def _native_license_terms(
             if index >= 100000:
                 raise InventoryError("native archive exceeds the 100000-entry evidence limit")
             path = PurePosixPath(member.name)
-            if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != prefix:
-                raise InventoryError("native archive contains an unsafe or unexpected path")
+            if path.is_absolute() or ".." in path.parts or not path.parts:
+                raise InventoryError("native archive contains an unsafe path")
+            # npm strips one directory layer; DefinitelyTyped tarballs use a
+            # different root name. Identity is bound by metadata and lock digest.
+            if prefix is None:
+                prefix = path.parts[0]
+            if path.parts[0] != prefix:
+                raise InventoryError("native archive contains more than one package root")
             if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
                 raise InventoryError("native archive contains a link or special entry")
             expanded += member.size
