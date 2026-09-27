@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from dataclasses import replace
 
 from .chat_capability import is_chat_compatible_model_id
@@ -51,6 +52,8 @@ from .privacy_policy_analysis import (
 )
 from .reasoning_effort_profile import default_role_effort_catalog
 from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
+from .spend_guard import SpendGuard, SpendGuardConfig, VirtualKeyError
+from .spend_metering import JsonlSpendLedgerStore, write_run_usage_summary
 
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
@@ -369,6 +372,83 @@ def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
         }
     )
     return status, available
+
+
+def _spend_reservations_command(argv: list[str]) -> None:
+    """List active spend reservations in a JSONL spend ledger (ADR 0138)."""
+    from .spend_metering import JsonlSpendLedgerStore, active_reservation_report
+
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator spend-reservations",
+        description="List active spend reservations and their unknown-outcome calls.",
+        allow_abbrev=False,
+    )
+    _add_log_level_arguments(parser)
+    parser.add_argument("--spend-ledger-path", required=True, help="JSONL spend ledger path.")
+    args = parser.parse_args(argv)
+    if not os.path.isfile(args.spend_ledger_path):
+        parser.error(f"spend ledger not found: {args.spend_ledger_path}")
+    try:
+        store = JsonlSpendLedgerStore(args.spend_ledger_path)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    report = active_reservation_report(store)
+    print(json.dumps({"active_reservations": report}, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _spend_settle_command(argv: list[str]) -> None:
+    """Append an operator settlement that closes one active spend reservation (ADR 0138)."""
+    from .domain.money import Money
+    from .spend_metering import JsonlSpendLedgerStore, operator_settle_reservation
+
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator spend-settle",
+        description=(
+            "Settle an unknown-outcome spend reservation with an explicit cost "
+            "(0 allowed), operator and reason. The event is append-only."
+        ),
+        allow_abbrev=False,
+    )
+    _add_log_level_arguments(parser)
+    parser.add_argument("--spend-ledger-path", required=True, help="JSONL spend ledger path.")
+    parser.add_argument("--reservation-id", required=True, help="Active reservation to settle.")
+    parser.add_argument("--settled-cost-usd", required=True,
+                        help="Authoritative charged cost for the call (use 0 only with evidence).")
+    parser.add_argument("--reason", required=True, help="Why this settlement is authoritative.")
+    parser.add_argument(
+        "--operator",
+        required=True,
+        help=(
+            "Who is settling, recorded in the audit trail. Free text, not "
+            "authentication: anyone who can write the ledger can settle."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Settle a reservation whose call has not finished yet (no linked usage "
+            "entry), e.g. one left by a crashed process. Without it such a "
+            "reservation is refused because its run may still be in flight."
+        ),
+    )
+    args = parser.parse_args(argv)
+    if not os.path.isfile(args.spend_ledger_path):
+        parser.error(f"spend ledger not found: {args.spend_ledger_path}")
+    try:
+        store = JsonlSpendLedgerStore(args.spend_ledger_path)
+        settlement = operator_settle_reservation(
+            store,
+            args.reservation_id,
+            settled_cost=Money.usd(args.settled_cost_usd),
+            reason=args.reason,
+            settled_by=args.operator,
+            now=int(time.time()),
+            force=args.force,
+        )
+    except (LookupError, ValueError, OSError) as exc:
+        parser.error(str(exc))
+    print(json.dumps({"spend_settlement": settlement.as_dict()}, ensure_ascii=False, sort_keys=True))
 
 
 def _check_fast_mlsirm_command(argv: list[str]) -> None:
@@ -748,6 +828,10 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in discovered
         if not model.evidence_only and is_discovered_chat_candidate(model)
     ]
+    # One price catalogue for spend admission and usage records (ADR 0138).
+    spend_guard = getattr(orchestrator, "spend_guard", None)
+    if spend_guard is not None:
+        refresh_price_book(chat_models, spend_guard.price_book)
     configured_gateway_probe_required = any(
         model.provider_name == "configured_gateway"
         and get_credential(model.credential_name) is not None
@@ -968,6 +1052,12 @@ def main(argv: list[str] | None = None) -> None:
     if subcommand == "openrouter-free-canary":
         _openrouter_free_canary_command(arguments_after_subcommand)
         return
+    if subcommand == "spend-reservations":
+        _spend_reservations_command(arguments_after_subcommand)
+        return
+    if subcommand == "spend-settle":
+        _spend_settle_command(arguments_after_subcommand)
+        return
 
     if subcommand == "nim-benchmark":
         # Optional benchmark harness (issue #86): dynamic NIM catalog discovery,
@@ -980,7 +1070,8 @@ def main(argv: list[str] | None = None) -> None:
         description="Route or conduct chat requests across model agents.",
         epilog=(
             "Commands: register-credential, discover-models, "
-            "openrouter-free-canary, check-fast-mlsirm, nim-benchmark"
+            "openrouter-free-canary, check-fast-mlsirm, nim-benchmark, "
+            "spend-reservations, spend-settle"
         ),
         allow_abbrev=False,
     )
@@ -1081,6 +1172,23 @@ def main(argv: list[str] | None = None) -> None:
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
+    parser.add_argument("--run-max-cost-usd", type=float, default=None,
+                        help="Per-run in-memory USD spend cap checked before every provider call "
+                             "(default: no per-run cap; ADR 0138).")
+    parser.add_argument("--baseline-min-remaining-ratio", type=float, default=None,
+                        help="Under a hard cap, run a paid sampled baseline only while this share "
+                             "of every applicable cap would remain after it (default 0.5; ADR 0138).")
+    parser.add_argument("--tenant-id", default=None,
+                        help="Trusted tenant id the CLI run is metered and budgeted under "
+                             "(default: 'default').")
+    parser.add_argument("--virtual-key-credential", default=None,
+                        help="KV credential name holding a virtual tenant key; its tenant and "
+                             "budget apply to the run (requires --spend-ledger-path).")
+    parser.add_argument("--spend-ledger-path", default=None,
+                        help="Append-only JSONL spend ledger for usage records, virtual keys, "
+                             "and tenant budgets (default: in-memory only).")
+    parser.add_argument("--run-usage-summary", default=None,
+                        help="Write the per-run usage summary JSON artifact to this path.")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument(
@@ -1135,6 +1243,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     _add_log_level_arguments(parser)
     args = parser.parse_args(arguments)
+    try:
+        spend_guard = SpendGuard(
+            config=SpendGuardConfig.from_values(
+                run_max_cost_usd=args.run_max_cost_usd,
+                baseline_min_remaining_ratio=args.baseline_min_remaining_ratio,
+            ),
+            store=(
+                JsonlSpendLedgerStore(args.spend_ledger_path)
+                if args.spend_ledger_path
+                else None
+            ),
+        )
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    virtual_key = None
+    if args.virtual_key_credential:
+        virtual_key = get_credential(args.virtual_key_credential)
+        if virtual_key is None:
+            parser.error(f"virtual key credential {args.virtual_key_credential!r} is not configured")
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -1155,6 +1282,7 @@ def main(argv: list[str] | None = None) -> None:
         rate_limit_wait_seconds=args.rate_limit_wait_seconds,
         rate_limit_unknown_cooldown_seconds=args.rate_limit_unknown_cooldown_seconds,
         allow_empty_agents=args.auto_discover_model_agents,
+        spend_guard=spend_guard,
         role_effort_catalog=(
             default_role_effort_catalog() if args.role_effort_catalog == "default" else None
         ),
@@ -1286,7 +1414,19 @@ def main(argv: list[str] | None = None) -> None:
     if not args.prompt:
         parser.error("prompt is required unless --serve is set")
 
-    result = orchestrator.complete([{"role": "user", "content": args.prompt}], mode=args.mode)
+    try:
+        spend_guard.resolve_identity(tenant_id=args.tenant_id, virtual_key=virtual_key)
+    except (VirtualKeyError, ValueError) as exc:
+        parser.error(str(exc))
+    with spend_guard.tenant_context(tenant_id=args.tenant_id, virtual_key=virtual_key):
+        try:
+            result = orchestrator.complete(
+                [{"role": "user", "content": args.prompt}], mode=args.mode
+            )
+        finally:
+            summary = spend_guard.last_run_summary()
+            if args.run_usage_summary and summary is not None:
+                write_run_usage_summary(args.run_usage_summary, summary)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
