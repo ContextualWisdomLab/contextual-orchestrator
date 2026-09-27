@@ -2186,6 +2186,22 @@ synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
 site, so the worker step required by the owner's report gets the fix, and so
 do the other roles for free, without a second implementation.
 
+### 2026-09-25 structured review synthesis follow-up — proposed in #1220
+
+The coverage note above did not include `response_format` synthesis. Noema's
+structured review request can reach `_orchestrated_provider_completion`, whose
+provider-facing synthesis loop exhausted a free pool after 429 responses
+without calling the shared cooldown wait. A focused regression failed on the
+second 429 before the repair. Candidate #1220 records each quota cooldown,
+keeps quota failures out of the health circuit, and reuses
+`_await_rate_limit_recovery` for a bounded retry only when every eligible
+candidate is cooling. Mixed failures and exhausted wait budgets still return
+typed errors with route evidence. The HTTP, document-diff, structured synthesis,
+and rate-limit regressions pass locally (98 tests); current-head hosted checks,
+independent review, protected merge, and central sidecar adoption
+remain unverified. The central sidecar pin in `.github#2366` carries the
+earlier ordinary-routing repair, not this structured successor.
+
 ### Follow-up (same day): an omitted cooldown header must still count as cooling
 
 `_record_rate_limit(agent_id, None)` originally returned without recording
@@ -7764,3 +7780,22 @@ authorization or published artifact. The proof explicitly marks it unprotected
 and unpublished. #1273's merge of this source passed the 59 API/streaming tests
 with strict warnings (session `5175`); its unchanged native cancellation source
 and separate native dependency still require their hosted gate.
+
+## 2026-09-27 protected-main refresh for #1266 — Proposed
+
+Ordinary merge `3a114546` preserves protected main `6ef802bf`, including
+#1291 fresh-runner pinned Rust bootstrap and #1220 document review. Initial
+strict verification failed three inherited recovery assertions (session
+`14510`): they assumed a retry deadline for headerless 429. Recovery fixtures
+now use provider-owned integer Retry-After; the mixed 429/500 matrix also
+retains absent-timing no-replay cases for both zero and positive wait budgets.
+Intermediate fixture errors (nonexistent exception attribute, fractional
+Retry-After) were corrected before acceptance; no production policy changed.
+
+Six affected suites passed **245 tests**, warnings as errors, process exit 0
+(session `58118`); actionlint and diff check passed. This is local integration
+evidence, not hosted checks or independent approval.
+
+Ledger: loop `1016-main-refresh`, parent `1016`, owner #1266 integration,
+status locally verified; next_action push once and restack descendants, then
+verify current-head CI/review; return_to #1016 protected/versioned contract.
