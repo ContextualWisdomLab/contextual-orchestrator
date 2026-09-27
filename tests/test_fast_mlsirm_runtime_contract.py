@@ -7,7 +7,7 @@ import tomllib
 
 
 def test_supported_python_floor_matches_fast_mlsirm_runtime() -> None:
-    """Every supported interpreter must install the mandatory psychometric runtime."""
+    """Every supported interpreter must install the released psychometric runtime."""
     project_data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
 
     assert project_data["requires-python"] == ">=3.12"
