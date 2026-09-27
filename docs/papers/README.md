@@ -166,8 +166,6 @@ redistribution is unclear.
   prompted planner model (`"generated"`), which corresponds to the paper's
   training-free ablation that replaces the trained Conductor with prompted
   frontier models (Appendix B.7, Table 11), not to the trained Conductor.
-  Grounds workflow steps, recursion depth, decomposition, and access-list
-  scope as first-class ablation factors.
 - Zhang, A. L., Kraska, T., & Khattab, O. (2026). *Recursive language models*
   (arXiv:2512.24601, Version 3). https://arxiv.org/abs/2512.24601
   Cited by the request-partitioning ADR and doctoring receipts as external
@@ -460,7 +458,6 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [RFC 9110](https://doi.org/10.17487/RFC9110)
 - [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
 - [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)
-- [Brookmeyer and Crowley (1982), median survival time confidence interval](https://doi.org/10.2307/2530286) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [arXiv 2211.09110 DOI](https://doi.org/10.48550/arXiv.2211.09110)
 - [arXiv 2305.05176 DOI](https://doi.org/10.48550/arXiv.2305.05176)
 - [arXiv 2403.04132 DOI](https://doi.org/10.48550/arXiv.2403.04132)
