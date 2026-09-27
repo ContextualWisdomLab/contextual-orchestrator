@@ -210,7 +210,7 @@ def rate_limited_storm_error(
     *,
     agent_id: str,
     model: str,
-    retry_after_seconds: float,
+    retry_after_seconds: float | None,
     transport: str = "passthrough",
     cooldown_source: str = "provider",
 ) -> ProviderUpstreamError:
@@ -221,37 +221,36 @@ def rate_limited_storm_error(
     (the administrator-owned model deadline, or the documented
     ``rate_limit_wait_seconds`` fallback). This is quota exhaustion, not a
     connection failure, so it is deliberately kept out of the
-    ``provider_connection_error`` / 502 surface and marked retryable: the
-    caller can retry after ``retry_after_seconds``.
+    ``provider_connection_error`` / 502 surface. It is marked retryable only
+    when the provider supplied ``retry_after_seconds``; unknown timing is
+    fail-closed and non-retryable by this response.
 
     ``cooldown_source`` is ``"provider"`` when ``retry_after_seconds`` came
-    from the provider's own ``Retry-After``/``x-ratelimit-reset*`` header, or
-    ``"assumed"`` when the provider stated no cooldown at all and
-    ``retry_after_seconds`` is instead the administrator-owned
-    ``rate_limit_unknown_cooldown_seconds`` default -- surfaced so the caller
-    can tell a measured wait apart from a guessed one.
+    from the provider's own ``Retry-After``/``x-ratelimit-reset*`` header.
+    It is ``"unavailable"`` with no retry duration when the provider supplied
+    no timing evidence; callers must not synthesize a retry instant.
     """
-    assumed_note = (
-        " (the provider stated no cooldown; this is an assumed wait)"
-        if cooldown_source == "assumed"
+    unavailable_note = (
+        " (the provider stated no retry timing)"
+        if cooldown_source == "unavailable"
         else ""
     )
+    detail = {"cooldown_source": cooldown_source}
+    if retry_after_seconds is not None:
+        detail["retry_after_seconds"] = retry_after_seconds
     return ProviderUpstreamError(
         agent_id=agent_id,
         model=model,
         error_code=PROVIDER_RATE_LIMITED_CODE,
         message=(
             "every eligible provider is rate-limited past this request's "
-            f"wait budget{assumed_note}"
+            f"wait budget{unavailable_note}"
         ),
         client_status=429,
         provider_status=429,
-        retryable=True,
+        retryable=retry_after_seconds is not None,
         transport=transport,
-        extra_detail={
-            "retry_after_seconds": retry_after_seconds,
-            "cooldown_source": cooldown_source,
-        },
+        extra_detail=detail,
     )
 
 
