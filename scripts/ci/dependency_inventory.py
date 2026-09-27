@@ -215,7 +215,7 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
             if archive.getinfo(member).is_dir():
                 continue
             if ".dist-info/" in member and Path(member).name.upper().startswith(
-                ("LICENSE", "LICENCE", "COPYING", "NOTICE")
+                ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")
             ) and not any(member.startswith(root) for root in distribution_roots):
                 raise InventoryError("wheel license text belongs to a different distribution")
         for index, metadata_path in enumerate(ordered):
@@ -255,7 +255,7 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
             for member in members:
                 if archive.getinfo(member).is_dir() or not member.startswith(distribution_roots[index]):
                     continue
-                if member in declared_files or Path(member).name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE")):
+                if member in declared_files or Path(member).name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")):
                     if archive.getinfo(member).file_size > _NATIVE_TEXT_LIMIT:
                         raise InventoryError("wheel licence exceeds text evidence limit")
                     raw = archive.read(member)
@@ -392,7 +392,7 @@ def _native_license_terms(
             if expanded > 2 * 1024 * 1024 * 1024:
                 raise InventoryError("native archive exceeds the 2 GiB expanded evidence limit")
             selected = str(path) == f"{prefix}/{metadata_name}" or path.name.upper().startswith(
-                ("LICENSE", "LICENCE", "COPYING", "NOTICE")
+                ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")
             )
             if not member.isfile() or not selected:
                 continue
@@ -543,7 +543,7 @@ def _installed_license_terms(name: str, version: str) -> tuple[list[str], str, l
     root = Path(distribution.locate_file("")).resolve()
     try:
         for member in distribution.files or []:
-            if not member.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE")):
+            if not member.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")):
                 continue
             path = Path(distribution.locate_file(member)).resolve()
             if not path.is_relative_to(root):

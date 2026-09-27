@@ -635,8 +635,9 @@ def test_wheel_version_prefix_is_not_exact_artifact_evidence(tmp_path):
     assert files == []
 
 
+@pytest.mark.parametrize("filename", ["LICENSE", "UNLICENSE"])
 @pytest.mark.parametrize("linked", [False, True])
-def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkeypatch, linked):
+def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkeypatch, linked, filename):
     import importlib.metadata
     repository = _repository(tmp_path)
     site = tmp_path / "site"
@@ -644,14 +645,14 @@ def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkey
     info.mkdir(parents=True)
     (info / "METADATA").write_text("Name: only_library\nVersion: 1.0\nLicense-Expression: MIT\n")
     raw = b"Permission is hereby granted, free of charge.\r\n"
-    license_path = info / "LICENSE"
+    license_path = info / filename
     if linked:
         outside = tmp_path / "outside-license"
         outside.write_bytes(raw)
         license_path.symlink_to(outside)
     else:
         license_path.write_bytes(raw)
-    (info / "RECORD").write_text("only_library-1.0.dist-info/LICENSE,,\n")
+    (info / "RECORD").write_text(f"only_library-1.0.dist-info/{filename},,\n")
     distribution = importlib.metadata.Distribution.at(info)
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
     inventory = build_inventory(repository, resolve_licenses=True)
@@ -659,7 +660,7 @@ def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkey
     if linked:
         assert package["license_files"] == []
     else:
-        assert package["license_files"] == [{"name": "LICENSE", "sha256": hashlib.sha256(raw).hexdigest(),
+        assert package["license_files"] == [{"name": filename, "sha256": hashlib.sha256(raw).hexdigest(),
                                             "text": raw.decode("utf-8")}]
 
 
@@ -768,3 +769,31 @@ def test_declared_arbitrary_license_filename_cannot_hide_additional_terms(tmp_pa
     groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": records}]})
     assert len(groups["undecidable"]) == 1
     assert len(groups["permitted"]) == int(bundled)
+
+
+@pytest.mark.parametrize("ecosystem", ["cargo", "npm", "python"])
+def test_unlicense_named_file_cannot_hide_additional_copyleft(tmp_path, ecosystem):
+    """Read the instrument's bytes; its permissive-looking name grants nothing."""
+    from scripts.ci.dependency_inventory import _native_license_terms
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    text = "Permission is hereby granted, free of charge, to any person."
+    extra = "GNU General Public License version 3 applies to this software."
+    if ecosystem == "python":
+        wheel = _wheel(tmp_path, "example", "1.2.3", ["License-Expression: MIT"])
+        with zipfile.ZipFile(wheel, "a") as archive:
+            archive.writestr("example-1.2.3.dist-info/LICENSE", text)
+            archive.writestr("example-1.2.3.dist-info/UNLICENSE", extra)
+        terms, source, files = _artifact_license_terms(tmp_path, "example", "1.2.3")
+        package = {"name": "example", "version": "1.2.3"}
+    else:
+        prefix = "example-1.2.3" if ecosystem == "cargo" else "package"
+        package, _ = _native_archive(tmp_path, ecosystem, "example", "1.2.3", text,
+                                     extra={f"{prefix}/UNLICENSE": extra})
+        terms, source, files = _native_license_terms(ecosystem, package, tmp_path, False)
+    assert any(file["name"].endswith("UNLICENSE") for file in files)
+    package.update(licenses=terms, license_files=files, license_source=source)
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": ecosystem,
+                                                          "packages": [package]}]})
+    assert not groups["permitted"]
+    assert groups["undecidable"] or groups["copyleft"]
