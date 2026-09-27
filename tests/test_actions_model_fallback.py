@@ -376,6 +376,13 @@ def test_http_virtual_free_tools_reselect_worker_on_retryable_failure() -> None:
     assert status == 200, body
     assert isinstance(body, dict)
     assert body["orchestration"]["mode"] == "route"
+    route = body["orchestration"]["route"]
+    assert [attempt["agent_id"] for attempt in route["attempted"]] == client.calls
+    assert [attempt["outcome"] for attempt in route["attempted"]] == [
+        "retryable_transport" if agent_id == "primary_free_agent" else "served"
+        for agent_id in client.calls
+    ]
+    assert route["terminal_reason"] == "served"
     assert "served-by-fallback_free_agent" in body["choices"][0]["message"]["content"]
     assert client.calls[0] == "primary_free_agent"
     assert client.calls[-1] == "fallback_free_agent"
