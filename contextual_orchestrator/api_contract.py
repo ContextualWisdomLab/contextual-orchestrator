@@ -120,10 +120,12 @@ OPENAPI_SPEC = {
                 "description": (
                     "One per-candidate attempt evidence entry, recorded before "
                     "(and, for the served candidate, alongside) a completion. "
-                    "Emitted by both the structured-synthesis candidate loop "
-                    "(_orchestrated_provider_completion) and the single-worker "
-                    "streaming fallback (stream_route) so callers see one fixed "
-                    "vocabulary regardless of path (issue #1016, rows 2 and 4)."
+                    "Emitted by the structured-synthesis candidate loop "
+                    "(_orchestrated_provider_completion), the single-worker "
+                    "streaming fallback (stream_route), and non-streaming "
+                    "route_once's shared _invoke failover loop so callers see "
+                    "one fixed vocabulary regardless of path (issue #1016, "
+                    "rows 2 and 4)."
                 ),
                 "required": ["agent_id", "model", "outcome"],
                 "properties": {
@@ -177,9 +179,10 @@ OPENAPI_SPEC = {
                 "description": (
                     "Route evidence for one completion: every eligible agent, "
                     "every attempt made (including the served one), and why the "
-                    "route terminated. Stable across the structured-synthesis "
-                    "and single-worker streaming fallback paths. A successful "
-                    "stream places this object in the final completion chunk."
+                    "route terminated. Stable across the structured-synthesis, "
+                    "single-worker streaming fallback, and non-streaming "
+                    "route_once paths. A successful stream places this object "
+                    "in the final completion chunk."
                 ),
                 "required": ["eligible_agent_ids", "attempted", "terminal_reason"],
                 "allOf": [

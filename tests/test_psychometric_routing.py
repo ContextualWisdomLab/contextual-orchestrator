@@ -1457,6 +1457,24 @@ def test_slow_observation_embedding_does_not_block_candidate_retirement(monkeypa
     assert errors == []
     assert orchestrator._psychometric_router.records() == []
 
+def test_departed_served_agent_observation_is_skipped_not_raised() -> None:
+    """A pool refresh during judging must not fail a request that already has its answer."""
+    kept = ModelAgent("kept_agent", "model-kept")
+    departed = ModelAgent("departed_agent", "model-departed")
+    orchestrator = TaskOrchestrator([kept, departed])
+    try:
+        orchestrator.candidates = [kept]
+        orchestrator._observe_contextual_quality(
+            "audit context",
+            "departed_agent",
+            accepted=True,
+            latency_seconds=None,
+            output_tokens=None,
+        )
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
 
 def test_changed_deployment_cannot_inherit_exact_context_score() -> None:
     """Prevent an obsolete deployment score from overriding current static ordering."""
