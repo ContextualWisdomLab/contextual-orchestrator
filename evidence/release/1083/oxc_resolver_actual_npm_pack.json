@@ -1,0 +1,135 @@
+{
+  "producer_source_sha": "992f229bc465c5a176227a44577b41c3932cda05",
+  "toolchain": {
+    "vp": "0.3.3",
+    "node": "24.14.0",
+    "pnpm": "11.24.0",
+    "npm": "11.17.0",
+    "napi": "3.10.4"
+  },
+  "red_npm_archive_sha256": "664b2dbcee644d13be910546467b9a97e3be14f07e434a325ea911bb636b1103",
+  "red_npm_license_absent": true,
+  "green_platforms": [
+    {
+      "platform": "android-arm-eabi",
+      "archive_sha256": "2173358cd9b58a741e84d9c1efedf62275fac77a1a3856447660866176df5d07",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-android-arm-eabi"
+    },
+    {
+      "platform": "android-arm64",
+      "archive_sha256": "2dd6bc618eeaffbbfe4ab0d17f3f7df5d0102ea75b05f1182c04b1b6973e6753",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-android-arm64"
+    },
+    {
+      "platform": "darwin-arm64",
+      "archive_sha256": "8578ac66a17144c975f9632b3e8350d4e72bdc508bb4dfb5188a509603931cd2",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-darwin-arm64"
+    },
+    {
+      "platform": "darwin-x64",
+      "archive_sha256": "ed1a0166f65055767588f82651cd282cd21890dd5ec545e6ed25f998d28646ac",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-darwin-x64"
+    },
+    {
+      "platform": "freebsd-x64",
+      "archive_sha256": "f85745239d730bc01071fbf57babf1cedcef29d102b9f34478b68c623d275b08",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-freebsd-x64"
+    },
+    {
+      "platform": "linux-arm-gnueabihf",
+      "archive_sha256": "516c06337ac407eb7b4379ed3e4d67d3add4da125460eac2ac9da59076c1af6e",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-arm-gnueabihf"
+    },
+    {
+      "platform": "linux-arm-musleabihf",
+      "archive_sha256": "85162447ffbc86bed911845516383c0873eede81d47bd9e196dd964af3099bf2",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-arm-musleabihf"
+    },
+    {
+      "platform": "linux-arm64-gnu",
+      "archive_sha256": "8fcce85243a6a0a63c436a7a7a13eb7db8047abdcd483d2c004d07f549e728f1",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-arm64-gnu"
+    },
+    {
+      "platform": "linux-arm64-musl",
+      "archive_sha256": "a6df60faf9fe96199d2bb2d10670c5aef6e2cc9b2a63f4440e8bf2578d19a756",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-arm64-musl"
+    },
+    {
+      "platform": "linux-ppc64-gnu",
+      "archive_sha256": "57cefed3496af61c8714200bcccaaceb585e12e900b73f850015133dee5bfa95",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-ppc64-gnu"
+    },
+    {
+      "platform": "linux-riscv64-gnu",
+      "archive_sha256": "4af36a9ef5467e2d27a5323bf422282257d1768ef3d66915e96c513bed5e83c2",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-riscv64-gnu"
+    },
+    {
+      "platform": "linux-riscv64-musl",
+      "archive_sha256": "993dda9423c51176580ead70fd2a64f38e4d4f785201ea4563866bc31d5d0126",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-riscv64-musl"
+    },
+    {
+      "platform": "linux-s390x-gnu",
+      "archive_sha256": "78e8b06b090bc002a9545053472ae7f75bde177fc5a832b6c46bf2ad566bd258",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-s390x-gnu"
+    },
+    {
+      "platform": "linux-x64-gnu",
+      "archive_sha256": "06fbe278d5429712aca1253e3a1db20d1d4ecd34e2c2904fba900d1534195cba",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-x64-gnu"
+    },
+    {
+      "platform": "linux-x64-musl",
+      "archive_sha256": "0312ef7bad2682af7494cd7135ac110a48fb189b335b39b07d9304b565aacb4e",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-linux-x64-musl"
+    },
+    {
+      "platform": "openharmony-arm64",
+      "archive_sha256": "7a91b9cd87e51b8465c38a3b6d9f4e6ddb7887d00780d4ee0a5e1f32dfeb132f",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-openharmony-arm64"
+    },
+    {
+      "platform": "wasm32-wasi",
+      "archive_sha256": "451caa2abb14ffc520c5ad65507ed4c737ef22c1fe11cdc80790df32c31f8353",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-wasm32-wasi"
+    },
+    {
+      "platform": "win32-arm64-msvc",
+      "archive_sha256": "d7aa3d8b825f528fb6f0415ae59e318a42dcd55ecc277bfc8e86aa3f569b16ee",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-win32-arm64-msvc"
+    },
+    {
+      "platform": "win32-x64-msvc",
+      "archive_sha256": "16b002a58b02ed9540cad138a0263175f626f063b31caa51cf336345c644a7f1",
+      "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "metadata": "@oxc-resolver/binding-win32-x64-msvc"
+    }
+  ],
+  "publisher_boundary": "NAPI readNapiConfig defaults npmClient to npm; pre-publish invokes npmClient publish, while root uses pnpm publish",
+  "pnpm_counterprobe": "vp pm pack inherited ancestor LICENSE without the copy; not equivalent to platform npm publication",
+  "limits": [
+    "Metadata-only packs, no native binaries compiled or rebuilt",
+    "No real publish or CO dependency upgrade",
+    "Full producer vp check/test and native dependency grant composition not established"
+  ]
+}

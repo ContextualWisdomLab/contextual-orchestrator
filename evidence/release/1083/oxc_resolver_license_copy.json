@@ -1,0 +1,39 @@
+{
+  "producer_source_sha": "992f229bc465c5a176227a44577b41c3932cda05",
+  "locked_tag_source_sha": "f4bd0eeaa6045b42f2ac6de3bd9a4102514082a4",
+  "license_sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+  "current_and_locked_tag_license_identical": true,
+  "affected_locked_platforms": 19,
+  "workflow_snippet_copy_verified": true,
+  "missing_source_fatal": true,
+  "root_napi_license_copy_verified": true,
+  "limits": [
+    "Additional native dependency grants/composition not cleared",
+    "No external submission or released artifact; original locked archives unchanged",
+    "Metadata-only actual npm pack proof; full native compilation and vp check/test not established",
+    "Original locked archives remain held; no published successor or CO lock update"
+  ],
+  "followup": {
+    "vp_missing_resolved": true,
+    "frozen_lockfile_install": "success; ignore-scripts; existing lock unchanged",
+    "actual_npm_pack_receipt": "oxc_resolver_actual_npm_pack.json",
+    "published_platform_receipt": "oxc_resolver_current_released_platform.json",
+    "result": "Actual metadata-only npm RED lacks LICENSE; all19 GREEN platform archives include exact instrument",
+    "publisher_scope": "Platform NAPI defaults to npm; pnpm ancestor inclusion counterprobe cannot substitute for that path",
+    "bootstrap_receipt": {
+      "name": "@voidzero-dev/vite-plus-cli-darwin-arm64",
+      "version": "0.3.3",
+      "url": "https://registry.npmjs.org/@voidzero-dev/vite-plus-cli-darwin-arm64/-/vite-plus-cli-darwin-arm64-0.3.3.tgz",
+      "registry_integrity": "sha512-C7O1kN10VYhBPmRYV/lYxC5HRGJtw4JimuwLdgggEpo37ko8OsIkMcfLVDB1HFCioA8gpO4jW81oBMvpNWrpqQ==",
+      "archive_sha256": "a29625a773bc8fef4de4434a67a24f34849b3c2c0159ea87a854c8853ec94754",
+      "binary_sha256": "e6ba499abb62c03537a4f838ae121008fe954ba0f9e9454d1137cfa1b7687333",
+      "provenance_metadata_present": {
+        "url": "https://registry.npmjs.org/-/npm/v1/attestations/@voidzero-dev%2fvite-plus-cli-darwin-arm64@0.3.3",
+        "provenance": {
+          "predicateType": "https://slsa.dev/provenance/v1"
+        }
+      },
+      "limits": "Registry integrity verified; attestation signature/source binding not independently verified"
+    }
+  }
+}

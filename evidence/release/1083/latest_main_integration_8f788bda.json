@@ -1,0 +1,32 @@
+{
+  "integration_source_sha": "8f788bda9b918ad7781dbc84d4477a9121294722",
+  "protected_main_base_sha": "8e1f1a8bf3e96e56dc8fcc90ec777883a1d56ce6",
+  "license_evidence_head_sha": "cefd1c82110245837d25c9734096c42bb96dae29",
+  "pypi_successor_head_sha": "65c35a2c4f50f716d10261716bb98bbee8dbccbe",
+  "branch": "probe/release-current-main-1083",
+  "verification": {
+    "runner_bootstrap_and_repository_metadata_tests": 20,
+    "process_exit": 0,
+    "security_and_release_actionlint_exit": 0,
+    "wheel_build_exit": 0,
+    "wheel_sha256": "00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf",
+    "identical_prior_installed_artifact": true,
+    "inventory_sha256": "3f73d38a732be49f4c2e5a552c01f7ac7e23710514846316abef9b76c0089595",
+    "inventory_counts": {
+      "python": 127,
+      "cargo": 43,
+      "npm": 359
+    },
+    "classification_counts": {
+      "permitted": 384,
+      "copyleft": 1,
+      "undecidable": 144
+    }
+  },
+  "limits": [
+    "Integration branch is not protected delivery",
+    "Older 406-test integration result is historical; this turn executed only 20 affected tests",
+    "Wheel identity supports reuse of exact artifact runtime evidence; dependency/license clearance remains incomplete",
+    "No immutable release or downstream consumer acceptance yet"
+  ]
+}

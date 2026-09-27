@@ -1,0 +1,20 @@
+{
+  "source_sha": "8e1f1a8bf3e96e56dc8fcc90ec777883a1d56ce6",
+  "security_run": 36336155059,
+  "rust_job": 108667272127,
+  "status": "completed",
+  "conclusion": "success",
+  "verified_steps": [
+    "format",
+    "relocated Python shared-library lookup",
+    "Clippy deny warnings",
+    "Rust workspace test:10passed",
+    "cargo-audit0.22.2 install",
+    "Cargo.lock advisory audit:43crate dependencies,1271advisories loaded"
+  ],
+  "repair_pr": 1312,
+  "limits": [
+    "Other matching-head Security jobs still queued at observation",
+    "No full release/security acceptance implied"
+  ]
+}
