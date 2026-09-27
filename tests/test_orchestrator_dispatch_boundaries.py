@@ -272,8 +272,9 @@ def _capturing_judge_components(captured: dict[str, object]) -> object:
     return _Components()
 
 
-DIRECT_ROUTE_CRITERIA = ["evidence_quality", "risk_signal"]
-CONDUCT_FINAL_ANSWER_CRITERIA = ["task_alignment", "evidential_support"]
+# Psychometric rows are stored by column position without criterion ids, so
+# every judged path must keep main's criteria in main's order.
+JUDGE_CRITERIA = ["evidence_quality", "risk_signal"]
 
 
 def _assert_judge_contract(captured: dict[str, object], criterion_ids: list[str]) -> None:
@@ -292,8 +293,7 @@ def test_conduct_judges_the_final_answer_against_the_verifier_reference(
     """Verification must measure the return candidate, not the verifier report.
 
     The verifier report goes to fast-mlsirm as ``reference_answer``; the
-    threshold stays the established ``0.7`` and only the criteria change to
-    describe a final answer instead of a verifier report.
+    threshold (``0.7``) and criteria stay exactly as on direct routes.
     """
     from contextual_orchestrator import orchestrator as orchestrator_module
 
@@ -325,11 +325,11 @@ def test_conduct_judges_the_final_answer_against_the_verifier_reference(
     assert isinstance(judge_kwargs, dict)
     assert judge_kwargs["answer"] == outputs["synthesizer"]
     assert judge_kwargs["reference_answer"] == outputs["verifier"]
-    _assert_judge_contract(captured, CONDUCT_FINAL_ANSWER_CRITERIA)
+    _assert_judge_contract(captured, JUDGE_CRITERIA)
 
 
 def test_route_once_judge_keeps_the_direct_route_contract() -> None:
-    """Direct routes judge the response itself with main's threshold and criteria."""
+    """Direct routes judge the response itself, with no reference, as on main."""
     from contextual_orchestrator import orchestrator as orchestrator_module
 
     captured: dict[str, object] = {}
@@ -345,14 +345,11 @@ def test_route_once_judge_keeps_the_direct_route_contract() -> None:
     assert isinstance(judge_kwargs, dict)
     assert judge_kwargs["answer"] == result["answer"]
     assert "reference_answer" not in judge_kwargs
-    _assert_judge_contract(captured, DIRECT_ROUTE_CRITERIA)
-    criteria = captured["criteria"]
-    assert isinstance(criteria, list)
-    assert not any("verifier finding" in criterion["description"] for criterion in criteria)
+    _assert_judge_contract(captured, JUDGE_CRITERIA)
 
 
 def test_realtime_route_judge_keeps_the_direct_route_contract() -> None:
-    """Streaming and batch share ``_realtime_route_judge``; it must not use conduct's rubric."""
+    """Streaming and batch share ``_realtime_route_judge``; it must not pass a reference."""
     from contextual_orchestrator import orchestrator as orchestrator_module
 
     captured: dict[str, object] = {}
@@ -375,7 +372,7 @@ def test_realtime_route_judge_keeps_the_direct_route_contract() -> None:
     assert isinstance(judge_kwargs, dict)
     assert judge_kwargs["answer"] == "streamed answer"
     assert "reference_answer" not in judge_kwargs
-    _assert_judge_contract(captured, DIRECT_ROUTE_CRITERIA)
+    _assert_judge_contract(captured, JUDGE_CRITERIA)
 
 
 @pytest.mark.parametrize("accepted", [True, False])

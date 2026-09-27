@@ -29,6 +29,27 @@ controlled whether the runtime returned a worker or synthesizer output. A
 quality judgment about the review report does not measure either response
 candidate and therefore cannot support that selection.
 
+## Scope
+
+This ADR changes only *which text is judged* in `conduct`. It does not change
+how answers are scored:
+
+- `accept_threshold` stays `0.7` on every path.
+- The criteria stay `evidence_quality` and `risk_signal` (weight `1.0` each,
+  same order and descriptions) on every path, including `conduct`.
+  `psychometric_routing.py` stores IRT rows by column position without
+  criterion ids, so renaming or reordering criteria would silently change the
+  meaning of rows already recorded.
+- Direct routes (`route_once`, streaming, and batch, all through
+  `_realtime_route_judge`) are unchanged: the one response is both the answer
+  under review and the stored `verifier_output`, and no reference is passed.
+
+A scoring redesign (a different threshold such as a conjunctive `1.0` rule,
+or criteria that describe a final answer rather than "the verifier output") is
+out of scope. It needs its own PR and ADR with evaluation evidence and a plan
+for the positional psychometric rows. An intermediate revision of this PR
+(`350da480`) included such a redesign; it was removed.
+
 ## Constraints
 
 - fast-mlsirm remains the only semantic judge; contextual-orchestrator must not
@@ -36,12 +57,6 @@ candidate and therefore cannot support that selection.
 - The verifier report remains available as evidence and must not be relabelled
   as the final answer.
 - Missing, malformed, or unavailable judge output fails closed (ADR 0001).
-- Direct routes (`route_once`, streaming, and batch, all through
-  `_realtime_route_judge`) must not change: there the one response is both the
-  answer under review and the stored `verifier_output`.
-- No acceptance-threshold change without evaluation evidence. The existing
-  `accept_threshold=0.7` has no calibration artifact either, but replacing it
-  is a separate, evaluated decision, not part of this fix.
 
 ## Alternatives
 
@@ -49,60 +64,44 @@ candidate and therefore cannot support that selection.
    differs from the returned object.
 2. **Disable judgment when `verifier_required=False`.** Rejected because it
    would remove evidence rather than repair the quality boundary.
-3. **Also raise the threshold to `1.0` (every criterion at its maximum).**
-   Rejected. It was not requested and has no evaluation behind it; with
-   continuous criterion scores it would reject almost every conduct final
-   answer and force the worker fallback. An earlier revision of this PR
-   (`350da480`) applied it to every judged path, including direct routes.
-4. **Judge the response candidate, pass the verifier report as
-   `reference_answer`, keep the `0.7` threshold, and use criteria that describe
-   a final answer.** Selected.
+3. **Judge the response candidate and pass the verifier report as
+   `reference_answer`, with scoring unchanged.** Selected.
 
 ## Decision
 
-`_model_judge_verification` accepts an optional `answer`.
+`_model_judge_verification` accepts an optional `answer`. Conduct callers (the
+template and the generated plan) pass their final workflow-step output as
+`answer`, and the verifier report goes to fast-mlsirm as `reference_answer`.
+fast-mlsirm treats the reference as a comparison standard, not as evidence:
+its prompt says requirements written only in the reference must not be
+credited to the answer. Direct-route callers omit `answer` and the call is
+exactly as before (no `reference_answer`).
 
-- **Conduct final answer** (`answer` supplied by both the template and the
-  generated plan): fast-mlsirm judges the final workflow-step output as
-  `answer` and receives the verifier report as `reference_answer`. fast-mlsirm
-  treats the reference as a comparison standard, not as evidence: its prompt
-  says requirements written only in the reference must not be credited to the
-  answer. The criteria are `task_alignment` ("Does the response directly and
-  completely address the requested task?") and `evidential_support` ("Are
-  material claims supported, with every substantive verifier finding resolved
-  or explicitly reported?"), each with `weight=1.0`.
-- **Direct routes** (`answer` omitted): unchanged. fast-mlsirm judges the
-  response itself, with no `reference_answer`, using the `evidence_quality` and
-  `risk_signal` criteria (weight `1.0` each) exactly as before.
-- **Both paths** construct the judge with `accept_threshold=0.7`.
-
-The conduct criteria differ from the direct-route ones only because the
-direct-route criteria ask about "the verifier output"; applied to a
-synthesizer answer they would describe the wrong object. Keeping the threshold
-and weights identical isolates the change to *what* is judged.
+Known limitation: the unchanged criterion descriptions still ask about "the
+verifier output". With `answer` now the final response, the judge scores that
+response against those descriptions. Rewording them belongs to the scoring
+redesign above.
 
 ## Evidence
 
-At `350da480`, and at the approved predecessor `235bf8fb`, the regression
-tests in `tests/test_orchestrator_dispatch_boundaries.py` fail:
+`tests/test_orchestrator_dispatch_boundaries.py`:
 
 - `test_conduct_judges_the_final_answer_against_the_verifier_reference`
-  (template and generated): at `235bf8fb` the captured `answer` is the
-  verifier output; at `350da480` the threshold is `1.0`.
+  (template and generated) fails at the approved predecessor `235bf8fb`
+  (captured `answer` is the verifier report) and passes now. It also pins
+  threshold `0.7` and `evidence_quality`/`risk_signal` for conduct.
 - `test_route_once_judge_keeps_the_direct_route_contract` and
-  `test_realtime_route_judge_keeps_the_direct_route_contract`: at `350da480`
-  direct routes use `1.0` and the conduct criteria.
-
-After this revision all of them pass, together with
-`tests/test_model_judge.py::test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call`
-(`0.7` again).
+  `test_realtime_route_judge_keeps_the_direct_route_contract` pin the direct
+  route: the response is the answer, no `reference_answer`, threshold `0.7`,
+  and main's criteria. At `350da480` both fail (threshold `1.0`, renamed
+  criteria).
 
 ## Effects and risks
 
 - A conduct verdict now describes the response candidate that may be returned.
 - The verifier report remains auditable as reference evidence.
-- Direct-route verdicts, quality-ledger observations, and cascade behavior are
-  unchanged.
+- Direct-route verdicts, quality-ledger observations, psychometric rows, and
+  cascade behavior are unchanged.
 - This does not establish held-out judge accuracy, inter-rater reliability, or
   a calibrated decision policy; `0.7` stays an uncalibrated legacy value.
 - `verifier_required=False` still permits a rejected synthesis to be returned;
@@ -111,11 +110,11 @@ After this revision all of them pass, together with
 
 ## Operational scenes
 
-- **Normal:** the synthesizer resolves the verifier's findings; the judge scores
-  the synthesis against the report and the weighted score reaches `0.7`.
-- **Failure:** the synthesizer ignores a concrete verifier finding; evidential
-  support scores low, so a required-verifier workflow falls back to the worker
-  output according to its existing policy.
+- **Normal:** the synthesizer addresses the verifier's findings; the judge
+  scores the synthesis with the report as reference and the weighted score
+  reaches `0.7`.
+- **Failure:** the synthesis scores below `0.7`; a required-verifier workflow
+  falls back to the worker output according to its existing policy.
 - **Unavailable judge:** fast-mlsirm or the provider fails; the verdict remains
   rejected and records available call accounting.
 - **Optional verifier policy:** the rejected verdict remains visible even when
@@ -123,9 +122,8 @@ After this revision all of them pass, together with
 
 ## Follow-up
 
-Any threshold change (including a conjunctive `1.0` rule) needs its own
-proposal with evaluation evidence. fast-mlsirm should own and release a
-versioned calibrated decision-policy contract with held-out design, estimator
-identity, uncertainty, criterion provenance, and immutable artifact digest.
-contextual-orchestrator can consume that release in a later PR; no source copy
-or mutable branch dependency is authorized.
+A scoring redesign (threshold and criteria) needs its own PR and ADR with
+evaluation evidence and a migration or versioning plan for the positional
+psychometric rows. fast-mlsirm should own and release a versioned calibrated
+decision-policy contract; contextual-orchestrator can consume that release in
+a later PR.

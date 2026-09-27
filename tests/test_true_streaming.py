@@ -938,7 +938,7 @@ def test_http_route_stream_shared_context_budget_error_before_any_provider_bytes
 
 
 class _JudgeSecondCallCriterion:
-    def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+    def __init__(self, criterion_id: str, description: str, weight: float) -> None:
         self.criterion_id = criterion_id
         self.description = description
         self.weight = weight

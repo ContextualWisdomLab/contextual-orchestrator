@@ -65,7 +65,7 @@ def _orch(judge_reply: str) -> tuple[TaskOrchestrator, _ScriptedClient]:
 
 
 class _ScriptedCriterion:
-    def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+    def __init__(self, criterion_id: str, description: str, weight: float) -> None:
         self.criterion_id = criterion_id
         self.description = description
         self.weight = weight
@@ -559,7 +559,7 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
         pass
 
     class _Criterion:
-        def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight
@@ -634,7 +634,7 @@ def test_judge_model_survives_concurrent_pool_change_during_verification() -> No
         pass
 
     class _Criterion:
-        def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight
@@ -1177,7 +1177,7 @@ def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> N
             })
 
     class _Criterion:
-        def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight
@@ -1241,7 +1241,7 @@ def test_fast_mlsirm_invalid_irt_projection_fails_closed() -> None:
             })
 
     class _Criterion:
-        def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight
@@ -1274,7 +1274,7 @@ def test_fast_mlsirm_format_error_fails_closed() -> None:
             raise _FormatError("invalid structured verdict")
 
     class _Criterion:
-        def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight
@@ -1322,7 +1322,7 @@ def test_fast_mlsirm_format_error_after_completed_call_preserves_accounting() ->
             raise _FormatError("invalid structured verdict")
 
     class _Criterion:
-        def __init__(self, criterion_id: str, description: str, weight: float = 1.0) -> None:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
             self.criterion_id = criterion_id
             self.description = description
             self.weight = weight

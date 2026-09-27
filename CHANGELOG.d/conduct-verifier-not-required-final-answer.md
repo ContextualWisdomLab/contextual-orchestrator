@@ -9,7 +9,6 @@
 - Corrected the fast-mlsirm boundary so both fixed and generated conduct plans
   judge the final response candidate, with the verifier report passed as
   `reference_answer` (a comparison standard), rather than judging the report
-  itself. The conduct judgment uses `task_alignment` and `evidential_support`
-  criteria because the old criteria ask about "the verifier output". The
-  acceptance threshold stays `0.7` on every path, and direct routes
-  (`route_once`, streaming, batch) keep their previous criteria unchanged.
+  itself. Scoring is unchanged: `accept_threshold` stays `0.7` and the
+  `evidence_quality`/`risk_signal` criteria stay the same on every path.
+  Direct routes (`route_once`, streaming, batch) are unchanged.

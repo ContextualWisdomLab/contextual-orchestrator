@@ -13197,18 +13197,12 @@ class TaskOrchestrator:
         """Judge an answer against verifier evidence and fail closed on uncertainty.
 
         Direct-route callers (``route_once``, streaming, and batch, all via
-        ``_realtime_route_judge``) omit ``answer`` because their verifier output
-        is the response itself; they keep the ``evidence_quality`` and
-        ``risk_signal`` criteria unchanged.
-
-        Conduct callers supply the final-step response as ``answer`` and pass the
-        verifier report to fast-mlsirm as ``reference_answer``, which fast-mlsirm
-        treats as a comparison standard, not as evidence. Judging the report as
-        the answer cannot establish the quality of the response being returned,
-        and criteria that ask about "the verifier output" would not describe the
-        judged object, so this path uses the ``task_alignment`` and
-        ``evidential_support`` criteria. Both paths use the same ``0.7``
-        acceptance threshold.
+        ``_realtime_route_judge``) omit ``answer``: the verifier output is the
+        response itself. Conduct callers pass their final-step response as
+        ``answer``, and the verifier report goes to fast-mlsirm as
+        ``reference_answer`` (a comparison standard, not evidence), so the
+        verdict describes the response that may be returned. Threshold and
+        criteria are identical on both paths.
         """
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
@@ -13265,55 +13259,24 @@ class TaskOrchestrator:
                 mode="route",
                 accept_threshold=0.7,
             )
-            if answer is None:
-                # Direct route: the response is the verifier output; criteria unchanged.
-                result = fast_judge.judge(
-                    task=task,
-                    answer=verifier_output,
-                    criteria=(
-                        components.criterion_cls(
-                            criterion_id="evidence_quality",
-                            description=(
-                                "Does the verifier output identify concrete evidence and "
-                                "caveats with actionable impact?"
-                            ),
-                            weight=1.0,
-                        ),
-                        components.criterion_cls(
-                            criterion_id="risk_signal",
-                            description=(
-                                "Does the verifier output mention substantive risks and "
-                                "constraints with support?"
-                            ),
-                            weight=1.0,
-                        ),
+            result = fast_judge.judge(
+                task=task,
+                # Conduct judges its final answer; the verifier report is the reference.
+                answer=verifier_output if answer is None else answer,
+                criteria=(
+                    components.criterion_cls(
+                        criterion_id="evidence_quality",
+                        description="Does the verifier output identify concrete evidence and caveats with actionable impact?",
+                        weight=1.0,
                     ),
-                )
-            else:
-                # Conduct final answer, judged against the verifier report as reference.
-                result = fast_judge.judge(
-                    task=task,
-                    answer=answer,
-                    reference_answer=verifier_output,
-                    criteria=(
-                        components.criterion_cls(
-                            criterion_id="task_alignment",
-                            description=(
-                                "Does the response directly and completely address the "
-                                "requested task?"
-                            ),
-                            weight=1.0,
-                        ),
-                        components.criterion_cls(
-                            criterion_id="evidential_support",
-                            description=(
-                                "Are material claims supported, with every substantive "
-                                "verifier finding resolved or explicitly reported?"
-                            ),
-                            weight=1.0,
-                        ),
+                    components.criterion_cls(
+                        criterion_id="risk_signal",
+                        description="Does the verifier output mention substantive risks and constraints with support?",
+                        weight=1.0,
                     ),
-                )
+                ),
+                **({} if answer is None else {"reference_answer": verifier_output}),
+            )
             verification = {
                 "accepted": result.accepted,
                 "reason": result.rationale,
