@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
-          python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
+          uv build --wheel --offline --no-build-isolation --out-dir dist
           python scripts/verify_decision_wheel_manifest.py dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
           python -m pip install --no-deps \
             --target "$RUNNER_TEMP/nim-wheel-site" \

@@ -1,8 +1,6 @@
 [build-system]
-# Declared explicitly so the PEP 639 licence metadata above is guaranteed to
-# be emitted: setuptools only understands the SPDX expression from 77.
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build==0.12.5"]
+build-backend = "uv_build"
 
 [project]
 name = "contextual-orchestrator"
@@ -47,7 +45,7 @@ queue = [
 ]
 
 [dependency-groups]
-native-build = ["maturin==1.15.0"]
+native-build = ["maturin==1.15.0", "uv_build==0.12.5"]
 dev = [
   "hypothesis>=6.100",
   "openai==2.54.0",
@@ -57,8 +55,12 @@ dev = [
 [tool.contextual_orchestrator]
 object_name_pattern = "two_or_more_words_snake_case"
 
-[tool.setuptools.packages.find]
-include = ["contextual_orchestrator*"]
+[tool.uv.build-backend]
+module-name = "contextual_orchestrator"
+module-root = ""
+# Native measurement ships in its separate maturin wheel.
+source-exclude = ["**/*.so", "**/*.pyd"]
+wheel-exclude = ["**/*.so", "**/*.pyd"]
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
