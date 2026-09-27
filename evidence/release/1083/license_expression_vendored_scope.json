@@ -48,16 +48,17 @@
   ],
   "findings": [
     "Complete Apache-2.0 root instrument is present.",
-    "_pyahocorasick.py declares LicenseRef-scancode-public-domain, attributes Wojciech Mula, and describes modifications; exact original upstream revision not established.",
+    "_pyahocorasick.py declares LicenseRef-scancode-public-domain and modifications. Historical ABOUT now establishes original ec2fb9cb393f571fd4316ea98ed7b65992f16127; see follow-up for file-versus-root scope.",
     "Bundled JSON contains license catalog identifiers and classifications, not grants licensing the JSON itself.",
     "README examples containing GPL do not establish GPL licensing of this software.",
     "Contributor Covenant adaptation is present; its separate redistribution scope is not resolved by the root Apache declaration."
   ],
   "classification": "held; no exact instrument set registered",
-  "next_action": "Establish original modified-code grant and bundled database/documentation redistribution scope before registering a complete reviewed set.",
+  "next_action": "Resolve file-level versus repository grant scope, later modifications, bundled database and documentation redistribution scope.",
   "limits": [
     "Not a full legal or source audit",
     "No GPL finding inferred from catalog entries",
     "No source files, upstream messages, registry archives or inventory classifications altered"
-  ]
+  ],
+  "follow_up_receipt": "license_expression_original_code_provenance.json"
 }

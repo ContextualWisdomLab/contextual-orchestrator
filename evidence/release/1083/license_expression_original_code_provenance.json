@@ -1,0 +1,43 @@
+{
+  "initial_import_commit": "025fee38d84aa19f32050c0802eb27e0f0852bc7",
+  "initial_import_date": "2017-01-11T15:57:43Z",
+  "origin_revision_explicitly_named_in_ABOUT": "ec2fb9cb393f571fd4316ea98ed7b65992f16127",
+  "origin_source_url": "https://github.com/WojciechMula/pyahocorasick/blob/ec2fb9cb393f571fd4316ea98ed7b65992f16127/py/pyahocorasick.py",
+  "origin_license_url": "https://github.com/WojciechMula/pyahocorasick/blob/ec2fb9cb393f571fd4316ea98ed7b65992f16127/LICENSE",
+  "verified_inputs": [
+    {
+      "name": "initial_vendor.ABOUT",
+      "sha256": "147e6d3b7786e76e1fb82028696f3f083864d8d1f16ab38cdd5c18bfe6135540"
+    },
+    {
+      "name": "initial_vendor.py",
+      "sha256": "55b5c71682c39b3aa86639bb3f07de8aa12c95ad3009bd14db566afa449de5a4"
+    },
+    {
+      "name": "original.py",
+      "sha256": "709c73de57287405a41715124486fe088b38012051d168817931d28146539cee"
+    },
+    {
+      "name": "original_README.rst",
+      "sha256": "436ed503110342ca26e827ec82fe753fd7d376454295577b616525e89dceba8d"
+    },
+    {
+      "name": "original_LICENSE",
+      "sha256": "752b3297650be1fe3f55f9315ff149735ae3192a6bde19f87495382a60da84f0"
+    }
+  ],
+  "initial_import_byte_identical": false,
+  "initial_import_diff": "--- original/py/pyahocorasick.py\n+++ initial_vendor/_pyahocorasick.py\n@@ -9,7 +9,7 @@\n \n from collections import deque\n \n-nil = object()\t# used to distinguish from None\n+nil = object()  # used to distinguish from None\n \n class TrieNode(object):\n \t\"\"\"\n@@ -23,10 +23,10 @@\n \t\tConstructs an empty node\n \t\t\"\"\"\n \n-\t\tself.char = char\t\t# character\n-\t\tself.output = nil\t\t# an output function for this node\n-\t\tself.fail = nil\t\t\t# fail link used by Aho-Corasick automaton\n-\t\tself.children = {}\t\t# children\n+\t\tself.char = char  # character\n+\t\tself.output = nil  # an output function for this node\n+\t\tself.fail = nil  # fail link used by Aho-Corasick automaton\n+\t\tself.children = {}  # children\n \n \tdef __repr__(self):\n \t\t\"\"\"\n@@ -209,7 +209,7 @@\n \t\t\tc = chr(i)\n \t\t\tif c in self.root.children:\n \t\t\t\tnode = self.root.children[c]\n-\t\t\t\tnode.fail = self.root\t# f(s) = 0\n+\t\t\t\tnode.fail = self.root  # f(s) = 0\n \t\t\t\tqueue.append(node)\n \t\t\telse:\n \t\t\t\tself.root.children[c] = self.root\n@@ -258,7 +258,7 @@\n \n \t\t\"\"\"\n \t\tstate = self.root\n-\t\tlast  = None\n+\t\tlast = None\n \n \t\tindex = 0\n \t\twhile index < len(string):\n@@ -281,7 +281,7 @@\n \t\t\t\t\t# Note: this leads to quadratic complexity in the worst case\n \t\t\t\t\tindex = last[1] + 1\n \t\t\t\t\tstate = self.root\n-\t\t\t\t\tlast  = None\n+\t\t\t\t\tlast = None\n \t\t\t\telse:\n \t\t\t\t\t# if no output, perform classic Aho-Corasick algorithm\n \t\t\t\t\twhile c not in state.children:\n@@ -320,25 +320,22 @@\n \t\t\tprint('%s' % s)\n \t\t\tpos, matches = res\n \t\t\tfor fragment in matches:\n-\t\t\t\tprint('%s%s' % ((pos - len(fragment) + 1)*' ', fragment))\n+\t\t\t\tprint('%s%s' % ((pos - len(fragment) + 1) * ' ', fragment))\n \n \tdemo()\n \n \n \tdef bug():\n-\t\tpatterns = ['GT-C3303','SAMSUNG-GT-C3303K/']\n+\t\tpatterns = ['GT-C3303', 'SAMSUNG-GT-C3303K/']\n \t\ttext = 'SAMSUNG-GT-C3303i/1.0 NetFront/3.5 Profile/MIDP-2.0 Configuration/CLDC-1.1'\n \n \t\tt = Trie()\n \t\tfor pattern in patterns:\n-\t\t\tret = t.add_word(pattern, (0, pattern))\n+\t\t\t_ret = t.add_word(pattern, (0, pattern))\n \n \t\tt.make_automaton()\n-\n \t\tres = list(t.iter(text))\n-\n \t\tassert len(res) == 1, 'failed'\n-\n \tbug()\n \n # vim: ts=4 sw=4 nowrap\n",
+  "findings": [
+    "Historical ABOUT explicitly establishes copied revision, replacing prior uncertainty.",
+    "Original pure-Python file itself declares public domain; original repository root LICENSE contains the complete three-clause BSD grant.",
+    "Initial importer changed spacing, removed blank lines and renamed a demo variable ret to _ret; no byte-identity claim.",
+    "Current wheel remains a later modified source, already matched to its exact producer tag.",
+    "Do not assume root BSD overrides file-level public-domain statement or transpose root Apache to vendored content."
+  ],
+  "classification": "held pending producer grant/scope resolution; no license instrument transplanted",
+  "remaining": [
+    "Resolve file-level versus repository licensing scope and later modifications",
+    "Bundled database/data and documentation redistribution scope"
+  ]
+}

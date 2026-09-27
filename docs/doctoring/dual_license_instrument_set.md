@@ -395,3 +395,18 @@ Covenant adaptation also needs its scope accounted for. No complete-set
 registration or whole-wheel Apache clearance was made. Counts remain
 370 permitted, zero copyleft, 143 held. The source-bound receipt is
 `evidence/release/1083/license_expression_vendored_scope.json`.
+
+### Exact original pure-Python revision recovered
+
+Initial import 025fee38d84aa19f32050c0802eb27e0f0852bc7 (2017-01-11)
+added _pyahocorasick.ABOUT with an explicit original revision:
+ec2fb9cb393f571fd4316ea98ed7b65992f16127, path py/pyahocorasick.py.
+This resolves the prior missing-original-revision finding. The original
+file declares public domain while the same repository revision has a complete
+three-clause BSD root LICENSE. Preserve this file-versus-root scope distinction;
+neither declaration is silently substituted for the other. The importer changed
+spacing, blank lines and one demo variable name, so byte identity is false.
+The full diff and hashes are retained in
+`evidence/release/1083/license_expression_original_code_provenance.json`.
+Later modification grants, bundled data and documentation scope remain to be
+resolved. No license was transplanted and no classification was changed.
