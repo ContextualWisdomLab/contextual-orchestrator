@@ -242,10 +242,20 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
             ):
                 raise InventoryError("wheel metadata directory disagrees with its identity")
             license_files = []
+            declared_files = set()
+            for declared in metadata.get_all("License-File", []):
+                path = PurePosixPath(declared)
+                if path.is_absolute() or ".." in path.parts or not path.parts:
+                    raise InventoryError("declared wheel licence path is unsafe")
+                targets = [distribution_roots[index] + prefix + declared for prefix in ("", "licenses/")]
+                present = [target for target in targets if target in members and not archive.getinfo(target).is_dir()]
+                if len(present) != 1:
+                    raise InventoryError("declared wheel licence file is missing or ambiguous")
+                declared_files.add(present[0])
             for member in members:
                 if archive.getinfo(member).is_dir() or not member.startswith(distribution_roots[index]):
                     continue
-                if Path(member).name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE")):
+                if member in declared_files or Path(member).name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE")):
                     if archive.getinfo(member).file_size > _NATIVE_TEXT_LIMIT:
                         raise InventoryError("wheel licence exceeds text evidence limit")
                     raw = archive.read(member)

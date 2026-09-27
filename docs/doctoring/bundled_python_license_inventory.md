@@ -13,7 +13,9 @@ The strict single-distribution API still refuses multiple records.
 One top-level root must match the requested wheel identity. Duplicate archive
 paths, path traversal, unowned licence files, contradictory metadata directories,
 and metadata inside another distribution's evidence directory are refused.
-Archive and text reads reuse the existing bounded evidence limits. Nothing is
+Declared `License-File` paths are also read even when named `EULA.txt`; missing,
+unsafe or ambiguous declarations fail. Archive and text reads reuse the existing
+bounded evidence limits. Nothing is
 extracted, installed or imported.
 
 ## Measurement and verification
