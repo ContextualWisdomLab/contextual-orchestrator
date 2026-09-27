@@ -1,0 +1,46 @@
+{
+  "integration_sha": "0d64cb01104fc3e7e573a75323a6c2ffcb8dcdd4",
+  "main_sha": "b08d0105269ef7cf3919836ab92aa12b6b5d6f14",
+  "license_stack_sha": "2888854156155dacd30a67b255069892da823401",
+  "pypi_successor_sha": "65c35a2c4f50f716d10261716bb98bbee8dbccbe",
+  "branch": "probe/release-current-main-1083",
+  "resolved_conflicts": [
+    "release verify setup: retain Compose and run PyPI guard immediately after checks gate",
+    "release verify validation: retain both license and exact-wheel twine checks"
+  ],
+  "verification": [
+    {
+      "scope": "seven affected release/license/security contract files before final integration commit",
+      "passed": 404,
+      "failed": 2,
+      "exit_code": 1,
+      "seconds": 90.6
+    },
+    {
+      "scope": "two failures after committing lock source and moving PyPI guard before setup",
+      "passed": 2,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 1.64
+    },
+    {
+      "scope": "release.yml and security.yml actionlint after resolution",
+      "exit_code": 0
+    }
+  ],
+  "initial_failures": [
+    "new twine lockfile had no committed source blob during in-progress merge",
+    "PyPI guard followed Compose rather than preceding setup"
+  ],
+  "file_sha256": {
+    ".github/workflows/release.yml": "92ee33b1b6f1c46ba2b9badbd37cb209620f7eb7d0e6ff95f9d01335e1444aea",
+    ".github/workflows/security.yml": "82155fbd9eb5bbb2ac5614e258a1a20b1fc212f665eba4c0c6afa78e4c5952f7",
+    "requirements-release-twine.txt": "c315976ec38b282f2ee7a57d72c1eeaa547b7e8be769fa916c98ffa9133321eb"
+  },
+  "limits": [
+    "No single full-suite pass at final integration SHA claimed",
+    "Local source integration, not hosted acceptance or main merge",
+    "Owner PR heads unchanged; independent review/required gates remain",
+    "License and immutable release/provenance/downstream acceptance gaps remain"
+  ]
+}
