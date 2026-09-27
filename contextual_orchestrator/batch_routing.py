@@ -1351,9 +1351,9 @@ class ProviderEmbeddingBatchBackend:
         """Wait within the caller's explicit deadline for a terminal state.
 
         ``timeout`` may be ``None`` or ``float("inf")`` when the caller has no
-        wall-clock deadline (contextual-orchestrator's no-implicit-deadline
-        default). ``threading.Event.wait`` raises ``OverflowError`` for a
-        non-finite timeout on CPython, so both forms are translated to ``None``
+        wall-clock deadline (contextual-orchestrator's no-implicit-deadline default);
+        ``threading.Event.wait`` raises ``OverflowError`` for a non-finite
+        timeout on CPython, so a non-finite value is translated to ``None``
         (block indefinitely) rather than passed through.
         """
         event = self._terminal_events.get(job.job_id)
