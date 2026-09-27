@@ -102,3 +102,23 @@ The earlier driver syntax failure is retained separately from the successful
 run. No production/native package defect is inferred from that harness failure.
 Full licensing, image/toolchain provenance, protected delivery, publication and
 consumer acceptance remain incomplete.
+
+## Cross-platform core wheel reproduction
+
+After the Linux tests terminated, the same owned container rebuilt the pure
+Python core from commit 67dec775. A Git archive contains precisely the build
+inputs: contextual_orchestrator, pyproject.toml, README.md and LICENSE. No package
+source was invented or copied from a third-party repository. The uv_build 0.12.5
+Linux wheel is hash-recorded and installed into the same owned venv; build uses
+pip wheel --no-index --no-deps --no-build-isolation with the venv bin directory
+on the child PATH. An initial missing backend PATH failure is preserved as
+harness evidence and was corrected without changing project source.
+
+The Linux wheel is byte-identical to the original macOS build:
+`00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf`.
+The build and container both terminate with exit 0. Input tar/backend/driver
+hashes and precise scope are committed in
+`evidence/release/1083/core_wheel_linux_reproduction.json`. After exporting
+receipts, only the owned container ID was removed; unrelated containers and
+shared images were preserved. This does not reproduce the native wheel or image,
+and does not replace complete license/provenance/publication acceptance.
