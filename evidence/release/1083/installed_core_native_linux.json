@@ -1,0 +1,47 @@
+{
+  "wheel_source_sha": "67dec775973896d1db30c78ade8cc76d64d0cf6b",
+  "test_source_sha": "56f0ba49e0eab81d6e67eab4d2f62a0d10d3c3b7",
+  "image_digest": "sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e",
+  "platform": "linux/amd64",
+  "host": "Colima aarch64, qemu-x86_64 emulation",
+  "network": "none",
+  "requirements_sha256": "59e6e6d5795c670b2b9263002158b301161f053a134c3ee60858591367339730",
+  "driver_sha256": "7b7e67d57d51fcf619bf834ebbf93bd17234b73f0090b56e2c4017bf08b41c40",
+  "log_sha256": "f39657be26c86fc6ecb190639028eb9ed39afa0cae1b7ede9f7da5604fa57e3a",
+  "smoke": {
+    "python": "3.12.14 (main, Sep 19 2026, 01:05:48) [GCC 12.2.0]",
+    "platform": "linux",
+    "core_version": "0.2.0",
+    "core_wheel_sha256": "00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf",
+    "wheel_files_verified": 52,
+    "native_version": "0.11.4",
+    "native_extension_sha256": "f05458cbe1fbfb5e368637c44cfa56824d0b504a1749bb2fb22cf6e637b527b9",
+    "native_file": "/co1083-venv/lib/python3.12/site-packages/fast_mlsirm/_core.cpython-312-x86_64-linux-gnu.so",
+    "native_smoke": 0.36787944117144167
+  },
+  "tests": {
+    "test_exit": 0,
+    "tests": [
+      "test_no_heuristic_default_transport_retry.py",
+      "test_orchestrator_dispatch_boundaries.py",
+      "test_structured_output_distinct_fallback.py",
+      "test_structured_output_malformed_synthesis_usage.py",
+      "test_postgres_connection.py",
+      "test_credentials_backends.py",
+      "test_credentials_boundaries.py",
+      "test_provider_catalog_store.py",
+      "test_provider_catalog_bootstrap.py",
+      "test_passthrough_provider_failover.py",
+      "test_tool_execution_fallback.py",
+      "test_orchestrator_client_boundaries.py",
+      "test_rate_limit_aware_admission.py"
+    ]
+  },
+  "test_count": 518,
+  "duration_seconds": 334.61,
+  "warnings": [
+    "PytestCacheWarning: read-only test input directory cannot create pytest cache"
+  ],
+  "container_exit": 0,
+  "scope": "local emulated Linux installed-pair proof; not strict-warning/full-suite, released container, complete licensing/provenance, hosted/main or consumer acceptance"
+}

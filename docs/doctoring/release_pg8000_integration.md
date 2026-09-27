@@ -74,3 +74,31 @@ recorded in `evidence/release/1083/installed_core_native_macos.json`.
 This is local macOS installed-pair evidence. Linux runtime/container pairing,
 complete license and provenance scope, protected main CI, immutable publication
 and downstream consumer acceptance remain separate requirements.
+
+## Linux installed pair
+
+The official Python 3.12 bookworm image is pinned to
+`sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e`,
+selected as linux/amd64 and executed through qemu-x86_64 on Colima aarch64.
+This is emulated Linux evidence, not bare-metal performance evidence.
+
+An owned container with network=none, all capabilities dropped and
+no-new-privileges installed dependencies from retained wheels only, using
+uv-exported lock hashes, pip require-hashes/no-index/only-binary. No source
+package directory was added to the import path. The installed core and released
+fast-mlsirm 0.11.4 extension both load from the container-local venv.
+
+All 52 wheel files except RECORD match the original wheel bytes. The Linux
+native extension executed chi2_sf(2,2), matching exp(-1) within 1e-12. The same
+13 focused test files then pass 518 tests in 334.61 seconds; both pytest and the
+container terminate with exit 0. One PytestCacheWarning reports an unwritable
+cache inside the copied test-input directory. It is documented, not suppressed;
+this run is not strict-warning or complete-suite acceptance. Future probes
+should put pytest cache in the owned writable temporary directory.
+
+`evidence/release/1083/installed_core_native_linux.json` records source revisions,
+image, native and wheel digests, driver/requirements/log digests and exact scope.
+The earlier driver syntax failure is retained separately from the successful
+run. No production/native package defect is inferred from that harness failure.
+Full licensing, image/toolchain provenance, protected delivery, publication and
+consumer acceptance remain incomplete.
