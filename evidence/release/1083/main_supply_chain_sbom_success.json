@@ -1,0 +1,46 @@
+{
+  "main_sha": "8e1f1a8bf3e96e56dc8fcc90ec777883a1d56ce6",
+  "run_id": 36336155059,
+  "job_id": 108667272245,
+  "job_status": "completed",
+  "conclusion": "success",
+  "runner": "cwlab-s1-04",
+  "artifact_id": 10938451174,
+  "artifact_zip_sha256": "9cb4c3d091e208953da034a5c5435c7730779a3189affbf1e04e74eda227d014",
+  "sbom_json_sha256": "196d82e4050b51852f73c3096846148896637cdc38574f0ec484cc607f2d60e0",
+  "components": 99,
+  "components_without_purl": 1,
+  "purl_ecosystems": [
+    "pypi"
+  ],
+  "gpl_declarations": [
+    {
+      "name": "chardet",
+      "version": "5.2.0",
+      "terms": [
+        "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)"
+      ]
+    },
+    {
+      "name": "psycopg",
+      "version": "3.3.4",
+      "terms": [
+        "LGPL-3.0-only"
+      ]
+    },
+    {
+      "name": "psycopg-binary",
+      "version": "3.3.4",
+      "terms": [
+        "LGPL-3.0-only"
+      ]
+    }
+  ],
+  "evidence_tools": [
+    "4b7006",
+    "ca726d",
+    "deb788",
+    "e36ce6"
+  ],
+  "scope": "Actual matching-main hosted job and downloaded digest verified. Its Python-centric 99-component SBOM is not complete Rust/npm/bundled/image release evidence and not the 7af candidate SBOM."
+}
