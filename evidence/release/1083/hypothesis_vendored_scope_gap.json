@@ -1,0 +1,35 @@
+{
+  "inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "name": "hypothesis",
+  "version": "6.165.10",
+  "wheel_sha256": "1a380bc99aa3b035e6a95a2201bf792d4082a04ca75babcc21849c2d0914bb28",
+  "python_source_member_count": 106,
+  "license_like_members": [
+    "hypothesis-6.165.10.dist-info/licenses/LICENSE.txt"
+  ],
+  "scope_evidence": [
+    {
+      "member": "hypothesis/vendor/pretty.py",
+      "sha256": "61c6fd35617e46ec4d18d731118e67f4e102c1c713a8bfb59a6a2aa00874bf98",
+      "line_start": 1,
+      "line_end": 63,
+      "excerpt": "# This file is part of Hypothesis, which may be found at\n# https://github.com/HypothesisWorks/hypothesis/\n#\n# Copyright the Hypothesis Authors.\n# Individual contributors are listed in AUTHORS.rst and the git log.\n#\n# This Source Code Form is subject to the terms of the Mozilla Public License,\n# v. 2.0. If a copy of the MPL was not distributed with this file, You can\n# obtain one at https://mozilla.org/MPL/2.0/.\n\n\"\"\"\nPython advanced pretty printer.  This pretty printer is intended to\nreplace the old `pprint` python module which does not allow developers\nto provide their own pretty print callbacks.\nThis module is based on ruby's `prettyprint.rb` library by `Tanaka Akira`.\nExample Usage\n-------------\nTo get a string of the output use `pretty`::\n    from pretty import pretty\n    string = pretty(complex_object)\nExtending\n---------\nThe pretty library allows developers to add pretty printing rules for their\nown objects.  This process is straightforward.  All you have to do is to\nadd a `_repr_pretty_` method to your object and call the methods on the\npretty printer passed::\n    class MyObject(object):\n        def _repr_pretty_(self, p, cycle):\n            ...\nHere is an example implementation of a `_repr_pretty_` method for a list\nsubclass::\n    class MyList(list):\n        def _repr_pretty_(self, p, cycle):\n            if cycle:\n                p.text('MyList(...)')\n            else:\n                with p.group(8, 'MyList([', '])'):\n                    for idx, item in enumerate(self):\n                        if idx:\n                            p.text(',')\n                            p.breakable()\n                        p.pretty(item)\nThe `cycle` parameter is `True` if pretty detected a cycle.  You *have* to\nreact to that or the result is an infinite loop.  `p.text()` just adds\nnon breaking text to the output, `p.breakable()` either adds a whitespace\nor breaks here.  If you pass it an argument it's used instead of the\ndefault space.  `p.pretty` prettyprints another object using the pretty print\nmethod.\nThe first parameter to the `group` function specifies the extra indentation\nof the next line.  In this example the next item will either be on the same\nline (if the items are short enough) or aligned with the right edge of the\nopening bracket of `MyList`.\nIf you just want to indent something you can use the group function\nwithout open / close parameters.  You can also use this code::\n    with p.indent(2):\n        ...\nInheritance diagram:\n.. inheritance-diagram:: IPython.lib.pretty\n   :parts: 3\n:copyright: 2007 by Armin Ronacher.\n            Portions (c) 2009 by Robert Kern.\n:license: BSD License.\n\"\"\""
+    },
+    {
+      "member": "hypothesis/internal/compat.py",
+      "sha256": "a193675885c840f0893c7d67a97c206802f00aad01b6a9f5e8b0301f83cbddcd",
+      "line_start": 295,
+      "line_end": 306,
+      "excerpt": "if sys.version_info[:2] < (3, 13):\n    # batched was added in 3.12, strict flag in 3.13\n    # copied from 3.13 docs reference implementation\n\n    def batched(iterable, n, *, strict=False):\n        if n < 1:\n            raise ValueError(\"n must be at least one\")\n        iterator = iter(iterable)\n        while batch := tuple(itertools.islice(iterator, n)):\n            if strict and len(batch) != n:\n                raise ValueError(\"batched(): incomplete batch\")\n            yield batch"
+    },
+    {
+      "member": "hypothesis/internal/conjecture/providers.py",
+      "sha256": "f85568025f4527da059f26e6d622dc0a2736e92baab5eaaf603ecb66161250ac",
+      "line_start": 1264,
+      "line_end": 1266,
+      "excerpt": "    def random(self) -> float:\n        # adapted from random.SystemRandom.random\n        return (int_from_bytes(self._urandom(7)) >> 3) * (2**-53)"
+    }
+  ],
+  "finding": "Root MPL excludes explicitly noted other projects. Actual pretty.py separately identifies BSD copyright/license; sole packaged license text contains MPL, not a complete BSD grant. Keep held pending exact upstream origin/license and bundled component evidence. CPython copied/adapted annotations are provenance leads, not verified attribution or grant conclusions.",
+  "scan_limit": "Lexical source-header/license/origin scan and targeted excerpts; not complete program/source license audit."
+}

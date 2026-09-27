@@ -273,3 +273,25 @@ publication occurred. The retained inventory remains 370 permitted, zero
 copyleft, 143 held until the actual dependency artifact and separate scope
 are verified. Future classification must retain the vendored grant choice
 and component attribution instead of assigning MIT to all wheel contents.
+
+## Hypothesis: root MPL does not close bundled scope
+
+Hypothesis 6.165.10's root license explicitly excludes code noted otherwise
+and identifies original project licenses as independently applicable. Its
+actual wheel contains `hypothesis/vendor/pretty.py` with separate Ronacher /
+Kern copyright and a BSD license designation. The only packaged license-like
+file contains the root MPL instrument; it does not contain a full BSD grant.
+Do not register the entire root text as authorizing every wheel component.
+
+`evidence/release/1083/hypothesis_vendored_scope_gap.json` binds the actual
+wheel, root instrument and component-source hashes, exact line excerpts and
+scope limits. A lexical scan of Python source members locates additional
+CPython copied/adapted-code comments. These are provenance leads requiring
+verification, not established attribution or grant conclusions. Generated
+output's CC0 designation likewise does not relicense its generator.
+
+Next: trace the exact vendored source origin and its actual grant, preserve
+component attribution and any separately applicable distribution terms, then
+verify the actual artifact's complete evidence. No root matcher change or
+license waiver is introduced. The full inventory remains 370 permitted,
+zero copyleft, 143 held; artifact release is still unverified.
