@@ -58,3 +58,21 @@ adjudication before release. The existing owners' review branches remain intact.
 The pip-audit formatter was considered and rejected as a replacement: it emits
 package names/versions and vulnerability rows but omits the richer dependency
 graph and publisher licence metadata. Reusing Trivy avoids a new SBOM collector.
+
+## Duplicate input follow-up
+
+A subsequent full Python artifact survey found that the unused historical
+`requirements-security-tools.in` still declared unpinned `cyclonedx-bom` and its
+hash lock retained chardet. No workflow, executable script or build target reads
+that pair; current Security uses the exact-pinned `requirements-security-ci`
+input/lock. Remove the obsolete pair instead of pretending its declared packages
+are exempt. Keep the inventory's enumeration of every remaining requirements
+file, and assert that no tool input reintroduces the mandatory LGPL CLI.
+
+The survey staged 122 hash-validated wheels without installing or importing
+package code. At main aaa4dfdd, individual reads yielded 93 permitted, 3 declared
+GPL-family and 25 unresolved Python entries. The three are chardet and the
+psycopg pair; #1225 owns the latter. Vendored metadata in py and setuptools is
+currently held by the strict wheel identity reader, not proof of a publisher
+licence violation. Source-package prebuild evidence, missing instruments,
+canonical text variants and wheel-bundled dependency scope remain separate work.

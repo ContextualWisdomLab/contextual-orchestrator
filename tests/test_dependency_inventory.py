@@ -185,7 +185,8 @@ def test_python_scope_includes_the_pinned_ci_and_fuzz_toolchains() -> None:
     for source in ("uv.lock", "requirements.lock", "requirements-security-ci.txt",
                    "fuzz/requirements-property.txt"):
         assert source in python["lockfile"]
-    assert {"cyclonedx-bom", "chardet"} <= names  # security CI toolchain
+    assert "pip-audit" in names  # retained security CI toolchain
+    assert not {"cyclonedx-bom", "chardet"} & names
     assert len(python["provenance"]) == len(python["lockfile"].split(", "))
 
 

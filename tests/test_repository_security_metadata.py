@@ -276,3 +276,9 @@ if __name__ == "__main__":  # pragma: no cover
     test_python_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
     print("ok")
+
+
+def test_security_tool_inputs_do_not_reintroduce_the_lgpl_sbom_cli():
+    """Every declared tool input counts, including obsolete duplicate locks."""
+    for path in ROOT_DIR.glob("requirements*.in"):
+        assert not re.search(r"^cyclonedx-bom(?:[<>=\s]|$)", path.read_text(), re.MULTILINE), path.name
