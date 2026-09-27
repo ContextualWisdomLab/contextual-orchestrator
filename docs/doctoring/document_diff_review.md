@@ -59,3 +59,20 @@ passed together: 208 passed with warnings as errors, process exit 0. The earlier
 `d9815f90` full default suite separately passed 5,115 tests with five native
 tokenizer skips and two deprecated-API warnings; it is predecessor evidence,
 not a full-suite result for this merged tree or hosted review approval.
+
+The current-tree full suite initially finished with 5,253 passes and one failure:
+`test_invoke_reraises_mixed_failure_without_waiting`. The same assertion failed
+on unmodified main `8df067ac`. Main's merged #1222 permits a budget-bounded retry
+of an explicitly rejected 429 candidate after another candidate fails. The old
+test prohibited that recovery and its fake sleep did not advance its fake clock.
+The replacement uses the neighboring advancing-clock pattern and explicit
+zero/positive wait budgets. Exact call order proves that the 500 candidate is
+never replayed, while the rejected candidate can recover only within budget.
+The complete taxonomy file passed 29 tests with warnings as errors. The CI
+benchmark contract passed 190 tests, 100% branch coverage and 100% public
+docstrings. These local results do not establish hosted checks or approval.
+
+After this repair, the full default native suite completed exit 0: 5,255 passed,
+five native tokenizer skips and two existing deprecated-API warnings. The
+seven-file routing/document regression set separately passed 208 tests with
+warnings as errors.
