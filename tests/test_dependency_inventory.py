@@ -797,3 +797,36 @@ def test_unlicense_named_file_cannot_hide_additional_copyleft(tmp_path, ecosyste
                                                           "packages": [package]}]})
     assert not groups["permitted"]
     assert groups["undecidable"] or groups["copyleft"]
+
+
+def test_bundled_archive_has_separate_identity_and_unresolved_scope(tmp_path):
+    """A root MIT instrument does not clear an unseen nested archive."""
+    from scripts.ci.dependency_inventory import _artifact_distributions
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    payload = b"unreviewed nested archive bytes"
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example-1.0.dist-info/LICENSE", "Permission is hereby granted, free of charge.")
+        archive.writestr("example/data/payload.tar.gz", payload)
+    records = _artifact_distributions(tmp_path, "example", "1.0")
+    assert records[0]["bundled_archives"] == [{
+        "name": "example/data/payload.tar.gz", "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload), "license_source": "unresolved nested archive scope",
+    }]
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": records}]})
+    assert not groups["permitted"]
+    assert groups["undecidable"]
+
+
+def test_nested_archive_size_limit_is_checked_before_read(tmp_path, monkeypatch):
+    import scripts.ci.dependency_inventory as inventory
+
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example/data/payload.tar.gz", b"x" * 4096,
+                         compress_type=zipfile.ZIP_DEFLATED)
+    assert wheel.stat().st_size < 2048
+    monkeypatch.setattr(inventory, "_NATIVE_ARCHIVE_LIMIT", 2048)
+    with pytest.raises(InventoryError, match="nested wheel archive exceeds"):
+        inventory._artifact_distributions(tmp_path, "example", "1.0")
