@@ -45,6 +45,41 @@ def bind_inventory(bom: dict, inventory: dict, source_sha: str) -> dict:
             name = package["name"]
             if ecosystem == "pypi":
                 name = re.sub(r"[-_.]+", "-", name).lower()
+            if "bundled_in" in package:
+                parent = package["bundled_in"]
+                parent_name = re.sub(r"[-_.]+", "-", parent["name"]).lower()
+                parents = identities.get(("pypi", parent_name, parent["version"]), [])
+                digest, metadata_digest = package.get("artifact_sha256", ""), package.get("metadata_sha256", "")
+                owner = next((item for item in scope["packages"] if "bundled_in" not in item
+                              and re.sub(r"[-_.]+", "-", item["name"]).lower() == parent_name
+                              and item["version"] == parent["version"]), None)
+                if (ecosystem != "pypi" or not parents or not owner
+                        or owner.get("artifact_sha256") != digest
+                        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                        or not re.fullmatch(r"[0-9a-f]{64}", metadata_digest)
+                        or not package.get("metadata_path")):
+                    raise ValueError("bundled distribution lacks matching parent artifact evidence")
+                ref = f"urn:co:bundled:{digest}:{metadata_digest}"
+                component = {"type": "library", "name": name, "version": package["version"],
+                             "purl": f"pkg:pypi/{name}@{package['version']}", "bom-ref": ref,
+                             "licenses": [{"license": {"name": term}} for term in package.get("licenses", [])],
+                             "properties": [{"name": "contextual-orchestrator:wheel-sha256", "value": digest},
+                                            {"name": "contextual-orchestrator:metadata-sha256", "value": metadata_digest},
+                                            {"name": "contextual-orchestrator:metadata-path", "value": package["metadata_path"]}]}
+                if any(item.get("bom-ref") == ref for item in bom["components"]):
+                    raise ValueError("duplicate bundled distribution reference")
+                bom["components"].append(component)
+                identities.setdefault((ecosystem, name, package["version"]), []).append(component)
+                dependencies = bom.setdefault("dependencies", [])
+                for parent_component in parents:
+                    parent_ref = parent_component.get("bom-ref")
+                    if not parent_ref:
+                        raise ValueError("bundled distribution parent has no graph reference")
+                    row = next((item for item in dependencies if item.get("ref") == parent_ref), None)
+                    if row is None:
+                        row = {"ref": parent_ref, "dependsOn": []}
+                        dependencies.append(row)
+                    row.setdefault("dependsOn", []).append(ref)
             matches = identities.get((ecosystem, name, package["version"]), [])
             if not matches:
                 raise ValueError(f"SBOM omits {ecosystem}:{name}@{package['version']}")
