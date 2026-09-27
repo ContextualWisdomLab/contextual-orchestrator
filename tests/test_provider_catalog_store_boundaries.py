@@ -183,11 +183,8 @@ class _SchemaLockFakeCursor:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args) -> None:
-        return None
+    def close(self) -> None:
+        self.closed = True
 
     def execute(self, statement: str, params=None) -> None:
         self.calls.append((statement, params))
