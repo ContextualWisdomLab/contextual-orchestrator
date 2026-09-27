@@ -363,3 +363,31 @@ The prior optimizer full-suite result (1306 failures, 15 errors) is not wholly
 explained by these examples. No full rerun, hosted acceptance, release or real
 accuracy/latency gain is claimed. PR #1137 remains unchanged. Rendered-document
 visual inspection is pending; this runbook is not a completed visual receipt.
+
+## Review PR #1203 integration resource repair (2026-09-27)
+
+The local ordinary-forward integration of #1203 `beb3bfe9` and #1209
+`84736f4d` reproduced 19 strict-warning failures across ten modules after
+building the real native extension. Exact #1209 reproduced the same count
+(18 identical test IDs; one finalizer timing shift). This was an inherited
+resource baseline, not permission to suppress warnings.
+
+Three test owners explain the remaining focused failures: embeddings and
+security HTTP tests stopped listeners without closing them; security request
+helpers consumed HTTPError bodies without closing the response; the no-usage
+tool provider stopped its server without joining and closing it. Test-created
+413/400 HTTPError objects also require test-owned closure. Production provider
+cleanup and daemon policy are unchanged.
+
+RED: the ten-module native baseline returned 255 passed, 19 failed. Initial
+focused cleanup returned 58 passed, 2 failed, exposing the synthetic 413/400
+response owners. GREEN after closing those owners:
+
+```sh
+.venv/bin/python -m pytest -p no:cacheprovider -c /dev/null -q -W error --tb=short tests/test_embeddings_model_pool_http_honesty.py tests/test_security_hardening.py tests/test_stream_options_null_flags_noop_http_honesty.py
+```
+
+Result: 60 passed in 7.62s, exit 0, CPython 3.14.6, real native extension.
+The explicit config path avoids an unavailable pytest-asyncio configuration
+plugin; this is local strict-warning evidence, not the exact hosted command.
+Full-suite and protected delivery remain unverified.
