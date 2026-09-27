@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 import sqlite3
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -232,6 +234,215 @@ def test_conduct_generated_plan_without_verifier_requirement_keeps_synthesis() -
         result = orch.conduct([{"role": "user", "content": "draft it"}])
     assert result["plan_source"] == "generated"
     assert result["answer"].startswith("[synth_agent:synthesizer]")
+
+
+def _capturing_judge_components(captured: dict[str, object]) -> object:
+    """fast-mlsirm stand-in that records the judge contract it is called with."""
+
+    class _Result:
+        accepted = True
+        rationale = "all required criteria attained their maximum"
+        usage: ClassVar[dict[str, int]] = {}
+        orchestration_mode = "route"
+        criterion_scores: ClassVar[dict[str, float]] = {"first": 1.0, "second": 1.0}
+
+        @staticmethod
+        def to_irt_row(*, item_type: str) -> tuple[int, int]:
+            assert item_type == "dichotomous"
+            return (1, 1)
+
+    class _Components:
+        class format_error(Exception):
+            pass
+
+        @staticmethod
+        def criterion_cls(**kwargs):
+            captured.setdefault("criteria", []).append(kwargs)
+            return kwargs
+
+        class judge_cls:
+            def __init__(self, _adapter, *, mode: str, accept_threshold: float) -> None:
+                captured["mode"] = mode
+                captured["accept_threshold"] = accept_threshold
+
+            def judge(self, **kwargs):
+                captured["judge_kwargs"] = kwargs
+                return _Result()
+
+    return _Components()
+
+
+# Psychometric rows are stored by column position without criterion ids, so
+# every judged path must keep main's criteria in main's order.
+JUDGE_CRITERIA = ["evidence_quality", "risk_signal"]
+
+
+def _assert_judge_contract(captured: dict[str, object], criterion_ids: list[str]) -> None:
+    criteria = captured["criteria"]
+    assert isinstance(criteria, list)
+    assert captured["mode"] == "route"
+    assert captured["accept_threshold"] == 0.7
+    assert [criterion["criterion_id"] for criterion in criteria] == criterion_ids
+    assert [criterion["weight"] for criterion in criteria] == [1.0, 1.0]
+
+
+@pytest.mark.parametrize("workflow_planning", ["template", "generated"])
+def test_conduct_judges_the_final_answer_against_the_verifier_reference(
+    workflow_planning: str,
+) -> None:
+    """Verification must measure the return candidate, not the verifier report.
+
+    The verifier report goes to fast-mlsirm as ``reference_answer``; the
+    threshold (``0.7``) and criteria stay exactly as on direct routes.
+    """
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    captured: dict[str, object] = {}
+    agents = [
+        _agent("planner_agent"),
+        _agent("builder_agent"),
+        _agent("verifier_agent"),
+        _agent("synth_agent"),
+    ]
+    orch = _orch(*agents)
+    if workflow_planning == "generated":
+        import dataclasses
+
+        orch.policy = dataclasses.replace(orch.policy, workflow_planning="generated")
+    plan_scope = (
+        patch.object(orch, "_plan_generated", side_effect=_generated_plan_steps)
+        if workflow_planning == "generated"
+        else nullcontext()
+    )
+    components = _capturing_judge_components(captured)
+    with plan_scope, patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: components
+    ):
+        result = orch.conduct([{"role": "user", "content": "draft it"}])
+
+    outputs = _template_role_outputs(result)
+    judge_kwargs = captured["judge_kwargs"]
+    assert isinstance(judge_kwargs, dict)
+    assert judge_kwargs["answer"] == outputs["synthesizer"]
+    assert judge_kwargs["reference_answer"] == outputs["verifier"]
+    _assert_judge_contract(captured, JUDGE_CRITERIA)
+
+
+def test_route_once_judge_keeps_the_direct_route_contract() -> None:
+    """Direct routes judge the response itself, with no reference, as on main."""
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    captured: dict[str, object] = {}
+    orch = _orch(_agent("primary_agent"), _agent("backup_agent"))
+    assert orch.policy.realtime_judge is True
+    components = _capturing_judge_components(captured)
+    with patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: components
+    ):
+        result = orch.route_once([{"role": "user", "content": "answer it"}])
+
+    judge_kwargs = captured["judge_kwargs"]
+    assert isinstance(judge_kwargs, dict)
+    assert judge_kwargs["answer"] == result["answer"]
+    assert "reference_answer" not in judge_kwargs
+    _assert_judge_contract(captured, JUDGE_CRITERIA)
+
+
+def test_realtime_route_judge_keeps_the_direct_route_contract() -> None:
+    """Streaming and batch share ``_realtime_route_judge``; it must not pass a reference."""
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    captured: dict[str, object] = {}
+    orch = _orch(_agent("primary_agent"), _agent("backup_agent"))
+    components = _capturing_judge_components(captured)
+    with patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: components
+    ):
+        verification = orch._realtime_route_judge(
+            text="answer it",
+            answer="streamed answer",
+            served_id="primary_agent",
+            latency_seconds=None,
+            usage=None,
+            free_only=False,
+        )
+
+    assert verification["accepted"] is True
+    judge_kwargs = captured["judge_kwargs"]
+    assert isinstance(judge_kwargs, dict)
+    assert judge_kwargs["answer"] == "streamed answer"
+    assert "reference_answer" not in judge_kwargs
+    _assert_judge_contract(captured, JUDGE_CRITERIA)
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_conduct_template_without_verifier_requirement_returns_synthesis(accepted: bool) -> None:
+    """``verifier_required=False`` must not turn the verifier's report into the answer.
+
+    The template's verifier step is instructed to "Find concrete errors, gaps,
+    and unsupported claims" -- its output is a review report, not an answer.
+    Turning the requirement off only means a rejected verdict no longer forces
+    the worker fallback; the synthesizer (final step) still produces the answer,
+    exactly as the generated-plan path already does (see
+    ``test_conduct_generated_plan_without_verifier_requirement_keeps_synthesis``).
+    """
+    agents = [
+        _agent("planner_agent"),
+        _agent("builder_agent"),
+        _agent("verifier_agent"),
+        _agent("synth_agent"),
+    ]
+    orch = _orch(*agents)
+    import dataclasses
+
+    orch.policy = dataclasses.replace(orch.policy, verifier_required=False)
+    result = _conduct_template_with_verdict(orch, accepted)
+    outputs = _template_role_outputs(result)
+    assert result["answer"] != outputs["verifier"]
+    assert result["answer"] == outputs["synthesizer"]
+
+
+@pytest.mark.parametrize(("accepted", "answer_role"), [(True, "synthesizer"), (False, "worker")])
+def test_conduct_template_with_verifier_requirement_gates_on_verdict(
+    accepted: bool, answer_role: str
+) -> None:
+    """Default ``verifier_required=True``: accepted -> synthesis, rejected -> worker output."""
+    agents = [
+        _agent("planner_agent"),
+        _agent("builder_agent"),
+        _agent("verifier_agent"),
+        _agent("synth_agent"),
+    ]
+    orch = _orch(*agents)
+    assert orch.policy.verifier_required is True
+    result = _conduct_template_with_verdict(orch, accepted)
+    outputs = _template_role_outputs(result)
+    assert result["verification"]["accepted"] is accepted
+    assert result["answer"] == outputs[answer_role]
+    assert result["answer"] != outputs["verifier"]
+
+
+def _conduct_template_with_verdict(orch: TaskOrchestrator, accepted: bool) -> dict:
+    """Run template conduct with a stubbed model-judge verdict."""
+    verdict = {"accepted": accepted, "reason": "stub verdict", "judge": "model"}
+
+    def judge(_task, fallback, **_kw):
+        return {**verdict, "verifier_output": fallback["verifier_output"]}
+
+    with patch.object(orch, "_model_judge_verification", side_effect=judge):
+        result = orch.conduct([{"role": "user", "content": "draft it"}])
+    assert result["plan_source"] == "template"
+    return result
+
+
+def _template_role_outputs(result: dict) -> dict[str, str]:
+    outputs = {
+        row["role"]: row["output"]
+        for row in result["trace"]
+        if "role" in row and "output" in row
+    }
+    assert set(outputs) >= {"thinker", "worker", "verifier", "synthesizer"}
+    return outputs
 
 
 def test_conduct_template_fallback_when_generation_fails() -> None:
