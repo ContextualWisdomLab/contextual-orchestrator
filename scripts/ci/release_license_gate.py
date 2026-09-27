@@ -40,6 +40,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+if __package__:
+    from .dependency_inventory import InventoryError, _npm_packages
+else:
+    from dependency_inventory import InventoryError, _npm_packages
+
 # GPL/LGPL/AGPL in any spelling, including ``GPLv3``. No trailing separator is
 # required: free-text spellings run the version straight onto the family name.
 _COPYLEFT_PATTERN = re.compile(
@@ -185,15 +190,8 @@ def _lock_packages_from_toml(path: Path, key: str) -> set[tuple[str, str]]:
 
 def _lock_packages_from_npm(path: Path) -> set[tuple[str, str]]:
     """Read installed package name/version pairs from an npm lockfile."""
-    with open(path, encoding="utf-8") as handle:
-        document = json.load(handle)
-    packages: set[tuple[str, str]] = set()
-    for location, entry in (document.get("packages") or {}).items():
-        if not location or not isinstance(entry, dict):
-            continue  # the "" entry is the project itself, not a dependency
-        name = entry.get("name") or location.split("node_modules/", 1)[-1]
-        packages.add((_normalize(str(name)), str(entry.get("version", ""))))
-    return packages
+    return {(_normalize(package["name"]), package["version"])
+            for package in _npm_packages(path, path.read_bytes())}
 
 
 def _parse_purl(purl: str, purl_prefix: str) -> tuple[str, str]:
@@ -220,7 +218,10 @@ def _sbom_packages(components: list[dict[str, Any]], purl_prefix: str) -> tuple[
         if not purl.startswith(purl_prefix):
             continue
         purl_name, purl_version = _parse_purl(purl, purl_prefix)
-        field_name = _normalize(str(component.get("name") or ""))
+        name = str(component.get("name") or "")
+        if purl_prefix == "pkg:npm/" and component.get("group"):
+            name = f"{component['group']}/{name}"
+        field_name = _normalize(name)
         field_version = str(component.get("version") or "")
         packages.add((purl_name, purl_version))
         if (purl_name, purl_version) != (field_name, field_version):
@@ -291,16 +292,16 @@ _RESTRICTION_PATTERN = re.compile(
 )
 
 _LICENCE_FAMILY_TOKENS = {
-    "MIT": ("mit", "permission is hereby granted"),
-    "BSD": ("bsd", "redistribution and use in source and binary forms"),
-    "APACHE": ("apache",),
+    "MIT": ("permission is hereby granted",),
+    "BSD": ("redistribution and use in source and binary forms",),
+    "APACHE": ("apache license",),
     "MPL": ("mozilla public license",),
-    "ISC": ("isc", "permission to use, copy, modify"),
+    "ISC": ("permission to use, copy, modify",),
     "0BSD": ("permission to use, copy, modify",),
     "PSF": ("python software foundation",),
-    "ZLIB": ("zlib", "altered source versions"),
-    "CC0": ("cc0", "public domain"),
-    "UNLICENSE": ("unlicense", "public domain"),
+    "ZLIB": ("altered source versions",),
+    "CC0": ("cc0 1.0 universal",),
+    "UNLICENSE": ("free and unencumbered software released into the public domain",),
 }
 
 
@@ -331,7 +332,7 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
         for entry in license_files
         if isinstance(entry, dict) and str(entry.get("text") or "").strip()
     ]
-    if not texts or len(texts) != len([entry for entry in license_files if isinstance(entry, dict)]):
+    if not texts or len(texts) != len(license_files):
         # A record with an empty or non-dict licence entry is incomplete.
         return False
     evidenced = False
@@ -353,6 +354,7 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
         if _COPYLEFT_PATTERN.search(text) or _RESTRICTION_PATTERN.search(text):
             return False
         lowered = " ".join(text.split()).lower()
+        evidenced = False
         for term in terms:
             if term in canonical_terms:
                 continue  # These declarations require the complete pinned instrument.
@@ -360,7 +362,9 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
             for family, tokens in _LICENCE_FAMILY_TOKENS.items():
                 if family in upper and any(token in lowered for token in tokens):
                     evidenced = True
-    return evidenced and matched_canonical_terms == canonical_terms
+        if not evidenced:
+            return False
+    return matched_canonical_terms == canonical_terms
 
 
 def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
@@ -554,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-sha", help="the released commit the inventory must describe")
     arguments = parser.parse_args(argv)
     if not arguments.sbom:
+        if arguments.mode == "release":
+            print("::error::--sbom is required in release mode; refusing to release.", file=sys.stderr)
+            return 1
         sbom = {"components": []}
     else:
       try:
@@ -600,7 +607,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::error::CycloneDX SBOM is malformed and cannot be adjudicated ({error}); refusing to release.",
               file=sys.stderr)
         return 1
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (InventoryError, OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         print(f"::error::Release licence gate could not read the declared dependency scopes ({error}).",
               file=sys.stderr)
         return 1

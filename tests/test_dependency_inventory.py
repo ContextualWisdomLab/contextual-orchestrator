@@ -624,3 +624,40 @@ def test_registry_package_cannot_borrow_local_project_licence(tmp_path):
     package = result["ecosystems"][0]["packages"][0]
     assert not package["licenses"]
     assert "license_evidence" not in package
+
+
+def test_wheel_version_prefix_is_not_exact_artifact_evidence(tmp_path):
+    """A nearby version cannot supply the pinned package's license evidence."""
+    _wheel(tmp_path, "library", "1.0.1", ["License-Expression: MIT"])
+    terms, source, files = _artifact_license_terms(tmp_path, "library", "1.0")
+    assert terms == []
+    assert "no wheel" in source
+    assert files == []
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkeypatch, linked):
+    import importlib.metadata
+    repository = _repository(tmp_path)
+    site = tmp_path / "site"
+    info = site / "only_library-1.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text("Name: only_library\nVersion: 1.0\nLicense-Expression: MIT\n")
+    raw = b"Permission is hereby granted, free of charge.\r\n"
+    license_path = info / "LICENSE"
+    if linked:
+        outside = tmp_path / "outside-license"
+        outside.write_bytes(raw)
+        license_path.symlink_to(outside)
+    else:
+        license_path.write_bytes(raw)
+    (info / "RECORD").write_text("only_library-1.0.dist-info/LICENSE,,\n")
+    distribution = importlib.metadata.Distribution.at(info)
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
+    inventory = build_inventory(repository, resolve_licenses=True)
+    package = next(e for e in inventory["ecosystems"] if e["ecosystem"] == "python")["packages"][0]
+    if linked:
+        assert package["license_files"] == []
+    else:
+        assert package["license_files"] == [{"name": "LICENSE", "sha256": hashlib.sha256(raw).hexdigest(),
+                                            "text": raw.decode("utf-8")}]

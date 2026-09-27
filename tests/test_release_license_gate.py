@@ -111,6 +111,14 @@ def test_release_workflow_runs_the_gate_before_publishing() -> None:
     release_gate = verify_block.index("--sbom sbom-download/cyclonedx-sbom.json")
     assert preinstall < environment < sbom_fetch < release_gate
     assert verify_block.index("--check-sources-only") < preinstall
+    download = verify_block.index("collect_python_license_artifacts.sh")
+    artifact_read = verify_block.index("--artifact-dir license-artifacts")
+    assert verify_block.index("--check-sources-only") < download < artifact_read < preinstall
+    collector = workflow.parents[2] / "scripts/ci/collect_python_license_artifacts.sh"
+    assert "--only-binary=:all:" in collector.read_text()
+    wheel_stage = verify_block.index('cp "${wheel}" license-artifacts/')
+    final_read = verify_block.rindex("--artifact-dir license-artifacts")
+    assert environment < wheel_stage < final_read < release_gate
     publish_block = text[text.index("\n  publish:") :]
     assert "needs: verify" in publish_block
 
@@ -605,5 +613,50 @@ def test_prebuild_source_cannot_authorize_final_release(tmp_path, monkeypatch, c
         "permitted": [{"name": "local-project", "version": "1", "license": "MIT"}],
         "copyleft": [], "undecidable": []})
     assert gate.main(["--inventory", str(path), "--mode", "preinstall"]) == 0
-    assert gate.main(["--inventory", str(path), "--mode", "release"]) == 1
+    sbom = tmp_path / "sbom.json"
+    sbom.write_text(json.dumps({"components": [_component("local-project", "1", license_id="MIT")]}))
+    assert gate.main(["--inventory", str(path), "--mode", "release", "--sbom", str(sbom)]) == 1
     assert "not final wheel" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode, expected", [("preinstall", 0), ("release", 1)])
+def test_release_requires_sbom_even_with_valid_inventory(tmp_path, mode, expected):
+    """Only the preinstall gate may operate without a built-environment SBOM."""
+    package = {"name": "library", "version": "1", "licenses": ["MIT"],
+               "license_files": [{"text": "Permission is hereby granted, free of charge"}]}
+    path = tmp_path / "inventory.json"
+    path.write_text(json.dumps(_inventory(packages=[package])))
+    assert main(["--mode", mode, "--inventory", str(path), "--source-sha", "a" * 40]) == expected
+
+
+@pytest.mark.parametrize("files", [
+    [{"text": "Vendor EULA: submission is permitted subject to vendor terms."}],
+    [{"text": "Permission is hereby granted, free of charge"}, {"text": "Vendor EULA"}],
+    [{"text": "Permission is hereby granted, free of charge"}, None],
+])
+def test_every_license_text_must_evidence_the_declared_family(files):
+    """Unrelated words and a valid sibling must not certify unknown text."""
+    package = {"name": "library", "version": "1", "licenses": ["MIT"], "license_files": files}
+    groups = classify_inventory_licenses(_inventory(packages=[package]))
+    assert not groups["permitted"]
+    assert len(groups["undecidable"]) == 1
+
+
+def test_nested_scoped_npm_identity_matches_sbom(tmp_path):
+    from scripts.ci.release_license_gate import _lock_packages_from_npm, _sbom_packages
+    lock = tmp_path / "package-lock.json"
+    lock.write_text(json.dumps({"packages": {"node_modules/a/node_modules/@types/node": {"version": "1.0"}}}))
+    expected = _lock_packages_from_npm(lock)
+    present, mismatches = _sbom_packages([{"group": "@types", "name": "node", "version": "1.0",
+                                        "purl": "pkg:npm/%40types/node@1.0"}], "pkg:npm/")
+    assert expected == present == {("@types/node", "1.0")}
+    assert mismatches == []
+
+
+def test_malformed_npm_dependency_is_not_silently_dropped(tmp_path):
+    from scripts.ci.dependency_inventory import InventoryError
+    from scripts.ci.release_license_gate import _lock_packages_from_npm
+    lock = tmp_path / "package-lock.json"
+    lock.write_text(json.dumps({"packages": {"node_modules/library": None}}))
+    with pytest.raises(InventoryError):
+        _lock_packages_from_npm(lock)
