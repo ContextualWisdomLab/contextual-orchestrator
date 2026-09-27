@@ -363,3 +363,57 @@ The prior optimizer full-suite result (1306 failures, 15 errors) is not wholly
 explained by these examples. No full rerun, hosted acceptance, release or real
 accuracy/latency gain is claimed. PR #1137 remains unchanged. Rendered-document
 visual inspection is pending; this runbook is not a completed visual receipt.
+
+## Review PR #1203 integration resource repair (2026-09-27)
+
+The local ordinary-forward integration of #1203 `beb3bfe9` and #1209
+`84736f4d` reproduced 19 strict-warning failures across ten modules after
+building the real native extension. Exact #1209 reproduced the same count
+(18 identical test IDs; one finalizer timing shift). This was an inherited
+resource baseline, not permission to suppress warnings.
+
+Three test owners explain the remaining focused failures: embeddings and
+security HTTP tests stopped listeners without closing them; security request
+helpers consumed HTTPError bodies without closing the response; the no-usage
+tool provider stopped its server without joining and closing it. Test-created
+413/400 HTTPError objects also require test-owned closure. Production provider
+cleanup and daemon policy are unchanged.
+
+RED: the ten-module native baseline returned 255 passed, 19 failed. Initial
+focused cleanup returned 58 passed, 2 failed, exposing the synthetic 413/400
+response owners. GREEN after closing those owners:
+
+```sh
+.venv/bin/python -m pytest -p no:cacheprovider -c /dev/null -q -W error --tb=short tests/test_embeddings_model_pool_http_honesty.py tests/test_security_hardening.py tests/test_stream_options_null_flags_noop_http_honesty.py
+```
+
+Result: 60 passed in 7.62s, exit 0, CPython 3.14.6, real native extension.
+The explicit config path avoids an unavailable pytest-asyncio configuration
+plugin; this is local strict-warning evidence, not the exact hosted command.
+Full-suite and protected delivery remain unverified.
+
+The repaired ten-module suite improved to 272 passed, 2 failed (148.26s).
+One late 503 response owner was `test_timeout_history_read_requires_durable_authorization_audit`: its `pytest.raises` retained the real urllib response without closing it. Closing that test-owned handle in `finally` preserves assertion failures. Focused `tests/test_model_timeout_policy.py` then returned 52 passed in 48.61s, exit 0, with the same strict-warning command prefix. A late 401 owner remains under allocation tracing; the expanded suite is not clean acceptance.
+
+The late 401 was a production consumer defect, reproduced independently with
+`test_local_candidate_registry_keeps_all_discovered_entries` (1 failed, 2.64s).
+Creation-stack instrumentation bound it to `_select_agent` → semantic affinity
+→ `_embed_cached` → `embed_with_usage` → `_send_raw` → the actual loopback
+embedding response at port 8082. This is distinct from test listener cleanup.
+Both task-vector and descriptor-vector consumers now close direct HTTPError
+responses they convert to unavailable evidence, while cleanup Exception cannot
+replace that outcome. Propagated provider errors retain caller ownership.
+Four regressions cover both consumers and cleanup success/failure.
+The measured-routing module plus the original catalog reproduction returned
+38 passed in 2.59s, exit 0, with strict warnings. The diagnostic two-module
+tracemalloc run also exposed an HTTP client timeout under tracing overhead;
+it is not evidence of a security assertion defect. Full-suite acceptance
+remains pending.
+
+Combined post-repair verification of the same ten previously failing modules
+returned **274 passed in 35.66s**, process exit 0, CPython 3.14.6 with the real
+native extension and warnings as errors. This closes that bounded 19-failure
+resource baseline. The separate full-suite process started before these final
+repairs and is historical diagnostic evidence, not current-head acceptance.
+
+The complete pre-final-repair native diagnostic exited 1: 5055 passed, 78 failed, 5 skipped, 6 errors (1597.04s). Most failures were resource warnings, including test helper responses and separately consumed production discovery/capability errors; two deprecated DIF alias calls also failed under warnings as errors. These are not all source assertions or hosted failures. Closing 15 consuming HTTP helper paths in twelve affected test modules produced 100 passed, 5 failed (104.15s), exit 1. The five remaining failures are synthetic capability HTTPError owners, not permission to close propagated responses in transport code. Default-suite verification is a separate required boundary.
