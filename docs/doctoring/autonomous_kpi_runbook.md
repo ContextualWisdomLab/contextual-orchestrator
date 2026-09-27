@@ -800,9 +800,20 @@ Loop ledger: `loop_id=co1016_provider_timing_20260927`, `parent_id=co1016`,
 `owner=#1266`, `depends_on=protected_main_and_current_head_review`,
 `status=LOCAL_VERIFIED`, `pass=finite_provider_timing_and_unknown_no_replay`,
 `retry=source_backed_failure`, `block=current_head_external_gate_only`,
-`evidence_sha=parent_of_receipt_commit`,
+`evidence_sha=b6f6cede`,
 `next_action=integrate_current_main_and_restack_dependents`,
 `return_to=co1016_owner_delivery`.
 
 Todo: integrate protected main, restack #1231/#1273, obtain current-head hosted
 results and independent approval, then verify versioned owner publication.
+
+Integration follow-up: protected main `aaa4dfdd` adds mixed-pool recovery and
+immutable-release gates. Both independently added test sets are retained;
+finite recovery fixtures now carry explicit provider timing instead of the
+legacy guessed-cooldown parameter. Session `21508`: 113 passed with strict
+warnings for admission, structured fallback and exhausted-pool error ordering.
+Session `69680`: 203 passed and two HTTP recovery fixture failures; those two
+fixtures also lacked provider timing. After correcting only their timing
+evidence, session `7172` passed all 34 action-fallback tests. The 203 unchanged
+release/review cases were not repeated. These are local integration receipts,
+not hosted or published evidence.
