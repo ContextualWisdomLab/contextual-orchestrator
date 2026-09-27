@@ -149,9 +149,12 @@ tag or GitHub Release exists, the step "Require a protected pypi environment
 before any tag or release exists" reads
 `GET /repos/{owner}/{repo}/environments/pypi` with the job's read-only token.
 It fails the run unless the environment exists, has a `required_reviewers`
-protection rule with at least one reviewer, and has a non-null
-`deployment_branch_policy`. Any other lookup error also fails the run. For
-`GITHUB_TOKEN`, that endpoint needs only `actions: read`, which `verify`
+protection rule with at least one reviewer, and uses explicit custom branch
+policies rather than all protected branches. The deployment-branch-policies
+endpoint must report exactly one policy: the literal `main`, with type
+`branch`. Extra branches, tag policies, wildcard patterns, incomplete lists,
+and lookup failures stop publication. Both read endpoints need only
+`actions: read` for `GITHUB_TOKEN`, which `verify`
 already has. Until the environment is set up, every release stops there,
 before anything is published.
 
