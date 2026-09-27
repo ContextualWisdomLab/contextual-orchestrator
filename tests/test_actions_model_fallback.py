@@ -905,8 +905,11 @@ def test_http_virtual_free_response_format_reselects_after_retryable_502(
     )
 
 
-def test_http_virtual_free_structured_retries_429_after_400(monkeypatch) -> None:
-    """A real structured HTTP request completes after a rejected cooldown."""
+@pytest.mark.parametrize("failure_order", [(429, 400), (400, 429)])
+def test_http_virtual_free_structured_retries_429_with_400_in_either_order(
+    monkeypatch, failure_order: tuple[int, int]
+) -> None:
+    """A structured HTTP request retries a rejected candidate in either order."""
     client = _StructuredFailThenServeClient()
     orchestrator = TaskOrchestrator(
         _free_agents(), client=client, rate_limit_wait_seconds=0.2,
@@ -924,7 +927,7 @@ def test_http_virtual_free_structured_retries_429_after_400(monkeypatch) -> None
                 "choices": [{"message": {"content": '{"ok": true}'}}],
                 "model": agent.model,
             }
-        status = 429 if len(calls) == 1 else 400
+        status = failure_order[len(calls) - 1]
         raise ProviderUpstreamError(
             agent_id=agent.id,
             model=agent.model,
@@ -959,11 +962,12 @@ def test_http_virtual_free_structured_retries_429_after_400(monkeypatch) -> None
     assert status == 200, body
     assert client.tool_payloads  # The conduct stages ran before synthesis.
     assert calls == [
-        "primary_free_agent", "fallback_free_agent", "primary_free_agent"
+        "primary_free_agent", "fallback_free_agent",
+        "primary_free_agent" if failure_order[0] == 429 else "fallback_free_agent",
     ]
     assert isinstance(body, dict)
     route = body["orchestration"]["route"]
-    assert [entry["provider_status"] for entry in route["attempted"][:2]] == [429, 400]
+    assert [entry["provider_status"] for entry in route["attempted"][:2]] == list(failure_order)
     assert route["attempted"][-1]["outcome"] == "served"
     assert orchestrator._group_router.member_report("primary_free_agent")[
         "failure_count"

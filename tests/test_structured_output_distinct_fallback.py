@@ -189,9 +189,10 @@ def test_free_structured_synthesis_retries_rejected_rate_limit_after_exhaustion(
     assert result["orchestration"]["route"]["attempted"][-1]["outcome"] == "served"
 
 
+@pytest.mark.parametrize("first_status", [400, 429])
 @pytest.mark.parametrize("status", [401, 403])
-def test_free_structured_synthesis_does_not_bypass_access_denial_after_429(
-    status: int,
+def test_free_structured_synthesis_does_not_bypass_access_denial(
+    status: int, first_status: int,
 ) -> None:
     """A later authentication or permission denial remains terminal."""
     first = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
@@ -208,9 +209,9 @@ def test_free_structured_synthesis_does_not_bypass_access_denial_after_429(
         raise ProviderUpstreamError(
             agent_id=agent.id, model=agent.model,
             error_code=("permission_error" if status == 403 else "authentication_error")
-            if denied else "rate_limit_exceeded",
-            message="upstream rejected request", client_status=status if denied else 429,
-            provider_status=status if denied else 429, retryable=not denied,
+            if denied else ("rate_limit_exceeded" if first_status == 429 else "invalid_request_error"),
+            message="upstream rejected request", client_status=status if denied else first_status,
+            provider_status=status if denied else first_status, retryable=not denied and first_status == 429,
             transport="structured_synthesis",
         )
 
@@ -231,8 +232,11 @@ def test_free_structured_synthesis_does_not_bypass_access_denial_after_429(
 
 
 @pytest.mark.parametrize("later_status", [400, 502])
-def test_free_structured_synthesis_bounds_rate_limit_retry(later_status: int) -> None:
-    """A repeated 429 gets one retry; another candidate is not replayed."""
+@pytest.mark.parametrize("repeated_status", [400, 429])
+def test_free_structured_synthesis_bounds_rate_limit_retry(
+    later_status: int, repeated_status: int,
+) -> None:
+    """A cooled candidate gets one retry; another candidate is not replayed."""
     first = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
     second = ModelAgent("second_agent", "second-model", "mock://second", tags=("cost:free",))
     orchestrator = TaskOrchestrator(
@@ -243,7 +247,10 @@ def test_free_structured_synthesis_bounds_rate_limit_retry(later_status: int) ->
 
     def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
         calls.append(agent.id)
-        status = 429 if agent.id == first.id else later_status
+        status = (
+            (429 if calls.count(first.id) == 1 else repeated_status)
+            if agent.id == first.id else later_status
+        )
         raise ProviderUpstreamError(
             agent_id=agent.id, model=agent.model,
             error_code={429: "rate_limit_exceeded", 400: "invalid_request_error", 502: "api_error"}[status],
@@ -264,7 +271,9 @@ def test_free_structured_synthesis_bounds_rate_limit_retry(later_status: int) ->
         )
 
     assert calls == [first.id, second.id, first.id]
-    assert exc_info.value.provider_status == 429
+    assert exc_info.value.provider_status == (
+        502 if repeated_status == 400 and later_status == 502 else 429
+    )
     assert exc_info.value.extra_detail["route"]["terminal_reason"] == "eligible_set_exhausted"
     assert len(exc_info.value.extra_detail["route"]["attempted"]) == 3
 
@@ -370,11 +379,12 @@ def test_virtual_structured_stale_models_do_not_pin_an_unrequested_endpoint(
 @pytest.mark.parametrize(
     ("failure_order", "final_status", "failure_counts"),
     [
-        ((400,), 400, (1, 0)),
-        ((502, 400), 400, (1, 1)),
+        ((400, 400), 400, (1, 1)),
+        ((502, 400), 502, (1, 1)),
+        ((400, 413), 400, (1, 0)),
         ((502, 413), 502, (1, 0)),
     ],
-    ids=["first_hard_error", "retryable_then_hard_error", "retryable_then_size_limit"],
+    ids=["all_hard_errors", "retryable_then_hard_error", "hard_error_then_size_limit", "retryable_then_size_limit"],
 )
 def test_structured_failure_ledgers_attribute_only_failed_candidates(
     failure_order: tuple[int, ...], final_status: int, failure_counts: tuple[int, int],

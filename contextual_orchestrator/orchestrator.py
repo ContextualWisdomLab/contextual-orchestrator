@@ -6900,6 +6900,7 @@ class TaskOrchestrator:
             retried_rate_limit: bool = False,
             prior_attempts: list[dict[str, Any]] | None = None,
             prior_eligible_ids: list[str] | None = None,
+            prior_retryable_error: ProviderUpstreamError | None = None,
             rate_limit_deadline: float | None = None,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Advance on 413 and retryable transport; JSON repair lives outside."""
@@ -6908,7 +6909,8 @@ class TaskOrchestrator:
             if rate_limit_deadline is None:
                 rate_limit_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
             last_model_not_found: ProviderUpstreamError | None = None
-            last_retryable_upstream_error: ProviderUpstreamError | None = None
+            last_retryable_upstream_error = prior_retryable_error
+            last_invalid_request_error: ProviderUpstreamError | None = None
             last_response_error: ProviderResponseError | None = None
             saw_request_too_large = False
             ordered_candidates = (
@@ -7129,12 +7131,8 @@ class TaskOrchestrator:
                                 last_model_not_found = classified
                                 request_exclusions.add(candidate.id)
                                 continue
-                            if (
-                                virtual_model
-                                and classified.provider_status == 400
-                                and rate_limited_candidates
-                                and not retried_rate_limit
-                            ):
+                            if virtual_model and classified.provider_status == 400:
+                                last_invalid_request_error = classified
                                 request_exclusions.add(candidate.id)
                                 continue
                             raise attach_route(
@@ -7173,11 +7171,17 @@ class TaskOrchestrator:
                     retried_rate_limit=True,
                     prior_attempts=attempts,
                     prior_eligible_ids=eligible_agent_ids,
+                    prior_retryable_error=last_retryable_upstream_error,
                     rate_limit_deadline=rate_limit_deadline,
                 )
             if last_retryable_upstream_error is not None:
                 raise attach_route(
                     last_retryable_upstream_error,
+                    terminal_reason="eligible_set_exhausted",
+                )
+            if last_invalid_request_error is not None:
+                raise attach_route(
+                    last_invalid_request_error,
                     terminal_reason="eligible_set_exhausted",
                 )
             if last_response_error is not None:
