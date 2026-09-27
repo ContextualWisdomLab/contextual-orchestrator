@@ -36,7 +36,8 @@ def _request(url: str, token: str | None) -> tuple[int, dict]:
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_inference_readiness_returns_per_candidate_diagnostics_with_inference_token() -> None:
