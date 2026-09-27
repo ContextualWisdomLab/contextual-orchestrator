@@ -7113,12 +7113,14 @@ class TaskOrchestrator:
             allow_cross_candidate_fallback: bool = True,
             require_output: bool = True,
             repair_mode: bool = False,
+            prior_retryable_error: ProviderUpstreamError | None = None,
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Advance on 413 and retryable transport; JSON repair lives outside."""
             nonlocal final_agent, synthesis_failure_recorded
             preferred = final_agent
             last_model_not_found: ProviderUpstreamError | None = None
-            last_retryable_upstream_error: ProviderUpstreamError | None = None
+            last_retryable_upstream_error = prior_retryable_error
+            last_invalid_request_error: ProviderUpstreamError | None = None
             last_response_error: ProviderResponseError | None = None
             saw_request_too_large = False
             ordered_candidates = (
@@ -7393,6 +7395,10 @@ class TaskOrchestrator:
                                 last_model_not_found = classified
                                 request_exclusions.add(candidate.id)
                                 continue
+                            if virtual_model and classified.provider_status == 400:
+                                last_invalid_request_error = classified
+                                request_exclusions.add(candidate.id)
+                                continue
                             raise attach_route(
                                 classified, terminal_reason="fail_closed"
                             ) from None
@@ -7405,6 +7411,11 @@ class TaskOrchestrator:
             if last_retryable_upstream_error is not None:
                 raise attach_route(
                     last_retryable_upstream_error,
+                    terminal_reason="eligible_set_exhausted",
+                )
+            if last_invalid_request_error is not None:
+                raise attach_route(
+                    last_invalid_request_error,
                     terminal_reason="eligible_set_exhausted",
                 )
             if last_response_error is not None:
@@ -7424,7 +7435,7 @@ class TaskOrchestrator:
             require_output: bool = True,
             repair_mode: bool = False,
         ) -> tuple[dict[str, Any], ModelAgent]:
-            """Retry only virtual synthesis after every available route returns 429."""
+            """Recover explicit 429 rejections without replaying excluded failures."""
             nonlocal final_agent
             if not virtual_model or not allow_cross_candidate_fallback:
                 return send_synthesis_once(
@@ -7435,6 +7446,8 @@ class TaskOrchestrator:
                 )
             preferred = final_agent
             wait_deadline: float | None = None
+            prior_retryable_error: ProviderUpstreamError | None = None
+            retried_mixed_failure = False
             while True:
                 available = [
                     candidate for candidate in synthesis_candidates
@@ -7488,13 +7501,18 @@ class TaskOrchestrator:
                 round_start = len(synthesis_route_attempts)
                 try:
                     return send_synthesis_once(
-                        payload, require_output=require_output, repair_mode=repair_mode
+                        payload, require_output=require_output, repair_mode=repair_mode,
+                        prior_retryable_error=prior_retryable_error,
                     )
                 except ProviderUpstreamError as exc:
                     round_attempts = synthesis_route_attempts[round_start:]
-                    if not exc.retryable or not round_attempts or any(
-                        row.get("provider_status") != 429
-                        and row.get("outcome") != "request_too_large"
+                    if retried_mixed_failure or not exc.retryable or not round_attempts or any(
+                        row.get("outcome") != "request_too_large"
+                        and (
+                            row.get("provider_status") is None
+                            or (row.get("provider_status") != 429
+                                and row.get("agent_id") not in request_exclusions)
+                        )
                         for row in round_attempts
                     ):
                         raise
@@ -7507,6 +7525,12 @@ class TaskOrchestrator:
                         and (wait_deadline is None or time.monotonic() < wait_deadline)
                     ):
                         raise
+                    retried_mixed_failure = any(
+                        row.get("provider_status") != 429
+                        and row.get("outcome") != "request_too_large"
+                        for row in round_attempts
+                    )
+                    prior_retryable_error = exc
                     if wait_deadline is None:
                         wait_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
                     final_agent = preferred
@@ -11735,6 +11759,9 @@ class TaskOrchestrator:
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
         last_quota_rejection: ProviderUpstreamError | None = None
+        # A later non-retryable failure (e.g. one model's 400) must not hide an
+        # earlier transient one: the exhaustion's retryability is order-independent.
+        last_retryable_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -11824,6 +11851,8 @@ class TaskOrchestrator:
                         last_upstream_error = exc
                         if quota_rejection:
                             last_quota_rejection = exc
+                        if exc.retryable:
+                            last_retryable_upstream_error = exc
                         if exc.provider_status in (429, 503):
                             # Quota cooldown, tracked separately from the
                             # circuit breaker below (a 429 is not a model
@@ -12023,6 +12052,8 @@ class TaskOrchestrator:
                 and last_quota_rejection is not None
                 else last_upstream_error
             )
+            if not terminal_error.retryable and last_retryable_upstream_error is not None:
+                terminal_error = last_retryable_upstream_error
             if route_attempts:
                 raise _attach_route_evidence_to_upstream_error(
                     terminal_error,
@@ -12746,7 +12777,11 @@ class TaskOrchestrator:
                         )
                     raise exc
 
-                if exc.provider_status not in (429, 503):
+                rejected_agent_ids = {
+                    row.get("agent_id") for row in current_attempts
+                    if isinstance(row, dict) and row.get("provider_status") == 429
+                }
+                if exc.provider_status not in (429, 503) and not rejected_agent_ids:
                     raise_with_recovered_route()
                 required_tags = self._image_input_required_tags(messages)
                 prompt_context = self._prompt_interaction(messages)
@@ -12820,10 +12855,9 @@ class TaskOrchestrator:
                 if ready:
                     # A mixed failure authorizes replay only for the agent
                     # that explicitly rejected this request with 429.
-                    if exc.provider_status != 429:
-                        raise_with_recovered_route()
                     cooling = [
-                        candidate for candidate in cooling if candidate.id == exc.agent_id
+                        candidate for candidate in cooling
+                        if candidate.id in rejected_agent_ids
                     ]
                     if not cooling:
                         raise_with_recovered_route()
