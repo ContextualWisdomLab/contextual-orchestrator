@@ -13,6 +13,13 @@ from contextual_orchestrator.orchestrator import (
     ProviderResponseError,
     ProviderUpstreamError,
 )
+from contextual_orchestrator.server import _tool_fallback_error_detail
+from contextual_orchestrator.tool_fallback import (
+    ToolExecutionError,
+    ToolFailureKind,
+    ToolFallbackStoppedError,
+    classify_tool_failure,
+)
 
 
 def _response_format() -> dict[str, object]:
@@ -145,6 +152,153 @@ def test_virtual_structured_transport_failure_advances_to_next_candidate(model: 
     assert orchestrator._group_router.member_report(first.id)["failure_count"] == 1
     assert orchestrator._group_router.member_report(second.id)["failure_count"] == 0
     assert orchestrator._group_router.member_report(second.id)["success_count"] == 1
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+def test_structured_tool_stop_keeps_prior_candidate_route(model: str) -> None:
+    """A later tool stop must keep the earlier structured candidate on the route."""
+    first = ModelAgent(
+        "first_agent",
+        "first-model",
+        "mock://first",
+        group_name="test_group",
+        tags=("cost:free",),
+    )
+    second = ModelAgent(
+        "second_agent",
+        "second-model",
+        "mock://second",
+        group_name="test_group",
+        tags=("cost:free",),
+    )
+    orchestrator = TaskOrchestrator([first, second])
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        if agent.id == first.id:
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="upstream_unavailable",
+                message="upstream provider unavailable",
+                client_status=502,
+                provider_status=502,
+                retryable=True,
+                transport="structured_synthesis",
+            )
+        decision = classify_tool_failure(
+            ToolExecutionError(
+                "request may have completed",
+                tool_name="send_message",
+                kind=ToolFailureKind.TRANSPORT_ERROR,
+                outcome_unknown=True,
+            )
+        )
+        raise ToolFallbackStoppedError(agent.id, decision)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ToolFallbackStoppedError) as excinfo,
+    ):
+        orchestrator.proxy_completion(_request(model), single_agent=False)
+
+    route = excinfo.value.detail["route"]
+    assert [row["outcome"] for row in route["attempted"]] == [
+        "retryable_transport",
+        "fail_closed",
+    ]
+    assert route["attempted"][0]["agent_id"] == first.id
+    terminal = route["attempted"][1]
+    assert terminal["agent_id"] == second.id
+    assert terminal["retryable"] is False
+    assert "error_code" not in terminal
+    assert "provider_status" not in terminal
+    assert route["terminal_reason"] == "fail_closed"
+    assert route["eligible_agent_ids"] == [first.id, second.id]
+    http_detail = _tool_fallback_error_detail(excinfo.value)
+    assert http_detail["route"] == route
+    assert http_detail["reason_code"]
+    assert orchestrator._group_router.member_report(first.id)["failure_count"] == 1
+    assert orchestrator._group_router.member_report(second.id)["failure_count"] == 1
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+def test_structured_repair_tool_stop_keeps_initial_synthesis_route(model: str) -> None:
+    """Repair stops retain transport failure and billed invalid synthesis attempts."""
+    first = ModelAgent(
+        "first_agent",
+        "first-model",
+        "mock://first",
+        group_name="test_group",
+        tags=("cost:free",),
+    )
+    second = ModelAgent(
+        "second_agent",
+        "second-model",
+        "mock://second",
+        group_name="test_group",
+        tags=("cost:free",),
+    )
+    orchestrator = TaskOrchestrator([first, second])
+
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if len(calls) == 1:
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="upstream_unavailable",
+                message="upstream provider unavailable",
+                client_status=502,
+                provider_status=502,
+                retryable=True,
+                transport="structured_synthesis",
+            )
+        if len(calls) == 2:
+            return _completion('{"input_count":6}', 3)
+        decision = classify_tool_failure(
+            ToolExecutionError(
+                "request may have completed",
+                tool_name="send_message",
+                kind=ToolFailureKind.TRANSPORT_ERROR,
+                outcome_unknown=True,
+            )
+        )
+        raise ToolFallbackStoppedError(agent.id, decision)
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(orchestrator, "_ranked_agents", return_value=[first, second]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ToolFallbackStoppedError) as excinfo,
+    ):
+        orchestrator.proxy_completion(_request(model), single_agent=False)
+
+    assert calls == [first.id, second.id, second.id]
+    route = excinfo.value.detail["route"]
+    assert [row["outcome"] for row in route["attempted"]] == [
+        "retryable_transport",
+        "served",
+        "fail_closed",
+    ]
+    assert route["attempted"][0]["agent_id"] == first.id
+    terminal = route["attempted"][2]
+    assert terminal["agent_id"] == second.id
+    assert terminal["retryable"] is False
+    assert "error_code" not in terminal
+    assert "provider_status" not in terminal
+    assert route["terminal_reason"] == "fail_closed"
+    assert route["eligible_agent_ids"] == [first.id, second.id]
+    http_detail = _tool_fallback_error_detail(excinfo.value)
+    assert http_detail["route"] == route
+    assert http_detail["reason_code"]
+    assert orchestrator._group_router.member_report(first.id)["failure_count"] == 1
+    assert orchestrator._group_router.member_report(second.id)["failure_count"] == 1
 
 
 @pytest.mark.parametrize(
