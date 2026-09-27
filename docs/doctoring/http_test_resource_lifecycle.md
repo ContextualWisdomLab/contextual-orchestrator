@@ -409,3 +409,9 @@ The measured-routing module plus the original catalog reproduction returned
 tracemalloc run also exposed an HTTP client timeout under tracing overhead;
 it is not evidence of a security assertion defect. Full-suite acceptance
 remains pending.
+
+Combined post-repair verification of the same ten previously failing modules
+returned **274 passed in 35.66s**, process exit 0, CPython 3.14.6 with the real
+native extension and warnings as errors. This closes that bounded 19-failure
+resource baseline. The separate full-suite process started before these final
+repairs and is historical diagnostic evidence, not current-head acceptance.
