@@ -65,7 +65,7 @@ def test_security_workflow_covers_core_repository_security_process():
         "python -m pip_audit --require-hashes -r requirements.lock",
         "python -m pip_audit --path .venv/lib/python3.12/site-packages",
         "cyclonedx-py environment .venv/bin/python",
-        "uv build --wheel --out-dir dist",
+        "uv build --wheel --no-build-isolation --python .venv/bin/python --out-dir dist",
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 

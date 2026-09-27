@@ -5835,6 +5835,7 @@ class TaskOrchestrator:
         # gate actually changes which value is currently winning, and
         # removed when _rate_limit_remaining expires the cooldown.
         self._rate_limit_assumed: set[str] = set()
+        self._rate_limit_recorded_at: dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
         # Injectable wait seam (mirrors _tool_retry_sleep) so a rate-limit-storm
         # test can assert the requested wait duration without a real sleep.
@@ -6497,6 +6498,7 @@ class TaskOrchestrator:
 
             for candidate in eligible_round:
                 started_at = time.perf_counter()
+                cooldown_attempt_started = time.monotonic()
                 candidate_payload = dict(upstream)
                 candidate_payload["model"] = candidate.model
                 if isinstance(file_replicas, dict):
@@ -6667,7 +6669,7 @@ class TaskOrchestrator:
                             consumed_response.close()
                         except Exception:
                             pass  # Preserve classification and failover on cleanup failure.
-                self._record_success(candidate.id)
+                self._record_success(candidate.id, attempt_started_at=cooldown_attempt_started)
                 if candidate.group_name:
                     self._group_router.observe_success(
                         candidate.id, time.perf_counter() - started_at
@@ -8246,6 +8248,7 @@ class TaskOrchestrator:
             parts = []
             emitted = False
             started_at = time.perf_counter()
+            cooldown_attempt_started = time.monotonic()
             try:
                 record_initial_selection([agent.id], "stream_route")
                 for delta in self.client.stream_chat(agent, messages, **stream_kwargs):
@@ -8346,7 +8349,7 @@ class TaskOrchestrator:
             output_budget_callback(output_budget)
         if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
-        self._record_success(agent.id)
+        self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
         answer = "".join(parts)
         # Real-time judging after the stream: already-sent bytes cannot be
         # recalled, so the verdict never changes this response -- it feeds the
@@ -11562,6 +11565,7 @@ class TaskOrchestrator:
                 else endpoint
             )
             started_at = time.perf_counter()
+            cooldown_attempt_started = time.monotonic()
             try:
                 record_initial_selection([agent.id], "capability_proxy")
                 result = (
@@ -11598,10 +11602,10 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     agent.id, time.perf_counter() - started_at
                 )
-                self._record_success(agent.id)
+                self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
                 return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
-            self._record_success(agent.id)
+            self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
             return result
         if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
@@ -11806,6 +11810,7 @@ class TaskOrchestrator:
                 attempted.append(agent)
                 try:
                     attempt_start = time.perf_counter()
+                    cooldown_attempt_started = time.monotonic()
                     effort_profile = self._role_effort_profile(role)
                     # This loop already decides retry-same-agent vs. failover
                     # per attempt below; single_attempt_transport() keeps
@@ -12043,7 +12048,7 @@ class TaskOrchestrator:
                         output_tokens=output_tokens,
                         total_tokens=total_tokens,
                     )
-                self._record_success(agent.id)
+                self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
                 if selection_design_sink is not None:
                     selection_design_sink(self._selection_design_receipt(candidates, attempted, agent))
                 if route_attempts:
@@ -12518,14 +12523,17 @@ class TaskOrchestrator:
             },
         )
 
-    def _record_success(self, agent_id: str) -> None:
+    def _record_success(self, agent_id: str, *, attempt_started_at: float | None = None) -> None:
         with self._circuit_lock:
             cleared = self._circuit.pop(agent_id, None)
-        # A fresh provider success is direct evidence that quota admission has
-        # recovered, so it also clears any provider-stated or assumed cooldown.
+        # An older in-flight success cannot disprove a newer 429 from another
+        # request on this agent. Unknown attempt order preserves the cooldown.
         with self._rate_limit_lock:
-            self._rate_limit_until.pop(agent_id, None)
-            self._rate_limit_assumed.discard(agent_id)
+            recorded_at = self._rate_limit_recorded_at.get(agent_id)
+            if recorded_at is not None and attempt_started_at is not None and attempt_started_at > recorded_at:
+                self._rate_limit_until.pop(agent_id, None)
+                self._rate_limit_assumed.discard(agent_id)
+                self._rate_limit_recorded_at.pop(agent_id, None)
         if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
 
@@ -12574,6 +12582,7 @@ class TaskOrchestrator:
         )
         until = time.monotonic() + resolved_seconds
         with self._rate_limit_lock:
+            self._rate_limit_recorded_at[agent_id] = time.monotonic()
             current = self._rate_limit_until.get(agent_id)
             if current is None or until > current:
                 self._rate_limit_until[agent_id] = until
@@ -12593,6 +12602,7 @@ class TaskOrchestrator:
             if remaining <= 0:
                 self._rate_limit_until.pop(agent_id, None)
                 self._rate_limit_assumed.discard(agent_id)
+                self._rate_limit_recorded_at.pop(agent_id, None)
                 return None
             return remaining
 
@@ -12626,6 +12636,8 @@ class TaskOrchestrator:
                     stale = self._rate_limit_until.get(agent_id)
                     if stale is not None and stale - time.monotonic() <= 0:
                         self._rate_limit_until.pop(agent_id, None)
+                        self._rate_limit_assumed.discard(agent_id)
+                        self._rate_limit_recorded_at.pop(agent_id, None)
         return snapshot
 
     def _rate_limit_wait_budget(self, agent: ModelAgent) -> float:
