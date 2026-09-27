@@ -22,6 +22,11 @@ If eligible candidates fail before sending content, the terminal SSE error detai
 contains the same typed route with `terminal_reason: "eligible_set_exhausted"` or
 `"fail_closed"`. A failure after content has begun may leave a partial stream;
 the caller must not infer a served completion from those bytes.
+A provider connection that closes without the Chat Completions `[DONE]` marker
+reports `provider_stream_incomplete` with a `fail_closed` route and no served
+receipt, even if an earlier provider frame carried `finish_reason: "stop"`.
+The gateway does not retry that request on another provider because the
+upstream outcome is unknown.
 
 The route contains only configured candidate IDs, model names, typed outcomes,
 upstream status when available, retryability, and a transport tag. It omits
