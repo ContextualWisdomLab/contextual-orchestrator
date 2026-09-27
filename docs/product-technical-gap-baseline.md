@@ -7523,7 +7523,7 @@ unchanged. Tests pin conduct (template/generated), `route_once`, and
 | `verifier_required=False` can publish a response despite a rejected verdict. | Reconcile the opt-out with fail-closed publication semantics in a separate policy decision and contract migration. | Open; explicitly not claimed complete by PR #1264. |
 
 **PRD/TRD/UML/ERD status:** PRD safety goal and TRD call boundary are updated
-by the Proposed ADR `docs/planning/adrs/0137-final-answer-judgment-boundary.md`.
+by the Proposed ADR `docs/planning/adrs/0139-final-answer-judgment-boundary.md`.
 No database schema or aggregate boundary changes, so the current ERD is
 unaffected. Conduct runtime sequence is now task + final response + verifier
 reference → fast-mlsirm judge → verdict → existing conduct gate. This local

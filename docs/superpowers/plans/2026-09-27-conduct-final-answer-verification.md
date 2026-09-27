@@ -10,7 +10,7 @@
 
 **Tech Stack:** Python 3.12+, pytest, contextual-orchestrator, released fast-mlsirm adapter contract.
 
-**Spec:** `docs/planning/adrs/0137-final-answer-judgment-boundary.md`
+**Spec:** `docs/planning/adrs/0139-final-answer-judgment-boundary.md`
 
 ## Global Constraints
 
@@ -53,7 +53,7 @@
 
 **Files:**
 - Modify: `CHANGELOG.d/conduct-verifier-not-required-final-answer.md`
-- Create: `docs/planning/adrs/0137-final-answer-judgment-boundary.md`
+- Create: `docs/planning/adrs/0139-final-answer-judgment-boundary.md`
 - Modify: `docs/product-technical-gap-baseline.md`
 
 **Interfaces:**
@@ -83,7 +83,7 @@
 **Files:**
 - Modify: `contextual_orchestrator/orchestrator.py`
 - Modify: `tests/test_orchestrator_dispatch_boundaries.py`, `tests/test_model_judge.py`; restore `tests/test_true_streaming.py` to main
-- Rename/rewrite: `docs/planning/adrs/0137-final-answer-judgment-boundary.md` (was `2026-09-27-...`; numeric id required by `tests/test_planning_adr_identifiers.py` on main)
+- Rename/rewrite: `docs/planning/adrs/0139-final-answer-judgment-boundary.md` (was `2026-09-27-...`; numeric id required by `tests/test_planning_adr_identifiers.py` on main)
 - Modify: `CHANGELOG.d/conduct-verifier-not-required-final-answer.md`, this plan, the gap baseline
 
 - [x] **Step 1: Restore `accept_threshold=0.7` and main's `evidence_quality`/`risk_signal` criteria (weight `1.0`) on every path, including conduct.**

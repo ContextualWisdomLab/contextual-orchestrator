@@ -1,5 +1,5 @@
 ---
-id: "0137"
+id: "0139"
 title: "Judge the conduct response candidate against the verifier report"
 status: proposed
 proposed_date: "2026-09-27"
@@ -19,7 +19,7 @@ related:
     relation: refines
 ---
 
-# ADR 0137: Judge the conduct response candidate against the verifier report
+# ADR 0139: Judge the conduct response candidate against the verifier report
 
 ## Problem
 
