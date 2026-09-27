@@ -166,6 +166,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: Set up pinned Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
@@ -176,9 +182,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (deny warnings)
+        env:
+          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test workspace
+        env:
+          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
         run: cargo test --workspace --locked
 
       - name: Install cargo-audit
