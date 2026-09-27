@@ -450,3 +450,25 @@ removed in that actual scan. No registry download or package hook was executed.
 The retained full inventory remains 370 permitted, zero copyleft and 143 held;
 this is collection evidence, not complete bundled-code license clearance.
 Receipt: `evidence/release/1083/native_instrument_selector.json`.
+
+## Playwright inlined-component inventory gap
+
+The recovered Playwright and Playwright-core bundle instruments name inlined
+packages that are not represented by those root npm identities alone. Five
+structured notice manifests contain 175 distinct name/version pairs; 132
+are absent from the retained npm inventory. Each list matches its notice
+section headings, end markers and stated package count exactly. Both original
+registry archives were rechecked against their lock SHA-512 and the five
+notice SHA-256 values. The producer manifests, missing identity list and
+archive bindings are retained in
+`evidence/release/1083/playwright_inlined_component_gap.json`.
+
+These are producer-declared inlined identities, not independently verified
+component archive hashes or complete binary composition. Existing lock
+inventory is therefore not full bundle-composition proof. Do not fabricate
+component digests, dependency edges or license clearance from root Apache.
+The unstructured webp codec instrument is outside this five-manifest count
+and still needs separate scope review. No SBOM component or classifier waiver
+was added; the previous 370/0/143 classification is unchanged and is not a
+count of these newly identified inlined components. Next: establish grants
+and provenance for these explicit included components before release proof.
