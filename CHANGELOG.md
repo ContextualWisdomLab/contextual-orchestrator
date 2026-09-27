@@ -12,6 +12,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Structured non-stream `/v1/responses` requests now preflight every required
+  conduct role for `orchestrator/free`. Image-capable worker-only pools fail
+  closed with typed HTTP 400 before template planning instead of surfacing a
+  missing-role HTTP 500; ordinary and streamed route admission remains
+  worker-scoped.
 - Removed a shadowed benchmark validation helper so the required benchmark
   branch coverage gate reaches 100% on the current code.
 - Safe same-agent retries now preserve every failed attempt before retrying and the eventual served attempt in the typed route receipt, without misclassifying tool failures as provider API errors.
