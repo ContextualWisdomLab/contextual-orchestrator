@@ -79,6 +79,7 @@ from .pii_protection import (
     load_pii_encryptor,
 )
 from .domain.budget import BudgetExceededError, CallPurpose
+from .domain.pricing import AdmissionTokenBounds
 from .spend_guard import (
     SpendGuard,
     guarded_provider_call,
@@ -108,6 +109,7 @@ from .reasoning_effort_profile import (
 from .token_counting import (
     TokenCountUnavailable,
     build_token_counter,
+    describe_message_count,
     prompt_token_lower_bound as _prompt_token_lower_bound_evidence,
     shared_context_output_budget,
 )
@@ -2766,6 +2768,30 @@ class ModelClient:
             messages,
             lambda: self._chat_transport(agent, messages, temperature, top_p, effort_profile),
             usage_reader=self.peek_usage,
+            token_bounds=lambda: self._admission_token_bounds(agent, messages),
+        )
+
+    def _admission_token_bounds(
+        self, agent: ModelAgent, messages: list[ChatMessage]
+    ) -> AdmissionTokenBounds:
+        """Exact prompt tokens and the output cap sent upstream, for spend admission.
+
+        The prompt count is used only when provenance-exact (never a lower
+        bound); the output cap is the ``max_tokens`` the transport sends. Either
+        may be ``None``, in which case admission falls back to the model's
+        ``context_window`` ceiling (ADR 0138).
+        """
+        output_cap = self.effective_max_output_tokens(agent)
+        tools = self.request_settings_snapshot().get("tools")
+        try:
+            prompt_tokens: int | None = describe_message_count(
+                self.token_counter, messages, agent.model, tools=tools
+            ).token_count
+        except (TokenCountUnavailable, TypeError, ValueError):
+            prompt_tokens = None
+        return AdmissionTokenBounds(
+            prompt_tokens=prompt_tokens,
+            max_output_tokens=output_cap if type(output_cap) is int else None,
         )
 
     def _chat_transport(
@@ -3418,6 +3444,7 @@ class ModelClient:
                 agent, messages, temperature, effort_profile, include_usage
             ),
             usage_reader=self.peek_usage,
+            token_bounds=lambda: self._admission_token_bounds(agent, messages),
         )
 
     def _stream_chat_transport(
@@ -9103,13 +9130,18 @@ class TaskOrchestrator:
             # first spend to be skipped when headroom runs short (ADR 0138).
             spend_scope = SpendGuard.active_scope()
             baseline = None
-            if spend_scope is None or spend_scope.baseline_admissible():
+            skip_reason = spend_scope.baseline_skip_reason() if spend_scope is not None else None
+            if skip_reason is None:
                 start = time.perf_counter()
                 try:
                     with SpendGuard.call_purpose(CallPurpose.BASELINE):
                         baseline = self.route_once(messages)
-                except BudgetExceededError:
+                except BudgetExceededError as exc:
                     baseline = None
+                    # Record why: a paid baseline below the headroom ratio is
+                    # ``baseline_headroom_exhausted``; other refusals keep
+                    # their own spend-guard reason (ADR 0138).
+                    skip_reason = str(exc.detail.get("reason") or "spend_budget")
                 baseline_latency = round((time.perf_counter() - start) * 1000, 2)
             if baseline is None:
                 results.append({
@@ -9121,7 +9153,7 @@ class TaskOrchestrator:
                         "verified": bool(orchestrated.get("verification", {}).get("accepted")),
                         "answer_length": len(orchestrated["answer"]),
                     },
-                    "baseline": {"skipped": True, "reason": "spend_budget"},
+                    "baseline": {"skipped": True, "reason": skip_reason or "spend_budget"},
                 })
                 continue
 

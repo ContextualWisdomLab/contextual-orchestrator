@@ -7482,9 +7482,20 @@ lock still meters uncapped work but refuses shared hard-budget admission as
 make unknown-cost ledger entries mark run/key/tenant positions incomplete,
 refuse cross-currency prices without exchange-rate evidence, contain recursive
 provider JSON parsing failures, and map ledger path I/O failures to the CLI
-argument-error surface. The numeric baseline threshold and CLI/KV surface
-remain removed; paid baseline work under a hard cap requires a future versioned
-allocation authority, while zero-cost or uncapped work can run.
+argument-error surface. *Owner revision 2026-09-27:* the removal of the
+baseline threshold was not requested and is reverted in behaviour. Under a hard
+cap a paid sampled baseline runs only while at least
+`baseline_min_remaining_ratio` (default `0.5`, CLI/KV configurable) of every
+applicable run, virtual-key, and tenant cap would remain after its upper-bound
+cost; otherwise it is skipped as `baseline_headroom_exhausted`. Zero-cost or
+uncapped baselines always run. Admission is bounded by exact prompt tokens x
+prompt price + sent `max_output_tokens` x completion price when both are known,
+else by the `context_window` ceiling; a priced route with neither is refused as
+`missing_context_window`. Unknown-outcome reservations expire with their budget
+window, and an operator can settle one with an explicit cost, reason, and
+operator (`spend-settle`, append-only `spend_settlement` event); all-time
+budgets stay fail closed until that settlement. `measurement_unavailable`
+refusals name the original provider error.
 
 **Verification and status.** Focused spend-domain, provider-limit, metering,
 guard, and CLI tests are GREEN locally; exact command and counts are recorded

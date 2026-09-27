@@ -28,7 +28,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
-from typing import Any, ContextManager, Iterable, Iterator, Protocol
+from typing import Any, ContextManager, Iterable, Iterator, Mapping, Protocol
 
 try:
     import fcntl
@@ -95,6 +95,13 @@ class MeteredUsage:
     virtual_key_id: str | None = None
     purpose: str = "primary"
     provider_limit_reason: str | None = None
+    #: Hard-cap reservation this call consumed; links an unknown outcome to an
+    #: operator settlement (ADR 0138).
+    reservation_id: str | None = None
+    #: Original provider failure class and HTTP status for a failed call, so a
+    #: later ``measurement_unavailable`` refusal can name its cause.
+    error_type: str | None = None
+    provider_status: int | None = None
 
     def __post_init__(self) -> None:
         """Keep status and cost-source vocabularies closed."""
@@ -129,6 +136,9 @@ class MeteredUsage:
             ),
             "cost_source": self.cost_source,
             "price_unknown": self.cost_source == "unknown",
+            "reservation_id": self.reservation_id,
+            "error_type": self.error_type,
+            "provider_status": self.provider_status,
             "record": self.record.as_dict(),
         }
 
@@ -150,6 +160,11 @@ class MeteredUsage:
             virtual_key_id=data.get("virtual_key_id"),
             purpose=data.get("purpose", "primary"),
             provider_limit_reason=data.get("provider_limit_reason"),
+            reservation_id=data.get("reservation_id"),
+            error_type=data.get("error_type"),
+            provider_status=(
+                data["provider_status"] if type(data.get("provider_status")) is int else None
+            ),
         )
 
 
@@ -198,6 +213,110 @@ class SpendReservation:
             run_id=data["run_id"],
             reserved_cost=Money(cost["amount"], cost.get("currency", "USD")),
             created_at=int(data["created_at"]),
+        )
+
+
+@dataclass(frozen=True)
+class SpendSettlement:
+    """An explicit operator settlement of one active reservation (ADR 0138).
+
+    An unknown provider outcome leaves its reservation active and its usage
+    entry unpriced, which keeps every hard budget that covers it fail closed.
+    An operator who has authoritative evidence (for example the provider's
+    billing console) closes that state with an append-only settlement: the
+    ``settled_cost`` (zero is allowed but must be stated explicitly) replaces
+    both the reservation and the linked unknown usage cost in every budget
+    sum, attributed to the reservation's tenant, key, run and time. ``reason``
+    and ``settled_by`` are required so the ledger explains every release.
+    """
+
+    reservation_id: str
+    tenant_id: str
+    run_id: str
+    reserved_cost: Money
+    reserved_at: int
+    settled_cost: Money
+    settled_at: int
+    settled_by: str
+    reason: str
+    virtual_key_id: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require an audit trail and a non-negative same-currency amount."""
+        if not self.reservation_id or not self.tenant_id or not self.run_id:
+            raise ValueError("reservation_id, tenant_id, and run_id are required")
+        if not str(self.reason).strip():
+            raise ValueError("a settlement reason is required")
+        if not str(self.settled_by).strip():
+            raise ValueError("settled_by (the operator) is required")
+        if self.settled_cost.currency != self.reserved_cost.currency:
+            raise ValueError("settled_cost must use the reservation currency")
+        for name in ("reserved_at", "settled_at"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+
+    @classmethod
+    def for_reservation(
+        cls,
+        reservation: SpendReservation,
+        *,
+        settled_cost: Money,
+        settled_at: int,
+        settled_by: str,
+        reason: str,
+    ) -> SpendSettlement:
+        """Build a settlement that inherits the reservation's attribution."""
+        return cls(
+            reservation_id=reservation.reservation_id,
+            tenant_id=reservation.tenant_id,
+            virtual_key_id=reservation.virtual_key_id,
+            run_id=reservation.run_id,
+            reserved_cost=reservation.reserved_cost,
+            reserved_at=reservation.created_at,
+            settled_cost=settled_cost,
+            settled_at=settled_at,
+            settled_by=settled_by,
+            reason=reason,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the append-only ledger representation."""
+        return {
+            "reservation_id": self.reservation_id,
+            "tenant_id": self.tenant_id,
+            "virtual_key_id": self.virtual_key_id,
+            "run_id": self.run_id,
+            "reserved_cost": {
+                "amount": str(self.reserved_cost.amount),
+                "currency": self.reserved_cost.currency,
+            },
+            "reserved_at": self.reserved_at,
+            "settled_cost": {
+                "amount": str(self.settled_cost.amount),
+                "currency": self.settled_cost.currency,
+            },
+            "settled_at": self.settled_at,
+            "settled_by": self.settled_by,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SpendSettlement:
+        """Rebuild a settlement from an append-only ledger event."""
+        reserved = data["reserved_cost"]
+        settled = data["settled_cost"]
+        return cls(
+            reservation_id=data["reservation_id"],
+            tenant_id=data["tenant_id"],
+            virtual_key_id=data.get("virtual_key_id"),
+            run_id=data["run_id"],
+            reserved_cost=Money(reserved["amount"], reserved.get("currency", "USD")),
+            reserved_at=int(data["reserved_at"]),
+            settled_cost=Money(settled["amount"], settled.get("currency", "USD")),
+            settled_at=int(data["settled_at"]),
+            settled_by=data["settled_by"],
+            reason=data["reason"],
         )
 
 
@@ -255,6 +374,14 @@ class SpendLedgerStore(Protocol):
         """Release a reservation after authoritative settlement."""
         ...
 
+    def settle_spend_reservation(self, settlement: SpendSettlement) -> bool:
+        """Close an active reservation with an operator settlement."""
+        ...
+
+    def spend_settlements(self) -> dict[str, SpendSettlement]:
+        """Every operator settlement, keyed by reservation id."""
+        ...
+
 
 class InMemorySpendLedgerStore:
     """Process-local :class:`SpendLedgerStore`."""
@@ -266,6 +393,7 @@ class InMemorySpendLedgerStore:
         self._keys: dict[str, VirtualKey] = {}
         self._budgets: dict[str, TenantBudget] = {}
         self._reservations: dict[str, SpendReservation] = {}
+        self._settlements: dict[str, SpendSettlement] = {}
 
     @contextmanager
     def budget_transaction(self) -> Iterator[None]:
@@ -340,12 +468,27 @@ class InMemorySpendLedgerStore:
         with self._lock:
             return self._reservations.pop(reservation_id, None) is not None
 
+    def settle_spend_reservation(self, settlement: SpendSettlement) -> bool:
+        """Replace an active reservation with an operator settlement."""
+        with self._lock:
+            if settlement.reservation_id not in self._reservations:
+                return False
+            self._reservations.pop(settlement.reservation_id)
+            self._settlements[settlement.reservation_id] = settlement
+            return True
+
+    def spend_settlements(self) -> dict[str, SpendSettlement]:
+        """Return every operator settlement keyed by reservation id."""
+        with self._lock:
+            return dict(self._settlements)
+
 
 class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
     """Durable append-only JSON Lines :class:`SpendLedgerStore`.
 
     Each line is one event: ``{"event": "usage" | "virtual_key" |
-    "tenant_budget" | "spend_reservation" | "spend_release", "data": {...}}``.
+    "tenant_budget" | "spend_reservation" | "spend_release" |
+    "spend_settlement", "data": {...}}``.
     Definitions are last-write-wins on replay. Active reservations survive a
     crash and therefore fail closed until explicit authoritative settlement.
     A POSIX file lock serializes cross-process budget transactions. The file
@@ -408,6 +551,7 @@ class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
         self._keys.clear()
         self._budgets.clear()
         self._reservations.clear()
+        self._settlements.clear()
         self.skipped_partial_lines = 0
         if self.path.exists():
             self._replay()
@@ -457,6 +601,8 @@ class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
             super().put_spend_reservation(SpendReservation.from_dict(data))
         elif kind == "spend_release":
             super().release_spend_reservation(data["reservation_id"])
+        elif kind == "spend_settlement":
+            super().settle_spend_reservation(SpendSettlement.from_dict(data))
         else:
             raise ValueError(f"unknown spend ledger event {kind!r}")
 
@@ -518,6 +664,14 @@ class JsonlSpendLedgerStore(InMemorySpendLedgerStore):
             self._write("spend_release", {"reservation_id": reservation_id})
             return super().release_spend_reservation(reservation_id)
 
+    def settle_spend_reservation(self, settlement: SpendSettlement) -> bool:
+        """Refresh under the file lock, then persist an operator settlement."""
+        with self._lock, self.budget_transaction():
+            if settlement.reservation_id not in self._reservations:
+                return False
+            self._write("spend_settlement", settlement.as_dict())
+            return super().settle_spend_reservation(settlement)
+
 
 def spent_in_scope(
     entries: Iterable[MeteredUsage],
@@ -526,13 +680,17 @@ def spent_in_scope(
     scope_id: str,
     since: int | None,
     currency: str = "USD",
+    settled_reservation_ids: Iterable[str] = (),
 ) -> tuple[Money, int]:
     """Sum charged cost for one budget scope since ``since``.
 
     Returns ``(spent, unpriced_calls)``. Entries whose cost is unknown are not
     summed (no invented prices) but are counted so callers can flag them.
+    An unknown entry whose reservation an operator settled is neither summed
+    nor counted here; :func:`settled_in_scope` adds the settled amount once.
     Entries in a different currency are skipped (no exchange-rate evidence).
     """
+    settled = set(settled_reservation_ids)
     total = Money.zero(currency)
     unpriced = 0
     for entry in entries:
@@ -545,6 +703,8 @@ def spent_in_scope(
         if scope is BudgetScope.RUN and entry.run_id != scope_id:
             continue
         if entry.charged_cost is None:
+            if entry.reservation_id is not None and entry.reservation_id in settled:
+                continue
             unpriced += 1
             continue
         if entry.charged_cost.currency != total.currency:
@@ -561,7 +721,13 @@ def reserved_in_scope(
     since: int | None,
     currency: str = "USD",
 ) -> Money:
-    """Sum active pre-call cost bounds for one budget scope and window."""
+    """Sum active pre-call cost bounds for one budget scope and window.
+
+    A reservation created before ``since`` (the start of a windowed budget's
+    current period) no longer counts: an unknown-outcome reservation expires
+    with the ``budget_duration`` window in which it was made. All-time
+    budgets (``since is None``) keep it until an operator settlement.
+    """
     total = Money.zero(currency)
     for reservation in reservations:
         if since is not None and reservation.created_at < since:
@@ -574,6 +740,98 @@ def reserved_in_scope(
             continue
         if reservation.reserved_cost.currency == total.currency:
             total = total + reservation.reserved_cost
+    return total
+
+
+def operator_settle_reservation(
+    store: SpendLedgerStore,
+    reservation_id: str,
+    *,
+    settled_cost: Money,
+    reason: str,
+    settled_by: str,
+    now: int,
+) -> SpendSettlement:
+    """Close one active reservation with an explicit, reasoned operator settlement.
+
+    This is the release path for an unknown provider outcome (ADR 0138): it
+    appends a ``spend_settlement`` event that replaces the reservation and the
+    linked unknown usage cost with ``settled_cost`` in every budget sum.
+    Raises ``LookupError`` when the reservation is not active (already
+    settled, released, or unknown) so a typo never writes a stray event.
+    """
+    with store.budget_transaction():
+        reservation = next(
+            (
+                item
+                for item in store.active_spend_reservations()
+                if item.reservation_id == reservation_id
+            ),
+            None,
+        )
+        if reservation is None:
+            raise LookupError(f"no active spend reservation {reservation_id!r}")
+        settlement = SpendSettlement.for_reservation(
+            reservation,
+            settled_cost=settled_cost,
+            settled_at=int(now),
+            settled_by=settled_by,
+            reason=reason,
+        )
+        if not store.settle_spend_reservation(settlement):
+            raise LookupError(f"no active spend reservation {reservation_id!r}")
+    return settlement
+
+
+def active_reservation_report(store: SpendLedgerStore) -> list[dict[str, Any]]:
+    """Describe every active reservation with its linked unknown-outcome calls."""
+    with store.budget_transaction():
+        reservations = store.active_spend_reservations()
+        entries = store.usage_entries()
+    linked: dict[str, list[dict[str, Any]]] = {}
+    for entry in entries:
+        if entry.reservation_id is None:
+            continue
+        linked.setdefault(entry.reservation_id, []).append(
+            {
+                "usage_record_id": entry.record.usage_record_id,
+                "provider_name": entry.record.provider_name,
+                "model_name": entry.record.model_name,
+                "call_status": entry.call_status,
+                "cost_source": entry.cost_source,
+                "error_type": entry.error_type,
+                "provider_status": entry.provider_status,
+                "created_at": entry.created_at,
+            }
+        )
+    return [
+        {**reservation.as_dict(), "calls": linked.get(reservation.reservation_id, [])}
+        for reservation in sorted(reservations, key=lambda item: item.created_at)
+    ]
+
+
+def settled_in_scope(
+    settlements: Mapping[str, SpendSettlement] | Iterable[SpendSettlement],
+    *,
+    scope: BudgetScope,
+    scope_id: str,
+    since: int | None,
+    currency: str = "USD",
+) -> Money:
+    """Sum operator-settled costs for one budget scope, windowed by reservation time."""
+    items = settlements.values() if isinstance(settlements, Mapping) else settlements
+    total = Money.zero(currency)
+    for settlement in items:
+        if since is not None and settlement.reserved_at < since:
+            continue
+        if scope is BudgetScope.TENANT and settlement.tenant_id != scope_id:
+            continue
+        if scope is BudgetScope.VIRTUAL_KEY and settlement.virtual_key_id != scope_id:
+            continue
+        if scope is BudgetScope.RUN and settlement.run_id != scope_id:
+            continue
+        if settlement.settled_cost.currency == total.currency:
+            total = total + settlement.settled_cost
     return total
 
 
@@ -704,8 +962,12 @@ __all__ = [
     "RUN_SUMMARY_SCHEMA",
     "SpendReservation",
     "SpendLedgerStore",
+    "SpendSettlement",
+    "active_reservation_report",
     "aggregate_usage",
+    "operator_settle_reservation",
     "reserved_in_scope",
+    "settled_in_scope",
     "spent_in_scope",
     "summarize_run",
     "write_run_usage_summary",

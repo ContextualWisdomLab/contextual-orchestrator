@@ -8,6 +8,7 @@ and the usage ledger price calls from one source.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from .money import Money, Price, Usage
@@ -49,6 +50,46 @@ def effective_price(
     return None
 
 
+@dataclass(frozen=True)
+class AdmissionTokenBounds:
+    """Per-request token upper bounds a caller can prove before sending.
+
+    ``prompt_tokens`` must be an exact, provenance-bound count (never a lower
+    bound) and ``max_output_tokens`` the output cap actually sent to the
+    provider. ``None`` means unknown; admission then falls back to the
+    model's ``context_window`` ceiling.
+    """
+
+    prompt_tokens: int | None = None
+    max_output_tokens: int | None = None
+
+    def usable(self) -> bool:
+        """Whether both bounds are known and valid."""
+        return (
+            type(self.prompt_tokens) is int
+            and self.prompt_tokens >= 0
+            and type(self.max_output_tokens) is int
+            and self.max_output_tokens > 0
+        )
+
+
+def estimate_request_cost(
+    price: Price | None, prompt_tokens: int, max_output_tokens: int
+) -> Money | None:
+    """Cost ceiling from an exact prompt count and the enforced output cap.
+
+    ``prompt_tokens`` x prompt price + ``max_output_tokens`` x completion
+    price. Tighter than :func:`estimate_call_cost` whenever the request's
+    own bounds are known; still an upper bound because the provider cannot
+    bill more output than the ``max_tokens`` it was sent.
+    """
+    if price is None:
+        return None
+    return price.cost_of(
+        Usage(max(0, int(prompt_tokens)), max(0, int(max_output_tokens)), measured=False)
+    )
+
+
 def estimate_call_cost(price: Price | None, total_token_ceiling: int) -> Money | None:
     """Conservative cost ceiling for a provider-published total-token limit.
 
@@ -66,7 +107,9 @@ def estimate_call_cost(price: Price | None, total_token_ceiling: int) -> Money |
 
 __all__ = [
     "LOCAL_ENDPOINT_SCHEMES",
+    "AdmissionTokenBounds",
     "PriceCatalog",
     "effective_price",
     "estimate_call_cost",
+    "estimate_request_cost",
 ]

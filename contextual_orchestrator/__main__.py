@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from dataclasses import replace
 
 from .chat_capability import is_chat_compatible_model_id
@@ -371,6 +372,66 @@ def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
         }
     )
     return status, available
+
+
+def _spend_reservations_command(argv: list[str]) -> None:
+    """List active spend reservations in a JSONL spend ledger (ADR 0138)."""
+    from .spend_metering import JsonlSpendLedgerStore, active_reservation_report
+
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator spend-reservations",
+        description="List active spend reservations and their unknown-outcome calls.",
+        allow_abbrev=False,
+    )
+    _add_log_level_arguments(parser)
+    parser.add_argument("--spend-ledger-path", required=True, help="JSONL spend ledger path.")
+    args = parser.parse_args(argv)
+    if not os.path.isfile(args.spend_ledger_path):
+        parser.error(f"spend ledger not found: {args.spend_ledger_path}")
+    try:
+        store = JsonlSpendLedgerStore(args.spend_ledger_path)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    report = active_reservation_report(store)
+    print(json.dumps({"active_reservations": report}, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _spend_settle_command(argv: list[str]) -> None:
+    """Append an operator settlement that closes one active spend reservation (ADR 0138)."""
+    from .domain.money import Money
+    from .spend_metering import JsonlSpendLedgerStore, operator_settle_reservation
+
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator spend-settle",
+        description=(
+            "Settle an unknown-outcome spend reservation with an explicit cost "
+            "(0 allowed), operator and reason. The event is append-only."
+        ),
+        allow_abbrev=False,
+    )
+    _add_log_level_arguments(parser)
+    parser.add_argument("--spend-ledger-path", required=True, help="JSONL spend ledger path.")
+    parser.add_argument("--reservation-id", required=True, help="Active reservation to settle.")
+    parser.add_argument("--settled-cost-usd", required=True,
+                        help="Authoritative charged cost for the call (use 0 only with evidence).")
+    parser.add_argument("--reason", required=True, help="Why this settlement is authoritative.")
+    parser.add_argument("--operator", required=True, help="Who is settling (audit trail).")
+    args = parser.parse_args(argv)
+    if not os.path.isfile(args.spend_ledger_path):
+        parser.error(f"spend ledger not found: {args.spend_ledger_path}")
+    try:
+        store = JsonlSpendLedgerStore(args.spend_ledger_path)
+        settlement = operator_settle_reservation(
+            store,
+            args.reservation_id,
+            settled_cost=Money.usd(args.settled_cost_usd),
+            reason=args.reason,
+            settled_by=args.operator,
+            now=int(time.time()),
+        )
+    except (LookupError, ValueError, OSError) as exc:
+        parser.error(str(exc))
+    print(json.dumps({"spend_settlement": settlement.as_dict()}, ensure_ascii=False, sort_keys=True))
 
 
 def _check_fast_mlsirm_command(argv: list[str]) -> None:
@@ -974,6 +1035,12 @@ def main(argv: list[str] | None = None) -> None:
     if subcommand == "openrouter-free-canary":
         _openrouter_free_canary_command(arguments_after_subcommand)
         return
+    if subcommand == "spend-reservations":
+        _spend_reservations_command(arguments_after_subcommand)
+        return
+    if subcommand == "spend-settle":
+        _spend_settle_command(arguments_after_subcommand)
+        return
 
     if subcommand == "nim-benchmark":
         # Optional benchmark harness (issue #86): dynamic NIM catalog discovery,
@@ -986,7 +1053,8 @@ def main(argv: list[str] | None = None) -> None:
         description="Route or conduct chat requests across model agents.",
         epilog=(
             "Commands: register-credential, discover-models, "
-            "openrouter-free-canary, check-fast-mlsirm, nim-benchmark"
+            "openrouter-free-canary, check-fast-mlsirm, nim-benchmark, "
+            "spend-reservations, spend-settle"
         ),
         allow_abbrev=False,
     )

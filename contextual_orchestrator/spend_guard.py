@@ -40,6 +40,7 @@ from .cost_ledger import CostLedger, PriceBook, UsageRecord
 from .domain.budget import (
     DEFAULT_BASELINE_MIN_REMAINING_RATIO,
     AffordabilityDecision,
+    BudgetExceededError,
     BudgetScope,
     CallPurpose,
     SpendLimit,
@@ -48,7 +49,12 @@ from .domain.budget import (
     parse_budget_duration,
 )
 from .domain.money import Money, Price, Usage, provider_reported_cost, to_decimal
-from .domain.pricing import effective_price, estimate_call_cost
+from .domain.pricing import (
+    AdmissionTokenBounds,
+    effective_price,
+    estimate_call_cost,
+    estimate_request_cost,
+)
 from .domain.provider_limits import (
     NOT_A_LIMIT,
     ProviderLimitAction,
@@ -70,6 +76,7 @@ from .spend_metering import (
     SpendLedgerStore,
     SpendReservation,
     reserved_in_scope,
+    settled_in_scope,
     spent_in_scope,
     summarize_run,
 )
@@ -219,6 +226,9 @@ class RunSpendScope:
         self.refusals: list[dict[str, Any]] = []
         self.store_failures = 0
         self._soft_alerts: set[str] = set()
+        #: In-run provider failures whose cost stayed unknown, newest last.
+        self.unmeasured_failures: list[dict[str, Any]] = []
+        self._last_unmeasured_error: BaseException | None = None
 
     # -- budget -------------------------------------------------------------
     def positions(self, now: int) -> list[SpendPosition]:
@@ -246,19 +256,33 @@ class RunSpendScope:
             if limit.max_cost is None and limit.soft_max_cost is None:
                 continue
             currency = (limit.max_cost or limit.soft_max_cost).currency  # type: ignore[union-attr]
+            since = limit.window_start(now)
+            settlements = store.spend_settlements() if store is not None else {}
             spent, _unpriced = spent_in_scope(
                 store.usage_entries() if store is not None else self.entries,
                 scope=limit.scope,
                 scope_id=limit.scope_id,
-                since=limit.window_start(now),
+                since=since,
                 currency=currency,
+                settled_reservation_ids=settlements.keys(),
             )
             if store is not None:
+                # Windowed budgets drop reservations (and unknown entries)
+                # made before the current period: an unknown outcome expires
+                # with its budget window. All-time budgets keep both until an
+                # operator settlement (ADR 0138).
                 spent = spent + reserved_in_scope(
                     store.active_spend_reservations(),
                     scope=limit.scope,
                     scope_id=limit.scope_id,
-                    since=limit.window_start(now),
+                    since=since,
+                    currency=currency,
+                )
+                spent = spent + settled_in_scope(
+                    settlements,
+                    scope=limit.scope,
+                    scope_id=limit.scope_id,
+                    since=since,
                     currency=currency,
                 )
             positions.append(SpendPosition(limit, spent, _unpriced == 0))
@@ -297,14 +321,29 @@ class RunSpendScope:
         """
         return self.decide(Money.zero(self.spent.currency), CallPurpose.BASELINE).allowed
 
+    def baseline_skip_reason(self) -> str | None:
+        """``None`` when a baseline may start, else the refusal reason to record."""
+        decision = self.decide(Money.zero(self.spent.currency), CallPurpose.BASELINE)
+        return None if decision.allowed else (decision.reason or "spend_budget")
+
     def raise_if_exhausted(self) -> None:
         """Raise ``BudgetExceededError`` when any active budget is already exhausted."""
         self.decide(Money.zero(self.spent.currency), CallPurpose.PRIMARY).raise_if_refused()
 
     def admit(
-        self, agent: Any, messages: Any
+        self,
+        agent: Any,
+        messages: Any,
+        *,
+        token_bounds: AdmissionTokenBounds | None = None,
     ) -> tuple[Price | None, SpendReservation | None]:
-        """Atomically reserve an affordable call's cost ceiling and return it with price."""
+        """Atomically reserve an affordable call's cost upper bound and return it with price.
+
+        The bound is ``prompt_tokens x prompt price + max_output_tokens x
+        completion price`` when ``token_bounds`` proves both, else the
+        ``context_window`` ceiling priced at the costlier rate. With neither,
+        a priced call fails closed as ``missing_context_window``.
+        """
         provider = str(getattr(agent, "provider_name", "") or "")
         with self._lock:
             reason = self.dropped_providers.get(provider) if provider else None
@@ -318,15 +357,30 @@ class RunSpendScope:
             tags=tuple(getattr(agent, "tags", ()) or ()),
         )
         total_token_ceiling = getattr(agent, "context_window", None)
+        bounds = token_bounds if isinstance(token_bounds, AdmissionTokenBounds) else None
+        has_ceiling = type(total_token_ceiling) is int and total_token_ceiling > 0
+        estimate_source: str | None = None
         if price is None:
             estimate = None
             unknown_estimate_reason = "price_unknown"
         elif price.is_free:
             estimate = Money.zero(price.currency)
             unknown_estimate_reason = "price_unknown"
-        elif type(total_token_ceiling) is int and total_token_ceiling > 0:
+            estimate_source = "zero_cost"
+        elif bounds is not None and bounds.usable():
+            estimate = estimate_request_cost(
+                price, bounds.prompt_tokens or 0, bounds.max_output_tokens or 0
+            )
+            estimate_source = "prompt_and_max_output"
+            if has_ceiling:
+                ceiling = estimate_call_cost(price, total_token_ceiling)
+                if ceiling is not None and estimate is not None and ceiling < estimate:
+                    estimate, estimate_source = ceiling, "context_window_ceiling"
+            unknown_estimate_reason = "price_unknown"
+        elif has_ceiling:
             estimate = estimate_call_cost(price, total_token_ceiling)
             unknown_estimate_reason = "price_unknown"
+            estimate_source = "context_window_ceiling"
         else:
             # Fail closed: a priced route without a positive provider context
             # window has no total-cost upper bound. The specific reason is
@@ -402,17 +456,102 @@ class RunSpendScope:
                 "context_window": (
                     total_token_ceiling if type(total_token_ceiling) is int else None
                 ),
+                "estimate_source": estimate_source,
+                "prompt_tokens_bound": bounds.prompt_tokens if bounds is not None else None,
+                "max_output_tokens_bound": (
+                    bounds.max_output_tokens if bounds is not None else None
+                ),
             }
+            cause: BaseException | None = None
+            if decision.reason == "measurement_unavailable":
+                detail["unmeasured_calls"] = self._unmeasured_call_evidence(decision)
+                with self._lock:
+                    cause = self._last_unmeasured_error
             with self._lock:
                 self.refusals.append(detail)
-            AffordabilityDecision(
+            refusal = AffordabilityDecision(
                 allowed=False,
                 reason=decision.reason,
                 scope=decision.scope,
                 scope_id=decision.scope_id,
                 detail=detail,
-            ).raise_if_refused()
+            )
+            try:
+                refusal.raise_if_refused()
+            except BudgetExceededError as exc:
+                if cause is not None:
+                    # Surface the provider failure that made measurement
+                    # incomplete instead of only the budget symptom.
+                    raise BudgetExceededError(
+                        f"{exc} (after unmeasured provider failure: "
+                        f"{type(cause).__name__}: {str(cause)[:200]})",
+                        detail=exc.detail,
+                    ) from cause
+                evidence = detail.get("unmeasured_calls") or []
+                if evidence:
+                    # Another run/process left the unknown outcome: name the
+                    # ledger's recorded error class and HTTP status.
+                    first = evidence[0]
+                    raise BudgetExceededError(
+                        f"{exc} (after unmeasured provider failure: "
+                        f"{first.get('error_type') or 'unknown error'}"
+                        f" status={first.get('provider_status')}"
+                        f" reservation={first.get('reservation_id')})",
+                        detail=exc.detail,
+                    ) from None
+                raise
         return price, reservation
+
+    def _unmeasured_call_evidence(self, decision: AffordabilityDecision) -> list[dict[str, Any]]:
+        """List the unknown-cost calls behind a ``measurement_unavailable`` refusal.
+
+        In-run failures carry the original error text; calls recorded by other
+        runs in a shared scope come from the ledger (error class and status).
+        """
+        with self._lock:
+            evidence = [dict(item) for item in self.unmeasured_failures]
+        seen = {item.get("usage_record_id") for item in evidence}
+        store = self.guard.store
+        if store is None or decision.scope in (None, BudgetScope.RUN):
+            return evidence
+        limit = next(
+            (
+                position.limit
+                for position in self.positions(self.guard.now())
+                if position.limit.scope is decision.scope
+                and position.limit.scope_id == decision.scope_id
+            ),
+            None,
+        )
+        since = limit.window_start(self.guard.now()) if limit is not None else None
+        settled = store.spend_settlements()
+        for entry in store.usage_entries(start=since):
+            if entry.charged_cost is not None or entry.record.usage_record_id in seen:
+                continue
+            if entry.reservation_id is not None and entry.reservation_id in settled:
+                continue
+            if decision.scope is BudgetScope.TENANT and entry.tenant_id != decision.scope_id:
+                continue
+            if (
+                decision.scope is BudgetScope.VIRTUAL_KEY
+                and entry.virtual_key_id != decision.scope_id
+            ):
+                continue
+            evidence.append(
+                {
+                    "usage_record_id": entry.record.usage_record_id,
+                    "run_id": entry.run_id,
+                    "provider_name": entry.record.provider_name,
+                    "model_name": entry.record.model_name,
+                    "call_status": entry.call_status,
+                    "error_type": entry.error_type,
+                    "provider_status": entry.provider_status,
+                    "provider_limit_reason": entry.provider_limit_reason,
+                    "reservation_id": entry.reservation_id,
+                    "created_at": entry.created_at,
+                }
+            )
+        return evidence
 
     # -- provider limits ----------------------------------------------------
     def observe_failure(self, agent: Any, exc: BaseException) -> ProviderLimitSignal:
@@ -512,6 +651,7 @@ class RunSpendScope:
         limit_reason: str | None = None,
         known_zero_cost: bool = False,
         reservation: SpendReservation | None = None,
+        error: BaseException | None = None,
     ) -> MeteredUsage:
         """Record one provider call and charge its cost to the run.
 
@@ -552,12 +692,32 @@ class RunSpendScope:
             virtual_key_id=self.virtual_key.key_id if self.virtual_key else None,
             purpose=_CALL_PURPOSE.get().value,
             provider_limit_reason=limit_reason,
+            reservation_id=reservation.reservation_id if reservation is not None else None,
+            error_type=type(error).__name__ if error is not None else None,
+            provider_status=(_error_status_and_evidence(error)[0] if error is not None else None),
         )
         reserved_cost = reservation.reserved_cost if reservation is not None else None
         with self._lock:
             if reserved_cost is not None:
                 self.reserved = self.reserved.minus_floor_zero(reserved_cost)
             self.entries.append(entry)
+            if charged is None and error is not None:
+                self.unmeasured_failures.append(
+                    {
+                        "usage_record_id": record.usage_record_id,
+                        "run_id": self.run_id,
+                        "provider_name": provider,
+                        "model_name": str(getattr(agent, "model", "")),
+                        "call_status": call_status,
+                        "error_type": entry.error_type,
+                        "provider_status": entry.provider_status,
+                        "provider_limit_reason": limit_reason,
+                        "error_message": str(error)[:200],
+                        "reservation_id": entry.reservation_id,
+                        "created_at": record.created_at,
+                    }
+                )
+                self._last_unmeasured_error = error
             if charged is not None and charged.currency == self.spent.currency:
                 self.spent = self.spent + charged
             elif charged is None and reserved_cost is not None:
@@ -827,6 +987,19 @@ def _call_status(signal: ProviderLimitSignal) -> str:
     return "provider_limit" if signal.action is not ProviderLimitAction.NONE else "error"
 
 
+def _read_token_bounds(
+    reader: Callable[[], AdmissionTokenBounds | None] | None,
+) -> AdmissionTokenBounds | None:
+    """Evaluate the caller's token-bound hook; any failure means "unknown"."""
+    if reader is None:
+        return None
+    try:
+        bounds = reader()
+    except Exception:  # noqa: BLE001 - an unavailable bound falls back to the ceiling
+        return None
+    return bounds if isinstance(bounds, AdmissionTokenBounds) else None
+
+
 def _read_usage(usage_reader: Callable[[], Any] | None) -> Any:
     if usage_reader is None:
         return None
@@ -843,12 +1016,15 @@ def guarded_provider_call(
     *,
     usage_reader: Callable[[], Any] | None,
     channel: str = "sync",
+    token_bounds: Callable[[], AdmissionTokenBounds | None] | None = None,
 ) -> T:
     """Admit, execute, meter, and limit-classify one chat call in the active run."""
     scope = _ACTIVE_RUN.get()
     if scope is None:
         return call()
-    price, reservation = scope.admit(agent, messages)
+    price, reservation = scope.admit(
+        agent, messages, token_bounds=_read_token_bounds(token_bounds)
+    )
     try:
         result = call()
     except Exception as exc:
@@ -862,6 +1038,7 @@ def guarded_provider_call(
             limit_reason=signal.reason or None,
             known_zero_cost=_refused_before_billing(signal, exc),
             reservation=reservation,
+            error=exc,
         )
         if signal.drops_provider:
             status, _evidence = _error_status_and_evidence(exc)
@@ -886,13 +1063,16 @@ def guarded_provider_stream(
     open_stream: Callable[[], Iterator[T]],
     *,
     usage_reader: Callable[[], Any] | None,
+    token_bounds: Callable[[], AdmissionTokenBounds | None] | None = None,
 ) -> Iterator[T]:
     """Streaming counterpart of :func:`guarded_provider_call`."""
     scope = _ACTIVE_RUN.get()
     if scope is None:
         yield from open_stream()
         return
-    price, reservation = scope.admit(agent, messages)
+    price, reservation = scope.admit(
+        agent, messages, token_bounds=_read_token_bounds(token_bounds)
+    )
     settled = False
     try:
         yield from open_stream()
@@ -908,6 +1088,7 @@ def guarded_provider_stream(
             limit_reason=signal.reason or None,
             known_zero_cost=_refused_before_billing(signal, exc),
             reservation=reservation,
+            error=exc,
         )
         if signal.drops_provider:
             status, _evidence = _error_status_and_evidence(exc)
@@ -956,6 +1137,7 @@ def metered_passthrough_call(
             call_status=_call_status(signal),
             limit_reason=signal.reason or None,
             known_zero_cost=_refused_before_billing(signal, exc),
+            error=exc,
         )
         raise
     usage_payload = result.get("usage") if isinstance(result, dict) else None

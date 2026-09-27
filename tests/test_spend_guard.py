@@ -746,7 +746,10 @@ def test_baseline_is_skipped_first_and_charged_to_the_same_guard() -> None:
     report = orch.compare_to_baseline(["compare this prompt"], mode="route")
     # Primary spends $2 of $7; the $2 baseline ceiling would leave $3 < $3.50.
     assert report["aggregate"]["baseline_skipped_count"] == 1
-    assert report["results"][0]["baseline"] == {"skipped": True, "reason": "spend_budget"}
+    assert report["results"][0]["baseline"] == {
+        "skipped": True,
+        "reason": "baseline_headroom_exhausted",
+    }
     summary = guard.last_run_summary()
     assert all(call["purpose"] == "primary" for call in summary["calls"])
     refusal = summary["budget"]["refusals"][-1]

@@ -65,11 +65,28 @@ this guard, never by discovery.
 
 Before every provider chat call (including `route_once`, streaming, and the
 sampled baseline) the guard computes a conservative total-cost upper bound
-from the single PriceBook-backed catalogue and the selected route's configured
-total-token ceiling. Because input/output splits are unknown, every token is
-priced at the more expensive of the prompt and completion rates. Unknown or
-conflicting total-token ceilings fail closed under a hard cap; a prompt-only
-lower bound is never admission authority. `decide_affordability` evaluates the
+from the single PriceBook-backed catalogue:
+
+- **Narrow bound (preferred).** When the request carries an exact,
+  provenance-bound prompt token count (`describe_message_count`, never a lower
+  bound) and the `max_output_tokens` the transport sends as `max_tokens`
+  (`ModelClient.effective_max_output_tokens`), the bound is
+  `prompt_tokens x prompt price + max_output_tokens x completion price`
+  (`estimate_request_cost`, `AdmissionTokenBounds`). The provider cannot bill
+  more output than the `max_tokens` it was sent. The bound is additionally
+  capped by the context-window ceiling when that is lower
+  (`estimate_source`: `prompt_and_max_output` or `context_window_ceiling`).
+- **Ceiling fallback.** Only when either value is unknown, the selected
+  route's total-token ceiling (`context_window`) is priced with every token at
+  the more expensive of the prompt and completion rates, because the
+  input/output split is unknown.
+- **Fail closed.** With neither, a priced route is refused
+  (`missing_context_window`). A prompt-only lower bound is never admission
+  authority, and a failing counter degrades to the fallback, never to
+  admission.
+
+The refusal detail records `estimate_source`, `prompt_tokens_bound` and
+`max_output_tokens_bound` next to the reason. `decide_affordability` evaluates the
 upper bound over every active limit. Admission and in-flight reservation occur
 under one store budget transaction. The in-memory adapter serializes every run
 scope that can access it. The JSONL adapter takes a POSIX file lock, refreshes
@@ -81,8 +98,9 @@ headroom. A call is refused, before it is sent, when for any limit:
 - the price is unknown for a billable endpoint (`price_unknown`, fail closed);
 - the price and active hard limit use different currencies and no exchange-rate
   evidence exists (`price_currency_mismatch`, fail closed);
-- a priced route lacks an authoritative total-token ceiling, i.e. a positive
-  `agent.context_window` (`missing_context_window`, fail closed). The refusal
+- a priced route has neither request token bounds nor an authoritative
+  total-token ceiling, i.e. a positive `agent.context_window`
+  (`missing_context_window`, fail closed). The refusal
   is recorded with its reason, agent id, model and `context_window` in the
   run usage summary (`budget.refusals`) and in the `BudgetExceededError`
   detail. Free and evidence-backed zero-cost routes need no ceiling and still
@@ -101,7 +119,15 @@ headroom. A call is refused, before it is sent, when for any limit:
 An unmeasured provider outcome consumes its in-flight upper-bound reservation
 for budget admission and marks measurement incomplete. The ledger still stores
 the charged cost as unknown; the reservation is not mislabeled as an actual
-provider charge.
+provider charge. The unknown usage entry records the reservation id, the
+provider error class (`error_type`) and HTTP status (`provider_status`).
+
+A `measurement_unavailable` refusal surfaces the original provider failure,
+not only the budget symptom: the refusal detail lists `unmeasured_calls`
+(in-run failures with a truncated error message; calls from other runs or
+processes with their ledgered error class, status and reservation id), the
+`BudgetExceededError` message names the error, and within the same run the
+refusal is chained (`__cause__`) to the provider exception.
 
 When several limits refuse, the one with the least remaining budget is reported;
 ties go run, then virtual key, then tenant. Soft budgets log a warning once per
@@ -122,7 +148,9 @@ The existing process-wide budget is extended, not duplicated:
 `compare_to_baseline` runs each baseline inside `CallPurpose.BASELINE`. The
 baseline is skipped (not failed) when the scope says it is not admissible or
 when its call is refused. Skipped rows are reported as
-`{"skipped": true, "reason": "spend_budget"}`, averages use only compared rows,
+`{"skipped": true, "reason": <refusal reason>}` (for the headroom rule,
+`baseline_headroom_exhausted`; other refusals keep their own spend-guard
+reason, `spend_budget` only when none is available), averages use only compared rows,
 and `aggregate.baseline_skipped_count` counts the skips. Primary work keeps the
 remaining budget. Under a hard cap, a paid baseline runs only while at least
 `baseline_min_remaining_ratio` (default `0.5`) of every applicable cap (run,
@@ -139,6 +167,35 @@ this rule with "paid baselines under a hard cap need a future allocation
 authority", which skipped every paid baseline in every capped run. The owner
 restored the original ratio rule; the total-cost upper-bound admission and
 zero-cost baseline admission from those commits are kept.
+
+### 2a. Unknown-outcome reservations never lock a budget forever
+
+An unknown provider outcome (a 5xx, timeout or crash after the request may
+have been billed) keeps its reservation and marks the scope's measurement
+incomplete. That is correct fail-closed behaviour, but it must end:
+
+- **Windowed budgets (`budget_duration` set).** Reservations and unknown
+  usage entries count only in the budget window in which they were made
+  (`reserved_in_scope`/`spent_in_scope` filter by `window_start`). At the next
+  window boundary they stop counting and stop blocking; nothing is rewritten.
+- **All-time budgets (no `budget_duration`) and the current window.** They
+  stay fail-closed until an operator settles the reservation with evidence
+  (provider invoice, dashboard, support confirmation). The release path is
+  explicit and append-only:
+  - `python -m contextual_orchestrator spend-reservations --spend-ledger-path P`
+    lists active reservations with their linked unknown calls (error class,
+    status, provider, model);
+  - `python -m contextual_orchestrator spend-settle --spend-ledger-path P
+    --reservation-id ID --settled-cost-usd X --reason TEXT --operator NAME`
+    appends a `spend_settlement` event (library:
+    `spend_metering.operator_settle_reservation`). Reason and operator are
+    mandatory; the cost is explicit (it may be `0` only with evidence that
+    the call was not billed) and must be non-negative in the reservation
+    currency. Unknown or already-closed reservations are rejected.
+  A settlement replaces the reservation and the linked unknown cost with the
+  settled cost in every budget sum, so the settled cost stays charged; it is
+  not a forgiveness switch. Settlements are windowed by the reservation time.
+- No elapsed-time expiry is inferred inside a window.
 
 ### 3. Provider-limit exhaustion drops only that provider for the rest of the run
 
@@ -232,7 +289,8 @@ https://docs.litellm.ai/docs/proxy/team_budgets
     write and replays the file at startup. A torn final line moves to
     `<name>.partial`; corruption anywhere else raises. `spend_reservation` and
     `spend_release` events retain admission state across processes and crashes;
-    no elapsed-time expiry is inferred. POSIX `flock` serializes the refresh,
+    `spend_settlement` events record operator settlements (section 2a). No
+    elapsed-time expiry is inferred beyond the budget window. POSIX `flock` serializes the refresh,
     decision and reservation append. Without that file-lock authority,
     uncapped metering remains available but a shared hard budget fails closed
     with `reservation_authority_unavailable`.
@@ -253,7 +311,11 @@ The new logic lives in new modules (`domain/*`, `spend_guard.py`,
 
 - `ModelClient.chat`, `stream_chat` and the passthrough senders delegate to
   guarded wrappers around the renamed transports.
-- Entry points are decorated with `@with_run_scope`.
+- Entry points are decorated with `@with_run_scope`. Where main's
+  `@_request_execution_scoped` also applies, it is the outer decorator: the
+  request scope validates and snapshots policy/effort state before a spend run
+  scope opens, and for generators it captures the context in which the run
+  scope is later entered. `compare_to_baseline` has only `@with_run_scope`.
 - `_failover_candidates` has one filter line.
 - A handful of failover loops re-raise `BudgetExceededError`.
 - `_raise_if_spend_budget_exceeded` consults the scope.
@@ -276,9 +338,13 @@ that PR.
 - Admission reserves the proven total-cost upper bound before the provider
   boundary. Known settlement replaces the reservation with measured/zero
   usage; an unknown outcome or process crash leaves the reservation active and
-  therefore fails closed without inventing a charge or an expiry.
+  therefore fails closed without inventing a charge, until its budget window
+  rolls over or an operator settles it (section 2a).
 - Streaming calls often report no usage (`stream_usage_supported`). Under a cap,
   a paid streamed call without usage blocks further paid calls in that run.
+- The narrow bound depends on the provider billing at most `max_tokens`
+  output tokens and on the exact prompt count matching provider framing; the
+  context-window ceiling still caps it.
 - Key and tenant spend are computed by scanning the store on each admission.
   That is O(entries). A windowed index is deferred.
 - CLI ledger open/read/lock failures use the argument-error surface instead of
