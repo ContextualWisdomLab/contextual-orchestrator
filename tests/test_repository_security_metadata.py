@@ -59,19 +59,22 @@ def test_security_workflow_covers_core_repository_security_process():
         "actions/setup-python@v6",
         "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1",
         "uv sync --locked --extra api --extra db --extra queue --group dev",
-        "python -m pip install --require-hashes -r requirements-security-ci.txt",
+        'uv sync --locked --extra api --extra db --extra queue --group dev --no-install-project',
+        'uv sync --locked --extra api --extra db --extra queue --group dev --no-build-isolation',
+        '"$RUNNER_TEMP/security-tools/bin/python" -m pip install --require-hashes -r requirements-security-ci.txt',
         "uv pip install --python .venv/bin/python --require-hashes -r requirements-opencode-review-ci.txt",
         "uv pip install --python .venv/bin/python --require-hashes -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt",
-        "python -m pip install --require-hashes -r requirements.lock",
-        "python -m pip_audit -r requirements.lock",
-        "cyclonedx-py environment --output-format json",
+        '"$RUNNER_TEMP/security-tools/bin/pip-audit" --path "$PWD/.venv/lib/python3.12/site-packages" --format json',
+        '"$RUNNER_TEMP/security-tools/bin/cyclonedx-py" environment "$PWD/.venv/bin/python" --output-format json',
         "uv build --wheel --no-build-isolation --out-dir dist",
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
     for expected_token in expected_tokens:
         assert expected_token in workflow_text
-    assert "pip_audit --path .venv" not in workflow_text
+    assert "pip install --require-hashes -r requirements.lock" not in workflow_text
+    assert '== ["contextual-orchestrator", "fast-mlsirm"]' in workflow_text
+    assert 'contains("09f762ded35786dd1078222a4577ff09d649816f")' in workflow_text
 
     removed_duplicate_scanners = [
         "actions/dependency-review-action@",
@@ -252,6 +255,16 @@ def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     native_build = "uv run --no-sync maturin develop --locked --release --features pyo3/extension-module"
     full_tests = "uv run --no-sync python -m pytest -q -ra"
     assert workflow_text.index(locked_sync) < workflow_text.index(native_build) < workflow_text.index(full_tests)
+
+
+def test_security_sbom_build_backend_is_locked_before_project_install():
+    workflow = read_text(".github/workflows/security.yml").split("- name: Install audit and project dependencies", 1)[1]
+    pyproject = read_text("pyproject.toml")
+    lock = read_text("uv.lock")
+    assert '[build-system]\nrequires = ["setuptools==84.0.0"]' in pyproject
+    assert '"setuptools==84.0.0"' in pyproject
+    assert 'name = "setuptools"\nversion = "84.0.0"' in lock
+    assert workflow.index("--no-install-project") < workflow.index("--no-build-isolation")
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():

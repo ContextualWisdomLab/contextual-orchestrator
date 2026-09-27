@@ -14,6 +14,10 @@ dependencies = [
   "fast-mlsirm @ git+https://github.com/ContextualWisdomLab/fast-mlsirm.git@09f762ded35786dd1078222a4577ff09d649816f ; python_full_version >= '3.12'",
 ]
 
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
 [project.optional-dependencies]
 test = [
   "hypothesis>=6.100",
@@ -41,6 +45,7 @@ dev = [
   "hypothesis>=6.100",
   "openai==2.54.0",
   "pytest>=8.0",
+  "setuptools==84.0.0",
 ]
 
 [tool.contextual_orchestrator]

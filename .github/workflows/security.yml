@@ -232,17 +232,26 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
       - name: Install audit and project dependencies
         run: |
-          python -m pip install --require-hashes -r requirements-security-ci.txt
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps -e .
+          uv sync --locked --extra api --extra db --extra queue --group dev --no-install-project
+          uv sync --locked --extra api --extra db --extra queue --group dev --no-build-isolation
+          python -m venv "$RUNNER_TEMP/security-tools"
+          "$RUNNER_TEMP/security-tools/bin/python" -m pip install --require-hashes -r requirements-security-ci.txt
 
       - name: Audit pinned dependencies and generate SBOM
         run: |
           set -euo pipefail
-          python -m pip_audit -r requirements.lock
-          cyclonedx-py environment --output-format json --output-file cyclonedx-sbom.json
+          "$RUNNER_TEMP/security-tools/bin/pip-audit" --path "$PWD/.venv/lib/python3.12/site-packages" --format json --output "$RUNNER_TEMP/dependency-audit.json"
+          jq -e '([.dependencies[] | select(.skip_reason) | .name] | sort) == ["contextual-orchestrator", "fast-mlsirm"]' "$RUNNER_TEMP/dependency-audit.json"
+          "$RUNNER_TEMP/security-tools/bin/cyclonedx-py" environment "$PWD/.venv/bin/python" --output-format json --output-file cyclonedx-sbom.json
+          jq -e 'any(.components[]; .name == "contextual-orchestrator")' cyclonedx-sbom.json
+          jq -e '[.components[] | select(.name == "fast-mlsirm") | (.purl // "") | contains("09f762ded35786dd1078222a4577ff09d649816f")] == [true]' cyclonedx-sbom.json
 
       - name: Upload CycloneDX SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1
