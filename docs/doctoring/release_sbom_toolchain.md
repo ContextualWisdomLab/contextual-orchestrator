@@ -99,9 +99,12 @@ proof. The final release path must stage the exact built root wheel separately.
 That remaining staging requirement and other publisher/bundled licence holds
 remain open; this repair does not claim publication readiness.
 
-At exact main aaa4dfdd, the existing collector found no root wheel; committed
-MIT source evidence now passes prebuild classification with manifest/LICENSE
-blob checks. Receipt: `/private/tmp/co-prebuild-project-license-receipt-1083.json`.
+At exact main aaa4dfdd, the existing collector found no root wheel and the
+manifest lacks the required string declaration/file list, so the new source
+reader correctly keeps it held. On this successor stack at 29df7084, #1226's
+committed MIT declaration and LICENSE pass prebuild classification with blob
+checks. Receipts: `/private/tmp/co-prebuild-project-license-receipt-1083.json`
+and `/private/tmp/co-prebuild-project-license-stack-receipt-1083.json`.
 159 focused contracts passed, plus the registry identity control passed
 separately; actionlint/diff checks passed. The existing minimal pytest config
 warning remains. Controls include virtual/editable roots, dirty licence bytes,
