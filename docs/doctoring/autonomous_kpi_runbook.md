@@ -698,3 +698,19 @@ on byte-identical fix files); #1105 head `b655fe1b`, still blocked on
 the same 3 pending-verdict CodeQL-compat failures with no self-healing
 rerun observed. Open-PR recount 88 (baseline 85). No merge, readiness
 change, or cross-branch push from this loop.
+
+## Structured synthesis zero-cooldown review repair, 2026-09-27
+
+After integrating protected main (including #1223) into #1251, review identified
+that a zero unknown cooldown admitted another synthesis send without waiting.
+A regression preparing success after the first 429 failed on the unchanged
+implementation because it sent again. The shared retry boundary now propagates
+the classified failure when no eligible candidate has an active cooldown; an
+already-expired wait deadline retains its storm classification. The preexisting
+cooldown regression also checks cooldown expiry at the actual send boundary.
+Local warnings-as-errors verification: 83 related tests passed in the broad
+run; its one new-test failure was an invalid exception-identity assertion
+(receipt attachment reconstructs the error), corrected to classified status,
+error code and one attempt. The corrected regression and cooldown boundary
+were verified separately. This is source evidence, not hosted approval or
+consumer release acceptance.
