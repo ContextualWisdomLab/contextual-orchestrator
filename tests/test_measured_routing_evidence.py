@@ -320,7 +320,8 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(orchestrator, "_invoke", fake_invoke)
 
-    def judge(text, fallback, *, free_only=False):
+    def judge(text, fallback, *, free_only=False, required_tags=()):
+        assert required_tags == ()
         accepted = "strong" in fallback["verifier_output"]
         return {
             "accepted": accepted,
@@ -383,3 +384,38 @@ def test_observation_count_is_zero_for_unknown_member() -> None:
     assert router.member_observation_count("ghost_member") == 0
     router.observe_failure("known_member")
     assert router.member_observation_count("known_member") == 1
+
+
+@pytest.mark.parametrize("descriptor", [False, True])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_unavailable_affinity_closes_consumed_http_error(monkeypatch, descriptor, cleanup_fails):
+    """Both optional embedding observations own errors converted to unavailable."""
+    import io
+    import urllib.error
+
+    member = ModelAgent("embedding_member", "mock-embed", tags=("embedding",))
+    orchestrator = _orch(member)
+    body = io.BytesIO(b"provider denied request")
+    error = urllib.error.HTTPError("https://provider.invalid", 401, "denied", {}, body)
+    close = error.close
+    closed = []
+
+    def cleanup():
+        close()
+        closed.append(True)
+        if cleanup_fails:
+            raise RuntimeError("cleanup failed")
+
+    def reject(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(error, "close", cleanup)
+    monkeypatch.setattr(orchestrator.client, "embed", reject)
+    try:
+        result = (orchestrator._descriptor_vector_cached(member) if descriptor
+                  else orchestrator._embed_cached("task"))
+        assert result is None
+        assert body.closed
+        assert closed == [True]
+    finally:
+        close()

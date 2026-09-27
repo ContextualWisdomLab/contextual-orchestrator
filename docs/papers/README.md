@@ -166,6 +166,13 @@ redistribution is unclear.
   prompted planner model (`"generated"`), which corresponds to the paper's
   training-free ablation that replaces the trained Conductor with prompted
   frontier models (Appendix B.7, Table 11), not to the trained Conductor.
+  Grounds workflow steps, recursion depth, decomposition, and access-list
+  scope as first-class ablation factors.
+- Zhang, A. L., Kraska, T., & Khattab, O. (2026). *Recursive language models*
+  (arXiv:2512.24601, Version 3). https://arxiv.org/abs/2512.24601
+  Cited by the request-partitioning ADR and doctoring receipts as external
+  motivation for bounded ownership of long inputs. Citation only; this is not
+  a reproduction of RLM experiments.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
@@ -312,7 +319,7 @@ more, 2512.24601, added as the last row.
 | 2506.22316 | [Polytomous judge benchmark](../benchmarks/2026-08-11-polytomous-llm-judge.md) and [judge calibration ADR](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md) |
 | 2110.15150 | [Purpose-limited protection ADR](../planning/adrs/0028-purpose-limited-pii-protection.md) |
 | 2601.17814 | [Model-group specification](../model-group-product-technical-spec.md) and [free-pool admission research](../research/review-gateway-free-pool-admission.md) |
-| 2512.24601 | Zhang, Kraska, and Khattab, *Recursive language models* (v3): [request-partitioning ADR](../planning/adrs/2026-09-10-request-partitioning.md), [learned-policy authority](../doctoring/learned_policy_authority_20260910.md), [partition cancellation](../doctoring/request_partition_cancellation_20260910.md), and [partition replay](../doctoring/request_partition_replay_20260910.md) |
+| 2512.24601 | Zhang, Kraska, and Khattab, *Recursive language models* (v3): [request-partitioning ADR](../planning/adrs/0135-whole-request-partitioning.md) (renamed from `2026-09-10-request-partitioning.md`), [learned-policy authority](../doctoring/learned_policy_authority_20260910.md) and its receipt, [partition cancellation](../doctoring/request_partition_cancellation_20260910.md), and [partition replay](../doctoring/request_partition_replay_20260910.md) |
 
 Scope: explicit arXiv URL, colon, and DOI-style identifiers in tracked Python,
 Rust, Markdown, and TOML files. This is a discovery census, not a complete
@@ -427,15 +434,15 @@ standards rather than papers. Existing citation discussions remain authoritative
 this register prevents DOI-only sources from escaping the discovery inventory.
 Case and sentence-final punctuation are normalized by the inventory test.
 
-- [DOI 10.1002/0471722162](https://doi.org/10.1002/0471722162) — David and Nagaraja (2003), *Order statistics* (3rd ed.); cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md) and [library research](../library_research.md).
+- [DOI 10.1002/0471722162](https://doi.org/10.1002/0471722162) — David and Nagaraja (2003), *Order statistics* (3rd ed.); cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md) and [library research](../library_research.md).
 - [DOI 10.1007/s11336-006-1478-z](https://doi.org/10.1007/s11336-006-1478-z)
 - [Bolsinova and Tijmstra (2019)](https://doi.org/10.1007/s11336-019-09682-5) — [bounded abstract review and outcome-leakage constraint](../doctoring/irt_router_measurement_review.md#conditional-dependence-follow-up).
 - [Bolsinova and Molenaar (2018)](https://doi.org/10.3389/fpsyg.2018.01525) — [bounded nonlinear-dependence intake and proposed leakage-safe evaluation](../doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake); no LLM transfer or replication claim.
 - [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
 - [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
 - [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
-- [DOI 10.1080/00031305.1996.10473566](https://doi.org/10.1080/00031305.1996.10473566) — Hyndman and Fan (1996), sample quantiles; cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
-- [DOI 10.1080/01621459.1958.10501452](https://doi.org/10.1080/01621459.1958.10501452) — Kaplan and Meier (1958), product-limit estimator; cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
+- [DOI 10.1080/00031305.1996.10473566](https://doi.org/10.1080/00031305.1996.10473566) — Hyndman and Fan (1996), sample quantiles; cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
+- [DOI 10.1080/01621459.1958.10501452](https://doi.org/10.1080/01621459.1958.10501452) — Kaplan and Meier (1958), nonparametric estimation from incomplete observations; cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
 - [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
 - [DOI 10.1111/j.0963-7214.2005.00342.x](https://doi.org/10.1111/j.0963-7214.2005.00342.x) — Reise, Ainsworth, and Haviland (2005), *Current Directions in Psychological Science*; replaces a non-resolving DOI previously listed for this citation.
@@ -453,6 +460,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [RFC 9110](https://doi.org/10.17487/RFC9110)
 - [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
 - [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)
+- [Brookmeyer and Crowley (1982), median survival time confidence interval](https://doi.org/10.2307/2530286) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [arXiv 2211.09110 DOI](https://doi.org/10.48550/arXiv.2211.09110)
 - [arXiv 2305.05176 DOI](https://doi.org/10.48550/arXiv.2305.05176)
 - [arXiv 2403.04132 DOI](https://doi.org/10.48550/arXiv.2403.04132)
@@ -465,6 +473,8 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [arXiv 2608.06867 DOI](https://doi.org/10.48550/arXiv.2608.06867)
 - [DOI 10.1214/aos/1176344552](https://doi.org/10.1214/aos/1176344552)
 - [DOI 10.2307/2530286](https://doi.org/10.2307/2530286) — Brookmeyer and Crowley (1982), median survival-time confidence interval; cited by [ADR 0127](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
+- [DOI 10.1007/BF01840446](https://doi.org/10.1007/BF01840446) — Myers (1986), An O(ND) difference algorithm and its variations, *Algorithmica* 1, 251–266; cited by ADR 0136 for object-sequence diffing (not redistributed).
+- [DOI 10.1145/3394486.3403172](https://doi.org/10.1145/3394486.3403172) — Xu et al. (2020), LayoutLM: Pre-training of text and layout for document image understanding, KDD '20; cited by ADR 0136 for page/object document representation (not redistributed).
 - [DOI 10.1525/collabra.33267](https://doi.org/10.1525/collabra.33267)
 - [DOI 10.18653/v1/2026.findings-acl.1881](https://doi.org/10.18653/v1/2026.findings-acl.1881)
 - [NIST AI 100-1](https://doi.org/10.6028/NIST.AI.100-1)
