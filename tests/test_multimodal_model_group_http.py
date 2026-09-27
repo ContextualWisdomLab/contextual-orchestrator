@@ -70,7 +70,8 @@ def _post_error(port: int, path: str, payload: dict) -> tuple[int, dict]:
     try:
         _post(port, path, payload)
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        with exc:
+            return exc.code, json.loads(exc.read())
     raise AssertionError("request unexpectedly succeeded")
 
 
@@ -90,7 +91,8 @@ def _get_error(port: int, path: str, *, token: str = TOKEN) -> tuple[int, dict]:
     try:
         _get(port, path, token=token)
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        with exc:
+            return exc.code, json.loads(exc.read())
     raise AssertionError("request unexpectedly succeeded")
 
 

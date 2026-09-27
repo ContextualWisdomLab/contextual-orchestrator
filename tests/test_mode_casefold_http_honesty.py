@@ -210,8 +210,9 @@ def test_http_embeddings_dimensions_digit_string_still_named_reject() -> None:
                 status2 = response.status
                 body2 = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            status2 = exc.code
-            body2 = json.loads(exc.read().decode("utf-8"))
+            with exc:
+                status2 = exc.code
+                body2 = json.loads(exc.read().decode("utf-8"))
         assert status2 == 400, body2
         assert "invalid_dimensions" in json.dumps(body2)
         assert "not supported" in json.dumps(body2)
@@ -234,8 +235,9 @@ def test_http_embeddings_dimensions_digit_string_still_named_reject() -> None:
                 status3 = response.status
                 body3 = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            status3 = exc.code
-            body3 = json.loads(exc.read().decode("utf-8"))
+            with exc:
+                status3 = exc.code
+                body3 = json.loads(exc.read().decode("utf-8"))
         assert status3 == 400, body3
         assert "invalid_dimensions" in json.dumps(body3)
         assert "not supported" in json.dumps(body3)
