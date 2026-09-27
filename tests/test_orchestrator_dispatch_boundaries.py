@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 import sqlite3
 from unittest.mock import patch
 
@@ -232,6 +233,86 @@ def test_conduct_generated_plan_without_verifier_requirement_keeps_synthesis() -
         result = orch.conduct([{"role": "user", "content": "draft it"}])
     assert result["plan_source"] == "generated"
     assert result["answer"].startswith("[synth_agent:synthesizer]")
+
+
+@pytest.mark.parametrize("workflow_planning", ["template", "generated"])
+def test_conduct_judges_the_final_answer_with_a_conjunctive_rule(
+    workflow_planning: str,
+) -> None:
+    """Verification must measure the return candidate, not the verifier report."""
+    from contextual_orchestrator import orchestrator as orchestrator_module
+
+    captured: dict[str, object] = {}
+
+    class _Components:
+        class format_error(Exception):
+            pass
+
+        @staticmethod
+        def criterion_cls(**kwargs):
+            captured.setdefault("criteria", []).append(kwargs)
+            return kwargs
+
+        class judge_cls:
+            def __init__(self, _adapter, *, mode: str, accept_threshold: float) -> None:
+                captured["mode"] = mode
+                captured["accept_threshold"] = accept_threshold
+
+            def judge(
+                self,
+                *,
+                task: str,
+                answer: str,
+                criteria: tuple,
+                reference_answer: str | None = None,
+            ):
+                captured.update(
+                    task=task,
+                    answer=answer,
+                    criteria_argument=criteria,
+                    reference_answer=reference_answer,
+                )
+
+                class _Result:
+                    accepted = True
+                    rationale = "all required criteria attained their maximum"
+                    usage = {}
+                    orchestration_mode = "route"
+                    criterion_scores = {"task_alignment": 1.0, "evidential_support": 1.0}
+
+                    @staticmethod
+                    def to_irt_row(*, item_type: str) -> tuple[int, int]:
+                        assert item_type == "dichotomous"
+                        return (1, 1)
+
+                return _Result()
+
+    agents = [
+        _agent("planner_agent"),
+        _agent("builder_agent"),
+        _agent("verifier_agent"),
+        _agent("synth_agent"),
+    ]
+    orch = _orch(*agents)
+    if workflow_planning == "generated":
+        import dataclasses
+
+        orch.policy = dataclasses.replace(orch.policy, workflow_planning="generated")
+    plan_scope = (
+        patch.object(orch, "_plan_generated", side_effect=_generated_plan_steps)
+        if workflow_planning == "generated"
+        else nullcontext()
+    )
+    with plan_scope, patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", lambda: _Components()
+    ):
+        result = orch.conduct([{"role": "user", "content": "draft it"}])
+
+    outputs = _template_role_outputs(result)
+    assert captured["answer"] == outputs["synthesizer"]
+    assert captured["reference_answer"] == outputs["verifier"]
+    assert captured["accept_threshold"] == 1.0
+    assert all("weight" not in criterion for criterion in captured["criteria"])
 
 
 @pytest.mark.parametrize("accepted", [True, False])

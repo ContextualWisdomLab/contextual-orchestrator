@@ -6,3 +6,7 @@
   generated-plan branch; `verifier_required` still only decides whether a
   rejected verdict falls back to the worker output.
 - Added a regression test covering both accepted and rejected verdicts.
+- Corrected the fast-mlsirm boundary so both fixed and generated conduct plans
+  judge the final response candidate against the verifier report rather than
+  judging the report itself. Acceptance now uses the maximum-score conjunction
+  of mandatory criteria instead of an uncalibrated `0.7` weighted cutoff.
