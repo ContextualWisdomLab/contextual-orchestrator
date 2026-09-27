@@ -22,7 +22,7 @@ closure after success and preserve the query exception object after failure.
 - RED: the two new credential regressions against unmodified owner production
   source failed (exit 1); GREEN: the credential file passed 14 tests (exit 0).
 - The five affected existing test files passed 110 tests before adding the
-  two regressions. The QA environment emits an existing unknown
+  two regressions. The final five-file run passed 112 tests (exit 0). The QA environment emits an existing unknown
   `asyncio_default_fixture_loop_scope` configuration warning; this is not
   strict-warning or complete-suite acceptance.
 - Real PostgreSQL 18.4, existing image
@@ -41,7 +41,7 @@ closure after success and preserve the query exception object after failure.
 Reproduce the isolated regression with the owner's project dependencies:
 
 ```sh
-uv run --locked --group test python -m pytest -q \
+uv run --locked --extra test --extra db python -m pytest -q \
   tests/test_credentials_backends.py \
   -k closes_dbapi_cursor_without_context_protocol
 ```
