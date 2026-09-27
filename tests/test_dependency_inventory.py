@@ -680,3 +680,91 @@ def test_wheel_license_directory_is_not_an_empty_instrument(tmp_path, empty_file
     groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": [
         {"name": "example", "version": "1.0", "licenses": terms, "license_files": files}]}]})
     assert bool(groups["permitted"]) is not empty_file
+
+
+@pytest.mark.parametrize("child_terms", ["MIT", "LGPL-3.0-only", None])
+def test_bundled_distribution_has_independent_evidence_and_classification(tmp_path, child_terms):
+    from scripts.ci.dependency_inventory import _artifact_distributions
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    child_root = "example/_vendor/child-2.0.dist-info/"
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example-1.0.dist-info/LICENSE", "Permission is hereby granted, free of charge")
+        declaration = f"License-Expression: {child_terms}\n" if child_terms else ""
+        archive.writestr(child_root + "METADATA", "Name: child\nVersion: 2.0\n" + declaration)
+        if child_terms:
+            archive.writestr(child_root + "LICENSE", "GNU Lesser General Public License" if "LGPL" in child_terms
+                             else "Permission is hereby granted, free of charge")
+    records = _artifact_distributions(tmp_path, "example", "1.0")
+    assert [(r["name"], r["version"]) for r in records] == [("example", "1.0"), ("child", "2.0")]
+    assert records[0]["licenses"] == ["MIT"]
+    assert records[1]["bundled_in"] == {"name": "example", "version": "1.0"}
+    assert records[0]["artifact_sha256"] == records[1]["artifact_sha256"]
+    assert all(file["name"].startswith(child_root) for file in records[1]["license_files"])
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": records}]})
+    assert len(groups["permitted"]) == (2 if child_terms == "MIT" else 1)
+    assert len(groups["copyleft"]) == (1 if child_terms == "LGPL-3.0-only" else 0)
+    assert len(groups["undecidable"]) == (1 if child_terms is None else 0)
+    with pytest.raises(InventoryError):
+        _artifact_license_terms(tmp_path, "example", "1.0")
+
+
+@pytest.mark.parametrize("failure", ["foreign_license", "nested_evidence_directory", "traversal", "oversized"])
+def test_bundled_wheel_refuses_unowned_or_unsafe_evidence(tmp_path, monkeypatch, failure):
+    import scripts.ci.dependency_inventory as inventory
+
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    with zipfile.ZipFile(wheel, "a") as archive:
+        if failure == "foreign_license":
+            archive.writestr("foreign-2.0.dist-info/LICENSE", "Permission is hereby granted")
+        elif failure == "nested_evidence_directory":
+            archive.writestr("example-1.0.dist-info/vendor/child-2.0.dist-info/METADATA",
+                             "Name: child\nVersion: 2.0\nLicense-Expression: MIT\n")
+        elif failure == "traversal":
+            archive.writestr("../example/LICENSE", "Permission is hereby granted")
+        else:
+            monkeypatch.setattr(inventory, "_NATIVE_TEXT_LIMIT", 1)
+    with pytest.raises(InventoryError):
+        inventory._artifact_distributions(tmp_path, "example", "1.0")
+
+
+def test_production_inventory_keeps_bundled_python_scope(tmp_path):
+    root = _repository(tmp_path, uv='[[package]]\nname="example"\nversion="1.0"\n')
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example/vendor/child-2.0.dist-info/METADATA",
+                         "Name: child\nVersion: 2.0\nLicense-Expression: LGPL-3.0-only\n")
+    inventory = build_inventory(root, resolve_licenses=True, artifact_dir=tmp_path)
+    packages = inventory["ecosystems"][0]["packages"]
+    assert [(p["name"], p["version"]) for p in packages] == [("example", "1.0"), ("child", "2.0")]
+    assert packages[1]["purl"] == "pkg:pypi/child@2.0"
+    assert packages[1]["sources"] == packages[0]["sources"] == ["uv.lock"]
+    assert packages[1]["licenses"] == ["LGPL-3.0-only"]
+
+
+@pytest.mark.parametrize("bundled", [False, True])
+@pytest.mark.parametrize("missing", [False, True])
+def test_declared_arbitrary_license_filename_cannot_hide_additional_terms(tmp_path, bundled, missing):
+    from scripts.ci.dependency_inventory import _artifact_distributions
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    declarations = [] if bundled else ["License-File: EULA.txt"]
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT", *declarations])
+    root = "example/vendor/child-2.0.dist-info/" if bundled else "example-1.0.dist-info/"
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example-1.0.dist-info/LICENSE", "Permission is hereby granted, free of charge")
+        if bundled:
+            archive.writestr(root + "METADATA", "Name: child\nVersion: 2.0\nLicense-Expression: MIT\nLicense-File: EULA.txt\n")
+            archive.writestr(root + "LICENSE", "Permission is hereby granted, free of charge")
+        if not missing:
+            archive.writestr(root + "EULA.txt", "GNU Lesser General Public License")
+    if missing:
+        with pytest.raises(InventoryError, match="missing or ambiguous"):
+            _artifact_distributions(tmp_path, "example", "1.0")
+        return
+    records = _artifact_distributions(tmp_path, "example", "1.0")
+    assert any(file["name"].endswith("/EULA.txt") for file in records[-1]["license_files"])
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": records}]})
+    assert len(groups["undecidable"]) == 1
+    assert len(groups["permitted"]) == int(bundled)

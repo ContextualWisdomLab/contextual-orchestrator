@@ -45,3 +45,24 @@ def test_forged_component_url_cannot_hide_wrong_artifact_version():
     bom["components"][0]["version"] = "2"
     with pytest.raises(ValueError, match="metadata disagrees"):
         bind_inventory(bom, INVENTORY, SHA)
+
+
+@pytest.mark.parametrize("wrong_parent", [False, True])
+def test_bundled_distribution_projects_its_own_component_and_parent_edge(wrong_parent):
+    inventory = copy.deepcopy(INVENTORY)
+    owner = inventory["ecosystems"][0]["packages"][0]
+    owner["artifact_sha256"] = "b" * 64
+    child = {"name": "vendored", "version": "2", "licenses": ["MIT"],
+             "artifact_sha256": ("d" if wrong_parent else "b") * 64,
+             "metadata_sha256": "c" * 64, "metadata_path": "module/vendor/vendored-2.dist-info/METADATA",
+             "bundled_in": {"name": owner["name"], "version": owner["version"]}}
+    inventory["ecosystems"][0]["packages"].append(child)
+    if wrong_parent:
+        with pytest.raises(ValueError, match="parent artifact"):
+            bind_inventory(copy.deepcopy(BOM), inventory, SHA)
+        return
+    bom = bind_inventory(copy.deepcopy(BOM), inventory, SHA)
+    component = next(c for c in bom["components"] if c["name"] == "vendored")
+    assert component["purl"] == "pkg:pypi/vendored@2"
+    assert bom["dependencies"][0]["dependsOn"] == ["cargo", component["bom-ref"]]
+    assert component["licenses"] == [{"license": {"name": "MIT"}}]

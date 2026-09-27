@@ -183,70 +183,112 @@ def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     return packages
 
 
-def _artifact_license_terms(
-    artifact_dir: Path, name: str, version: str
-) -> tuple[list[str], str, list[str]]:
-    """Read a package's licence from its own distribution artefact, unopened.
-
-    The artefact is the evidence: its `.dist-info/METADATA` and bundled licence
-    files state the terms the publisher shipped. Reading them from the archive
-    is a file read -- the package is never installed, imported or executed --
-    and the artefact's sha256 is recorded so the licence is tied to the exact
-    bytes, not to a registry's separate claim about them.
-    """
+def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list[dict[str, Any]]:
+    """Read the root and every bundled Python distribution from one wheel."""
     normalized = _NAME_SEPARATORS.sub("_", name.strip().lower())
     candidates = sorted(artifact_dir.glob(f"{normalized}-{version}-*.whl"))
     if not candidates:
-        # sdists are excluded on purpose: reading one usefully means running its
-        # build backend, and an unreviewed package must not execute here.
-        return [], f"no wheel for {name}=={version} in {artifact_dir}", []
+        return []
     if len(candidates) != 1:
         raise InventoryError(f"multiple wheels for {name}=={version}; artifact identity is ambiguous")
     artifact = candidates[0]
-    # One read: hashing the path and then reopening it would bind a digest to
-    # bytes that need not be the bytes parsed.
-    raw_artifact = artifact.read_bytes()
+    with artifact.open("rb") as handle:
+        raw_artifact = handle.read(_NATIVE_ARCHIVE_LIMIT + 1)
+    if len(raw_artifact) > _NATIVE_ARCHIVE_LIMIT:
+        raise InventoryError("wheel exceeds archive evidence limit")
     digest = hashlib.sha256(raw_artifact).hexdigest()
-    terms: list[str] = []
-    license_files: list[Any] = []
+    records = []
     with zipfile.ZipFile(io.BytesIO(raw_artifact)) as archive:
-        metadata_members = [member for member in archive.namelist() if member.endswith(".dist-info/METADATA")]
-        if len(metadata_members) != 1:
-            raise InventoryError("wheel must contain exactly one distribution metadata record")
-        metadata_path = metadata_members[0]
-        metadata = email.message_from_string(archive.read(metadata_path).decode("utf-8", "replace"))
-        if any(len(metadata.get_all(field, [])) != 1 for field in ("Name", "Version")):
-            raise InventoryError("wheel has missing or duplicate identity fields")
-        metadata_name = _NAME_SEPARATORS.sub("_", str(metadata.get("Name") or "").strip().lower())
-        if metadata_name != normalized or str(metadata.get("Version") or "") != version:
-            raise InventoryError(f"wheel metadata identity differs from {name}=={version}")
-        terms = _metadata_license_terms(metadata)
-        distribution_root = metadata_path.removesuffix("METADATA")
-        for member in archive.namelist():
+        members = archive.namelist()
+        if len(members) != len(set(members)) or any(
+            PurePosixPath(member).is_absolute() or ".." in PurePosixPath(member).parts
+            for member in members
+        ):
+            raise InventoryError("wheel has duplicate or unsafe archive paths")
+        metadata_members = [member for member in members if member.endswith(".dist-info/METADATA")]
+        roots = [member for member in metadata_members if len(PurePosixPath(member).parts) == 2]
+        if len(roots) != 1:
+            raise InventoryError("wheel must contain exactly one root distribution metadata record")
+        ordered = roots + [member for member in metadata_members if member not in roots]
+        distribution_roots = [member.removesuffix("METADATA") for member in ordered]
+        for member in members:
             if archive.getinfo(member).is_dir():
                 continue
             if ".dist-info/" in member and Path(member).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE")
+            ) and not any(member.startswith(root) for root in distribution_roots):
+                raise InventoryError("wheel license text belongs to a different distribution")
+        for index, metadata_path in enumerate(ordered):
+            if any(part.endswith(".dist-info") for part in PurePosixPath(metadata_path).parts[:-2]):
+                raise InventoryError("nested metadata is inside another distribution's evidence directory")
+            if archive.getinfo(metadata_path).file_size > _NATIVE_TEXT_LIMIT:
+                raise InventoryError("wheel metadata exceeds text evidence limit")
+            raw_metadata = archive.read(metadata_path)
+            metadata = email.message_from_bytes(raw_metadata)
+            if any(len(metadata.get_all(field, [])) != 1 for field in ("Name", "Version")):
+                raise InventoryError("wheel has missing or duplicate identity fields")
+            metadata_name = str(metadata.get("Name") or "").strip()
+            metadata_version = str(metadata.get("Version") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", metadata_name) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9.!+_-]*", metadata_version
             ):
-                if not member.startswith(distribution_root):
-                    raise InventoryError("wheel license text belongs to a different distribution")
-                raw = archive.read(member)
-                license_files.append({
-                    "name": Path(member).name,
-                    "sha256": hashlib.sha256(raw).hexdigest(),
-                    "text": raw.decode("utf-8", "replace"),
-                })
-    if not terms:
-        return [], f"{artifact.name} (sha256 {digest[:12]}) declares no licence metadata", license_files
-    # The declaration is what the publisher stated; the bundled licence text is
-    # the instrument itself. Absence of the text is recorded, never resolved by
-    # the declaration alone.
-    evidence = (
-        "licence files: " + ", ".join(sorted(entry["name"] for entry in license_files))
-        if license_files
-        else "declaration only: the wheel bundles no licence text"
-    )
-    return terms, f"artefact {artifact.name} sha256 {digest}; {evidence}", license_files
+                raise InventoryError("wheel metadata identity is malformed")
+            metadata_normalized = _NAME_SEPARATORS.sub("_", metadata_name.lower())
+            if index == 0 and (metadata_normalized, metadata_version) != (normalized, version):
+                raise InventoryError(f"wheel metadata identity differs from {name}=={version}")
+            directory = PurePosixPath(metadata_path).parent.name.removesuffix(".dist-info")
+            if _NAME_SEPARATORS.sub("_", directory.lower()) != _NAME_SEPARATORS.sub(
+                "_", f"{metadata_name}-{metadata_version}".lower()
+            ):
+                raise InventoryError("wheel metadata directory disagrees with its identity")
+            license_files = []
+            declared_files = set()
+            for declared in metadata.get_all("License-File", []):
+                path = PurePosixPath(declared)
+                if path.is_absolute() or ".." in path.parts or not path.parts:
+                    raise InventoryError("declared wheel licence path is unsafe")
+                targets = [distribution_roots[index] + prefix + declared for prefix in ("", "licenses/")]
+                present = [target for target in targets if target in members and not archive.getinfo(target).is_dir()]
+                if len(present) != 1:
+                    raise InventoryError("declared wheel licence file is missing or ambiguous")
+                declared_files.add(present[0])
+            for member in members:
+                if archive.getinfo(member).is_dir() or not member.startswith(distribution_roots[index]):
+                    continue
+                if member in declared_files or Path(member).name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE")):
+                    if archive.getinfo(member).file_size > _NATIVE_TEXT_LIMIT:
+                        raise InventoryError("wheel licence exceeds text evidence limit")
+                    raw = archive.read(member)
+                    license_files.append({"name": member, "sha256": hashlib.sha256(raw).hexdigest(),
+                                          "text": raw.decode("utf-8", "replace")})
+            terms = _metadata_license_terms(metadata)
+            source = f"artefact {artifact.name} sha256 {digest}; metadata {metadata_path}"
+            if not terms:
+                source += "; declares no licence metadata"
+            elif not license_files:
+                source += "; declaration only: the wheel bundles no licence text"
+            record = {"name": metadata_name if index else name, "version": metadata_version,
+                      "licenses": terms, "license_source": source, "license_files": license_files,
+                      "artifact_sha256": digest, "metadata_sha256": hashlib.sha256(raw_metadata).hexdigest(),
+                      "metadata_path": metadata_path}
+            if index:
+                record["bundled_in"] = {"name": name, "version": version}
+            records.append(record)
+    return records
+
+
+def _artifact_license_terms(
+    artifact_dir: Path, name: str, version: str
+) -> tuple[list[str], str, list[dict[str, str]]]:
+    """Read single-distribution evidence; refuse implicit bundled ownership."""
+    records = _artifact_distributions(artifact_dir, name, version)
+    if not records:
+        return [], f"no wheel for {name}=={version} in {artifact_dir}", []
+    if len(records) != 1:
+        raise InventoryError("wheel must contain exactly one distribution metadata record")
+    record = records[0]
+    files = [{**entry, "name": Path(entry["name"]).name} for entry in record["license_files"]]
+    return record["licenses"], record["license_source"], files
 
 
 # ponytail: bounded in-memory archive reads; oversized artifacts fail closed.
@@ -643,7 +685,7 @@ def build_inventory(
         ):
             raise InventoryError("uncommitted lockfile bytes cannot authorize native downloads")
         for entry in ecosystems:
-            for package in entry["packages"]:
+            for package in list(entry["packages"]):
                 if entry["ecosystem"] == "python":
                     if prebuild_local_project and package.get("source") in ({"editable": "."}, {"virtual": "."}):
                         terms, source, license_files = _local_project_license_terms(
@@ -651,9 +693,17 @@ def build_inventory(
                         )
                         package["license_evidence"] = "prebuild-source"
                     elif artifact_dir is not None:
-                        terms, source, license_files = _artifact_license_terms(
-                            artifact_dir, package["name"], package["version"]
-                        )
+                        records = _artifact_distributions(artifact_dir, package["name"], package["version"])
+                        if records:
+                            package.update(records[0])
+                            terms, source, license_files = (package[key] for key in
+                                                           ("licenses", "license_source", "license_files"))
+                            for bundled in records[1:]:
+                                bundled["purl"] = f"pkg:pypi/{bundled['name']}@{bundled['version']}"
+                                bundled["sources"] = list(package["sources"])
+                                entry["packages"].append(bundled)
+                        else:
+                            terms, source, license_files = [], f"no wheel for {package['name']}=={package['version']}", []
                     else:
                         terms, source, license_files = _installed_license_terms(package["name"], package["version"])
                 else:
