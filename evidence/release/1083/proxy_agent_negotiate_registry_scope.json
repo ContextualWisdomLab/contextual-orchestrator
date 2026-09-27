@@ -1,0 +1,20 @@
+{
+  "name": "proxy-agent-negotiate",
+  "version": "1.1.0",
+  "registry_url": "https://registry.npmjs.org/proxy-agent-negotiate/1.1.0",
+  "registry_metadata_sha256": "41807d237c09eff6120e33932015c4ff9c230872c2df119010db48aa4ae0731e",
+  "archive_url": "https://registry.npmjs.org/proxy-agent-negotiate/-/proxy-agent-negotiate-1.1.0.tgz",
+  "archive_sha256": "6eec23d5d381a8b0ffafe91c19876d3a052e463618695981a7529f3a8bca1997",
+  "registry_integrity_verified": "sha512-N8IBcM3UgCVzz2L2Lqv8DVntDnnC8/hiV4nEDUPkqq72TPUgYWjQc+bdZlBPZK9LzPAvOY//gAt0S0DApoOXWQ==",
+  "repository": {
+    "url": "git+https://github.com/TooTallNate/proxy-agents.git",
+    "type": "git",
+    "directory": "packages/negotiate"
+  },
+  "declared_license": "MIT",
+  "license_files": [],
+  "limits": [
+    "Registry artifact identity does not prove exact bytes in Playwright bundle",
+    "Missing bundled instrument remains held; no declaration-only clearance"
+  ]
+}

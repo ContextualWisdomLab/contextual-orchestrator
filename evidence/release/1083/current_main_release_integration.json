@@ -52,5 +52,34 @@
     "Local source integration, not hosted acceptance or main merge",
     "Owner PR heads unchanged; independent review/required gates remain",
     "License and immutable release/provenance/downstream acceptance gaps remain"
-  ]
+  ],
+  "followup_integration": {
+    "source_sha": "267ddd4cd91bfb1fe09daf6851c624477a951179",
+    "license_stack_sha": "82e1766c",
+    "branch": "probe/release-current-main-1083",
+    "inventory_sha256": "2a6ae45031b3ec403862f1323f7a73778be5d218f1301b376bb542f49bd24aa3",
+    "inventory_process_exit": 0,
+    "inventory_tool_session": 54053,
+    "committed_source_records_verified": 16,
+    "inventory_counts": {
+      "python": 127,
+      "cargo": 43,
+      "npm": 359
+    },
+    "classification_totals": {
+      "permitted": 384,
+      "copyleft": 1,
+      "undecidable": 144
+    },
+    "selected_regressions_passed": 2,
+    "regression_process_exit": 0,
+    "workflow_actionlint_exit": 0,
+    "evidence_selection": "Retain original cached archives, add only the16 exact previously verified missing tool-wheel identities; other platform candidates preserved separately",
+    "limits": [
+      "Full406 prior integration proof remains at0d64cb01; followup verifies changed collector/source path only",
+      "Archive license metadata is not installed native-runtime or complete bundled-composition proof",
+      "Root0.2.0 wheel is older artifact evidence, not rebuilt current source release acceptance",
+      "GPL declaration blocker,144holds,fullSBOM/native/container/provenance and protectedrelease/downstream checks remain"
+    ]
+  }
 }

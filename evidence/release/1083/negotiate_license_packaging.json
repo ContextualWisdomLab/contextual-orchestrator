@@ -1,0 +1,33 @@
+{
+  "producer_source_sha": "4813885d3f4e2ff837878ceffdba656a71dc31f0",
+  "package": "proxy-agent-negotiate",
+  "version": "1.1.0",
+  "minimal_change": "Add package-local LICENSE following sibling MIT instrument; omit unverified historical year",
+  "red_archive_sha256": "8db83985b27bdf461ec242e17dfe45be6b7e463257874863720c77e1d1ad6b23",
+  "green_archive_sha256": "efe0eeff6e28a67c27dfdce455bcf1482c650b700229313359f475248d35b97d",
+  "added_member": "package/LICENSE",
+  "license_sha256": "4695bbfb506070fe27672f03b3e53108654fc14eb92fc189248c2e487d7e1655",
+  "unchanged_existing_members": 5,
+  "registry_dist_members_byte_identical": 4,
+  "tool": "npm 11.17.0; Node 24.19.0; npm pack --offline --ignore-scripts",
+  "pnpm_limit": "Pinned pnpm10.30.3 pack could not resolve uninstalled workspace tsconfig; no dependency installation performed",
+  "limits": [
+    "Proposed attribution requires producer confirmation",
+    "Metadata/packaging proof using retained registry dist, not source compilation",
+    "No public upstream submission or release; locked1.1.0 remains held",
+    "Pinned pnpm packaging verified; full source compilation, publish workflow, and maintainer-approved attribution not verified"
+  ],
+  "pnpm_followup": {
+    "version": "10.30.3",
+    "command": "corepack pnpm --dir packages/negotiate --config.ignore-scripts=true pack --pack-destination <output>",
+    "workspace_preparation": "Existing packages/tsconfig linked at packages/negotiate/node_modules/tsconfig; no dependency installation, manifest changes, or lifecycle execution",
+    "red_archive_sha256": "aefde8c8444e74d9bea2d0b37f8bd918b3cca53c2c73e191836ccff84c22d5a8",
+    "green_archive_sha256": "cfb8b352b8529ec5407f06c390a45cd4fd1723aeff544429be16dd2fde17ac2b",
+    "unchanged_members": 5,
+    "added_members": [
+      "package/LICENSE"
+    ],
+    "registry_dist_byte_identical_members": 4,
+    "result": "success"
+  }
+}

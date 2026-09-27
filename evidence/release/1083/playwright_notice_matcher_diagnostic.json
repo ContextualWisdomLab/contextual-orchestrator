@@ -1,0 +1,2364 @@
+{
+  "matcher_source_sha": "a9a3ade4",
+  "input_inventory_sha256": "2a6ae45031b3ec403862f1323f7a73778be5d218f1301b376bb542f49bd24aa3",
+  "counts": {
+    "candidate_match": 209,
+    "no_match": 4
+  },
+  "observations": [
+    {
+      "name": "@babel/code-frame",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/code-frame",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/compat-data",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/core",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/generator",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-annotate-as-pure",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-compilation-targets",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-create-class-features-plugin",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-globals",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-member-expression-to-functions",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-module-imports",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-module-transforms",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-optimise-call-expression",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-plugin-utils",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-replace-supers",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-skip-transparent-expression-wrappers",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-string-parser",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-validator-identifier",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-validator-identifier",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helper-validator-option",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/helpers",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "a1e7d1f732ffb24ee7cf3f66bd5673ed04c796ec525e7005feb116bf0c23f14a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/parser",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "3b7888d501e13391b5a85f89b31858140823e3f230b1008a324a1d2f169b5ba6",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-proposal-decorators",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-async-generators",
+      "version": "7.8.4",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-decorators",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-import-attributes",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-json-strings",
+      "version": "7.8.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-jsx",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-object-rest-spread",
+      "version": "7.8.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-optional-catch-binding",
+      "version": "7.8.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-syntax-typescript",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-class-properties",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-class-static-block",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-destructuring",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-explicit-resource-management",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-export-namespace-from",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-logical-assignment-operators",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-modules-commonjs",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-nullish-coalescing-operator",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-numeric-separator",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-optional-chaining",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-private-methods",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-react-jsx",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/plugin-transform-typescript",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/preset-typescript",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/template",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/traverse",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@babel/types",
+      "version": "7.29.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@hono/node-server",
+      "version": "1.19.14",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0b0c66549d707adde684351aefe1fdf7b88c12c4e3a4ae33f7286db3927b5505",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jest/diff-sequences",
+      "version": "30.4.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jest/expect-utils",
+      "version": "30.4.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jest/get-type",
+      "version": "30.1.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jridgewell/gen-mapping",
+      "version": "0.3.13",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jridgewell/remapping",
+      "version": "2.3.5",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jridgewell/resolve-uri",
+      "version": "3.1.2",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "8adb731483e6d608e3bc2119500d7d95b455f49f007ff8e082b964dbf072fc8c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jridgewell/sourcemap-codec",
+      "version": "1.5.5",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@jridgewell/trace-mapping",
+      "version": "0.3.31",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@modelcontextprotocol/sdk",
+      "version": "1.29.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "eef7955c68b7ef9c4c5deb0c6c1753f7b01f777117c969171a48bef0a9be7034",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "@sec-ant/readable-stream",
+      "version": "0.4.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0ac4e004bd250c5ba246a84f92a64685e90db1fc9f8dabeb06b9b88a2ef051d7",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "agent-base",
+      "version": "9.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "5eefb867c4db4d440313ce5db8e5da389d1b32f1175dd1ff966832e1a48f2d13",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ajv-formats",
+      "version": "3.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "d4a63f4ece6b3ac556f4fc83987f2dac029a3a1ccf264faf7b114f780e13ce8b",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ajv",
+      "version": "8.20.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "5fac497e58c50279f621c846a55b9aa21838d1e6736bc22c650dce57da5866d9",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ansi-colors",
+      "version": "4.1.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "b8ff672532446a49b650973eba2fce1f3715ea102989e614d56c87d3c23eadda",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ansi-styles",
+      "version": "4.3.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ansi-styles",
+      "version": "5.2.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "anymatch",
+      "version": "3.1.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "76af13b126d82d04e7d69573e4464d96d0d89bf7bf60c2a8d06d3d5a6a216500",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "anymatch",
+      "version": "3.1.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "76af13b126d82d04e7d69573e4464d96d0d89bf7bf60c2a8d06d3d5a6a216500",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "balanced-match",
+      "version": "4.0.4",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "d8f69e3f44605b62f5dd6900dc7e2a85a0aa213cfbeb609623491f29c229f99a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "balanced-match",
+      "version": "4.0.4",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "d8f69e3f44605b62f5dd6900dc7e2a85a0aa213cfbeb609623491f29c229f99a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "baseline-browser-mapping",
+      "version": "2.10.40",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "832cf96ab54de7453652c7234d8550a3c71cc9dc48b462fe1393ec2849b15045",
+      "candidate_terms": [
+        "Apache-2.0"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "binary-extensions",
+      "version": "2.3.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "5b5315696ef5c3e497646af2e6b3f775bf99a466d077688302b8218eb2142dd1",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "binary-extensions",
+      "version": "2.3.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "5b5315696ef5c3e497646af2e6b3f775bf99a466d077688302b8218eb2142dd1",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "brace-expansion",
+      "version": "5.0.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "83f6d868b2bfa0dff7876b2f196809e36785f593348956ca80d4aa90c874f1b5",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "brace-expansion",
+      "version": "5.0.7",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83f6d868b2bfa0dff7876b2f196809e36785f593348956ca80d4aa90c874f1b5",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "braces",
+      "version": "3.0.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "braces",
+      "version": "3.0.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "browserslist",
+      "version": "4.28.4",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "65b76f8f08f6ffa54063e8bf1edf8fccd34d8cbfbd003351db70d92153ed92ef",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "buffer-crc32",
+      "version": "1.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "3462a4eed629cadfba772dba5b9cf853ba71b023bd900c1ad0d67e63eccfa1d9",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "buffer-from",
+      "version": "1.1.2",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "3527d3324b8561103aef685792f34fc85f9077ee917636c71817c9d679b5d7f8",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "buffer-from",
+      "version": "1.1.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "3527d3324b8561103aef685792f34fc85f9077ee917636c71817c9d679b5d7f8",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "bundle-name",
+      "version": "4.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "bytes",
+      "version": "3.1.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "4c7015bb94fb55a83255987a2d68ea216c4feb44bcfe71b511aa8b8247d34a5a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "caniuse-lite",
+      "version": "1.0.30001799",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "7a7d7a63780cdcd656eb668db65243ab61005edf3a3916aeaf0502a6a7d26257",
+      "candidate_terms": [],
+      "status": "no_match"
+    },
+    {
+      "name": "chalk",
+      "version": "4.1.2",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "chokidar",
+      "version": "3.6.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "d29edc90d24aaf606cf5388de58edf1ac15117193e4a8d53caea803f6cded7ed",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "chokidar",
+      "version": "3.6.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "d29edc90d24aaf606cf5388de58edf1ac15117193e4a8d53caea803f6cded7ed",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ci-info",
+      "version": "4.4.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "a9ec7cd5d8cee902f44c2f149856c0ec0ca310e9c1d2dcd5db8ab46435b7ef98",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "color-convert",
+      "version": "2.0.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "bf5dbde929df6ba887d71ce77b5e0951d0c7f57ccd63e5319e8abdb563927526",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "color-name",
+      "version": "1.1.4",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "be5c7fa46023fa42d039fe6dc9703628dcaf3c1ff2df7474d74e5a674948d9b8",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "colors",
+      "version": "1.4.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "5557e9a542e744e38ee3c83c7ef15ed6c127c5abd6f3fcbdc59f70393ea278ac",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "commander",
+      "version": "15.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "df201db921f134dbf3f18356700d2aca3f3d198639f47269db5db763911561a3",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "content-type",
+      "version": "1.0.5",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "66e0f351948c067394a7d6d1c89c0973c921552a66d4138058398e3184bc2050",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "convert-source-map",
+      "version": "2.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "ee608a1f0ad516e0506ba874098d33238c087b64c53b3544f69dd5cdb1ac8211",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "cross-spawn",
+      "version": "7.0.6",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "50755267f32159a074ff9a7ad86f317d5dc52d373ce5d5d5a2c2c3c1b56b81e2",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "bfff71a454738877e0c3e2d8397f2171eec2928a6905c4f72b70f0ef5ba09fd7",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "bfff71a454738877e0c3e2d8397f2171eec2928a6905c4f72b70f0ef5ba09fd7",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "bfff71a454738877e0c3e2d8397f2171eec2928a6905c4f72b70f0ef5ba09fd7",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "default-browser-id",
+      "version": "5.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "default-browser",
+      "version": "5.5.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "define-lazy-prop",
+      "version": "3.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "diff",
+      "version": "9.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "75fbccba1aaa63cdb095dddf1d96a0f753515a5da188ec8e659f4ad1c50fc791",
+      "candidate_terms": [
+        "BSD-2-Clause",
+        "BSD-3-Clause"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "dotenv",
+      "version": "17.4.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "c82334ea81b190b37beb26ee8bfd6ba739d20e7de88658e8fc1684095f5d7c53",
+      "candidate_terms": [
+        "BSD-2-Clause",
+        "BSD-3-Clause"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "electron-to-chromium",
+      "version": "1.5.381",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "700b08a53cb7998707a61aa892e4a3a389c73b37fb112634fe5c43eab194f257",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "enquirer",
+      "version": "2.4.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "ab9ce509c109c4d31bab315784fd05587094db2a607204e53262361ea5a9d752",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "escape-string-regexp",
+      "version": "2.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "eventsource-parser",
+      "version": "3.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "e4c424060409e3cff80b7310f59081adb25c34f5e6ef0f82cd6826721f34d21e",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "eventsource",
+      "version": "3.0.7",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "382957077e7648c2279ae2ba85d72703c7724e3a217ca754b4218dfd3b4c1c21",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "fast-deep-equal",
+      "version": "3.1.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "dcb25236be48e1127998553dbcfc5f69f49c331086c1d60656e0ca58e5243c1a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "fast-uri",
+      "version": "3.1.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "6a58da1a3d09dc52b3a7a4d4963fed6ef55d773173dd8794b80e68b5725e6d90",
+      "candidate_terms": [
+        "BSD-2-Clause",
+        "BSD-3-Clause"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "fill-range",
+      "version": "7.1.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "fill-range",
+      "version": "7.1.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "gensync",
+      "version": "1.0.0-beta.2",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "9c5caf1a748bc345419e18a2f3a59d2d7a5c7cbeb86bfaf55413105aff3a04a7",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "get-east-asian-width",
+      "version": "1.6.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "get-stream",
+      "version": "9.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "glob-parent",
+      "version": "5.1.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "a196f8273a9d7b86ce28cb1755ba2bb59c532a30c76312372cdf43949000e4a4",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "glob-parent",
+      "version": "5.1.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "a196f8273a9d7b86ce28cb1755ba2bb59c532a30c76312372cdf43949000e4a4",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "graceful-fs",
+      "version": "4.2.11",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "eddf3e7fe533e1e73cb4dacb7ede060cfbcf32543e6f21b3f992e76e3ce930ac",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "graceful-fs",
+      "version": "4.2.11",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "eddf3e7fe533e1e73cb4dacb7ede060cfbcf32543e6f21b3f992e76e3ce930ac",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "has-flag",
+      "version": "4.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "has-flag",
+      "version": "4.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "has-flag",
+      "version": "4.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "has-flag",
+      "version": "4.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "https-proxy-agent",
+      "version": "9.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "5eefb867c4db4d440313ce5db8e5da389d1b32f1175dd1ff966832e1a48f2d13",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ini",
+      "version": "7.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ip-address",
+      "version": "10.2.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "08cee9dbef3f8e47662e5f61ca0bb266a3ecb709ec34a7c321f39a4890621aba",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-binary-path",
+      "version": "2.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "ed155308d638276e6678e89b7656f29bd20b1dd689464310530cae1414c595fd",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-binary-path",
+      "version": "2.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "ed155308d638276e6678e89b7656f29bd20b1dd689464310530cae1414c595fd",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-docker",
+      "version": "3.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-extglob",
+      "version": "2.1.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "615613b4ed60403c140c9da22d5ba30daa2bcff2b1f78909259956c0f8ccbb6b",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-extglob",
+      "version": "2.1.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "615613b4ed60403c140c9da22d5ba30daa2bcff2b1f78909259956c0f8ccbb6b",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-glob",
+      "version": "4.0.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "c70e0727a720dd1170d986c0a1c7c91c2000b1061bb05bc5b939e49fbc70302c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-glob",
+      "version": "4.0.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "c70e0727a720dd1170d986c0a1c7c91c2000b1061bb05bc5b939e49fbc70302c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-in-ssh",
+      "version": "1.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-inside-container",
+      "version": "1.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-number",
+      "version": "7.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-number",
+      "version": "7.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-stream",
+      "version": "4.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "is-wsl",
+      "version": "3.1.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "isexe",
+      "version": "2.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "jest-diff",
+      "version": "30.4.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "jest-matcher-utils",
+      "version": "30.4.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "jest-message-util",
+      "version": "30.4.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "jest-util",
+      "version": "30.4.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "jpeg-js",
+      "version": "0.4.4",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "fe6409287d34b5c12b59ded4fac51a8b0d6be68598a8a5367f93e078b76c6e53",
+      "candidate_terms": [
+        "BSD-2-Clause",
+        "BSD-3-Clause"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "js-tokens",
+      "version": "4.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "280e6ae00cfc865a815567d71db2b2d94efc9db3cb6b1d9e90c9101646672e84",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "js-tokens",
+      "version": "4.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "280e6ae00cfc865a815567d71db2b2d94efc9db3cb6b1d9e90c9101646672e84",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "jsesc",
+      "version": "3.1.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "277f56fdfdc98df362c05d64e9ee53805f99e6403966026d0ca838a12e7d5e12",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "json-schema-traverse",
+      "version": "1.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "dcb25236be48e1127998553dbcfc5f69f49c331086c1d60656e0ca58e5243c1a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "json5",
+      "version": "2.2.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "332eb18bdbaf2210231cb9b368028dd99043488c0496b139c7fae4ed46c25747",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "json5",
+      "version": "2.2.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "332eb18bdbaf2210231cb9b368028dd99043488c0496b139c7fae4ed46c25747",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "json5",
+      "version": "2.2.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "332eb18bdbaf2210231cb9b368028dd99043488c0496b139c7fae4ed46c25747",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "lru-cache",
+      "version": "5.1.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "mime",
+      "version": "4.1.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "81a7a92fac9556316dc2ae53d2b7e736aa7f6687a2ac5a44edaeaa12c3a0a6e0",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "mime",
+      "version": "4.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "81a7a92fac9556316dc2ae53d2b7e736aa7f6687a2ac5a44edaeaa12c3a0a6e0",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "minimatch",
+      "version": "10.2.5",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "18ada492fb30f42059a4041a3f79a7c761befbc09f815b5566967988aa315690",
+      "candidate_terms": [],
+      "status": "no_match"
+    },
+    {
+      "name": "minimatch",
+      "version": "10.2.5",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "18ada492fb30f42059a4041a3f79a7c761befbc09f815b5566967988aa315690",
+      "candidate_terms": [],
+      "status": "no_match"
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "b6b690d9efd25cdd7408badaca173afdfa82592ebfc04f50fa6083add1b8b7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "b6b690d9efd25cdd7408badaca173afdfa82592ebfc04f50fa6083add1b8b7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "b6b690d9efd25cdd7408badaca173afdfa82592ebfc04f50fa6083add1b8b7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "node-releases",
+      "version": "2.0.50",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "2ac084f7e0f6dbc467c182831c5ccba41633e8fad2c2f090feebf6151847483c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "normalize-path",
+      "version": "3.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "d85714c13e675a1d3332720f8ec8a534a58d8ced4e6045253750446050549d5c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "normalize-path",
+      "version": "3.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "d85714c13e675a1d3332720f8ec8a534a58d8ced4e6045253750446050549d5c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "open",
+      "version": "11.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "path-key",
+      "version": "3.1.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "pend",
+      "version": "1.2.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "1180803ba80a3e62e5bffd07a3c99fe77cba8f7efc698300e7b66e10e687bab9",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "picocolors",
+      "version": "1.1.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "c4f197d33774b40db5254f93bdde15d746ac6304d206ab7ae465b3273c6976cb",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "picocolors",
+      "version": "1.1.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "c4f197d33774b40db5254f93bdde15d746ac6304d206ab7ae465b3273c6976cb",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "picomatch",
+      "version": "2.3.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "a17f2777489a68bfecadd4db5a3da49c96426388adc2c7c06df667b2a8b7ba5c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "picomatch",
+      "version": "2.3.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "a17f2777489a68bfecadd4db5a3da49c96426388adc2c7c06df667b2a8b7ba5c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "picomatch",
+      "version": "4.0.4",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "a17f2777489a68bfecadd4db5a3da49c96426388adc2c7c06df667b2a8b7ba5c",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "pkce-challenge",
+      "version": "5.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "6a9e68083f25f19cd6201911d9e9569f4f6993446e2a4783560e35f6dcb72825",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "pngjs",
+      "version": "7.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "1a84d9e2a5fe07884132a12d79df8cb3fbde4533e60188bec4c2a0529842912a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "powershell-utils",
+      "version": "0.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "pretty-format",
+      "version": "30.4.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "progress",
+      "version": "2.0.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "929c6bfc79fa460ffba2b82f7aa5dab09096fae434f839187906fc0a62b52610",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "proxy-agent-negotiate",
+      "version": "1.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "699130070caa5dc9fc84e25ea13bc527461275ac56f5169ee363dcf44a20f5bb",
+      "candidate_terms": [],
+      "status": "no_match"
+    },
+    {
+      "name": "proxy-from-env",
+      "version": "2.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "66c88b91179ef5deff8720f42b30fdc5c38b018e47d51402b172d0e92aaa6e44",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "react-is",
+      "version": "18.3.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "cc7dac54fb5aaac08a93ee92560db03532e1e4bbf737dc4a80190acee6260a87",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "react-is",
+      "version": "19.2.7",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "025d5bbc0d7be4b459c38cbd98ded6ff5e2f5dd2fa5a89a446bbad1971cc30a6",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "readdirp",
+      "version": "3.6.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "6a22d017828373a467bb3a0d3f475e88bfb18104c65cb5d9c0b520759ea0f0a8",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "readdirp",
+      "version": "3.6.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "6a22d017828373a467bb3a0d3f475e88bfb18104c65cb5d9c0b520759ea0f0a8",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "retry",
+      "version": "0.13.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "b881073a8ecac816e021d38a2febf395f071bd9b900b84a725f0e65beb8b9188",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "run-applescript",
+      "version": "7.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "semver",
+      "version": "6.3.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "shebang-command",
+      "version": "2.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "6efcd2f2b10e629fe20c8a954618dd49d20552c67194b5df920031cd0a34ad1a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "shebang-regex",
+      "version": "3.0.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "signal-exit",
+      "version": "4.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "65d5f069a908c54237c2cc965715c961c173a24f3d4173e01375449077d2310b",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "slash",
+      "version": "3.0.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "smart-buffer",
+      "version": "4.2.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "2e97476400624fc802e8aa992757c8d8a039124f08bd68c887c31714b3e15354",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "socks-proxy-agent",
+      "version": "10.1.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "5eefb867c4db4d440313ce5db8e5da389d1b32f1175dd1ff966832e1a48f2d13",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "socks",
+      "version": "2.8.9",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f06ec1e5b32a39029d05fcc3ff1eb2b86fb9432242e6c5437742979d2fbbe0d",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "source-map-support",
+      "version": "0.5.21",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "841ff12e5338ac1411870477446cf7a0db984d3c30a9f4fc0cf02c485a57b637",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "source-map-support",
+      "version": "0.5.21",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "841ff12e5338ac1411870477446cf7a0db984d3c30a9f4fc0cf02c485a57b637",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "source-map",
+      "version": "0.6.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "a831ebbde5f04db418428c5da41fc0449f209b571152e6abb9ba12b43d4e22c3",
+      "candidate_terms": [
+        "BSD-2-Clause",
+        "BSD-3-Clause"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "source-map",
+      "version": "0.6.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "a831ebbde5f04db418428c5da41fc0449f209b571152e6abb9ba12b43d4e22c3",
+      "candidate_terms": [
+        "BSD-2-Clause",
+        "BSD-3-Clause"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "stack-utils",
+      "version": "2.0.6",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "3c912d10c393a5e3b067d1769323d192c9956ebc4993badc241aef51b8f4085b",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "supports-color",
+      "version": "7.2.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/matchers/expect.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "supports-color",
+      "version": "7.2.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "supports-color",
+      "version": "7.2.0",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "supports-color",
+      "version": "7.2.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "to-regex-range",
+      "version": "5.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/serverRegistry.js.LICENSE",
+      "section_sha256": "b22741305b13c521c2081382063f49f8a74de419cf51f8c09ef8274c83aafbac",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "to-regex-range",
+      "version": "5.0.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "b22741305b13c521c2081382063f49f8a74de419cf51f8c09ef8274c83aafbac",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "which",
+      "version": "2.0.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "ws",
+      "version": "8.21.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "0f7b277311f49882c0892c3ae76bf7168490464f0126fc8a7fc6554d4ec9a2ad",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "wsl-utils",
+      "version": "0.3.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "yallist",
+      "version": "3.1.1",
+      "producer": "playwright",
+      "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+      "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "yaml",
+      "version": "2.9.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "9151423e532fdc6f699b120a8c6391b294c280c39e684aa03f0afb5388c58e43",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "yauzl",
+      "version": "3.4.0",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "9c3059dc28bbd48791a8351a53a3f63700cb2c3fc3d508ae8c310b2aff2d4ac1",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "yazl",
+      "version": "3.3.1",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "9c3059dc28bbd48791a8351a53a3f63700cb2c3fc3d508ae8c310b2aff2d4ac1",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "zod-to-json-schema",
+      "version": "3.25.2",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "e30a0bf54141427d855af1de8373be5604994bf09ebc341e2a3b1c6febf671cd",
+      "candidate_terms": [
+        "ISC"
+      ],
+      "status": "candidate_match"
+    },
+    {
+      "name": "zod",
+      "version": "4.4.3",
+      "producer": "playwright-core",
+      "notice_path": "package/lib/utilsBundle.js.LICENSE",
+      "section_sha256": "023e8ff37a54594dea56fd79a82051654ab7915ace014c0f4be368be27d0981d",
+      "candidate_terms": [
+        "MIT"
+      ],
+      "status": "candidate_match"
+    }
+  ],
+  "limits": [
+    "Candidate recognition is not declaration or complete grant approval",
+    "Existing BSD family recognition does not distinguish clause count",
+    "No root package clearance or release gate changes",
+    "Unmatched sections require exact instrument review"
+  ],
+  "diagnostic_candidate_limit": "CC-BY-4.0 and BlueOak-1.0.0 were intentionally absent from the eight trial candidates; no_match does not prove a missing instrument. Canonical comparison also requires removing producer separator framing, never substantive text.",
+  "confirmed_missing_instrument": {
+    "component": "proxy-agent-negotiate@1.1.0",
+    "producer_notice": "(no license text found; declared licenses: MIT)",
+    "registry_receipt": "proxy_agent_negotiate_registry_scope.json",
+    "root_cause": "Published npm tarball has no license instrument; bundled notice carries declaration only."
+  }
+}

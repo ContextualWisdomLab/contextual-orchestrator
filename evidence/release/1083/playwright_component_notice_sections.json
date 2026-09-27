@@ -1,0 +1,3194 @@
+{
+  "inventory_source_sha": "267ddd4cd91bfb1fe09daf6851c624477a951179",
+  "inventory_sha256": "2a6ae45031b3ec403862f1323f7a73778be5d218f1301b376bb542f49bd24aa3",
+  "components": [
+    {
+      "name": "@babel/code-frame",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 35,
+          "end_line": 60,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 77,
+          "end_line": 102,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/compat-data",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 104,
+          "end_line": 129,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/core",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 131,
+          "end_line": 156,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/generator",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 158,
+          "end_line": 183,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-annotate-as-pure",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 185,
+          "end_line": 210,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-compilation-targets",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 212,
+          "end_line": 237,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-create-class-features-plugin",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 239,
+          "end_line": 264,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-globals",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 266,
+          "end_line": 291,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-member-expression-to-functions",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 293,
+          "end_line": 318,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-module-imports",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 320,
+          "end_line": 345,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-module-transforms",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 347,
+          "end_line": 372,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-optimise-call-expression",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 374,
+          "end_line": 399,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-plugin-utils",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 401,
+          "end_line": 426,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-replace-supers",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 428,
+          "end_line": 453,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-skip-transparent-expression-wrappers",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 455,
+          "end_line": 480,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-string-parser",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 482,
+          "end_line": 507,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-validator-identifier",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 62,
+          "end_line": 87,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 509,
+          "end_line": 534,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helper-validator-option",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 536,
+          "end_line": 561,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/helpers",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "a1e7d1f732ffb24ee7cf3f66bd5673ed04c796ec525e7005feb116bf0c23f14a",
+          "start_line": 563,
+          "end_line": 589,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/parser",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "3b7888d501e13391b5a85f89b31858140823e3f230b1008a324a1d2f169b5ba6",
+          "start_line": 591,
+          "end_line": 613,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-proposal-decorators",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 615,
+          "end_line": 640,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-async-generators",
+      "version": "7.8.4",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 642,
+          "end_line": 667,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-decorators",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 669,
+          "end_line": 694,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-import-attributes",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 696,
+          "end_line": 721,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-json-strings",
+      "version": "7.8.3",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 723,
+          "end_line": 748,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-jsx",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 750,
+          "end_line": 775,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-object-rest-spread",
+      "version": "7.8.3",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 777,
+          "end_line": 802,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-optional-catch-binding",
+      "version": "7.8.3",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 804,
+          "end_line": 829,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-syntax-typescript",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 831,
+          "end_line": 856,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-class-properties",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 858,
+          "end_line": 883,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-class-static-block",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 885,
+          "end_line": 910,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-destructuring",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 912,
+          "end_line": 937,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-explicit-resource-management",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 939,
+          "end_line": 964,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-export-namespace-from",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 966,
+          "end_line": 991,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-logical-assignment-operators",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 993,
+          "end_line": 1018,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-modules-commonjs",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1020,
+          "end_line": 1045,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-nullish-coalescing-operator",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1047,
+          "end_line": 1072,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-numeric-separator",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1074,
+          "end_line": 1099,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-optional-chaining",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1101,
+          "end_line": 1126,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-private-methods",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1128,
+          "end_line": 1153,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-react-jsx",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1155,
+          "end_line": 1180,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/plugin-transform-typescript",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1182,
+          "end_line": 1207,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/preset-typescript",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1209,
+          "end_line": 1234,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/template",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1236,
+          "end_line": 1261,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/traverse",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1263,
+          "end_line": 1288,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@babel/types",
+      "version": "7.29.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8d6fe0ed0a0d193caf077b18999da35617471fb4b2fdbaff86d5e706886b20bf",
+          "start_line": 1290,
+          "end_line": 1315,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@hono/node-server",
+      "version": "1.19.14",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0b0c66549d707adde684351aefe1fdf7b88c12c4e3a4ae33f7286db3927b5505",
+          "start_line": 99,
+          "end_line": 123,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jest/diff-sequences",
+      "version": "30.4.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 89,
+          "end_line": 114,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jest/expect-utils",
+      "version": "30.4.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 116,
+          "end_line": 141,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jest/get-type",
+      "version": "30.1.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 143,
+          "end_line": 168,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jridgewell/gen-mapping",
+      "version": "0.3.13",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+          "start_line": 1317,
+          "end_line": 1339,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jridgewell/remapping",
+      "version": "2.3.5",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+          "start_line": 1341,
+          "end_line": 1363,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jridgewell/resolve-uri",
+      "version": "3.1.2",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "8adb731483e6d608e3bc2119500d7d95b455f49f007ff8e082b964dbf072fc8c",
+          "start_line": 1365,
+          "end_line": 1387,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jridgewell/sourcemap-codec",
+      "version": "1.5.5",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+          "start_line": 1389,
+          "end_line": 1411,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@jridgewell/trace-mapping",
+      "version": "0.3.31",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "c56d8c6a8c4c2575432125465f6c64e627c6fd4c61c3a809ef968ca651fea6d5",
+          "start_line": 1413,
+          "end_line": 1435,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@modelcontextprotocol/sdk",
+      "version": "1.29.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "eef7955c68b7ef9c4c5deb0c6c1753f7b01f777117c969171a48bef0a9be7034",
+          "start_line": 125,
+          "end_line": 149,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "@sec-ant/readable-stream",
+      "version": "0.4.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0ac4e004bd250c5ba246a84f92a64685e90db1fc9f8dabeb06b9b88a2ef051d7",
+          "start_line": 151,
+          "end_line": 175,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "agent-base",
+      "version": "9.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "5eefb867c4db4d440313ce5db8e5da389d1b32f1175dd1ff966832e1a48f2d13",
+          "start_line": 177,
+          "end_line": 202,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ajv-formats",
+      "version": "3.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "d4a63f4ece6b3ac556f4fc83987f2dac029a3a1ccf264faf7b114f780e13ce8b",
+          "start_line": 204,
+          "end_line": 228,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ajv",
+      "version": "8.20.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "5fac497e58c50279f621c846a55b9aa21838d1e6736bc22c650dce57da5866d9",
+          "start_line": 230,
+          "end_line": 254,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ansi-colors",
+      "version": "4.1.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "b8ff672532446a49b650973eba2fce1f3715ea102989e614d56c87d3c23eadda",
+          "start_line": 256,
+          "end_line": 280,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 282,
+          "end_line": 294,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ansi-styles",
+      "version": "4.3.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 170,
+          "end_line": 182,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ansi-styles",
+      "version": "5.2.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 184,
+          "end_line": 196,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "anymatch",
+      "version": "3.1.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "76af13b126d82d04e7d69573e4464d96d0d89bf7bf60c2a8d06d3d5a6a216500",
+          "start_line": 22,
+          "end_line": 40,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "76af13b126d82d04e7d69573e4464d96d0d89bf7bf60c2a8d06d3d5a6a216500",
+          "start_line": 296,
+          "end_line": 314,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "balanced-match",
+      "version": "4.0.4",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "d8f69e3f44605b62f5dd6900dc7e2a85a0aa213cfbeb609623491f29c229f99a",
+          "start_line": 20,
+          "end_line": 46,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "d8f69e3f44605b62f5dd6900dc7e2a85a0aa213cfbeb609623491f29c229f99a",
+          "start_line": 316,
+          "end_line": 342,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "baseline-browser-mapping",
+      "version": "2.10.40",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "832cf96ab54de7453652c7234d8550a3c71cc9dc48b462fe1393ec2849b15045",
+          "start_line": 1437,
+          "end_line": 1641,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "binary-extensions",
+      "version": "2.3.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "5b5315696ef5c3e497646af2e6b3f775bf99a466d077688302b8218eb2142dd1",
+          "start_line": 42,
+          "end_line": 55,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "5b5315696ef5c3e497646af2e6b3f775bf99a466d077688302b8218eb2142dd1",
+          "start_line": 344,
+          "end_line": 357,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "brace-expansion",
+      "version": "5.0.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "83f6d868b2bfa0dff7876b2f196809e36785f593348956ca80d4aa90c874f1b5",
+          "start_line": 48,
+          "end_line": 74,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83f6d868b2bfa0dff7876b2f196809e36785f593348956ca80d4aa90c874f1b5",
+          "start_line": 359,
+          "end_line": 385,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "braces",
+      "version": "3.0.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+          "start_line": 57,
+          "end_line": 81,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+          "start_line": 387,
+          "end_line": 411,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "browserslist",
+      "version": "4.28.4",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "65b76f8f08f6ffa54063e8bf1edf8fccd34d8cbfbd003351db70d92153ed92ef",
+          "start_line": 1643,
+          "end_line": 1666,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "buffer-crc32",
+      "version": "1.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "3462a4eed629cadfba772dba5b9cf853ba71b023bd900c1ad0d67e63eccfa1d9",
+          "start_line": 413,
+          "end_line": 435,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "buffer-from",
+      "version": "1.1.2",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "3527d3324b8561103aef685792f34fc85f9077ee917636c71817c9d679b5d7f8",
+          "start_line": 76,
+          "end_line": 100,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "3527d3324b8561103aef685792f34fc85f9077ee917636c71817c9d679b5d7f8",
+          "start_line": 437,
+          "end_line": 461,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "bundle-name",
+      "version": "4.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 463,
+          "end_line": 475,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "bytes",
+      "version": "3.1.2",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "4c7015bb94fb55a83255987a2d68ea216c4feb44bcfe71b511aa8b8247d34a5a",
+          "start_line": 477,
+          "end_line": 503,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "caniuse-lite",
+      "version": "1.0.30001799",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "7a7d7a63780cdcd656eb668db65243ab61005edf3a3916aeaf0502a6a7d26257",
+          "start_line": 1668,
+          "end_line": 2066,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "chalk",
+      "version": "4.1.2",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 198,
+          "end_line": 210,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "chokidar",
+      "version": "3.6.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "d29edc90d24aaf606cf5388de58edf1ac15117193e4a8d53caea803f6cded7ed",
+          "start_line": 83,
+          "end_line": 107,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "d29edc90d24aaf606cf5388de58edf1ac15117193e4a8d53caea803f6cded7ed",
+          "start_line": 505,
+          "end_line": 529,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ci-info",
+      "version": "4.4.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "a9ec7cd5d8cee902f44c2f149856c0ec0ca310e9c1d2dcd5db8ab46435b7ef98",
+          "start_line": 212,
+          "end_line": 236,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "color-convert",
+      "version": "2.0.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "bf5dbde929df6ba887d71ce77b5e0951d0c7f57ccd63e5319e8abdb563927526",
+          "start_line": 238,
+          "end_line": 261,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "color-name",
+      "version": "1.1.4",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "be5c7fa46023fa42d039fe6dc9703628dcaf3c1ff2df7474d74e5a674948d9b8",
+          "start_line": 263,
+          "end_line": 274,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "colors",
+      "version": "1.4.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "5557e9a542e744e38ee3c83c7ef15ed6c127c5abd6f3fcbdc59f70393ea278ac",
+          "start_line": 531,
+          "end_line": 559,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "commander",
+      "version": "15.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "df201db921f134dbf3f18356700d2aca3f3d198639f47269db5db763911561a3",
+          "start_line": 561,
+          "end_line": 586,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "content-type",
+      "version": "1.0.5",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "66e0f351948c067394a7d6d1c89c0973c921552a66d4138058398e3184bc2050",
+          "start_line": 588,
+          "end_line": 613,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "convert-source-map",
+      "version": "2.0.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "ee608a1f0ad516e0506ba874098d33238c087b64c53b3544f69dd5cdb1ac8211",
+          "start_line": 2068,
+          "end_line": 2094,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "cross-spawn",
+      "version": "7.0.6",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "50755267f32159a074ff9a7ad86f317d5dc52d373ce5d5d5a2c2c3c1b56b81e2",
+          "start_line": 615,
+          "end_line": 639,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "bfff71a454738877e0c3e2d8397f2171eec2928a6905c4f72b70f0ef5ba09fd7",
+          "start_line": 2096,
+          "end_line": 2118,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "bfff71a454738877e0c3e2d8397f2171eec2928a6905c4f72b70f0ef5ba09fd7",
+          "start_line": 102,
+          "end_line": 124,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "bfff71a454738877e0c3e2d8397f2171eec2928a6905c4f72b70f0ef5ba09fd7",
+          "start_line": 641,
+          "end_line": 663,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "default-browser-id",
+      "version": "5.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 665,
+          "end_line": 677,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "default-browser",
+      "version": "5.5.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 679,
+          "end_line": 691,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "define-lazy-prop",
+      "version": "3.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 693,
+          "end_line": 705,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "diff",
+      "version": "9.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "75fbccba1aaa63cdb095dddf1d96a0f753515a5da188ec8e659f4ad1c50fc791",
+          "start_line": 707,
+          "end_line": 739,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "dotenv",
+      "version": "17.4.2",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "c82334ea81b190b37beb26ee8bfd6ba739d20e7de88658e8fc1684095f5d7c53",
+          "start_line": 741,
+          "end_line": 767,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "electron-to-chromium",
+      "version": "1.5.381",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "700b08a53cb7998707a61aa892e4a3a389c73b37fb112634fe5c43eab194f257",
+          "start_line": 2120,
+          "end_line": 2128,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "enquirer",
+      "version": "2.4.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "ab9ce509c109c4d31bab315784fd05587094db2a607204e53262361ea5a9d752",
+          "start_line": 769,
+          "end_line": 793,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "escape-string-regexp",
+      "version": "2.0.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 276,
+          "end_line": 288,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "eventsource-parser",
+      "version": "3.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "e4c424060409e3cff80b7310f59081adb25c34f5e6ef0f82cd6826721f34d21e",
+          "start_line": 795,
+          "end_line": 819,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "eventsource",
+      "version": "3.0.7",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "382957077e7648c2279ae2ba85d72703c7724e3a217ca754b4218dfd3b4c1c21",
+          "start_line": 821,
+          "end_line": 846,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "fast-deep-equal",
+      "version": "3.1.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "dcb25236be48e1127998553dbcfc5f69f49c331086c1d60656e0ca58e5243c1a",
+          "start_line": 848,
+          "end_line": 872,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "fast-uri",
+      "version": "3.1.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "6a58da1a3d09dc52b3a7a4d4963fed6ef55d773173dd8794b80e68b5725e6d90",
+          "start_line": 874,
+          "end_line": 907,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "fill-range",
+      "version": "7.1.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+          "start_line": 109,
+          "end_line": 133,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+          "start_line": 909,
+          "end_line": 933,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "gensync",
+      "version": "1.0.0-beta.2",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "9c5caf1a748bc345419e18a2f3a59d2d7a5c7cbeb86bfaf55413105aff3a04a7",
+          "start_line": 2130,
+          "end_line": 2140,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "get-east-asian-width",
+      "version": "1.6.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 935,
+          "end_line": 947,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "get-stream",
+      "version": "9.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 949,
+          "end_line": 961,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "glob-parent",
+      "version": "5.1.2",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "a196f8273a9d7b86ce28cb1755ba2bb59c532a30c76312372cdf43949000e4a4",
+          "start_line": 135,
+          "end_line": 153,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "a196f8273a9d7b86ce28cb1755ba2bb59c532a30c76312372cdf43949000e4a4",
+          "start_line": 963,
+          "end_line": 981,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "graceful-fs",
+      "version": "4.2.11",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "eddf3e7fe533e1e73cb4dacb7ede060cfbcf32543e6f21b3f992e76e3ce930ac",
+          "start_line": 290,
+          "end_line": 308,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "eddf3e7fe533e1e73cb4dacb7ede060cfbcf32543e6f21b3f992e76e3ce930ac",
+          "start_line": 983,
+          "end_line": 1001,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "has-flag",
+      "version": "4.0.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 310,
+          "end_line": 322,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 2142,
+          "end_line": 2154,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 126,
+          "end_line": 138,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 1003,
+          "end_line": 1015,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "https-proxy-agent",
+      "version": "9.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "5eefb867c4db4d440313ce5db8e5da389d1b32f1175dd1ff966832e1a48f2d13",
+          "start_line": 1017,
+          "end_line": 1042,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ini",
+      "version": "7.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+          "start_line": 1044,
+          "end_line": 1062,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ip-address",
+      "version": "10.2.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "08cee9dbef3f8e47662e5f61ca0bb266a3ecb709ec34a7c321f39a4890621aba",
+          "start_line": 1064,
+          "end_line": 1086,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-binary-path",
+      "version": "2.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "ed155308d638276e6678e89b7656f29bd20b1dd689464310530cae1414c595fd",
+          "start_line": 155,
+          "end_line": 167,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "ed155308d638276e6678e89b7656f29bd20b1dd689464310530cae1414c595fd",
+          "start_line": 1088,
+          "end_line": 1100,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-docker",
+      "version": "3.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1102,
+          "end_line": 1114,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-extglob",
+      "version": "2.1.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "615613b4ed60403c140c9da22d5ba30daa2bcff2b1f78909259956c0f8ccbb6b",
+          "start_line": 169,
+          "end_line": 193,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "615613b4ed60403c140c9da22d5ba30daa2bcff2b1f78909259956c0f8ccbb6b",
+          "start_line": 1116,
+          "end_line": 1140,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-glob",
+      "version": "4.0.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "c70e0727a720dd1170d986c0a1c7c91c2000b1061bb05bc5b939e49fbc70302c",
+          "start_line": 195,
+          "end_line": 219,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "c70e0727a720dd1170d986c0a1c7c91c2000b1061bb05bc5b939e49fbc70302c",
+          "start_line": 1142,
+          "end_line": 1166,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-in-ssh",
+      "version": "1.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1168,
+          "end_line": 1180,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-inside-container",
+      "version": "1.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1182,
+          "end_line": 1194,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-number",
+      "version": "7.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+          "start_line": 221,
+          "end_line": 245,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "e7be5b2c574f0ab4def3bc6b53a5986adda383da4b7c2efce196f988b2ada91e",
+          "start_line": 1196,
+          "end_line": 1220,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-stream",
+      "version": "4.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1222,
+          "end_line": 1234,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "is-wsl",
+      "version": "3.1.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1236,
+          "end_line": 1248,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "isexe",
+      "version": "2.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+          "start_line": 1250,
+          "end_line": 1268,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "jest-diff",
+      "version": "30.4.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 324,
+          "end_line": 349,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "jest-matcher-utils",
+      "version": "30.4.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 351,
+          "end_line": 376,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "jest-message-util",
+      "version": "30.4.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 378,
+          "end_line": 403,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "jest-util",
+      "version": "30.4.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 405,
+          "end_line": 430,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "jpeg-js",
+      "version": "0.4.4",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "fe6409287d34b5c12b59ded4fac51a8b0d6be68598a8a5367f93e078b76c6e53",
+          "start_line": 1270,
+          "end_line": 1298,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "js-tokens",
+      "version": "4.0.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "280e6ae00cfc865a815567d71db2b2d94efc9db3cb6b1d9e90c9101646672e84",
+          "start_line": 432,
+          "end_line": 456,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "280e6ae00cfc865a815567d71db2b2d94efc9db3cb6b1d9e90c9101646672e84",
+          "start_line": 2156,
+          "end_line": 2180,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "jsesc",
+      "version": "3.1.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "277f56fdfdc98df362c05d64e9ee53805f99e6403966026d0ca838a12e7d5e12",
+          "start_line": 2182,
+          "end_line": 2205,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "json-schema-traverse",
+      "version": "1.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "dcb25236be48e1127998553dbcfc5f69f49c331086c1d60656e0ca58e5243c1a",
+          "start_line": 1300,
+          "end_line": 1324,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "json5",
+      "version": "2.2.3",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "332eb18bdbaf2210231cb9b368028dd99043488c0496b139c7fae4ed46c25747",
+          "start_line": 2207,
+          "end_line": 2233,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "332eb18bdbaf2210231cb9b368028dd99043488c0496b139c7fae4ed46c25747",
+          "start_line": 140,
+          "end_line": 166,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "332eb18bdbaf2210231cb9b368028dd99043488c0496b139c7fae4ed46c25747",
+          "start_line": 1326,
+          "end_line": 1352,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "lru-cache",
+      "version": "5.1.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+          "start_line": 2235,
+          "end_line": 2253,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "mime",
+      "version": "4.1.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "81a7a92fac9556316dc2ae53d2b7e736aa7f6687a2ac5a44edaeaa12c3a0a6e0",
+          "start_line": 168,
+          "end_line": 192,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "81a7a92fac9556316dc2ae53d2b7e736aa7f6687a2ac5a44edaeaa12c3a0a6e0",
+          "start_line": 1354,
+          "end_line": 1378,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "minimatch",
+      "version": "10.2.5",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "18ada492fb30f42059a4041a3f79a7c761befbc09f815b5566967988aa315690",
+          "start_line": 194,
+          "end_line": 252,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "18ada492fb30f42059a4041a3f79a7c761befbc09f815b5566967988aa315690",
+          "start_line": 1380,
+          "end_line": 1438,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "b6b690d9efd25cdd7408badaca173afdfa82592ebfc04f50fa6083add1b8b7b4",
+          "start_line": 2255,
+          "end_line": 2279,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "b6b690d9efd25cdd7408badaca173afdfa82592ebfc04f50fa6083add1b8b7b4",
+          "start_line": 254,
+          "end_line": 278,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "b6b690d9efd25cdd7408badaca173afdfa82592ebfc04f50fa6083add1b8b7b4",
+          "start_line": 1440,
+          "end_line": 1464,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "node-releases",
+      "version": "2.0.50",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "2ac084f7e0f6dbc467c182831c5ccba41633e8fad2c2f090feebf6151847483c",
+          "start_line": 2281,
+          "end_line": 2305,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "normalize-path",
+      "version": "3.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "d85714c13e675a1d3332720f8ec8a534a58d8ced4e6045253750446050549d5c",
+          "start_line": 247,
+          "end_line": 271,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "d85714c13e675a1d3332720f8ec8a534a58d8ced4e6045253750446050549d5c",
+          "start_line": 1466,
+          "end_line": 1490,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "open",
+      "version": "11.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1492,
+          "end_line": 1504,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "path-key",
+      "version": "3.1.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 1506,
+          "end_line": 1518,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "pend",
+      "version": "1.2.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "1180803ba80a3e62e5bffd07a3c99fe77cba8f7efc698300e7b66e10e687bab9",
+          "start_line": 1520,
+          "end_line": 1546,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "picocolors",
+      "version": "1.1.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "c4f197d33774b40db5254f93bdde15d746ac6304d206ab7ae465b3273c6976cb",
+          "start_line": 458,
+          "end_line": 476,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "c4f197d33774b40db5254f93bdde15d746ac6304d206ab7ae465b3273c6976cb",
+          "start_line": 2307,
+          "end_line": 2325,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "picomatch",
+      "version": "2.3.2",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "a17f2777489a68bfecadd4db5a3da49c96426388adc2c7c06df667b2a8b7ba5c",
+          "start_line": 273,
+          "end_line": 297,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "a17f2777489a68bfecadd4db5a3da49c96426388adc2c7c06df667b2a8b7ba5c",
+          "start_line": 1548,
+          "end_line": 1572,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "picomatch",
+      "version": "4.0.4",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "a17f2777489a68bfecadd4db5a3da49c96426388adc2c7c06df667b2a8b7ba5c",
+          "start_line": 478,
+          "end_line": 502,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "pkce-challenge",
+      "version": "5.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "6a9e68083f25f19cd6201911d9e9569f4f6993446e2a4783560e35f6dcb72825",
+          "start_line": 1574,
+          "end_line": 1598,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "pngjs",
+      "version": "7.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "1a84d9e2a5fe07884132a12d79df8cb3fbde4533e60188bec4c2a0529842912a",
+          "start_line": 1600,
+          "end_line": 1623,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "powershell-utils",
+      "version": "0.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1625,
+          "end_line": 1637,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "pretty-format",
+      "version": "30.4.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "47c3a210dbd352c682f4dea35c4c81340655c43bab7f8c898a72ddb60e2b7dad",
+          "start_line": 504,
+          "end_line": 529,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "progress",
+      "version": "2.0.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "929c6bfc79fa460ffba2b82f7aa5dab09096fae434f839187906fc0a62b52610",
+          "start_line": 1639,
+          "end_line": 1664,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "proxy-agent-negotiate",
+      "version": "1.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "699130070caa5dc9fc84e25ea13bc527461275ac56f5169ee363dcf44a20f5bb",
+          "start_line": 1666,
+          "end_line": 1670,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "proxy-from-env",
+      "version": "2.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "66c88b91179ef5deff8720f42b30fdc5c38b018e47d51402b172d0e92aaa6e44",
+          "start_line": 1672,
+          "end_line": 1695,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "react-is",
+      "version": "18.3.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "cc7dac54fb5aaac08a93ee92560db03532e1e4bbf737dc4a80190acee6260a87",
+          "start_line": 531,
+          "end_line": 555,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "react-is",
+      "version": "19.2.7",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "025d5bbc0d7be4b459c38cbd98ded6ff5e2f5dd2fa5a89a446bbad1971cc30a6",
+          "start_line": 557,
+          "end_line": 581,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "readdirp",
+      "version": "3.6.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "6a22d017828373a467bb3a0d3f475e88bfb18104c65cb5d9c0b520759ea0f0a8",
+          "start_line": 299,
+          "end_line": 323,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "6a22d017828373a467bb3a0d3f475e88bfb18104c65cb5d9c0b520759ea0f0a8",
+          "start_line": 1697,
+          "end_line": 1721,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "retry",
+      "version": "0.13.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "b881073a8ecac816e021d38a2febf395f071bd9b900b84a725f0e65beb8b9188",
+          "start_line": 1723,
+          "end_line": 1747,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "run-applescript",
+      "version": "7.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 1749,
+          "end_line": 1761,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "semver",
+      "version": "6.3.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+          "start_line": 2327,
+          "end_line": 2345,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "shebang-command",
+      "version": "2.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "6efcd2f2b10e629fe20c8a954618dd49d20552c67194b5df920031cd0a34ad1a",
+          "start_line": 1763,
+          "end_line": 1775,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "shebang-regex",
+      "version": "3.0.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 1777,
+          "end_line": 1789,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "signal-exit",
+      "version": "4.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "65d5f069a908c54237c2cc965715c961c173a24f3d4173e01375449077d2310b",
+          "start_line": 1791,
+          "end_line": 1810,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "slash",
+      "version": "3.0.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 583,
+          "end_line": 595,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "smart-buffer",
+      "version": "4.2.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "2e97476400624fc802e8aa992757c8d8a039124f08bd68c887c31714b3e15354",
+          "start_line": 1812,
+          "end_line": 1835,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "socks-proxy-agent",
+      "version": "10.1.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "5eefb867c4db4d440313ce5db8e5da389d1b32f1175dd1ff966832e1a48f2d13",
+          "start_line": 1837,
+          "end_line": 1862,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "socks",
+      "version": "2.8.9",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f06ec1e5b32a39029d05fcc3ff1eb2b86fb9432242e6c5437742979d2fbbe0d",
+          "start_line": 1864,
+          "end_line": 1887,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "source-map-support",
+      "version": "0.5.21",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "841ff12e5338ac1411870477446cf7a0db984d3c30a9f4fc0cf02c485a57b637",
+          "start_line": 280,
+          "end_line": 304,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "841ff12e5338ac1411870477446cf7a0db984d3c30a9f4fc0cf02c485a57b637",
+          "start_line": 1889,
+          "end_line": 1913,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "source-map",
+      "version": "0.6.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "a831ebbde5f04db418428c5da41fc0449f209b571152e6abb9ba12b43d4e22c3",
+          "start_line": 306,
+          "end_line": 336,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "a831ebbde5f04db418428c5da41fc0449f209b571152e6abb9ba12b43d4e22c3",
+          "start_line": 1915,
+          "end_line": 1945,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "stack-utils",
+      "version": "2.0.6",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "3c912d10c393a5e3b067d1769323d192c9956ebc4993badc241aef51b8f4085b",
+          "start_line": 597,
+          "end_line": 621,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 1947,
+          "end_line": 1959,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "supports-color",
+      "version": "7.2.0",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/matchers/expect.js.LICENSE",
+          "notice_sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 623,
+          "end_line": 635,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 2347,
+          "end_line": 2359,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/esmLoader.js.LICENSE",
+          "notice_sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 338,
+          "end_line": 350,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f28ca797266da281f2192fca5e497c02f1422297de714d87d6cad49d0c1213a",
+          "start_line": 1961,
+          "end_line": 1973,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "to-regex-range",
+      "version": "5.0.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/serverRegistry.js.LICENSE",
+          "notice_sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e",
+          "section_sha256": "b22741305b13c521c2081382063f49f8a74de419cf51f8c09ef8274c83aafbac",
+          "start_line": 325,
+          "end_line": 349,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        },
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "b22741305b13c521c2081382063f49f8a74de419cf51f8c09ef8274c83aafbac",
+          "start_line": 1975,
+          "end_line": 1999,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "which",
+      "version": "2.0.2",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+          "start_line": 2001,
+          "end_line": 2019,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "ws",
+      "version": "8.21.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "0f7b277311f49882c0892c3ae76bf7168490464f0126fc8a7fc6554d4ec9a2ad",
+          "start_line": 2021,
+          "end_line": 2044,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "wsl-utils",
+      "version": "0.3.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "83d91d073049317c708c9c98149fe595038bdd924b3d60c5bfd8ce115b47e7b4",
+          "start_line": 2046,
+          "end_line": 2058,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "yallist",
+      "version": "3.1.1",
+      "observations": [
+        {
+          "producer": "playwright",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/transform/babelBundle.js.LICENSE",
+          "notice_sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c",
+          "section_sha256": "fe43736ad1d70bc993f8f18de0b85641adb7433dce871d78363df97f4fbc239c",
+          "start_line": 2361,
+          "end_line": 2379,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "yaml",
+      "version": "2.9.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "9151423e532fdc6f699b120a8c6391b294c280c39e684aa03f0afb5388c58e43",
+          "start_line": 2060,
+          "end_line": 2076,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "yauzl",
+      "version": "3.4.0",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "9c3059dc28bbd48791a8351a53a3f63700cb2c3fc3d508ae8c310b2aff2d4ac1",
+          "start_line": 2078,
+          "end_line": 2102,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "yazl",
+      "version": "3.3.1",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "9c3059dc28bbd48791a8351a53a3f63700cb2c3fc3d508ae8c310b2aff2d4ac1",
+          "start_line": 2104,
+          "end_line": 2128,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "zod-to-json-schema",
+      "version": "3.25.2",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "e30a0bf54141427d855af1de8373be5604994bf09ebc341e2a3b1c6febf671cd",
+          "start_line": 2130,
+          "end_line": 2148,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    },
+    {
+      "name": "zod",
+      "version": "4.4.3",
+      "observations": [
+        {
+          "producer": "playwright-core",
+          "producer_version": "1.62.1",
+          "notice_path": "package/lib/utilsBundle.js.LICENSE",
+          "notice_sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33",
+          "section_sha256": "023e8ff37a54594dea56fd79a82051654ab7915ace014c0f4be368be27d0981d",
+          "start_line": 2150,
+          "end_line": 2174,
+          "scope": "producer-attributed notice text; not component artifact digest"
+        }
+      ]
+    }
+  ],
+  "unique_identities": 175,
+  "notice_occurrences": 213,
+  "limits": [
+    "Section digests bind producer-attributed grant text, not independently verified component bytes",
+    "No permission verdict or root-package license inheritance",
+    "Supporting observations, not complete CycloneDX SBOM"
+  ],
+  "next_action": "Review attributed grants and incorporate producer-observed identities without fabricated artifact hashes"
+}
