@@ -590,3 +590,20 @@ def test_verified_llvm_archive_title_and_whitespace_variants_preserve_complete_m
                "license_files": [{"name": "LICENSE", "text": text}]}
     groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "cargo", "packages": [package]}]})
     assert len(groups["permitted"]) == 1
+
+
+def test_prebuild_source_cannot_authorize_final_release(tmp_path, monkeypatch, capsys):
+    import scripts.ci.release_license_gate as gate
+    inventory = {"ecosystems": [{"ecosystem": "python", "packages": [
+        {"name": "local-project", "version": "1", "licenses": ["MIT"],
+         "license_evidence": "prebuild-source"}]}]}
+    path = tmp_path / "inventory.json"
+    path.write_text(json.dumps(inventory))
+    monkeypatch.setattr(gate, "inventory_binding_findings", lambda *args: [])
+    monkeypatch.setattr(gate, "scope_coverage_findings", lambda *args: [])
+    monkeypatch.setattr(gate, "classify_inventory_licenses", lambda *args: {
+        "permitted": [{"name": "local-project", "version": "1", "license": "MIT"}],
+        "copyleft": [], "undecidable": []})
+    assert gate.main(["--inventory", str(path), "--mode", "preinstall"]) == 0
+    assert gate.main(["--inventory", str(path), "--mode", "release"]) == 1
+    assert "not final wheel" in capsys.readouterr().out
