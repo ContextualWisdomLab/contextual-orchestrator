@@ -586,6 +586,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         if inventory is not None:
             coverage = inventory_binding_findings(inventory, arguments.source_sha) + coverage
+            if arguments.mode == "release":
+                coverage += ["prebuild project source is not final wheel licence evidence"
+                             for entry in inventory.get("ecosystems", [])
+                             for package in entry.get("packages", [])
+                             if package.get("license_evidence") == "prebuild-source"]
             inventory_groups = classify_inventory_licenses(inventory)
             groups = {
                 key: groups[key] + inventory_groups[key]

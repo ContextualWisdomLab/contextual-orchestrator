@@ -578,3 +578,52 @@ def test_wheel_identity_fields_must_not_be_duplicated(tmp_path, field):
     _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT", f"{field}: another"])
     with pytest.raises(InventoryError, match="duplicate identity"):
         _artifact_license_terms(tmp_path, "example", "1.0")
+
+
+@pytest.mark.parametrize("local_source", [{"virtual": "."}, {"editable": "."}])
+def test_prebuild_project_source_is_opt_in_and_bound_to_committed_files(tmp_path, local_source):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="local-project"\nversion="1.0"\nlicense="MIT"\nlicense-files=["LICENSE"]\n')
+    (tmp_path / "LICENSE").write_text("MIT License. Permission is hereby granted to any person.")
+    root = _repository(tmp_path, uv='[[package]]\nname="local-project"\nversion="1.0"\nsource=' +
+                       ('{virtual="."}' if "virtual" in local_source else '{editable="."}') + '\n')
+    ordinary = build_inventory(root, resolve_licenses=True, artifact_dir=tmp_path)
+    assert not ordinary["ecosystems"][0]["packages"][0]["licenses"]
+    source = build_inventory(root, resolve_licenses=True, artifact_dir=tmp_path, prebuild_local_project=True)
+    package = source["ecosystems"][0]["packages"][0]
+    assert package["licenses"] == ["MIT"]
+    assert package["license_evidence"] == "prebuild-source"
+    assert {p["path"] for p in source["ecosystems"][0]["provenance"]} == {"uv.lock", "pyproject.toml", "LICENSE"}
+    assert all(p["matches_commit"] for p in source["ecosystems"][0]["provenance"])
+    (root / "LICENSE").write_text("uncommitted change")
+    dirty = build_inventory(root, resolve_licenses=True, artifact_dir=tmp_path, prebuild_local_project=True)
+    assert any(p.get("matches_commit") is False for p in dirty["ecosystems"][0]["provenance"])
+
+
+@pytest.mark.parametrize("failure", ["identity", "escape", "absent"])
+def test_prebuild_source_refuses_wrong_identity_or_unprovable_files(tmp_path, failure):
+    from scripts.ci.dependency_inventory import _local_project_license_terms
+    name = "wrong-project" if failure == "identity" else "local-project"
+    filename = "../LICENSE" if failure == "escape" else "missing-LICENSE"
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname="{name}"\nversion="1.0"\nlicense="MIT"\nlicense-files=["{filename}"]\n')
+    root = _repository(tmp_path)
+    commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    args = (root, {"name": "local-project", "version": "1.0"}, commit, [])
+    if failure != "absent":
+        with pytest.raises(InventoryError):
+            _local_project_license_terms(*args)
+    else:
+        assert _local_project_license_terms(*args)[0] == []
+
+
+def test_registry_package_cannot_borrow_local_project_licence(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="local-project"\nversion="1.0"\nlicense="MIT"\nlicense-files=["LICENSE"]\n')
+    (tmp_path / "LICENSE").write_text("MIT License. Permission is hereby granted to any person.")
+    root = _repository(tmp_path, uv='[[package]]\nname="local-project"\nversion="1.0"\n'
+                       'source={registry="https://pypi.org/simple"}\n')
+    result = build_inventory(root, resolve_licenses=True, artifact_dir=tmp_path, prebuild_local_project=True)
+    package = result["ecosystems"][0]["packages"][0]
+    assert not package["licenses"]
+    assert "license_evidence" not in package

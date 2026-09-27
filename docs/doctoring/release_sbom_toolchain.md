@@ -76,3 +76,36 @@ psycopg pair; #1225 owns the latter. Vendored metadata in py and setuptools is
 currently held by the strict wheel identity reader, not proof of a publisher
 licence violation. Source-package prebuild evidence, missing instruments,
 canonical text variants and wheel-bundled dependency scope remain separate work.
+
+## Root-project prebuild evidence
+
+The uv lock identifies this repository's own root as `source={virtual="."}`;
+editable root distributions use `source={editable="."}`. Before building, the
+root project has no released wheel to download. Looking only in staged wheels
+therefore makes its source licence hold indefinitely.
+
+The explicit `--prebuild-local-project` option reads the committed root
+pyproject name/version, SPDX declaration and every matching licence file. Blob
+provenance and text digests remain part of the same inventory. Wrong identity,
+outside paths, missing files and dirty blobs cannot authorize installation.
+Only those two exact root source markers qualify; an identically named registry
+package must still supply its own wheel evidence. No package source is built or
+executed to inspect these files.
+
+Security and release use the option only before install. Default collection
+continues to demand a wheel, and the final release gate refuses inventories
+marked `prebuild-source`; source evidence cannot substitute for built-package
+proof. The final release path must stage the exact built root wheel separately.
+That remaining staging requirement and other publisher/bundled licence holds
+remain open; this repair does not claim publication readiness.
+
+At exact main aaa4dfdd, the existing collector found no root wheel; committed
+MIT source evidence now passes prebuild classification with manifest/LICENSE
+blob checks. Receipt: `/private/tmp/co-prebuild-project-license-receipt-1083.json`.
+159 focused contracts passed, plus the registry identity control passed
+separately; actionlint/diff checks passed. The existing minimal pytest config
+warning remains. Controls include virtual/editable roots, dirty licence bytes,
+wrong identity, escaping/missing files and explicit final-release refusal.
+
+[PyPA licence metadata guidance](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license-and-license-files)
+provides the string declaration and licence-file pattern contract.

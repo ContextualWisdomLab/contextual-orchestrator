@@ -60,6 +60,8 @@ def _toml_packages(path: Path, data: bytes) -> list[dict[str, str]]:
         if not isinstance(entry, dict) or not entry.get("name") or not entry.get("version"):
             raise InventoryError(f"{path}: package[{index}] is malformed or has no name/version")
         package = {"name": str(entry["name"]), "version": str(entry["version"])}
+        if path.name == "uv.lock" and entry.get("source") in ({"editable": "."}, {"virtual": "."}):
+            package["source"] = entry["source"]
         if path.name == "Cargo.lock":
             package.update({key: entry[key] for key in ("source", "checksum") if key in entry})
         packages.append(package)
@@ -431,6 +433,34 @@ def _local_cargo_license_terms(
     return [], "local crate is not a declared workspace member", []
 
 
+def _local_project_license_terms(root: Path, package: dict[str, Any], commit: str,
+                                 provenance: list[dict[str, Any]]) -> tuple[list[str], str, list[dict[str, str]]]:
+    """Read committed root-project evidence before its distribution can exist."""
+    data, record = _read_locked_source(root, root / "pyproject.toml", commit)
+    provenance.append(record)
+    project = tomllib.loads(data.decode()).get("project", {})
+    if (project.get("name"), project.get("version")) != (package["name"], package["version"]):
+        raise InventoryError("local project identity disagrees with the locked package")
+    declaration, patterns = project.get("license"), project.get("license-files")
+    if not isinstance(declaration, str) or not isinstance(patterns, list) or not patterns:
+        return [], "local project licence declaration/files absent", []
+    files = []
+    for pattern in patterns:
+        if not isinstance(pattern, str) or PurePosixPath(pattern).is_absolute() or ".." in PurePosixPath(pattern).parts:
+            raise InventoryError("local project licence pattern is outside repository")
+        matches = sorted(root.glob(pattern))
+        if not matches:
+            return [], "local project licence pattern matches no files", []
+        for path in matches:
+            if not path.resolve().is_relative_to(root) or not path.is_file():
+                raise InventoryError("local project licence file is outside repository or not a file")
+            raw, record = _read_locked_source(root, path, commit)
+            provenance.append(record)
+            files.append({"name": str(path.relative_to(root)), "sha256": hashlib.sha256(raw).hexdigest(),
+                          "text": raw.decode("utf-8", "replace")})
+    return [declaration], "committed prebuild project source (not wheel evidence)", files
+
+
 def _metadata_license_terms(metadata: Any) -> list[str]:
     """Licence terms declared by one distribution's METADATA, in SPDX-first order."""
     terms: list[str] = []
@@ -512,7 +542,7 @@ def _read_locked_source(repository_root: Path, lock: Path, commit: str) -> tuple
 
 def build_inventory(
     repository_root: Path, resolve_licenses: bool = False, artifact_dir: Path | None = None,
-    download_native_artifacts: bool = False,
+    download_native_artifacts: bool = False, prebuild_local_project: bool = False,
 ) -> dict[str, Any]:
     """Collect every lockfile-resolved dependency, grouped by ecosystem."""
     # One commit is captured up front and every blob comparison uses it, so a
@@ -598,7 +628,12 @@ def build_inventory(
         for entry in ecosystems:
             for package in entry["packages"]:
                 if entry["ecosystem"] == "python":
-                    if artifact_dir is not None:
+                    if prebuild_local_project and package.get("source") in ({"editable": "."}, {"virtual": "."}):
+                        terms, source, license_files = _local_project_license_terms(
+                            repository_root, package, commit, entry["provenance"]
+                        )
+                        package["license_evidence"] = "prebuild-source"
+                    elif artifact_dir is not None:
                         terms, source, license_files = _artifact_license_terms(
                             artifact_dir, package["name"], package["version"]
                         )
@@ -654,6 +689,8 @@ def main(argv: list[str] | None = None) -> int:
         "--download-native-artifacts", action="store_true",
         help="fetch hash-pinned canonical Cargo/npm archives without installing or running code",
     )
+    parser.add_argument("--prebuild-local-project", action="store_true",
+                        help="use committed root-project source only for preinstall evidence")
     arguments = parser.parse_args(argv)
     if arguments.download_native_artifacts and not arguments.artifact_dir:
         parser.error("--download-native-artifacts requires --artifact-dir")
@@ -673,9 +710,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         inventory = build_inventory(
             root,
-            resolve_licenses=arguments.resolve_licenses or bool(arguments.artifact_dir),
+            resolve_licenses=arguments.resolve_licenses or bool(arguments.artifact_dir) or arguments.prebuild_local_project,
             artifact_dir=Path(arguments.artifact_dir).resolve() if arguments.artifact_dir else None,
             download_native_artifacts=arguments.download_native_artifacts,
+            prebuild_local_project=arguments.prebuild_local_project,
         )
     except (InventoryError, OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         print(f"::error::Dependency inventory could not be built ({error}).", file=sys.stderr)
