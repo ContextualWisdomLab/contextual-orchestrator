@@ -570,3 +570,10 @@ def test_wheel_license_evidence_refuses_ambiguous_or_foreign_identity(tmp_path, 
                 archive.writestr("another-1.0.dist-info/LICENSE", "MIT License")
     with pytest.raises(InventoryError):
         _artifact_license_terms(tmp_path, "example", "1.0")
+
+
+@pytest.mark.parametrize("field", ["Name", "Version"])
+def test_wheel_identity_fields_must_not_be_duplicated(tmp_path, field):
+    _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT", f"{field}: another"])
+    with pytest.raises(InventoryError, match="duplicate identity"):
+        _artifact_license_terms(tmp_path, "example", "1.0")

@@ -126,9 +126,9 @@ The wheel reader previously selected a longer-version filename prefix and
 accepted another distribution's metadata/instrument or the first of multiple
 wheel variants. Five RED cases reproduced these defects. The repair requires
 an exact filename version boundary, one wheel and one METADATA record,
-matching normalized Name/exact Version, and license files under that same
+single Name/Version fields, matching normalized Name/exact Version, and license files under that same
 distribution's metadata root. All inventory callers use the repaired reader.
-The combined inventory/classifier/workflow/install-gate command passed 199
+The combined inventory/classifier/workflow/install-gate command passed 201
 tests, exit 0, with the inherited minimal-interpreter config warning retained.
 No hosted or release acceptance is claimed.
 

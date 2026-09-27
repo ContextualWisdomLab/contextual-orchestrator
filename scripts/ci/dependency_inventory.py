@@ -213,6 +213,8 @@ def _artifact_license_terms(
             raise InventoryError("wheel must contain exactly one distribution metadata record")
         metadata_path = metadata_members[0]
         metadata = email.message_from_string(archive.read(metadata_path).decode("utf-8", "replace"))
+        if any(len(metadata.get_all(field, [])) != 1 for field in ("Name", "Version")):
+            raise InventoryError("wheel has missing or duplicate identity fields")
         metadata_name = _NAME_SEPARATORS.sub("_", str(metadata.get("Name") or "").strip().lower())
         if metadata_name != normalized or str(metadata.get("Version") or "") != version:
             raise InventoryError(f"wheel metadata identity differs from {name}=={version}")
