@@ -534,14 +534,16 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     assert slept and sum(slept) <= orchestrator.rate_limit_wait_seconds
 
 
-def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
-    """A candidate that failed for a non-rate-limit reason is not a storm."""
+def test_invoke_mixed_failure_retries_only_quota_rejected_candidate(monkeypatch) -> None:
+    """Mixed exhaustion may retry a quota rejection without replaying another failure."""
     now = [1000.0]
     slept: list[float] = []
+    calls: list[str] = []
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
 
     class MixedFailure(ModelClient):
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            calls.append(agent.id)
             now[0] += 0.01
             status = 429 if agent.id == "primary_worker" else 500
             with _http_error(status) as response_error:
@@ -553,17 +555,27 @@ def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
         ModelAgent("primary_worker", "mock-a", tags=("reasoning",), priority=1),
         ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
     ]
-    orchestrator = TaskOrchestrator(agents, client=MixedFailure())
+    orchestrator = TaskOrchestrator(agents, client=MixedFailure(), tool_retry_attempts=0)
     orchestrator._triage_fn = lambda text: False
-    orchestrator._rate_limit_sleep = slept.append
+    def advance_clock(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    orchestrator._rate_limit_sleep = advance_clock
     try:
         with pytest.raises(ProviderUpstreamError) as excinfo:
             orchestrator.route_once([{"role": "user", "content": "route this"}])
     finally:
         orchestrator.close()
 
-    assert excinfo.value.error_code != PROVIDER_RATE_LIMITED_CODE
-    assert slept == []
+    error = excinfo.value
+    assert error.error_code == PROVIDER_RATE_LIMITED_CODE
+    assert error.retryable is True
+    assert error.extra_detail["cooldown_source"] == "assumed"
+    assert slept and sum(slept) <= orchestrator.rate_limit_wait_seconds
+    assert calls.count("primary_worker") > 1
+    assert calls.count("backup_worker") == 1
+    assert "primary_worker" not in orchestrator._circuit
 
 
 def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> None:
