@@ -35,5 +35,23 @@
     "Other Security jobs are separate gates; predecessor Rust linking failed",
     "No release wheel digest or complete release SBOM established by this receipt"
   ],
-  "run_url": "https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36330029062"
+  "run_url": "https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36330029062",
+  "separate_jobs": [
+    {
+      "job_id": 108650068022,
+      "name": "CodeQL, supply chain, and SBOM",
+      "conclusion": "success"
+    },
+    {
+      "job_id": 108650068093,
+      "name": "Property and coverage-guided fuzzing",
+      "conclusion": "success"
+    },
+    {
+      "job_id": 108650068011,
+      "name": "Rust workspace gate",
+      "conclusion": "failure",
+      "follow_up": "link search repair merged in #1311; newer main terminal result still required"
+    }
+  ]
 }

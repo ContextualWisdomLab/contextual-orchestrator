@@ -26,6 +26,16 @@
     {
       "scope": "release.yml and security.yml actionlint after resolution",
       "exit_code": 0
+    },
+    {
+      "scope": "all seven affected release/license/security contract files at final integration SHA",
+      "passed": 406,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 41.79,
+      "log_sha256": "8b0c747e051653ac3442dc3bb690549b3b26c1627312328faedf332e0c94f1a2",
+      "tool_session": 47681,
+      "command": "python -m pytest tests/test_dependency_inventory.py tests/test_release_license_gate.py tests/test_release_workflow_contract.py tests/test_release_workflow_idempotency_contract.py tests/test_release_supply_chain_contract.py tests/test_release_pypi_publish_contract.py tests/test_repository_security_metadata.py -q"
     }
   ],
   "initial_failures": [
@@ -38,7 +48,7 @@
     "requirements-release-twine.txt": "c315976ec38b282f2ee7a57d72c1eeaa547b7e8be769fa916c98ffa9133321eb"
   },
   "limits": [
-    "No single full-suite pass at final integration SHA claimed",
+    "406 scoped contract tests are not the complete project or installed-wheel suite",
     "Local source integration, not hosted acceptance or main merge",
     "Owner PR heads unchanged; independent review/required gates remain",
     "License and immutable release/provenance/downstream acceptance gaps remain"
