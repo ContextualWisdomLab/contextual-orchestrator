@@ -642,7 +642,7 @@ def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> 
             },
         )
         assert status == 400, body
-        assert body["error"]["code"] == "invalid_request"
+        assert body["error"]["code"] == "invalid_model"
     finally:
         server.shutdown()
         thread.join(timeout=5)

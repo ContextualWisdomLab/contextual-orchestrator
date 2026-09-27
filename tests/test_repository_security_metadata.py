@@ -105,7 +105,8 @@ def test_security_workflow_covers_core_repository_security_process():
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
-    assert workflow_text.count("runs-on: ubuntu-24.04") == 4
+    selector = '${{ github.event_name == \'push\' && github.ref == \'refs/heads/main\' && fromJSON(\'["self-hosted","linux","x64","cwlab"]\') || \'ubuntu-24.04\' }}'
+    assert workflow_text.count("runs-on: " + selector) == 4
     assert "runs-on: ubuntu-latest" not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]

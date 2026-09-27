@@ -43,11 +43,7 @@ from contextual_orchestrator.provider_errors import (  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
-def _http_error(
-    code: int,
-    body: bytes | None = None,
-    headers: dict[str, str] | None = None,
-) -> urllib.error.HTTPError:
+def _http_error(code: int, body: bytes | None = None, *, headers: dict[str, str] | None = None) -> urllib.error.HTTPError:
     payload = io.BytesIO(body) if body is not None else None
     return urllib.error.HTTPError(
         "https://provider.example/chat/completions", code, "error", headers, payload
@@ -492,9 +488,11 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     The fake client raises exactly what ``ModelClient._send_with_retry`` now
     produces -- a classified ``ProviderUpstreamError`` -- so this exercises the
     real boundary contract between the transport layer and agent failover.
-    Time is simulated so provider-call duration cannot make the result depend
-    on wall-clock scheduling. Missing provider timing must fail closed without
-    a sleep or a fabricated retry instant.
+    Time is simulated: each provider call costs ``call_seconds`` and the
+    rate-limit sleep advances the clock. With real time, calls that take any
+    time made the two assumed cooldowns expire at different instants; the
+    candidate skipped while still cooling became ready before the storm check
+    and was read as a mixed failure, surfacing the raw 429 early.
     """
     now = [1000.0]
     slept: list[float] = []
@@ -529,11 +527,11 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     exc = excinfo.value
     assert exc.error_code == PROVIDER_RATE_LIMITED_CODE
     assert exc.client_status == 429
-    assert exc.retryable is False
-    assert exc.extra_detail["cooldown_source"] == "unavailable"
-    assert "retry_after_seconds" not in exc.extra_detail
+    assert exc.retryable is True
+    assert exc.extra_detail["cooldown_source"] == "assumed"
+    assert exc.extra_detail["route"]["terminal_reason"] == "rate_limit_wait_budget_exhausted"
     assert exc.agent_id in {"primary_worker", "backup_worker"}
-    assert slept == []
+    assert slept and sum(slept) <= orchestrator.rate_limit_wait_seconds
 
 
 def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
@@ -566,95 +564,6 @@ def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
 
     assert excinfo.value.error_code != PROVIDER_RATE_LIMITED_CODE
     assert slept == []
-
-
-def test_invoke_serves_candidate_whose_cooldown_expired_while_skipped(monkeypatch) -> None:
-    """A candidate skipped while cooling is retried once ready, not read as a mixed failure.
-
-    Round one: both candidates reject with a provider-declared cooldown, recorded
-    ``call_seconds`` apart. After the storm wait only the earlier one is ready;
-    it rejects again while the other's cooldown lapses. That lapsed candidate
-    never failed in this round, so selection must re-run and serve it instead
-    of surfacing the raw 429 (the pre-fix, timing-dependent outcome).
-    """
-    now = [1000.0]
-    slept: list[float] = []
-    monkeypatch.setattr(time, "monotonic", lambda: now[0])
-    calls: list[str] = []
-
-    class RecoversOnSecondVisit(ModelClient):
-        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
-            now[0] += 0.01
-            calls.append(agent.id)
-            if calls.count(agent.id) > 1 and agent.id == calls[1]:
-                return "served after cooldown"
-            with _http_error(429, headers={"x-ratelimit-reset": "0.02"}) as response_error:
-                raise classify_provider_failure(
-                    response_error, agent_id=agent.id, model=agent.model
-                )
-
-    def advance_clock(seconds: float) -> None:
-        slept.append(seconds)
-        now[0] += seconds
-
-    agents = [
-        ModelAgent("primary_worker", "mock-a", tags=("reasoning",)),
-        ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
-    ]
-    orchestrator = TaskOrchestrator(
-        agents, client=RecoversOnSecondVisit(), tool_retry_attempts=0
-    )
-    orchestrator._triage_fn = lambda text: False
-    orchestrator._rate_limit_sleep = advance_clock
-    try:
-        result = orchestrator.route_once([{"role": "user", "content": "route this"}])
-    finally:
-        orchestrator.close()
-
-    first, second = calls[0], calls[1]
-    assert result["answer"] == "served after cooldown"
-    assert calls == [first, second, first, second]
-    assert len(slept) == 1
-
-
-def test_invoke_retries_same_agent_for_provider_authorized_zero_delay() -> None:
-    """Retry-After: 0 authorizes the bounded same-agent retry immediately."""
-
-    class ImmediateRetryThenSuccess(ModelClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.calls = 0
-
-        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
-            self.calls += 1
-            if self.calls == 1:
-                with _http_error(429, headers={"Retry-After": "0"}) as response_error:
-                    raise classify_provider_failure(
-                        response_error, agent_id=agent.id, model=agent.model
-                    )
-            return "recovered immediately"
-
-    client = ImmediateRetryThenSuccess()
-    orchestrator = TaskOrchestrator(
-        [ModelAgent("solo_worker", "mock-a", tags=("reasoning", "cost:free"))],
-        client=client,
-        tool_retry_attempts=1,
-    )
-    orchestrator._triage_fn = lambda text: False
-    health_failures: list[str] = []
-    orchestrator._record_failure = health_failures.append  # type: ignore[method-assign]
-    try:
-        result = orchestrator.route_once(
-            [{"role": "user", "content": "route this"}],
-            model_name=TaskOrchestrator.FREE_MODEL,
-        )
-    finally:
-        orchestrator.close()
-
-    assert result["answer"] == "recovered immediately"
-    assert client.calls == 2
-    assert health_failures == []
-    assert orchestrator._circuit == {}
 
 
 def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> None:
@@ -805,3 +714,92 @@ def test_truncated_read_classifies_as_provider_connection_error(failure: Excepti
     assert classified.client_status == 502
     assert classified.provider_status is None
     assert classified.retryable is True
+
+
+def test_invoke_serves_candidate_whose_cooldown_expired_while_skipped(monkeypatch) -> None:
+    """A candidate skipped while cooling is retried once ready, not read as a mixed failure.
+
+    Round one: both candidates reject with a provider-declared cooldown, recorded
+    ``call_seconds`` apart. After the storm wait only the earlier one is ready;
+    it rejects again while the other's cooldown lapses. That lapsed candidate
+    never failed in this round, so selection must re-run and serve it instead
+    of surfacing the raw 429 (the pre-fix, timing-dependent outcome).
+    """
+    now = [1000.0]
+    slept: list[float] = []
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    calls: list[str] = []
+
+    class RecoversOnSecondVisit(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            now[0] += 0.01
+            calls.append(agent.id)
+            if calls.count(agent.id) > 1 and agent.id == calls[1]:
+                return "served after cooldown"
+            with _http_error(429, headers={"x-ratelimit-reset": "0.02"}) as response_error:
+                raise classify_provider_failure(
+                    response_error, agent_id=agent.id, model=agent.model
+                )
+
+    def advance_clock(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    agents = [
+        ModelAgent("primary_worker", "mock-a", tags=("reasoning",)),
+        ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents, client=RecoversOnSecondVisit(), tool_retry_attempts=0
+    )
+    orchestrator._triage_fn = lambda text: False
+    orchestrator._rate_limit_sleep = advance_clock
+    try:
+        result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+    finally:
+        orchestrator.close()
+
+    first, second = calls[0], calls[1]
+    assert result["answer"] == "served after cooldown"
+    assert calls == [first, second, first, second]
+    assert len(slept) == 1
+
+
+def test_invoke_retries_same_agent_for_provider_authorized_zero_delay() -> None:
+    """Retry-After: 0 authorizes the bounded same-agent retry immediately."""
+
+    class ImmediateRetryThenSuccess(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls += 1
+            if self.calls == 1:
+                with _http_error(429, headers={"Retry-After": "0"}) as response_error:
+                    raise classify_provider_failure(
+                        response_error, agent_id=agent.id, model=agent.model
+                    )
+            return "recovered immediately"
+
+    client = ImmediateRetryThenSuccess()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("solo_worker", "mock-a", tags=("reasoning", "cost:free"))],
+        client=client,
+        tool_retry_attempts=1,
+    )
+    orchestrator._triage_fn = lambda text: False
+    health_failures: list[str] = []
+    orchestrator._record_failure = health_failures.append  # type: ignore[method-assign]
+    try:
+        result = orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+    finally:
+        orchestrator.close()
+
+    assert result["answer"] == "recovered immediately"
+    assert client.calls == 2
+    assert health_failures == []
+    assert orchestrator._circuit == {}

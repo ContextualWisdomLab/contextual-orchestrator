@@ -99,6 +99,7 @@ def test_prompt_count_source_present_for_a_verified_in_scope_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_prompt_count_source_absent_for_an_unscoped_model() -> None:
@@ -118,6 +119,7 @@ def test_prompt_count_source_absent_for_an_unscoped_model() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_prompt_count_source_absent_when_a_message_carries_a_non_text_content_part() -> None:
@@ -129,7 +131,13 @@ def test_prompt_count_source_absent_when_a_message_carries_a_non_text_content_pa
     # which never reaches ``chat_completion_response``/``_prompt_count_source``
     # at all (tool-bearing requests take the structured/passthrough branch).
     server, thread, port = _server(
-        [ModelAgent("general_agent", _VERIFIED_MODEL, tags=("reasoning", "writing"))],
+        [
+            ModelAgent(
+                "general_agent",
+                _VERIFIED_MODEL,
+                tags=("reasoning", "writing", "input:text", "input:image"),
+            )
+        ],
         token_counter=_stub_native_token_counter(),
     )
     try:
@@ -156,6 +164,7 @@ def test_prompt_count_source_absent_when_a_message_carries_a_non_text_content_pa
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_shared_context_budget_reads_and_clears_client_evidence() -> None:
