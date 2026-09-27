@@ -1,0 +1,426 @@
+{
+  "producer_source_sha": "84c904bc2e3fd126c8c32905a2597a6716a69249",
+  "inputs": [
+    {
+      "name": "@rolldown/binding-android-arm-eabi",
+      "version": "1.2.5",
+      "locked_sha512": "0cb7bf8be97cca720163b5c4435f754de66f0a8a302066b5f11f9d215df4196ec388eb69ef88bfc57f21b3c1948d6e40455ed566e89eddde80ba64a60b06de44",
+      "archive_sha256": "8aaf43956996264a19c1e43d4b8819eb9cece37f7f7b76837d23f5519712b9f0"
+    },
+    {
+      "name": "@rolldown/binding-android-arm64",
+      "version": "1.2.5",
+      "locked_sha512": "cd77302a5400a5800e10b1ddf0fc0a0c591a81817d5b2e1ed1127ed2a9f397d3e39e98fbe53106f2e7efe34a7627b90211fc1902c362bb3448c8d34c593dfc8a",
+      "archive_sha256": "54b3b8693f95a5973988515eda615f36cda86d91c49cd89c993d6d5f4b8f5f79"
+    },
+    {
+      "name": "@rolldown/binding-darwin-arm64",
+      "version": "1.2.5",
+      "locked_sha512": "74ae106a4238da7cd68094f9b26e32e32fcefff0f83b133be7f707dbc44b57e9f320df4063e62c6ee515ad44e394b8d747abe9cb115b4ac6e636e27a04ff6cc3",
+      "archive_sha256": "d406b7cdc041f4a4c4441f36ff8e6eea130296909cc5ff86add954a9d0ddc47b"
+    },
+    {
+      "name": "@rolldown/binding-darwin-x64",
+      "version": "1.2.5",
+      "locked_sha512": "7ea4802da52ed568ddd672b6b96da424359d2c273c971d48718f8c4d8dba02eadf771d7d6a797386a5ce80215b0454279450d39f84c2d7fecdcf8065da62cfdc",
+      "archive_sha256": "0ab118f4db3e0c702b60ebbd13c2656eb4e1b1a0dab43784d763ca76a90ea853"
+    },
+    {
+      "name": "@rolldown/binding-freebsd-x64",
+      "version": "1.2.5",
+      "locked_sha512": "fef0a7371964c6cf6d2b134373259478fa49fcf813cf121a561a0ce52986f1457e191fc870f6a6e156318bb188328ecf483b8daa526abe9aea8a2f4daaa54233",
+      "archive_sha256": "54d26c9f9be8f970bab8181212fd6155ef566ee6b1ec4ee0fc4677c80b7deee2"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm-gnueabihf",
+      "version": "1.2.5",
+      "locked_sha512": "69b93434b039d7d2f1442b3399b1348d82ae43d60fa1c3974e23973a8e98afe6004fde551fe3eda98023389bc62addef88477fc78ab369b025c1de5b1ce38046",
+      "archive_sha256": "2150ac85b602f50c086c8e33f734247a3e92d500bc41c759f9338d5a5a701fe6"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm64-gnu",
+      "version": "1.2.5",
+      "locked_sha512": "63b7802e227c96bd0cd871f5d3726cfa0ed5df8c1feac9e5a592c0b0723dd2e2e1af73d594db1b155017242f5dfd5e819cfc8ab694b023e35c07f44bc6c431b8",
+      "archive_sha256": "cda8d61b13cda3e0f9f7b0dcf50c003cc245d27b8cf4a8e1fea209c4a7108086"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm64-musl",
+      "version": "1.2.5",
+      "locked_sha512": "c4cbd98276d98386159d1fc05f66f7a0e3c34c5609bd455a260e4579d03f2eebdec40b5789b6507a3e1c9d3930deb8ec27f820511381eb84ddb444e28a6f8560",
+      "archive_sha256": "f918f611c568502141d3a9835e1951763d02b30435b97691556234a0e6823416"
+    },
+    {
+      "name": "@rolldown/binding-linux-ppc64-gnu",
+      "version": "1.2.5",
+      "locked_sha512": "1918dea935031d3a391b09edb0b68031c05a846de79698dfb575992cdef71e2610961c04a30bdaac58109d19d066d229e247975fbaae5c56c6dfcb8f6416b610",
+      "archive_sha256": "1c4b6257228849d3fd9e83a4b3a7b23877a0ff681eab736339d6a50b0b1adbb8"
+    },
+    {
+      "name": "@rolldown/binding-linux-s390x-gnu",
+      "version": "1.2.5",
+      "locked_sha512": "bcb353478e45d94c1cf00b9f90d5cf981e15962697b3e16f721784a20233397ccee25f8bce279717903f4d6c4bcb91edaa9b1108751f77494f56badd81774b1d",
+      "archive_sha256": "15fbd27613cfaa580507e5951aeb32747dcb5e0b18c59816fe8d40e6ee7a8049"
+    },
+    {
+      "name": "@rolldown/binding-linux-x64-gnu",
+      "version": "1.2.5",
+      "locked_sha512": "3208f9f7f1d3b9878af46cf6300fa60562a71ec02090149e735e5931bd6cb77a087c56d7ee00a339a7bb1b2747873732422f59ffb33542e37d6d1de816a1748d",
+      "archive_sha256": "6cf144ba0ab021bd9cc139b0fe753db4c793d4846be4eb03b5bc90642da98571"
+    },
+    {
+      "name": "@rolldown/binding-linux-x64-musl",
+      "version": "1.2.5",
+      "locked_sha512": "998f003f4fe2721b1b840c469cb6b7777f8cc15d047e0acf343d9ba65237626f13e91da927437cedbbeb295c0d5e6772de39ebe9e40179c76ac7f1cc927066a4",
+      "archive_sha256": "58324eafb51fd80a8d92ccc679ece7cfc477f6a3b5449d03107c5d4fc36d7b3b"
+    },
+    {
+      "name": "@rolldown/binding-openharmony-arm64",
+      "version": "1.2.5",
+      "locked_sha512": "f122ecb00da8c1e031c91803a7bf3d0027d16ffdcffb3351269cd9c528b3c45f66f0d503438fb7c63a3cb6d8e15461b0e90c5bef4a19884b488da2a29023bb63",
+      "archive_sha256": "87af71f1afeaa6d2a643850fd74a7fd683df9f96804dc9431f6c015b402680cc"
+    },
+    {
+      "name": "@rolldown/binding-win32-arm64-msvc",
+      "version": "1.2.5",
+      "locked_sha512": "bc66ebb83e73aae86873c0fd49589780dd85049b4d753c90e03b46f925a2106949880ce829c676c69fb1b9709f7e1b9b55db7434995366a91e46e111cbb83c0b",
+      "archive_sha256": "8920bcfdabaf1d3ba76846adc8cc07bdbe3c0c5a82440cc9ee51486ae0ac68fd"
+    },
+    {
+      "name": "@rolldown/binding-win32-x64-msvc",
+      "version": "1.2.5",
+      "locked_sha512": "7bf497a60212cfe228a95712488d2bc7f77f85ef33a8b7b1fbfac25a99c7a6655f98f2148da83d1fa3fbce8b5fd20247c0f52143167f985f2dafa69c79b4fdcb",
+      "archive_sha256": "921674011a5e74be4e6d4bed28dcfa60c1cb8dfa6b9889c752dd177a8b5cd7d5"
+    }
+  ],
+  "results": [
+    {
+      "state": "red",
+      "name": "@rolldown/binding-android-arm-eabi",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "27f0fbbc98bb9d89b8cc9146ff69db9335c07f05c51fd6d309a6eec4d2cc1c17"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-android-arm64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "73e95b46328a986a20004a96da1f872dfee4e3da8598fac5ea33f4e6942afb71"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-darwin-arm64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "d39dcc7d977db8bcc43453b371c339f858f7c6dd02f5fcf803c145d084326bc6"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-darwin-x64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "fb3326a6cfe29451457a1f2e1b35a178d8bee0b7561af0901770c7d69ff5a1df"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-freebsd-x64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "2572ee53f8829b4384cfd305cafb69926a5a5557216aaaf8529aa7d13d168dcd"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-linux-arm-gnueabihf",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "ebe165111462bb1510154c41e55c30e1201e5b1abe474a9fc1f2ec9cf8a4251a"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-linux-arm64-gnu",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "2bdc43a5f67db2e40fe703ea7fd3bd596c58253bcb97f44850e5c441671f0a1c"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-linux-arm64-musl",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "1e22e4f0a4ca12fa4a4884cc5e6203ea164dce45c18dcc2cd3a294e797aea2a4"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-linux-ppc64-gnu",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "f2394a41fa31d52d6460bbc1a3bbdaf9b1bd69d4b68914158ce930fcf42a3d52"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-linux-s390x-gnu",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "89aced7040797acc5c7d990d4d3be4022322eea182e1703bc837b0ce4ea13a60"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-linux-x64-gnu",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "3b8564ccb3e9ab7b51146ddd28bf6c41158cbe246b1361bbb96b92d667f2a17e"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-linux-x64-musl",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "956cb29540afe8323eab458d2ccfb2e82c836c96cebf8b3128a40d8269d5524b"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-openharmony-arm64",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "a68883f5d8580ac553389750664256914bd6b3386d311c31649c0ed901289406"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-win32-arm64-msvc",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "ff09a15592b08038c83ee354c6136ee89e5fbbe8e7da7364ba9ce3273d303e76"
+    },
+    {
+      "state": "red",
+      "name": "@rolldown/binding-win32-x64-msvc",
+      "members": [
+        "package/package.json"
+      ],
+      "archive_sha256": "487ea98ef3e0c5e3667fee71e749cccd822c6fb01e92d18e84ac55cd2c70379b"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-android-arm-eabi",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "f23fbef20a63e174a9816828de0c1c65beda16af5942b7512e070f86171cd3a2"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-android-arm64",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "705e341098e45ce7f4a8a6edfff34dc9d16393710b49809a293c58a9cbe3fe1f"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-darwin-arm64",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "5858163dd7e01f5fa711e73d5c2f1985392587ae2537303cf52d017769c64161"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-darwin-x64",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "5214fb7b45cdfeb57084d68df15f515b02149db6ffaa2da5528690ecbb6d0039"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-freebsd-x64",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "0ae44dbf4c08bb0839e9d3a7f5b34983ea7bada4b494618e481802790926b389"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-linux-arm-gnueabihf",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "ce3c15f41f1d80635a86b8e4b8ebd0bb416e63ac1a277e661f5632a3537d9aad"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-linux-arm64-gnu",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "3dc5e34726af0ef1f1db58435310ea1d67ff200636b26eb8f774ec5f559afd8a"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-linux-arm64-musl",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "4e6508a1b1cdfac25db67e67d91cfe511163a07c5ad3282b5532b3eeda445fc8"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-linux-ppc64-gnu",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "38579aadfb6d885476e6a6a8c23ced4ede09f9c6de4887ba280ffc07f5c27d9c"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-linux-s390x-gnu",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "d9a124b912178b94ebd5cda6a561bddb9943173196ab68b80f4748a74ea001c8"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-linux-x64-gnu",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "8c2bb3c549a45db6117ea133a0b7d42a416ded5871848c0d4b8458bd097a8b4c"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-linux-x64-musl",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "a81d6d648cc7436dec9a2eb5a73c9c5518b127d13be7c7cfaee4e561c31f10f6"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-openharmony-arm64",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "a8e0d987f7a567e7f9e4875e6123e8184de7f5fad0b75db0c3ae895ef52554d7"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-win32-arm64-msvc",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "abc5d5ebd6780295dc435087d7cdb5f9e27f862aa0e24f32161549919c1e973b"
+    },
+    {
+      "state": "green",
+      "name": "@rolldown/binding-win32-x64-msvc",
+      "members": [
+        "package/LICENSE",
+        "package/LICENSE.third-party",
+        "package/package.json"
+      ],
+      "archive_sha256": "18d6ecae938e1f74e4d706d216e500bb88ee53e9a729f177ddda5e57d53792f4"
+    }
+  ],
+  "missing_instrument_copy_exit": 1,
+  "packer": "npm 11.17.0 through project-scoped Vite+ 0.3.3",
+  "license_sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+  "third_party_sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c",
+  "scope": "Actual retained platform manifests and exact producer copy step; 15 metadata-only packs, native binaries omitted. Full build/publish/just lint unverified. No locked artifact waiver or complete bundled grant clearance.",
+  "tool_evidence": {
+    "pack": "b90bdc exit0",
+    "pinned_publisher": "42efc7 exit0",
+    "required_just_list": "a17a8a exit127: just not installed",
+    "codegraph_sync": "822ce7 exit0",
+    "actionlint": "a3da3e baseline/proposal one identical SC2086, not clean"
+  },
+  "napi_publisher_pin": {
+    "version": "3.8.6",
+    "locked_integrity": "sha512-FnJ9fghsV9Q4zh2aJGPSvQiUlJRC27B6KhzAXcIW2rlSD8keak3mhXw4tJYa3KJkP9whETfsPwqp/DJRnQg5ng==",
+    "tarball_sha256": "7433c6e06e63c2bd6c795855b541ef92655960eb975bb1d672ebcffb8fba2f1e",
+    "publisher_sources": [
+      {
+        "file": "package/dist/index.js",
+        "sha256": "651e73829e3be036d05944015eaf622dba0215f03c26ae5dd4c72a0b5b865fff",
+        "hits": [
+          "\t\tnpmClient: \"npm\"",
+          "\t\t\tconst { packageJson, targets, packageName, binaryName, npmClient, rootPublisher: configuredRootPublisher, wasm } = await readNapiConfig(packageJsonPath, options.configPath ? resolve(options.cwd, op",
+          "\t\t\t\tnpmClient,",
+          "\tconst { npmClient, packageName, packageVersion, releasePackages, workspaceRoot } = prepared;",
+          "\t\t\t\t\t\t\tconst output = execSync(`${npmClient} publish`, {"
+        ]
+      },
+      {
+        "file": "package/src/utils/config.ts",
+        "sha256": "7765d6ebbef34d7d442433d05cdce35ba5602903c157b2abe2b922ba0404c5a0",
+        "hits": [
+          "  npmClient?: string",
+          "  Pick<UserNapiConfig, 'binaryName' | 'packageName' | 'npmClient'>",
+          "      npmClient: 'npm',"
+        ]
+      },
+      {
+        "file": "package/src/api/pre-publish.ts",
+        "sha256": "bfd9a94a0ba90e9b639a5d1a7bc562244bb97e059d052fc1df22df1a5a5a311f",
+        "hits": [
+          "  npmClient: string",
+          "          npmClient,",
+          "          npmClient,",
+          "    npmClient,",
+          "              const output = execSync(`${npmClient} publish`, {"
+        ]
+      }
+    ]
+  },
+  "actionlint": {
+    "baseline_diagnostics": [
+      "shellcheck reported issue in this script: SC2086:info:5:6: Double quote to prevent globbing and word splitting [shellcheck]"
+    ],
+    "proposal_diagnostics": [
+      "shellcheck reported issue in this script: SC2086:info:5:6: Double quote to prevent globbing and word splitting [shellcheck]"
+    ]
+  },
+  "upstream_publication": "Not authorized or submitted; if approved, draft PR and ci: webcontainer label required by producer AGENTS."
+}

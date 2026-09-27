@@ -1,0 +1,16 @@
+diff --git a/.github/workflows/publish-to-npm.yml b/.github/workflows/publish-to-npm.yml
+index e8b8616..de08611 100644
+--- a/.github/workflows/publish-to-npm.yml
++++ b/.github/workflows/publish-to-npm.yml
+@@ -118,6 +118,11 @@ jobs:
+         run: |
+           find ./packages/ -type d -maxdepth 1 -exec cp LICENSE {} \;
+           find ./packages/ -type d -maxdepth 1 -exec cp THIRD-PARTY-LICENSE {} \;
++          for package_manifest in packages/rolldown/npm/*/package.json; do
++            test -f "$package_manifest"
++            cp LICENSE "${package_manifest%/package.json}/LICENSE"
++            cp THIRD-PARTY-LICENSE "${package_manifest%/package.json}/LICENSE.third-party"
++          done
+ 
+       - name: Publish(Dry Run)
+         # `NAPI_DRY_RUN` makes rolldown's `prepublishOnly` hook pass `--dry-run`

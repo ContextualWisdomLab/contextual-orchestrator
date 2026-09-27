@@ -1,0 +1,32 @@
+{
+  "run_id": 36336155059,
+  "source_sha": "8e1f1a8bf3e96e56dc8fcc90ec777883a1d56ce6",
+  "event": "push",
+  "branch": "main",
+  "run_attempt": 1,
+  "status": "completed",
+  "conclusion": "success",
+  "required_jobs": [
+    {
+      "id": 108667272127,
+      "name": "Rust workspace gate",
+      "conclusion": "success"
+    },
+    {
+      "id": 108667272244,
+      "name": "Tests and package quality",
+      "conclusion": "success"
+    },
+    {
+      "id": 108667272245,
+      "name": "CodeQL, supply chain, and SBOM",
+      "conclusion": "success"
+    },
+    {
+      "id": 108667272249,
+      "name": "Property and coverage-guided fuzzing",
+      "conclusion": "success"
+    }
+  ],
+  "scope": "All four required integrated Security and Quality jobs green on exact main SHA. Does not prove candidate7af protected delivery, license clearance, immutable publication or consumer runtime acceptance."
+}

@@ -1,0 +1,36 @@
+{
+  "repository": "ContextualWisdomLab/contextual-orchestrator",
+  "immutability": {
+    "enabled": true,
+    "enforced_by_owner": true,
+    "tool": "845551"
+  },
+  "pypi_environment": {
+    "http_status": 404,
+    "tool": "ef94b9",
+    "branch_policies_http_status": 404,
+    "branch_tool": "6d2ef6",
+    "admin_read_permission_verified": "affa76"
+  },
+  "owner_1258": {
+    "head_sha": "4f301efdc35c32d28a03bcfe4ef0acf72bc2c355",
+    "state": "OPEN",
+    "draft": true,
+    "tool": "7fc52b",
+    "head_unchanged": true
+  },
+  "desired_policy": {
+    "required_reviewers": "User or team identity pending user response; never provision an unprotected environment",
+    "deployment_branch_policy": {
+      "protected_branches": false,
+      "custom_branch_policies": true
+    },
+    "branch_policies": [
+      {
+        "name": "main",
+        "type": "branch"
+      }
+    ]
+  },
+  "scope": "Live repository policy reads only; no environment, reviewer, tag, release, or token configuration changed. User asked for missing required-reviewer identity asynchronously."
+}
