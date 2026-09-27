@@ -159,7 +159,7 @@ def test_kv_key_resolution_and_marked_event_storage() -> None:
 
 
 def test_missing_kv_key_and_invalid_event_declarations_fail_closed(memory_credentials: InMemoryCredentialBackend) -> None:
-    memory_credentials._store.pop(DEFAULT_PII_KEY_NAME)
+    memory_credentials._credential_store.pop(DEFAULT_PII_KEY_NAME)
     with pytest.raises(PiiProtectionError):
         load_pii_encryptor()
     memory_credentials.set(DEFAULT_PII_KEY_NAME, "bad")
