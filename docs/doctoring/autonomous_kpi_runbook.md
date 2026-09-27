@@ -714,3 +714,18 @@ run; its one new-test failure was an invalid exception-identity assertion
 error code and one attempt. The corrected regression and cooldown boundary
 were verified separately. This is source evidence, not hosted approval or
 consumer release acceptance.
+
+## Main security runner admission, 2026-09-27
+
+After #1223, #1251 and #1253 merged, main Security run 36313956572 had
+four queued jobs with no runner while the general self-hosted pool had
+an idle runner. Group 3 already selected CO but admitted only central
+main workflow paths. Its existing restricted workflow policy and repository
+selection were retained; exactly CO security.yml@refs/heads/main was added
+and independently read back. Existing queued jobs still had no assignment.
+The four job selectors now explicitly request self-hosted Linux X64 cwlab
+only on push to main. PR, scheduled and manual jobs retain hosted Ubuntu.
+Dedicated CodeQL/OpenCode/control pools, security commands, permissions,
+concurrency and approval gates stay intact. Existing pool eligibility admits
+the general runners; no solver dependency or guessed duration weight is added.
+Actual runner assignment and terminal job results remain required proof.

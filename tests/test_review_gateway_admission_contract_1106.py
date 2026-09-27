@@ -72,6 +72,7 @@ def test_versioned_contract_exposes_real_admission_provenance(monkeypatch):
 
     admissions = review_gateway.review_pool_admissions(orchestrator.agents)
 
+    assert review_gateway.REVIEW_READINESS_CONTRACT_VERSION == "2"
     assert {admission.model_id for admission in admissions} == {
         "router-review",
         "nim-review",
