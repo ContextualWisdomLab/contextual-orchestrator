@@ -660,3 +660,38 @@ def test_malformed_npm_dependency_is_not_silently_dropped(tmp_path):
     lock.write_text(json.dumps({"packages": {"node_modules/library": None}}))
     with pytest.raises(InventoryError):
         _lock_packages_from_npm(lock)
+
+
+@pytest.mark.parametrize("unknown", ["Vendor-MIT-Restricted", "BSD-Proprietary", "CustomCompanyTerms"])
+@pytest.mark.parametrize("form", ["{}", "MIT OR {}", "MIT AND {}"])
+def test_unknown_declaration_never_inherits_permissive_permission(unknown, form):
+    """Unknown operands stay held even beside a real permissive declaration."""
+    term = form.format(unknown)
+    component = _component("example", "1", expression=term)
+    assert classify_sbom_components(_sbom(component))["undecidable"]
+    package = {"name": "example", "version": "1", "licenses": [term],
+               "license_files": [{"name": "LICENSE", "text":
+                                  "Permission is hereby granted, free of charge."}]}
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python",
+                                                          "packages": [package]}]})
+    assert not groups["permitted"]
+    assert groups["undecidable"]
+
+
+@pytest.mark.parametrize("term", [
+    "MIT No Attribution License (MIT-0)",
+    "Mozilla Public License 2.0 (MPL 2.0)",
+    "Apache License, Version 2.0",
+    "(MIT OR Apache-2.0) AND Unicode-3.0",
+])
+def test_registered_metadata_spellings_remain_recognized(term):
+    """Explicit known aliases survive conservative expression normalization."""
+    from scripts.ci.release_license_gate import classify_license_term
+
+    assert classify_license_term(term)[0] == "permitted"
+
+
+def test_ambiguous_dual_license_marker_remains_undecidable():
+    from scripts.ci.release_license_gate import classify_license_term
+
+    assert classify_license_term("Dual License")[0] == "undecidable"
