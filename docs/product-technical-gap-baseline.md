@@ -7636,3 +7636,22 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-27 protected-main refresh for #1266 — Proposed
+
+Ordinary merge `3a114546` preserves protected main `6ef802bf`, including
+#1291 fresh-runner pinned Rust bootstrap and #1220 document review. Initial
+strict verification failed three inherited recovery assertions (session
+`14510`): they assumed a retry deadline for headerless 429. Recovery fixtures
+now use provider-owned integer Retry-After; the mixed 429/500 matrix also
+retains absent-timing no-replay cases for both zero and positive wait budgets.
+Intermediate fixture errors (nonexistent exception attribute, fractional
+Retry-After) were corrected before acceptance; no production policy changed.
+
+Six affected suites passed **245 tests**, warnings as errors, process exit 0
+(session `58118`); actionlint and diff check passed. This is local integration
+evidence, not hosted checks or independent approval.
+
+Ledger: loop `1016-main-refresh`, parent `1016`, owner #1266 integration,
+status locally verified; next_action push once and restack descendants, then
+verify current-head CI/review; return_to #1016 protected/versioned contract.

@@ -534,7 +534,8 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
 
 
 @pytest.mark.parametrize("wait_seconds", [0.0, 10.0])
-def test_invoke_mixed_failure_retries_only_rejected_candidate(monkeypatch, wait_seconds) -> None:
+@pytest.mark.parametrize("provider_retry_after", [None, "5"])
+def test_invoke_mixed_failure_retries_only_rejected_candidate(monkeypatch, wait_seconds, provider_retry_after) -> None:
     """A 429 can recover within budget; an unknown-outcome 500 is never replayed."""
     now = [1000.0]
     slept: list[float] = []
@@ -549,6 +550,8 @@ def test_invoke_mixed_failure_retries_only_rejected_candidate(monkeypatch, wait_
                 return "recovered"
             status = 429 if agent.id == "primary_worker" else 500
             with _http_error(status) as response_error:
+                if status == 429 and provider_retry_after is not None:
+                    response_error.hdrs = {"Retry-After": provider_retry_after}
                 raise classify_provider_failure(
                     response_error, agent_id=agent.id, model=agent.model
                 )
@@ -568,7 +571,7 @@ def test_invoke_mixed_failure_retries_only_rejected_candidate(monkeypatch, wait_
     orchestrator._triage_fn = lambda text: False
     orchestrator._rate_limit_sleep = advance_clock
     try:
-        if wait_seconds:
+        if wait_seconds and provider_retry_after is not None:
             result = orchestrator.route_once([{"role": "user", "content": "route this"}])
             assert result["answer"] == "recovered"
             assert calls == ["primary_worker", "backup_worker", "primary_worker"]
@@ -576,9 +579,13 @@ def test_invoke_mixed_failure_retries_only_rejected_candidate(monkeypatch, wait_
         else:
             with pytest.raises(ProviderUpstreamError) as excinfo:
                 orchestrator.route_once([{"role": "user", "content": "route this"}])
-            assert excinfo.value.error_code == PROVIDER_RATE_LIMITED_CODE
-            assert excinfo.value.retryable
-            assert excinfo.value.extra_detail["route"]["terminal_reason"] == "rate_limit_wait_budget_exhausted"
+            if provider_retry_after is None:
+                assert excinfo.value.error_code != PROVIDER_RATE_LIMITED_CODE
+                assert excinfo.value.provider_status == 500
+            else:
+                assert excinfo.value.error_code == PROVIDER_RATE_LIMITED_CODE
+                assert excinfo.value.retryable
+                assert excinfo.value.extra_detail["route"]["terminal_reason"] == "rate_limit_wait_budget_exhausted"
             assert calls == ["primary_worker", "backup_worker"]
             assert slept == []
     finally:
