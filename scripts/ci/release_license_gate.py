@@ -31,6 +31,7 @@ Being optional, unexecuted or test-only is never an exemption.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -303,15 +304,27 @@ _LICENCE_FAMILY_TOKENS = {
 }
 
 
+# Complete SPDX instruments from license-list-data@31ba1a50e5397e00a304dbadc76531740e89ee48.
+# Only whitespace is normalized. No package, filename or keyword exemption.
+# The LLVM title's three/four leading dashes are the two verified archive forms.
+_CANONICAL_TEXT_HASHES = {
+    "Apache-2.0 WITH LLVM-exception": frozenset({
+        "63bdd4702a2eaf44fc39da5567c649ee9a2da804b6434982b034ac37004eb459",
+        "f42a00ac54d036890559853a40f95622ab3e63d52173f5714284134b2af11e3c",
+    }),
+    "MPL-2.0": frozenset({"e8ba82e63ba908724aaee6043943c5a2629b9ebf1af581ea0eea19a713123685"}),
+    "BlueOak-1.0.0": frozenset({"61c644f13191f65c6ff4e58322c5d92ca44702c37ef0e1bc36f08af1021835a7"}),
+}
+
+
 def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> bool:
     """Whether the bundled licence text evidences a declared, non-copyleft term.
 
-    The whole text is read, not a prefix: a permissive opening followed by a
-    copyleft clause or an extra condition is exactly what a prefix check would
-    miss. Text carrying GPL-family language is never evidence for a permissive
-    declaration, and a text no known family matches is refused rather than
-    assumed. A record that carries no text at all is refused too -- there is no
-    legacy shape here that passes on a filename alone.
+    Complete pinned SPDX instruments are matched before keyword checks, since
+    their compatibility clauses may mention GPL without selecting that license.
+    Every file in a canonical-only declaration must match a complete instrument;
+    changed or additional terms cannot use that path. Mixed legacy declarations
+    retain the prior conservative matcher. Missing text is always refused.
     """
     texts = [
         str(entry.get("text") or "")
@@ -322,18 +335,32 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
         # A record with an empty or non-dict licence entry is incomplete.
         return False
     evidenced = False
+    canonical_terms = set(terms) & _CANONICAL_TEXT_HASHES.keys()
+    if canonical_terms != set(terms):
+        canonical_terms = set()  # Mixed legacy declarations retain the prior conservative path.
+    matched_canonical_terms: set[str] = set()
     for text in texts:
+        digest = hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+        matches = {term for term in canonical_terms if digest in _CANONICAL_TEXT_HASHES[term]}
+        if matches:
+            matched_canonical_terms.update(matches)
+            evidenced = True
+            continue
+        if canonical_terms:
+            return False  # Every instrument must match, including additional files.
         # Every bundled text has to be acceptable: a permissive LICENSE next to
         # a separate GPL one is a package under both, not under the first.
         if _COPYLEFT_PATTERN.search(text) or _RESTRICTION_PATTERN.search(text):
             return False
         lowered = " ".join(text.split()).lower()
         for term in terms:
+            if term in canonical_terms:
+                continue  # These declarations require the complete pinned instrument.
             upper = term.upper()
             for family, tokens in _LICENCE_FAMILY_TOKENS.items():
                 if family in upper and any(token in lowered for token in tokens):
                     evidenced = True
-    return evidenced
+    return evidenced and matched_canonical_terms == canonical_terms
 
 
 def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
