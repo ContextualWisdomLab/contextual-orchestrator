@@ -1,0 +1,334 @@
+{
+  "source_sha": "7af8a89a8aa015445e3d204960eda8a9c8727962",
+  "containers": [
+    {
+      "name": "fuzz/requirements-property.txt",
+      "sha256": "9e041ff68b7e4d4b3dcd804b0d4001156e6756ebb9206f61de63536d43453e96",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "7dcafe04d1648995d71e5d47f7a7165263e36d2d",
+          "committed_blob_id": "7dcafe04d1648995d71e5d47f7a7165263e36d2d",
+          "matches_commit": true,
+          "path": "fuzz/requirements-property.txt",
+          "read_sha256": "9e041ff68b7e4d4b3dcd804b0d4001156e6756ebb9206f61de63536d43453e96"
+        }
+      ],
+      "dependency_refs": [
+        "13c582c2-39db-403a-a471-3b3cee0acdc5",
+        "3f970804-1eeb-42a4-a88b-e5cf37c64f2d",
+        "4cdaadea-22c5-437d-a4eb-c8361b390a5a",
+        "50529fa9-fec6-4d86-85a6-87b3f9ad4ff6",
+        "63cc0c3c-42d3-48aa-9bef-7b146d77c31d",
+        "6883634a-2681-4909-8fac-b2a6e792936d",
+        "6f1843d4-4804-4951-b680-dbc7315076f6",
+        "877dbaa4-2857-4723-8ae5-4ccbedfa5beb",
+        "89541c2b-7cea-4a9d-8f67-1486b97a6b7b",
+        "95069b91-8867-4915-807b-e938d2644ea8",
+        "ab9189f2-80ce-4d4b-a7d7-329639d58641",
+        "ac50c2a1-0db5-47ef-81e9-370e4817f596",
+        "c399b8ac-8d91-4127-b2d4-1f5047363b2c",
+        "caa8e37e-1820-4d4d-ad9e-640fa9d1cfe8",
+        "cf3b9b95-bda7-4518-8e0b-9a31baa5b086",
+        "d530bd9e-17a6-447f-8b67-8d86cb8ac186",
+        "e61513f0-51d6-4e4a-b267-b3abab68668f",
+        "e8763c6a-6843-420d-9eb1-9ca3745b6a20"
+      ]
+    },
+    {
+      "name": "uv.lock",
+      "sha256": "3df24199b4b1e6dd62d11f41bcecf7253ce3cdf2517dfb1923321cc252cc7088",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "221bfba47a94139e926436b071aa76544a8deb43",
+          "committed_blob_id": "221bfba47a94139e926436b071aa76544a8deb43",
+          "matches_commit": true,
+          "path": "uv.lock",
+          "read_sha256": "3df24199b4b1e6dd62d11f41bcecf7253ce3cdf2517dfb1923321cc252cc7088"
+        }
+      ],
+      "dependency_refs": [
+        "pkg:pypi/contextual-orchestrator@0.2.0"
+      ]
+    },
+    {
+      "name": "package-lock.json",
+      "sha256": "9530d76e2e68d46c0caaa4f41bcaefd43bf62a1cb0692b98cd2ae478896a2f14",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "c8f47b76719da3fe124449134892052f490e2615",
+          "committed_blob_id": "c8f47b76719da3fe124449134892052f490e2615",
+          "matches_commit": true,
+          "path": "package-lock.json",
+          "read_sha256": "9530d76e2e68d46c0caaa4f41bcaefd43bf62a1cb0692b98cd2ae478896a2f14"
+        }
+      ],
+      "dependency_refs": [
+        "61e57d7c-e641-47bb-ae5a-2cc1582cf2b3"
+      ]
+    },
+    {
+      "name": "requirements-release-twine.txt",
+      "sha256": "c315976ec38b282f2ee7a57d72c1eeaa547b7e8be769fa916c98ffa9133321eb",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "cc53d77a655ad3f8e6517096d940466107231156",
+          "committed_blob_id": "cc53d77a655ad3f8e6517096d940466107231156",
+          "matches_commit": true,
+          "path": "requirements-release-twine.txt",
+          "read_sha256": "c315976ec38b282f2ee7a57d72c1eeaa547b7e8be769fa916c98ffa9133321eb"
+        }
+      ],
+      "dependency_refs": [
+        "1b33a82e-7fa8-430b-946f-48075bcdc433",
+        "496d2022-1301-483f-9073-7c016afa70a6",
+        "6c26b458-63e4-41d3-b4a6-a5102fad5bdb",
+        "7ddbb836-80a7-4a12-b35e-262bf16b6711",
+        "9550f9c7-4e1b-4962-be8e-ae93dcbcb919",
+        "97590766-2f61-4ceb-aa33-27cf594b0bbd",
+        "9782656a-58fd-414a-9def-794a037d9721",
+        "9f7cd283-2b51-4524-8234-1b00330739ca",
+        "aecf9af2-9bb7-4369-9958-940616e7e005",
+        "b32e795a-58e7-439b-a016-6eeb88e4e2b8",
+        "e51e5a9e-5bd8-4da8-b8c9-6cb218834348",
+        "pkg:pypi/docutils@0.23",
+        "pkg:pypi/id@1.6.1",
+        "pkg:pypi/idna@3.20",
+        "pkg:pypi/jaraco-classes@3.4.0",
+        "pkg:pypi/jaraco-context@6.1.2",
+        "pkg:pypi/jaraco-functools@4.6.0",
+        "pkg:pypi/jeepney@0.9.0",
+        "pkg:pypi/keyring@25.7.0",
+        "pkg:pypi/more-itertools@11.1.0",
+        "pkg:pypi/nh3@0.3.7",
+        "pkg:pypi/readme-renderer@46.0",
+        "pkg:pypi/requests-toolbelt@1.0.0",
+        "pkg:pypi/rfc3986@2.0.0",
+        "pkg:pypi/secretstorage@3.5.0",
+        "pkg:pypi/twine@7.0.0",
+        "pkg:pypi/urllib3@2.8.0"
+      ]
+    },
+    {
+      "name": "rust/Cargo.lock",
+      "sha256": "31c18e3eea54dddb490ebf28743ddd311e77384540885c2b2fe379f8c0c5e190",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "58fc95de5df40f23b9f6d9533596584e17538c36",
+          "committed_blob_id": "58fc95de5df40f23b9f6d9533596584e17538c36",
+          "matches_commit": true,
+          "path": "rust/Cargo.lock",
+          "read_sha256": "31c18e3eea54dddb490ebf28743ddd311e77384540885c2b2fe379f8c0c5e190"
+        }
+      ],
+      "dependency_refs": [
+        "82f63abf-0abc-465a-8500-90e5cee9dc81"
+      ]
+    },
+    {
+      "name": "pnpm-lock.yaml",
+      "sha256": "caee37dc81ba9d5a39ab8f4bc247d83918dfc97de9b236e18731b5ee384bbfe6",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "d33743560873dc6239fa4f0a5f2ddba7a64f64a1",
+          "committed_blob_id": "d33743560873dc6239fa4f0a5f2ddba7a64f64a1",
+          "matches_commit": true,
+          "path": "pnpm-lock.yaml",
+          "read_sha256": "caee37dc81ba9d5a39ab8f4bc247d83918dfc97de9b236e18731b5ee384bbfe6"
+        }
+      ],
+      "dependency_refs": [
+        "4d832e1c-e1a8-4735-8675-5b1aec17baab",
+        "pkg:npm/%40chromatic-com/storybook@5.3.0",
+        "pkg:npm/%40storybook/addon-a11y@10.5.10",
+        "pkg:npm/%40storybook/addon-docs@10.5.10",
+        "pkg:npm/%40storybook/addon-vitest@10.5.10",
+        "pkg:npm/%40storybook/react-vite@10.5.10",
+        "pkg:npm/%40types/node@24.13.3",
+        "pkg:npm/%40types/react-dom@19.2.5",
+        "pkg:npm/%40types/react@19.2.18",
+        "pkg:npm/%40vitejs/plugin-react@6.1.0",
+        "pkg:npm/%40vitest/browser-playwright@4.1.11",
+        "pkg:npm/%40vitest/coverage-v8@4.1.11",
+        "pkg:npm/oxlint@1.80.0",
+        "pkg:npm/playwright@1.62.1",
+        "pkg:npm/react-dom@19.2.8",
+        "pkg:npm/react@19.2.8",
+        "pkg:npm/storybook@10.5.10",
+        "pkg:npm/typescript@6.0.3",
+        "pkg:npm/vite@8.2.2",
+        "pkg:npm/vitest@4.1.11"
+      ]
+    },
+    {
+      "name": "requirements-opencode-review-ci.txt",
+      "sha256": "1cb886d539f1ad28c44be92f810f7f8e520ee640bcb8b516894d3c81df0ae90c",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "3a356cea2898a0e36faeab45059c001aff3b48d9",
+          "committed_blob_id": "3a356cea2898a0e36faeab45059c001aff3b48d9",
+          "matches_commit": true,
+          "path": "requirements-opencode-review-ci.txt",
+          "read_sha256": "1cb886d539f1ad28c44be92f810f7f8e520ee640bcb8b516894d3c81df0ae90c"
+        }
+      ],
+      "dependency_refs": [
+        "1163529e-591d-47ab-8c8f-de1382334cd7",
+        "2eb58230-e2cf-4547-b76d-8906be3afc7d",
+        "340ef7ed-0b6d-43e1-b049-a936f467b5e0",
+        "63d777c9-afba-46e2-9e28-4ca189b1fe2c",
+        "6ffdedc6-6347-4d78-8df2-07ce8a747921",
+        "86f4a66c-8007-4d86-a729-45d1b08a09a0",
+        "a9381179-1974-4b1f-87e3-4e80d92297d3",
+        "d75eedbb-3e38-4dad-a925-93a6c396d4da",
+        "pkg:pypi/coverage@7.15.4",
+        "pkg:pypi/interrogate@1.7.0",
+        "pkg:pypi/py@1.11.0",
+        "pkg:pypi/pytest-cov@7.1.0",
+        "pkg:pypi/pytest@9.0.3",
+        "pkg:pypi/tabulate@0.10.0",
+        "pkg:pypi/uv@0.12.5"
+      ]
+    },
+    {
+      "name": "requirements.lock",
+      "sha256": "bb701dca79c8c9e1fd9b06ab90ba4ec95e7367bab5cb5f0ff52f26eba60653d9",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "96e6d1ccf5739f76830d53dac4441081ed0a25be",
+          "committed_blob_id": "96e6d1ccf5739f76830d53dac4441081ed0a25be",
+          "matches_commit": true,
+          "path": "requirements.lock",
+          "read_sha256": "bb701dca79c8c9e1fd9b06ab90ba4ec95e7367bab5cb5f0ff52f26eba60653d9"
+        }
+      ],
+      "dependency_refs": [
+        "0abfb7d8-8289-4cb6-9727-627318f25ee2",
+        "13b7ef47-79da-4dc0-8585-e73be879fa33",
+        "18cc2e87-b6e5-4b3e-adcd-0877206401eb",
+        "1a95c720-df7b-4a73-ae02-beffb1c920e5",
+        "2864152b-5ad9-43fb-979f-a695025b5dd3",
+        "3e805d70-c8f4-4f6c-b124-3bca348d4aa8",
+        "3f5d627b-2511-4b8a-b4c7-e1dc7eb6b2f6",
+        "411cb0b1-cc02-4ee4-846c-6ba0b38047be",
+        "5ec53ed0-d2c4-4cf0-9e4c-838f4f8ee071",
+        "61f7f01f-fe76-43bd-a7b2-30946e20ed1a",
+        "623b62c2-679a-4f51-a734-41bbda36e9ab",
+        "69b2e6d2-9c2a-4a8e-b980-14009dfa9397",
+        "6c45d458-1679-49c0-8ab4-682e0e74f91e",
+        "700eff5d-59fe-4b7f-9c98-a40f09c0d448",
+        "721d4180-a6aa-44e5-ad71-408d96ad8b1e",
+        "738208d2-b0d4-4d14-ba7e-fb94d0d0cd81",
+        "79ed71ed-a909-4096-8f58-4d5e0fdc7c50",
+        "7aebcff3-e555-495d-af75-1ca2148c7060",
+        "85a67f00-7034-45f0-8d05-56a36f28bb10",
+        "85f90679-630d-4005-9ae5-8031044de16a",
+        "86a29cdc-c7ba-42b4-b5b2-da06c288004e",
+        "8d5e8f87-793c-46ce-a850-e2b4c17fb33a",
+        "929ba71e-89e1-4b9b-8f0b-04c51a9d5056",
+        "9d44ebd6-cb9a-4b90-9052-036ee5479a98",
+        "a208bad6-2c68-4c1a-aab9-8d1cf2a05f7b",
+        "a8a55dcf-4055-4268-af13-6612b499f976",
+        "ac1ea17b-8635-47de-9628-8eba284dcca6",
+        "afe21d6e-8503-422d-93da-2fedab102fde",
+        "b158b31a-a3c1-4bf5-a678-6c280d415ec0",
+        "bbd7bd96-d7ce-423e-a194-a97111df6a0d",
+        "c4b5dbe4-fccd-4521-bc31-42c7074e2e44",
+        "c7ffe801-36d4-424a-9f9d-6db47ea9cfff",
+        "dfce4a35-57cb-45f3-ade2-78baba3cdcfa",
+        "e76c73dd-a7cd-4bed-b5cb-d5e1937ce0e6",
+        "eebb72b7-1b1b-41d0-a4ad-cfc93c0a4ad4",
+        "f004922f-1a98-43a3-9864-e9e5ba652520",
+        "f2ec32b6-835c-4289-b982-f5be03188c8d",
+        "fb9ab1be-0aaa-42ff-a957-64ef1894f2d8",
+        "fb9e0252-8b6e-4255-aecc-bf0d9af86ff8",
+        "ff0e3ba7-b3e4-46d9-8ea7-d470a97e4b5c",
+        "pkg:pypi/alembic@1.18.5",
+        "pkg:pypi/annotated-doc@0.0.4",
+        "pkg:pypi/annotated-types@0.7.0",
+        "pkg:pypi/fastapi@0.138.2",
+        "pkg:pypi/mako@1.3.12",
+        "pkg:pypi/sqlalchemy@2.0.51",
+        "pkg:pypi/starlette@1.3.1",
+        "pkg:pypi/typing-inspection@0.4.2",
+        "pkg:pypi/uvicorn@0.49.0"
+      ]
+    },
+    {
+      "name": "requirements-security-ci.txt",
+      "sha256": "26c00c2242d67a23ce28f61e2575baf7493a65ebedfc246df06cede658e9beff",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "26b2707cd8e9e9ade388c031f5ad1d51d3627451",
+          "committed_blob_id": "26b2707cd8e9e9ade388c031f5ad1d51d3627451",
+          "matches_commit": true,
+          "path": "requirements-security-ci.txt",
+          "read_sha256": "26c00c2242d67a23ce28f61e2575baf7493a65ebedfc246df06cede658e9beff"
+        }
+      ],
+      "dependency_refs": [
+        "061aafda-2a60-4313-ab85-32fcf79f7966",
+        "062929c0-c8ef-4846-929e-7d9092678a3d",
+        "331a4308-0699-464a-bd8e-a5ea93489365",
+        "3c1def94-cab0-4d04-a41e-92b1bd94c604",
+        "6d518756-132f-4769-9ef1-d1cb7929234c",
+        "88305840-3f52-41b8-9cab-beaf754ddb70",
+        "8d45d037-3872-4c99-87b4-fc84faa87940",
+        "a9b6ca79-ea69-4318-a533-5844117d8cab",
+        "c7b7ef70-7d32-47d7-907f-06d6d2ddcf2e",
+        "cdd1d7e0-33e3-4ce3-9c05-0416d0337c57",
+        "pkg:pypi/boolean-py@5.0",
+        "pkg:pypi/cachecontrol@0.14.4",
+        "pkg:pypi/certifi@2026.6.17",
+        "pkg:pypi/charset-normalizer@3.4.9",
+        "pkg:pypi/cyclonedx-python-lib@11.11.0",
+        "pkg:pypi/defusedxml@0.7.1",
+        "pkg:pypi/filelock@3.29.7",
+        "pkg:pypi/license-expression@30.4.4",
+        "pkg:pypi/msgpack@1.2.1",
+        "pkg:pypi/packageurl-python@0.17.6",
+        "pkg:pypi/pip-api@0.0.34",
+        "pkg:pypi/pip-audit@2.10.1",
+        "pkg:pypi/pip-requirements-parser@32.0.1",
+        "pkg:pypi/platformdirs@4.10.0",
+        "pkg:pypi/py-serializable@2.1.0",
+        "pkg:pypi/pyparsing@3.3.2",
+        "pkg:pypi/tomli-w@1.2.0",
+        "pkg:pypi/tomli@2.4.1"
+      ]
+    },
+    {
+      "name": "fuzz/requirements-atheris.txt",
+      "sha256": "1c504cac1e73c65ae908a23bcef97816f7afc5d3e3fc1d8e01f70c0ceac417eb",
+      "inventory_provenance_matches": [
+        {
+          "blob_id": "83ef1c52bc4e4a688765109d728b123703a6b3ef",
+          "committed_blob_id": "83ef1c52bc4e4a688765109d728b123703a6b3ef",
+          "matches_commit": true,
+          "path": "fuzz/requirements-atheris.txt",
+          "read_sha256": "1c504cac1e73c65ae908a23bcef97816f7afc5d3e3fc1d8e01f70c0ceac417eb"
+        }
+      ],
+      "dependency_refs": [
+        "084f1650-a13e-4b81-8b42-01c73b4fe387",
+        "174d1754-991e-4196-aa53-8e2455231a5b",
+        "23194738-7eea-4b68-aa6f-b8e46b288914",
+        "32c97595-fcb7-4370-af53-fdc1d3652e4c",
+        "75f48eb3-8fcd-4269-8665-894a77e60ef9",
+        "8268d956-a841-4725-be07-57bc20b1d9ac",
+        "9e3c948c-b87f-4f8a-8207-43f47162451f",
+        "b0f64e85-b2b4-4491-bd85-f0f758dc9eac",
+        "b28ba65f-9f2a-41f3-8bd0-5097393232d6",
+        "cdc567c8-e26c-41f1-80ec-aa16a2604fe9",
+        "f94fea93-4d81-46c5-b8dd-43400f3c227f"
+      ]
+    }
+  ],
+  "graph_dangling_refs": [],
+  "finding": "Ten manifest source-input grouping nodes lack their own license metadata. All source bytes match committed inventory provenance; no library/archive grant was inferred from their parent or file type.",
+  "decision_boundary": "Keep the current fail-closed gate. An input-container projection/ownership contract needs a precise scope while retaining every actual package, unknown archive and dependency edge. No generic application/file exemption.",
+  "tools": [
+    "3e9b9f",
+    "c76b5a"
+  ],
+  "sbom_sha256": "d2de90b5286ceba7c8fa6d6a1534b9041209fab51159367f13886ca4595eb6fe"
+}

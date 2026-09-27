@@ -1,0 +1,50 @@
+{
+  "observed_at": "2026-09-27T18:46:16Z",
+  "queued": {
+    ".github": {
+      "total": 572,
+      "sampled": 100,
+      "workflow_counts_sample": {
+        ".github/workflows/pr-review-merge-scheduler.yml": 4,
+        ".github/workflows/opencode-review.yml": 10,
+        ".github/workflows/noema-review.yml": 12,
+        ".github/workflows/agent-review-runtime-quality-ci.yml": 3,
+        ".github/workflows/python-security.yml": 5,
+        ".github/workflows/security-scan.yml": 4,
+        ".github/workflows/sast-semgrep.yml": 5,
+        ".github/workflows/codeql-pr.yml": 5,
+        ".github/workflows/strix.yml": 12,
+        "dynamic/github-code-quality/codeql": 10,
+        ".github/workflows/opencode-review-dispatch.yml": 21,
+        ".github/workflows/scheduled-security-scan.yml": 1,
+        ".github/workflows/secret-scan.yml": 1,
+        ".github/workflows/codeql-scan-dispatch.yml": 4,
+        ".github/workflows/trusted-uv-materializer-quality-ci.yml": 2,
+        ".github/workflows/agent-mention-router-quality-ci.yml": 1
+      }
+    },
+    "contextual-orchestrator": {
+      "total": 86,
+      "sampled": 86,
+      "workflow_counts_sample": {
+        "dynamic/github-code-quality/codeql": 42,
+        ".github/workflows/codeql-pr.yml": 13,
+        ".github/workflows/security.yml": 23,
+        "dynamic/dependabot/update-graph": 2,
+        "dynamic/dependabot/dependabot-updates": 3,
+        ".github/workflows/opencode-hourly-loop.yml": 1,
+        ".github/workflows/provider-catalog-sync.yml": 1,
+        ".github/workflows/noema-review.yml": 1
+      }
+    }
+  },
+  "runner_observation": "All six online. Busy states changed during sampling; initial 2 busy, subsequent group reads 5 busy, later org read 4 busy. Idle snapshots do not establish persistent allocation defect.",
+  "eligibility": "Groups 3/4/5 each one worker admit contextual-orchestrator Security main; group6 reserves three control workers. Latest queued OpenCode bootstrap labels self-hosted/linux/x64; no invalid label proved.",
+  "decision": "Do not change grants or add optimization without durable demand/service measurements. Main Security exact-head 8e1f1a8b completed all four jobs. Central sidecar runtime RCA already has owner PR2468; no duplicate repair or merge of an unverified head.",
+  "central_runtime_pr": {
+    "number": 2468,
+    "head": "0bea6aeeeef1f8d0ba9bceab65fc34a8a03ca228",
+    "state": "open",
+    "protected_hosted_acceptance": "pending"
+  }
+}
