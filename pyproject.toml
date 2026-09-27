@@ -49,6 +49,9 @@ object_name_pattern = "two_or_more_words_snake_case"
 [tool.setuptools.packages.find]
 include = ["contextual_orchestrator*"]
 
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+
 [tool.coverage.run]
 source = ["contextual_orchestrator"]
 omit = ["contextual_orchestrator/__main__.py", "contextual_orchestrator/server.py"]

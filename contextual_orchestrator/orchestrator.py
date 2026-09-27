@@ -7126,9 +7126,18 @@ class TaskOrchestrator:
             def attach_route(
                 error: ProviderUpstreamError, *, terminal_reason: str
             ) -> ProviderUpstreamError:
-                return _attach_route_evidence_to_upstream_error(
-                    error,
-                    route_evidence(terminal_reason=terminal_reason),
+                extra_detail = dict(error.extra_detail)
+                extra_detail["route"] = route_evidence(terminal_reason=terminal_reason)
+                return ProviderUpstreamError(
+                    agent_id=error.agent_id,
+                    model=error.model,
+                    error_code=error.error_code,
+                    message=str(error),
+                    client_status=error.client_status,
+                    provider_status=error.provider_status,
+                    retryable=error.retryable,
+                    transport=error.transport,
+                    extra_detail=extra_detail,
                 )
 
             for candidate in ordered_candidates:
@@ -7354,19 +7363,13 @@ class TaskOrchestrator:
                     terminal_reason="eligible_set_exhausted",
                 )
             if last_response_error is not None:
-                raise _attach_route_evidence_to_response_error(
-                    last_response_error,
-                    route_evidence(terminal_reason="eligible_set_exhausted"),
-                )
+                raise last_response_error
             if last_model_not_found is not None and not saw_request_too_large:
                 raise attach_route(
                     last_model_not_found, terminal_reason="eligible_set_exhausted"
                 )
-            raise _attach_route_evidence_to_upstream_error(
-                ProviderRequestTooLargeError(
-                    "request body exceeds every eligible provider limit"
-                ),
-                route_evidence(terminal_reason="eligible_set_exhausted"),
+            raise ProviderRequestTooLargeError(
+                "request body exceeds every eligible provider limit"
             )
 
         response_format = chat_body.get("response_format")
@@ -9843,7 +9846,6 @@ class TaskOrchestrator:
                 )
                 step_prompt_bound = prompt_bound
             start = time.perf_counter()
-            selection_start = len(_REQUEST_SELECTION_ATTEMPTS.get() or ())
             output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
                 agent,
                 step_messages,
@@ -9880,9 +9882,8 @@ class TaskOrchestrator:
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
-            attempted = list((_REQUEST_SELECTION_ATTEMPTS.get() or [agent])[selection_start:])
-            served = self._agent(served_id)
-            row["selection_design"] = self._selection_design_receipt([agent], attempted, served)
+            attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
+            row["selection_design"] = self._selection_design_receipt([agent], attempted, agent)
             trace.append(row)
             if progress is not None:
                 _notify_progress(progress, step.role, "completed", redact_value(output))
@@ -12391,10 +12392,10 @@ class TaskOrchestrator:
                     dict.fromkeys([*recovered_eligible_agent_ids, *current_eligible])
                 )
 
-                def raise_with_recovered_route(failure: ProviderUpstreamError = exc) -> NoReturn:
+                def raise_with_recovered_route() -> NoReturn:
                     if merged_attempts:
                         raise _attach_route_evidence_to_upstream_error(
-                            failure,
+                            exc,
                             _route_evidence_payload(
                                 eligible_agent_ids=merged_eligible,
                                 attempted=merged_attempts,
@@ -12405,7 +12406,7 @@ class TaskOrchestrator:
                                 ),
                             ),
                         )
-                    raise failure
+                    raise exc
 
                 if exc.provider_status not in (429, 503):
                     raise_with_recovered_route()
