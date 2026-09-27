@@ -1,0 +1,41 @@
+{
+  "observed_at": "2026-09-27T17:59:36.246515+00:00",
+  "main_sha": "8e1f1a8bf3e96e56dc8fcc90ec777883a1d56ce6",
+  "run_id": 36336155059,
+  "central_queued_run_count": 552,
+  "online_runners": 6,
+  "busy_runners": 6,
+  "worker_groups": {
+    "3": [
+      "cwlab-s1-02"
+    ],
+    "4": [
+      "cwlab-s1-03"
+    ],
+    "5": [
+      "cwlab-s1-04"
+    ]
+  },
+  "control_group_6": [
+    "cwlab-s1-01",
+    "cwlab-s1-05",
+    "cwlab-s2-01"
+  ],
+  "jobs": {
+    "108667272127": "success",
+    "108667272244": "queued",
+    "108667272245": "in_progress on cwlab-s1-04",
+    "108667272249": "queued"
+  },
+  "scope": "Live snapshot, not terminal acceptance. All worker groups already admit CO main security workflow. Preserve control reservations; no idle eligible capacity identified.",
+  "tool_evidence": [
+    "8af17d",
+    "aa37f1",
+    "971ef7",
+    "5c9d55",
+    "4aefb1",
+    "002ddf",
+    "cf95b8",
+    "9f7083"
+  ]
+}

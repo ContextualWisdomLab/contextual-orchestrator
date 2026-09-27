@@ -391,6 +391,18 @@ def test_native_artifact_license_evidence_is_lock_bound_and_fails_closed(tmp_pat
         assert hashlib.new("sha256" if ecosystem == "cargo" else "sha512", archive.read_bytes()).hexdigest() in source
 
 
+def test_verified_native_archive_without_declaration_is_distinct_from_missing_archive(tmp_path):
+    from scripts.ci.dependency_inventory import _native_license_terms
+
+    package, _ = _native_archive(tmp_path, "npm", "example", "1.2.3", None, declaration=None)
+    terms, source, files = _native_license_terms("npm", package, tmp_path, False)
+    assert terms == [] and files == []
+    assert "declares no supported licence metadata" in source
+    missing = _native_license_terms("npm", package, tmp_path / "absent", False)
+    assert "locked native artifact absent" in missing[1]
+    assert "declares no supported licence metadata" not in missing[1]
+
+
 def test_native_collection_covers_both_npm_locks_and_local_workspace(tmp_path):
     """All native entries get evidence, including dev/optional and local members."""
     from scripts.ci.release_license_gate import classify_inventory_licenses

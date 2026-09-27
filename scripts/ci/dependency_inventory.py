@@ -478,7 +478,10 @@ def _native_license_terms(
         # Exclusive creation also refuses a cache entry replaced by a concurrent writer.
         with artifact.open("xb") as handle:
             handle.write(raw)
-    return terms, f"{url} ({algorithm} {digest})", license_files
+    source = f"{url} ({algorithm} {digest})"
+    if not terms:
+        source += "; declares no supported licence metadata"
+    return terms, source, license_files
 
 
 def _local_cargo_license_terms(
