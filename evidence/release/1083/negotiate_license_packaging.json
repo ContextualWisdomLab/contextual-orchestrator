@@ -1,0 +1,20 @@
+{
+  "producer_source_sha": "4813885d3f4e2ff837878ceffdba656a71dc31f0",
+  "package": "proxy-agent-negotiate",
+  "version": "1.1.0",
+  "minimal_change": "Add package-local LICENSE following sibling MIT instrument; omit unverified historical year",
+  "red_archive_sha256": "8db83985b27bdf461ec242e17dfe45be6b7e463257874863720c77e1d1ad6b23",
+  "green_archive_sha256": "efe0eeff6e28a67c27dfdce455bcf1482c650b700229313359f475248d35b97d",
+  "added_member": "package/LICENSE",
+  "license_sha256": "4695bbfb506070fe27672f03b3e53108654fc14eb92fc189248c2e487d7e1655",
+  "unchanged_existing_members": 5,
+  "registry_dist_members_byte_identical": 4,
+  "tool": "npm 11.17.0; Node 24.19.0; npm pack --offline --ignore-scripts",
+  "pnpm_limit": "Pinned pnpm10.30.3 pack could not resolve uninstalled workspace tsconfig; no dependency installation performed",
+  "limits": [
+    "Proposed attribution requires producer confirmation",
+    "Metadata/packaging proof using retained registry dist, not source compilation",
+    "Producer pnpm release path remains unverified",
+    "No public upstream submission or release; locked1.1.0 remains held"
+  ]
+}
