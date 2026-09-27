@@ -262,8 +262,10 @@ jobs:
           # this far.
           python -m scripts.ci.dependency_inventory --repository-root . \
             --output /dev/null --check-sources-only
+          python -m pip download --require-hashes -r requirements.lock \
+            --no-deps --only-binary=:all: --dest license-artifacts
           python -m scripts.ci.dependency_inventory --repository-root . \
-            --output dependency-inventory.json --resolve-licenses
+            --output dependency-inventory.json --artifact-dir license-artifacts
           python -m scripts.ci.release_license_gate \
             --inventory dependency-inventory.json \
             --source-sha "${TARGET_SHA}" \
@@ -322,7 +324,7 @@ jobs:
           # the environment SBOM cannot see are enumerated against the exact
           # source this release publishes rather than against whatever the
           # security run happened to hold.
-          python -m scripts.ci.dependency_inventory \
+          uv run --no-sync python -m scripts.ci.dependency_inventory \
             --repository-root . --output dependency-inventory.json --resolve-licenses
           python -m scripts.ci.release_license_gate \
             --sbom sbom-download/cyclonedx-sbom.json \

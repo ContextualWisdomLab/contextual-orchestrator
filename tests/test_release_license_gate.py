@@ -111,6 +111,12 @@ def test_release_workflow_runs_the_gate_before_publishing() -> None:
     release_gate = verify_block.index("--sbom sbom-download/cyclonedx-sbom.json")
     assert preinstall < environment < sbom_fetch < release_gate
     assert verify_block.index("--check-sources-only") < preinstall
+    download = verify_block.index("pip download --require-hashes")
+    artifact_read = verify_block.index("--artifact-dir license-artifacts")
+    assert verify_block.index("--check-sources-only") < download < artifact_read < preinstall
+    assert "--only-binary=:all:" in verify_block[download:artifact_read]
+    installed_read = verify_block.index("uv run --no-sync python -m scripts.ci.dependency_inventory")
+    assert environment < installed_read < release_gate
     publish_block = text[text.index("\n  publish:") :]
     assert "needs: verify" in publish_block
 
