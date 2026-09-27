@@ -66,3 +66,46 @@ def test_bundled_distribution_projects_its_own_component_and_parent_edge(wrong_p
     assert component["purl"] == "pkg:pypi/vendored@2"
     assert bom["dependencies"][0]["dependsOn"] == ["cargo", component["bom-ref"]]
     assert component["licenses"] == [{"license": {"name": "MIT"}}]
+
+
+def test_bundled_archive_projects_hash_bound_file_without_parent_license():
+    inventory = copy.deepcopy(INVENTORY)
+    owner = inventory['ecosystems'][0]['packages'][0]
+    owner['artifact_sha256'] = 'b' * 64
+    owner['bundled_archives'] = [{'name': 'data/zones.tar.gz', 'sha256': 'c' * 64, 'size': 42}]
+    bom = bind_inventory(copy.deepcopy(BOM), inventory, SHA)
+    child = next(c for c in bom['components'] if c.get('type') == 'file')
+    assert child['name'] == 'data/zones.tar.gz'
+    assert child['hashes'] == [{'alg': 'SHA-256', 'content': 'c' * 64}]
+    assert 'licenses' not in child and 'purl' not in child
+    assert child['bom-ref'] in bom['dependencies'][0]['dependsOn']
+    assert 'cargo' in bom['dependencies'][0]['dependsOn']
+
+
+@pytest.mark.parametrize('change', [{'name': '../zones.tar.gz'}, {'sha256': 'bad'}, {'size': True}])
+def test_bundled_archive_rejects_invalid_identity(change):
+    inventory = copy.deepcopy(INVENTORY)
+    owner = inventory['ecosystems'][0]['packages'][0]
+    owner['artifact_sha256'] = 'b' * 64
+    archive = {'name': 'zones.tar.gz', 'sha256': 'c' * 64, 'size': 42}
+    archive.update(change)
+    owner['bundled_archives'] = [archive]
+    with pytest.raises(ValueError, match='bundled archive'):
+        bind_inventory(copy.deepcopy(BOM), inventory, SHA)
+
+
+def test_archive_has_one_identity_and_edges_for_each_duplicate_parent():
+    inventory = copy.deepcopy(INVENTORY)
+    owner = inventory["ecosystems"][0]["packages"][0]
+    owner["artifact_sha256"] = "b" * 64
+    owner["bundled_archives"] = [{"name": "zones.tar.gz", "sha256": "c" * 64, "size": 42}]
+    bom = copy.deepcopy(BOM)
+    other = copy.deepcopy(bom["components"][0])
+    other["bom-ref"] = "python-other"
+    bom["components"].append(other)
+    result = bind_inventory(bom, inventory, SHA)
+    files = [c for c in result["components"] if c.get("type") == "file"]
+    assert len(files) == 1
+    for parent in ("python", "python-other"):
+        row = next(r for r in result["dependencies"] if r["ref"] == parent)
+        assert files[0]["bom-ref"] in row["dependsOn"]
