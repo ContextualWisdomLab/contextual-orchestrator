@@ -205,6 +205,19 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
             for member in members
         ):
             raise InventoryError("wheel has duplicate or unsafe archive paths")
+        bundled_archives = []
+        for member in members:
+            info = archive.getinfo(member)
+            if info.is_dir() or not member.lower().endswith((".whl", ".egg", ".zip", ".tar", ".tar.gz", ".tgz", ".crate", ".jar")):
+                continue
+            if info.file_size > _NATIVE_ARCHIVE_LIMIT:
+                raise InventoryError("nested wheel archive exceeds evidence limit")
+            bundled_digest = hashlib.sha256()
+            with archive.open(member) as handle:
+                while chunk := handle.read(65536):
+                    bundled_digest.update(chunk)
+            bundled_archives.append({"name": member, "sha256": bundled_digest.hexdigest(),
+                                     "size": info.file_size, "license_source": "unresolved nested archive scope"})
         metadata_members = [member for member in members if member.endswith(".dist-info/METADATA")]
         roots = [member for member in metadata_members if len(PurePosixPath(member).parts) == 2]
         if len(roots) != 1:
@@ -271,6 +284,8 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
                       "licenses": terms, "license_source": source, "license_files": license_files,
                       "artifact_sha256": digest, "metadata_sha256": hashlib.sha256(raw_metadata).hexdigest(),
                       "metadata_path": metadata_path}
+            if index == 0 and bundled_archives:
+                record["bundled_archives"] = bundled_archives
             if index:
                 record["bundled_in"] = {"name": name, "version": version}
             records.append(record)
