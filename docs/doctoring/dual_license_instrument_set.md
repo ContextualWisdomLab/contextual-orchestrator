@@ -316,3 +316,42 @@ Primary history:
 https://github.com/HypothesisWorks/hypothesis/commit/7f4dd55ff01cbd5e9aa24a500f10dfc8eda91b0f
 https://github.com/HypothesisWorks/hypothesis/blob/6384deef469a88c147dab205f093b2d16d652785/hypothesis/src/hypothesis/vendor/pretty.py
 https://github.com/ipython/ipython/blob/b5734353b6d697be2bc4bc98333b0d29462533f9/COPYING.rst
+
+## Oxc platform package producer packaging
+
+The retained @oxc-parser and @oxlint platform archives have no license
+instruments. All 39 cached archives were rechecked against their lock-bound
+SHA-512 integrity and exact package metadata. The current Oxc producer
+8d8c1fc288cdc67482297077adff1c1a6ef44fb3 uses NAPI CLI 3.10.5 to create the
+platform directories. That exact registry CLI archive was integrity verified
+(SHA-256 fec42207108677024cbde344ee8018a3f54d0574912d79f9aee68ee827492e5e).
+Its generator writes package metadata and README but no license instrument.
+Oxc's prepublish checker verifies listed files, not missing license texts.
+
+A local producer patch copies Oxc's existing LICENSE and THIRD-PARTY-LICENSE
+before prepublish checks on all three native publish preparation paths:
+reusable NAPI releases, oxlint, and oxfmt. The latter is a sibling path, not an
+additional retained dependency. Use LICENSE.third-party for the second file:
+actual npm pack excluded the first tried LICENSE-THIRD-PARTY filename under
+the platform files allowlist. No provenance, publication or security step is
+removed. Missing npm_dir or source instrument stops the isolated Bash step.
+
+Actual offline metadata-only npm packs of all 39 retained package manifests
+include both byte-identical producer instruments after running the exact YAML
+copy snippet. Two representative RED packs omitted them before repair. These
+probes omit native binaries and are not rebuilt or published native artifacts.
+The receipt preserves the old archive identities separately from probe hashes;
+no original registry tarball or inventory classification was changed.
+Compiled Rust/native dependency scope and source provenance remain unresolved.
+A future publication must verify those obligations, not apply root MIT to all
+linked components.
+
+The isolated shell passes shellcheck. Full actionlint exits 1 on both original
+HEAD and repaired workflows, with the same 47 kind/message diagnostics:
+existing local-action metadata and shell quoting errors remain. No whole-lint
+pass is claimed. CodeGraph indexed the source with one known directory-symlink
+fixture read error; no fixture was changed or deleted. The upstream patch has
+not been committed, published or submitted as a PR. Any submission must follow
+Oxc's AI-disclosure and contributor-review policy. Counts remain 370 permitted,
+zero copyleft, 143 held. Patch and packaging receipts are retained under
+`evidence/release/1083/oxc_platform_license_packaging.*`.
