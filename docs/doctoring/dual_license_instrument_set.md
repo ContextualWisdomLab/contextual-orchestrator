@@ -355,3 +355,23 @@ not been committed, published or submitted as a PR. Any submission must follow
 Oxc's AI-disclosure and contributor-review policy. Counts remain 370 permitted,
 zero copyleft, 143 held. Patch and packaging receipts are retained under
 `evidence/release/1083/oxc_platform_license_packaging.*`.
+
+## Hosted quality execution after runner repairs
+
+Security run 36330029062 at predecessor main
+7116592c7599cd8cb45ba9bf31b89be6d4f0fd3f completed the Tests and package
+quality job 108650067894 successfully, including Compose verification, native
+measurement build, full tests, benchmark coverage and installed-wheel checks.
+The full suite recorded 5300 passed, five native-tokenizer skips and two
+unsuppressed deprecation warnings. Benchmark proof recorded 190 passed and
+100% branch coverage for nim_benchmark.py; installed-wheel checks recorded
+40 passed. This is not strict-warning or native-tokenizer acceptance.
+
+The separate predecessor Rust job failed linking libpython; repair #1311 is
+merged at b08d0105269ef7cf3919836ab92aa12b6b5d6f14. Its four exact-main
+Security jobs remain queued at this observation. All six organization runners
+are online and busy; the three execution groups already admit this Security
+workflow. Reassigning labels adds no available execution capacity. Preserve
+the control group reservation. Latest-main terminal gates and immutable
+release evidence remain separate. Receipt:
+`evidence/release/1083/hosted_quality_predecessor.json`.
