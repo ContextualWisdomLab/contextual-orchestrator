@@ -202,6 +202,7 @@ class _FakeBatchApiClient:
                         "body": {
                             "choices": [{"message": {"role": "assistant", "content": "batched answer"}}],
                             "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+                            "orchestration": {"trace": [{"output": "intermediate"}]},
                         }
                     },
                 }
@@ -232,7 +233,45 @@ def test_pg_llm_batch_backend_submits_and_retrieves() -> None:
     assert item.prompt_tokens == 12
     assert item.completion_tokens == 8
     assert item.model == "gpt-x"
+    assert item.trace == [{"output": "intermediate"}]
     assert "download_results" in client.calls
+
+
+class _MalformedTraceElementsBatchApiClient(_FakeBatchApiClient):
+    async def download_results(self, batch_id, endpoint_alias):
+        self.calls.append("download_results")
+        return {
+            "success": True,
+            "batch_id": batch_id,
+            "responses": [
+                {
+                    "custom_id": "a",
+                    "response": {
+                        "body": {
+                            "choices": [{"message": {"role": "assistant", "content": "batched answer"}}],
+                            "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+                            "orchestration": {
+                                "trace": [{"output": "intermediate"}, None, "not-a-step", 7]
+                            },
+                        }
+                    },
+                }
+            ],
+        }
+
+
+def test_pg_llm_batch_backend_drops_non_dict_trace_elements() -> None:
+    """A downloaded trace with non-dict elements must not crash retrieval."""
+    client = _MalformedTraceElementsBatchApiClient()
+    backend = PgLlmBatchBackend(client, endpoint_alias="prod_gateway")
+    requests = [BatchRequest(messages=[{"role": "user", "content": "batch me"}], custom_id="a", model="gpt-x")]
+
+    job = backend.submit(requests, metadata={"routing_reason": "latency-tolerant"})
+    backend.poll(job)
+
+    results = backend.retrieve(job)
+    assert len(results) == 1
+    assert results[0].trace == [{"output": "intermediate"}]
 
 
 def test_pg_llm_batch_backend_incomplete_download_raises_download_error() -> None:

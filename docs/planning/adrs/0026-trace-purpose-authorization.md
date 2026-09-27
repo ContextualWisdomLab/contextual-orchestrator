@@ -16,10 +16,12 @@ affected_components:
 ## Decision
 
 Inference or admin authentication alone does not authorize a trace-bearing
-response. Chat, admin simulation, workflow/evaluation creation, batch-result
-retrieval, and trace-enabled workflow/evaluation reads require the verified
-`trace` purpose scope. The server records a metadata-only audit event before
-releasing the response and never trusts a caller-supplied purpose header.
+response. Chat, admin simulation, workflow/evaluation creation, explicit
+batch-result trace requests, and trace-enabled workflow/evaluation reads
+require the verified `trace` purpose scope. Plain inference owners retrieve
+batch answers and cost evidence with traces stripped. The server records a
+metadata-only audit event before releasing a trace response and never trusts a
+caller-supplied purpose header.
 
 Chat validates the trace flag before selecting structured, tool, streaming, or
 ordinary execution, so no early-return path can weaken the request contract.
@@ -50,10 +52,12 @@ closed for the trace purpose because it has no verified trace claim.
   contains no prompt, output, credential, or PII value;
 - audit failure returns a generic `503` instead of releasing the trace.
 
-Issue #117 remains open: batch jobs need their protected-main integration, and
-the authorization adapter still needs tenant/resource/lifetime context. The
-legacy single-token production migration is now guarded in the CLI and
-canonical Compose path; its explicit local escape hatch remains documented.
+Issue #117 remains open only for richer tenant/workspace/resource/lifetime and
+revocation context supplied by the external authorization adapter. Protected
+main already owner-binds batch jobs and workflow/evaluation records, gates
+batch-result trace release, and rejects legacy single-token mode in production
+CLI and canonical Compose paths. The explicit local single-token escape hatch
+remains documented and must not be presented as production trace authority.
 
 ## Research grounding
 
