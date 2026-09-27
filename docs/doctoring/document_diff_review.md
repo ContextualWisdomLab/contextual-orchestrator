@@ -76,3 +76,22 @@ After this repair, the full default native suite completed exit 0: 5,255 passed,
 five native tokenizer skips and two existing deprecated-API warnings. The
 seven-file routing/document regression set separately passed 208 tests with
 warnings as errors.
+
+## Boundary rejection coverage, 2026-09-27
+
+A standalone branch-coverage run at `637df4db` exposed 81% coverage in the
+new document review module despite 24 passing tests. Added cases exercise
+malformed references and objects, traversal, nullable added/removed sides,
+UTF-8 and aggregate text budgets, malformed or duplicate-key model JSON,
+invalid evidence locations, and rejection of an invalid second finding
+without returning partial results. The HTTP body cap can reject an oversized
+envelope before its text budget is reached; a separate public-validator test
+proves the aggregate text gate itself instead of accepting the same 413 from
+the earlier HTTP gate. The module now passes 65 tests with warnings as errors
+and 100% statement/branch coverage (205 statements, 98 branches). This is a
+local boundary receipt, not hosted review approval or coverage of the whole
+server.
+
+Before integrating later main changes, the full boundary-repair tree passed
+5,296 tests (five native tokenizer skips, two existing deprecated-API warnings),
+process exit 0. This result is scoped to that pre-integration tree.

@@ -27,7 +27,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.document_diff_review import DocumentDiffReviewError, validate_document_diff_findings  # noqa: E402
+from contextual_orchestrator.document_diff_review import (  # noqa: E402
+    DocumentDiffReviewError,
+    validate_document_diff_envelope,
+    validate_document_diff_findings,
+)
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -274,6 +278,26 @@ def _mutated(**changes) -> dict:
         (_mutated(**{"objects.0.head_text": "\ud800"}), 400, "invalid_text"),
         (_mutated(head_blob=ENVELOPE["base_blob"]), 400, "inconsistent_change"),
         (_mutated(path="manuscript/paper.txt"), 400, "unsupported_document"),
+        (_mutated(objects=[None]), 400, "invalid_object"),
+        (_mutated(objects=[{"page": 1}]), 400, "missing_field"),
+        (_mutated(extractor_version=None), 400, "invalid_reference"),
+        (_mutated(extractor_version="extractor\nversion"), 400, "invalid_reference"),
+        (_mutated(repo="not-a-repository"), 400, "invalid_reference"),
+        (_mutated(path="/paper.docx"), 400, "invalid_reference"),
+        (_mutated(path="../paper.docx"), 400, "invalid_reference"),
+        (_mutated(path="folder\\paper.docx"), 400, "invalid_reference"),
+        (_mutated(**{"objects.0.page": True}), 400, "invalid_page"),
+        (_mutated(**{"objects.0.head_text": 123}), 400, "invalid_text"),
+        (_mutated(**{"objects.0.head_text": "가" * 3000}), 400, "invalid_text"),
+        (_mutated(**{"objects.0.object_hash_head": None}), 400, "inconsistent_change"),
+        (_mutated(**{"objects.0.change": "added", "objects.0.object_hash_base": None}), 400, "inconsistent_change"),
+        (_mutated(**{"objects.0.change": "unchanged"}), 400, "inconsistent_change"),
+        (_mutated(base_blob=None, head_blob=None), 400, "invalid_reference"),
+        (_mutated(contract_version="document_diff_review.v2"), 400, "unsupported_contract"),
+        (_mutated(objects=[]), 400, "invalid_objects"),
+        (_mutated(objects=[None] * 201), 400, "invalid_objects"),
+        (_mutated(objects=[{**ENVELOPE["objects"][0], "base_text": "word " * 1600,
+                           "head_text": "text " * 1600}] * 17), 413, "request_too_large"),
     ],
     ids=[
         "data_uri",
@@ -291,6 +315,11 @@ def _mutated(**changes) -> dict:
         "unpaired_surrogate",
         "same_blob",
         "text_file",
+        "non_object", "missing_object_fields", "non_string_reference", "reference_control",
+        "invalid_repo", "absolute_path", "traversal", "backslash_path", "boolean_page",
+        "non_string_text", "utf8_text_budget", "missing_hash", "text_without_hash",
+        "unchanged_different_hashes", "both_blobs_null", "unsupported_contract",
+        "empty_objects", "object_count_budget", "envelope_text_budget",
     ],
 )
 def test_leaking_or_malformed_envelopes_fail_closed_before_any_provider_call(gateway, envelope, status, code) -> None:
@@ -380,3 +409,67 @@ def test_decoy_is_preferred_once_zero_retention_is_waived(gateway) -> None:
 
     assert status == 200, body
     assert "free_retaining_reviewer" in post.called
+
+
+@pytest.mark.parametrize("answer", [None, "not JSON", '{"findings":[],"findings":[]}',
+                                  "[]", '{"findings":{}}',
+                                  json.dumps({"findings": [{}] * 101}),
+                                  json.dumps({"findings": [None]}),
+                                  json.dumps({"findings": [{}]})])
+def test_malformed_model_answer_has_no_findings(answer) -> None:
+    with pytest.raises(DocumentDiffReviewError) as error:
+        validate_document_diff_findings(answer, ENVELOPE)
+    assert (error.value.status, error.value.code) == (502, "invalid_structured_output")
+
+
+@pytest.mark.parametrize(("changes", "code"), [
+    ({"category": "unknown"}, "invalid_structured_output"),
+    ({"severity": "unknown"}, "invalid_structured_output"),
+    ({"object_index": True}, "unsupported_evidence"),
+    ({"object_index": 100}, "unsupported_evidence"),
+    ({"related_object_index": True}, "unsupported_evidence"),
+    ({"related_object_index": 100}, "unsupported_evidence"),
+    ({"related_evidence": "n = 120"}, "unsupported_evidence"),
+    ({"evidence_head": 118}, "unsupported_evidence"),
+    ({"evidence_head": " "}, "unsupported_evidence"),
+    ({"explanation": None}, "invalid_structured_output"),
+    ({"explanation": " "}, "invalid_structured_output"),
+    ({"explanation": "x" * 2001}, "invalid_structured_output"),
+])
+def test_invalid_finding_is_rejected_without_partial_results(changes, code) -> None:
+    finding = {
+        "category": "body", "severity": "minor", "object_index": 0,
+        "evidence_base": None, "evidence_head": "118 participants",
+        "related_object_index": None, "related_evidence": None,
+        "explanation": "Sample size changed.",
+    }
+    invalid = {**finding, **changes}
+    with pytest.raises(DocumentDiffReviewError) as error:
+        validate_document_diff_findings(json.dumps({"findings": [finding, invalid]}), ENVELOPE)
+    assert (error.value.status, error.value.code) == (502, code)
+
+
+def test_added_and_removed_objects_keep_null_sides(gateway) -> None:
+    post, _, _ = gateway
+    envelope = _mutated(base_blob=None)
+    envelope["objects"] = [
+        {**ENVELOPE["objects"][0], "change": "added", "page": None,
+         "object_hash_base": None, "base_text": None},
+        {**ENVELOPE["objects"][0], "change": "removed",
+         "object_hash_head": None, "head_text": None},
+    ]
+    status, body = post(envelope)
+    assert status == 200, body
+    assert body["base_blob"] is None
+    assert body["findings"] == []
+
+
+def test_total_extracted_text_budget_rejects_individually_bounded_objects() -> None:
+    """The envelope validator enforces its own budget independently of HTTP size."""
+    envelope = _mutated(objects=[
+        {**ENVELOPE["objects"][0], "base_text": "word " * 1600, "head_text": "text " * 1600}
+    ] * 17)
+    with pytest.raises(DocumentDiffReviewError) as error:
+        validate_document_diff_envelope(envelope)
+    assert (error.value.status, error.value.code) == (413, "request_too_large")
+    assert "envelope text" in str(error.value)
