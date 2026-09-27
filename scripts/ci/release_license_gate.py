@@ -54,6 +54,20 @@ _COPYLEFT_PATTERN = re.compile(
 )
 _UNDECIDABLE_VALUES = frozenset({"", "unknown", "none", "null", "noassertion", "other", "proprietary"})
 _UNDECIDABLE_PREFIXES = ("licenseref-", "documentref-")
+# Closed declaration vocabulary: recognized identifiers and legacy metadata
+# spellings only. Recognition never replaces actual instrument evidence.
+_KNOWN_NON_GPL_DECLARATIONS = frozenset(
+    " ".join(value.replace("(", " ").replace(")", " ").split()).casefold() for value in (
+        "MIT", "MIT-0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "ISC",
+        "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "MPL-2.0", "PSF-2.0",
+        "Zlib", "CC0-1.0", "CC-BY-4.0", "Unlicense", "BlueOak-1.0.0", "Unicode-3.0",
+        "MIT License", "MIT No Attribution", "MIT No Attribution License (MIT-0)",
+        "BSD License", "BSD 3-Clause License", "3-Clause BSD License",
+        "Apache 2.0", "Apache License, Version 2.0", "Apache Software License",
+        "Mozilla Public License 2.0 (MPL 2.0)", "PSFL", "Python Software Foundation License",
+        "Apache-2.0/MIT", "MIT/Apache-2.0",
+    )
+)
 _NAME_SEPARATORS = re.compile(r"[-_.]+")
 _REQUIREMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
 
@@ -100,6 +114,13 @@ def classify_license_term(term: str) -> tuple[str, str]:
     if _is_undecidable(term):
         return "undecidable", term.strip() or "<none>"
     cleaned = term.replace("(", " ").replace(")", " ")
+    # A non-GPL spelling is not permission: refuse every unrecognized operand,
+    # including unknown alternatives next to an otherwise valid OR choice.
+    declarations = re.split(r"\s+(?:AND|OR)\s+", cleaned)
+    if any(not _COPYLEFT_PATTERN.search(operand)
+           and " ".join(operand.split()).casefold() not in _KNOWN_NON_GPL_DECLARATIONS
+           for operand in declarations):
+        return "undecidable", term
     if re.search(r"\sAND\s", cleaned):
         operands = [part.strip() for part in re.split(r"\sAND\s", cleaned) if part.strip()]
         if any(_is_undecidable(operand) for operand in operands):
