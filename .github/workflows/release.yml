@@ -34,7 +34,7 @@ name: Release
 # (the test suite, release-notes rendering) -- a `contents: write` token is
 # never present alongside that code. `publish` holds the write token, and its
 # very first steps re-check (for a fresh publish only -- see above)
-# protected main's tip and every check reported for TARGET_SHA, immediately
+# protected main's tip and the required checks for TARGET_SHA, immediately
 # before tag creation, right after `verify`'s potentially long-running gate
 # finishes. That tip/checks recheck is still a check-then-act window, not an
 # atomic guarantee -- see docs/planning/adrs/0129-canonical-immutable-release.md's
@@ -56,17 +56,16 @@ on:
 permissions:
   contents: read
 
-# This repository's push-triggered job names from the integrated security.yml
-# workflow -- shared by both jobs' checks-green gate (see
-# scripts/ci/release_checks_gate.sh) so a `commits/$SHA/check-runs` report
-# that is empty, or missing one of them, is treated as "not ready yet",
-# never as vacuously "nothing to block on". A dispatch fired moments after a
-# merge can race GitHub's own registration of this new tip's push-triggered
-# check-runs: the API can legitimately return an empty or partial list
-# before GitHub has even created the entries, and filtering an empty/partial
-# list for "not complete+green" is vacuously empty too -- which previously
-# let a release publish before Security/Fuzz/CodeQL had even started (Devin
-# finding). Kept in sync with the integrated workflow's job `name:` values by
+# The explicit allowlist of REQUIRED release checks: the job names of the
+# integrated security.yml workflow. Both jobs' checks-green gate (see
+# scripts/ci/release_checks_gate.sh) evaluates exactly these jobs in the
+# newest push-triggered security.yml run for TARGET_SHA; a missing run, an
+# unfinished run, or a missing / non-success required job is "not ready",
+# never vacuously "nothing to block on" (a dispatch fired moments after a
+# merge can race GitHub's creation of that run -- Devin finding). Other
+# workflows' check-runs on the same commit (scheduled security.yml runs,
+# hourly maintenance loops) are ignored. Kept in sync with the integrated
+# workflow's job `name:` values by
 # tests/test_release_workflow_contract.py; update this list in the same PR
 # that adds, removes, or renames a push-triggered quality job.
 env:
@@ -304,6 +303,9 @@ jobs:
     permissions:
       contents: write
       checks: read
+      # Read-only: the shared checks-green recheck reads the security.yml
+      # push run and its jobs through the Actions API.
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.version }}
