@@ -1,0 +1,42 @@
+{
+  "source_sha": "4039e0f127c943ee8f2819e61d521947322bcdb4",
+  "image_id": "sha256:f82d3914d2076d84948e02ae4621fa6ede07be26b85cc28d57581701315fa9c9",
+  "platform": "linux/arm64",
+  "build": {
+    "exit": 0,
+    "tool": "afeff0"
+  },
+  "runtime": {
+    "exit": 0,
+    "tool": "816279",
+    "python": "3.12.14",
+    "network": "none",
+    "read_only": true,
+    "imports": [
+      "contextual_orchestrator",
+      "contextual_orchestrator._token_packer",
+      "pg8000"
+    ]
+  },
+  "vulnerabilities": {
+    "exit": 0,
+    "tool": "f62b64",
+    "severity": [
+      "HIGH",
+      "CRITICAL"
+    ],
+    "ignore_unfixed": true,
+    "findings": 0,
+    "sha256": "b9977c8094b001deb05375ef928eaae1dc932471fb44441edfbafe90e6e24b44"
+  },
+  "sbom": {
+    "components": 139,
+    "sha256": "7216664ddfbd15f5d162b4827f642307dddfdd9caad6d824e0eaddfa873d27e2",
+    "license_counts": {
+      "permitted": 52,
+      "copyleft": 28,
+      "undecidable": 59
+    }
+  },
+  "limits": "Local ARM64 image only; fixable high/critical vulnerability clearance is independent of licence clearance. GPL/unknown component holds remain. No immutable publication, reproducible image comparison or downstream acceptance."
+}

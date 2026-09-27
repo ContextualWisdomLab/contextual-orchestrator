@@ -20,6 +20,7 @@ COPY --from=maturin-tools /usr/bin/maturin /usr/local/bin/maturin
 COPY requirements.lock /build/requirements.lock
 COPY rust/Cargo.toml rust/Cargo.lock /build/rust/
 COPY rust/token_counter/ /build/rust/token_counter/
+COPY rust/decision_receipt/ /build/rust/decision_receipt/
 COPY contextual_orchestrator/ /build/contextual_orchestrator/
 RUN uv python install 3.12 \
     && uv pip install --python 3.12 --require-hashes -r /build/requirements.lock --target /build/deps \
@@ -27,7 +28,7 @@ RUN uv python install 3.12 \
     && uv pip install --python 3.12 /build/wheels/*.whl --target /build/deps
 
 # python:3.12-slim
-FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
 
 WORKDIR /app
 COPY pyproject.toml requirements.lock README.md LICENSE ./

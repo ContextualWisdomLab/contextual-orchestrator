@@ -1,0 +1,57 @@
+{
+  "repository": "ContextualWisdomLab/contextual-orchestrator",
+  "source_sha": "7116592c7599cd8cb45ba9bf31b89be6d4f0fd3f",
+  "run_id": 36330029062,
+  "job_id": 108650067894,
+  "job_conclusion": "success",
+  "full_suite": {
+    "passed": 5300,
+    "skipped": 5,
+    "warnings": 2,
+    "seconds": 832.5
+  },
+  "benchmark_proof": {
+    "passed": 190,
+    "seconds": 94.88,
+    "nim_benchmark_branch_coverage_percent": 100
+  },
+  "installed_wheel_checks": {
+    "passed": 40,
+    "seconds": 31.76
+  },
+  "skips": [
+    "native tokenizer extension unavailable",
+    "native tokenizer unavailable: ascii_prose",
+    "native tokenizer unavailable: code",
+    "native tokenizer unavailable: cjk",
+    "contextual_orchestrator._token_packer unavailable"
+  ],
+  "warnings": [
+    "two logistic_dif_purified deprecation warnings"
+  ],
+  "limits": [
+    "Not latest main b08d0105269ef7cf3919836ab92aa12b6b5d6f14 acceptance",
+    "Not strict-warning acceptance or native tokenizer proof",
+    "Other Security jobs are separate gates; predecessor Rust linking failed",
+    "No release wheel digest or complete release SBOM established by this receipt"
+  ],
+  "run_url": "https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36330029062",
+  "separate_jobs": [
+    {
+      "job_id": 108650068022,
+      "name": "CodeQL, supply chain, and SBOM",
+      "conclusion": "success"
+    },
+    {
+      "job_id": 108650068093,
+      "name": "Property and coverage-guided fuzzing",
+      "conclusion": "success"
+    },
+    {
+      "job_id": 108650068011,
+      "name": "Rust workspace gate",
+      "conclusion": "failure",
+      "follow_up": "link search repair merged in #1311; newer main terminal result still required"
+    }
+  ]
+}

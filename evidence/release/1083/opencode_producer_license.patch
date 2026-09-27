@@ -1,0 +1,20 @@
+diff --git a/packages/opencode/script/build.ts b/packages/opencode/script/build.ts
+index ce45f77..bbfeb8b 100755
+--- a/packages/opencode/script/build.ts
++++ b/packages/opencode/script/build.ts
+@@ -220,6 +220,7 @@ for (const item of targets) {
+       {
+         name,
+         version: Script.version,
++        license: pkg.license,
+         preferUnplugged: true,
+         os: [item.os],
+         cpu: [item.arch],
+@@ -229,6 +230,7 @@ for (const item of targets) {
+       2,
+     ),
+   )
++  await Bun.file(`dist/${name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+   binaries[name] = Script.version
+ }
+ 

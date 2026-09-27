@@ -1,6 +1,8 @@
 """Deployment contract for the canonical root Compose path."""
 
 from pathlib import Path
+import shutil
+import tomllib
 
 
 def test_compose_uses_postgres_kv_and_secret_bootstrap() -> None:
@@ -31,3 +33,37 @@ def test_gateway_image_installs_postgres_driver_and_ignores_secrets() -> None:
     assert "--inference-token-key CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN" in dockerfile
     assert "--auth-token-key" not in dockerfile
     assert ".secrets" in Path(".dockerignore").read_text().splitlines()
+
+
+def test_gateway_build_copies_complete_rust_workspace(tmp_path) -> None:
+    """Every workspace manifest and its licence must exist in the build stage."""
+    for line in Path("Dockerfile").read_text().splitlines():
+        fields = line.split()
+        if not fields or fields[0] != "COPY" or not fields[-1].startswith("/build/rust/"):
+            continue
+        destination = tmp_path / fields[-1].removeprefix("/build/")
+        destination.mkdir(parents=True, exist_ok=True)
+        for source in fields[1:-1]:
+            path = Path(source)
+            if path.is_dir():
+                shutil.copytree(path, destination, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns("target"))
+            else:
+                shutil.copyfile(path, destination / path.name)
+    workspace = tomllib.loads((tmp_path / "rust/Cargo.toml").read_text())
+    for member in workspace["workspace"]["members"]:
+        root = tmp_path / "rust" / member
+        manifest = tomllib.loads((root / "Cargo.toml").read_text())
+        assert (root / manifest["package"]["license-file"]).read_bytes() == Path("LICENSE").read_bytes()
+
+
+def test_container_lock_admits_locked_linux_python312_numpy_wheels() -> None:
+    """Both Linux architectures can use the reviewed NumPy wheel artifacts."""
+    packages = tomllib.loads(Path("uv.lock").read_text())["package"]
+    numpy = next(package for package in packages if package["name"] == "numpy")
+    requirements = Path("requirements.lock").read_text()
+    wheels = [wheel for wheel in numpy["wheels"]
+              if "cp312-cp312-manylinux" in wheel["url"]]
+    assert wheels
+    for wheel in wheels:
+        assert f"--hash={wheel['hash']}" in requirements

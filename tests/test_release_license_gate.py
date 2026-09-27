@@ -558,7 +558,7 @@ def test_one_unmet_condition_holds_the_entry(package, expected) -> None:
     assert [row["name"] for row in groups[expected]] == [f"python:{package['name']}"]
 
 
-@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0"])
+@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0", "CC-BY-4.0", "PSF-2.0"])
 def test_complete_canonical_license_instrument_is_not_rejected_by_keyword_mentions(expression):
     """An entire known instrument evidences its declaration, including compatibility clauses."""
     text = (Path(__file__).parent / "fixtures/license_text" / f"{expression.replace(' ', '_')}.txt").read_text()
@@ -569,7 +569,7 @@ def test_complete_canonical_license_instrument_is_not_rejected_by_keyword_mentio
     assert not groups["undecidable"] and not groups["copyleft"]
 
 
-@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0"])
+@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0", "CC-BY-4.0", "PSF-2.0"])
 @pytest.mark.parametrize("change", ["append", "truncate", "second_file", "second_unknown_file", "wrong_declaration"])
 def test_canonical_text_matching_cannot_hide_changed_or_additional_terms(expression, change):
     text = (Path(__file__).parent / "fixtures/license_text" / f"{expression.replace(' ', '_')}.txt").read_text()
@@ -695,3 +695,164 @@ def test_ambiguous_dual_license_marker_remains_undecidable():
     from scripts.ci.release_license_gate import classify_license_term
 
     assert classify_license_term("Dual License")[0] == "undecidable"
+
+
+@pytest.mark.parametrize("change", ["none", "notice-only", "missing-mit", "missing-unlicense", "changed", "gpl"])
+def test_complete_reviewed_dual_instrument_set(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / name).read_text() for name in
+             ("dual-selection.txt", "dual-mit.txt", "dual-unlicense.txt")]
+    if change == "notice-only":
+        texts = texts[:1]
+    elif change == "missing-mit":
+        del texts[1]
+    elif change == "missing-unlicense":
+        del texts[2]
+    elif change == "changed":
+        texts[0] += "Commercial use is prohibited."
+    elif change == "gpl":
+        texts.append("GNU General Public License version 3")
+    assert _declaration_matches_text(["Unlicense OR MIT"], [{"text": t} for t in texts]) is (change == "none")
+
+
+@pytest.mark.parametrize("name,term", [("cryptography", "Apache-2.0 OR BSD-3-Clause"), ("packaging", "Apache-2.0 OR BSD-2-Clause")])
+@pytest.mark.parametrize("change", ["none", "notice-only", "missing-grant", "restriction", "extra"])
+def test_complete_apache_bsd_instrument_sets(name, term, change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / f"{name}-instrument-{i}.txt").read_text() for i in range(3)]
+    if change == "notice-only":
+        texts = texts[:1]
+    elif change == "missing-grant":
+        del texts[1]
+    elif change == "restriction":
+        texts[0] += "Redistribution requires written permission."
+    elif change == "extra":
+        texts.append("Unreviewed additional terms")
+    assert _declaration_matches_text([term], [{"text": t} for t in texts]) is (change == "none")
+
+
+def test_complete_blueoak_markdown_variant_preserves_all_terms():
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    text = (directory / "BlueOak-1.0.0-markdown.txt").read_text()
+    canonical = (directory / "BlueOak-1.0.0.txt").read_text()
+    rendered = text.replace("**_As far as", "***As far as").replace("claim._**", "claim.***")
+    assert " ".join(rendered.split()) == " ".join(canonical.split())
+    assert _declaration_matches_text(["BlueOak-1.0.0"], [{"text": text}])
+    assert not _declaration_matches_text(["BlueOak-1.0.0"], [{"text": text + "Commercial use forbidden."}])
+
+
+@pytest.mark.parametrize("change", ["none", "missing-mit", "missing-apache", "notice-only", "extra", "changed"])
+def test_complete_multi_term_instrument_set(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / f"sniffio-instrument-{i}.txt").read_text() for i in range(3)]
+    if change == "missing-mit":
+        del texts[2]
+    elif change == "missing-apache":
+        del texts[1]
+    elif change == "notice-only":
+        texts = texts[:1]
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "changed":
+        texts[0] += "Commercial use forbidden."
+    terms = ["MIT OR Apache-2.0", "MIT License", "Apache Software License"]
+    assert _declaration_matches_text(terms, [{"text": t} for t in texts]) is (change == "none")
+
+
+@pytest.mark.parametrize("change", ["none", "notice-only", "missing-notice", "changed", "grant-changed", "extra", "duplicate"])
+@pytest.mark.parametrize("terms, filenames", [
+    (["Apache-2.0", "Apache Software License"], ["sniffio-instrument-1.txt", "cyclonedx-notice.txt"]),
+    (["MIT", "MIT License"], ["pytest-cov-license.txt", "pytest-cov-authors.txt"]),
+    (["BSD-2-Clause"], ["pygments-license.txt", "pygments-2.20.0-authors.txt"]),
+    (["BSD-2-Clause"], ["pygments-license.txt", "pygments-2.21.0-authors.txt"]),
+])
+def test_complete_grant_attribution_set(change, terms, filenames):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / name).read_text() for name in filenames]
+    if change == "notice-only":
+        texts = texts[1:]
+    elif change == "missing-notice":
+        texts = texts[:1]
+    elif change == "changed":
+        texts[1] += "Different attribution."
+    elif change == "grant-changed":
+        texts[0] += "Unreviewed grant condition."
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "duplicate":
+        texts.append(texts[1])
+    assert _declaration_matches_text(terms, [{"text": t} for t in texts]) is (change in {"none", "missing-notice"})
+
+
+def test_cc_by_fixture_matches_full_official_instrument():
+    import hashlib
+    text = (Path(__file__).parent / "fixtures/license_text/CC-BY-4.0.txt").read_text()
+    official = text.replace("More_considerations", "More considerations")
+    assert hashlib.sha256(" ".join(official.split()).encode()).hexdigest() == (
+        "1f5a529dc95849305307f0d6861169d8cae9e99807e4abcec68ef9ad19235652"
+    )
+
+
+@pytest.mark.parametrize("change", ["none", "missing-section", "changed-section", "notice-only", "missing-notice", "changed-notice", "extra", "duplicate", "wrong-declaration"])
+def test_requests_complete_apache_terms_and_notice(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures/license_text"
+    texts = [(directory / f"requests-{name}.txt").read_text() for name in ("license", "notice")]
+    terms = ["Apache-2.0", "Apache Software License"]
+    if change == "missing-section":
+        texts[0] = texts[0].split("   9. Accepting Warranty")[0]
+    elif change == "changed-section":
+        texts[0] = texts[0].replace("royalty-free", "royalty-bearing")
+    elif change == "notice-only":
+        texts = texts[1:]
+    elif change == "missing-notice":
+        texts = texts[:1]
+    elif change == "changed-notice":
+        texts[1] += "Commercial use forbidden."
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "duplicate":
+        texts.append(texts[1])
+    elif change == "wrong-declaration":
+        terms = ["MIT"]
+    assert _declaration_matches_text(terms, [{"text": text} for text in texts]) is (change in {"none", "missing-notice"})
+
+
+def test_requests_terms_match_complete_official_apache_sections():
+    import hashlib
+    directory = Path(__file__).parent / "fixtures/license_text"
+    official = (directory / "sniffio-instrument-1.txt").read_text()
+    assert hashlib.sha256(" ".join(official.split()).encode()).hexdigest() == (
+        "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645"
+    )
+    terms = official.split("END OF TERMS AND CONDITIONS")[0]
+    actual = (directory / "requests-license.txt").read_text()
+    assert " ".join(actual.split()) == " ".join(terms.split())
+
+
+@pytest.mark.parametrize("change", ["none", "missing-grant", "changed-grant", "changed-readme", "changed-changelog", "extra", "duplicate", "wrong-declaration"])
+def test_boolean_py_complete_grant_and_documentation(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures/license_text"
+    texts = [(directory / f"boolean-py-{name}.txt").read_text() for name in ("license", "readme", "changelog")]
+    terms = ["BSD-2-Clause"]
+    if change == "missing-grant":
+        texts = texts[1:]
+    elif change == "changed-grant":
+        texts[0] = texts[0].replace("with or without modification", "without modification")
+    elif change == "changed-readme":
+        texts[1] += "Commercial use forbidden."
+    elif change == "changed-changelog":
+        texts[2] += "Unreviewed terms."
+    elif change == "extra":
+        texts.append("GPL additional grant")
+    elif change == "duplicate":
+        texts.append(texts[1])
+    elif change == "wrong-declaration":
+        terms = ["MIT"]
+    assert _declaration_matches_text(terms, [{"text": text} for text in texts]) is (change == "none")

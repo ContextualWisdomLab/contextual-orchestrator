@@ -391,6 +391,18 @@ def test_native_artifact_license_evidence_is_lock_bound_and_fails_closed(tmp_pat
         assert hashlib.new("sha256" if ecosystem == "cargo" else "sha512", archive.read_bytes()).hexdigest() in source
 
 
+def test_verified_native_archive_without_declaration_is_distinct_from_missing_archive(tmp_path):
+    from scripts.ci.dependency_inventory import _native_license_terms
+
+    package, _ = _native_archive(tmp_path, "npm", "example", "1.2.3", None, declaration=None)
+    terms, source, files = _native_license_terms("npm", package, tmp_path, False)
+    assert terms == [] and files == []
+    assert "declares no supported licence metadata" in source
+    missing = _native_license_terms("npm", package, tmp_path / "absent", False)
+    assert "locked native artifact absent" in missing[1]
+    assert "declares no supported licence metadata" not in missing[1]
+
+
 def test_native_collection_covers_both_npm_locks_and_local_workspace(tmp_path):
     """All native entries get evidence, including dev/optional and local members."""
     from scripts.ci.release_license_gate import classify_inventory_licenses
@@ -830,3 +842,80 @@ def test_nested_archive_size_limit_is_checked_before_read(tmp_path, monkeypatch)
     monkeypatch.setattr(inventory, "_NATIVE_ARCHIVE_LIMIT", 2048)
     with pytest.raises(InventoryError, match="nested wheel archive exceeds"):
         inventory._artifact_distributions(tmp_path, "example", "1.0")
+
+
+def test_package_body_license_evidence_cannot_be_hidden_by_root_metadata(tmp_path):
+    """Keep separately scoped package evidence without applying the root grant."""
+    from scripts.ci.dependency_inventory import _artifact_distributions
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    payloads = {
+        "example/data/cc-by-4.0.LICENSE": b"separately scoped license terms",
+        "example/data/index.json.ABOUT": b"about_resource: index.json\nlicense_expression: cc-by-4.0\n",
+    }
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example-1.0.dist-info/LICENSE", "Permission is hereby granted, free of charge.")
+        for name, data in payloads.items():
+            archive.writestr(name, data)
+        archive.writestr("example/license.py", "# source module, not a license instrument\n")
+    records = _artifact_distributions(tmp_path, "example", "1.0")
+    assert records[0]["unscoped_license_files"] == [
+        {"name": name, "sha256": hashlib.sha256(data).hexdigest(), "text": data.decode()}
+        for name, data in payloads.items()
+    ]
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": records}]})
+    assert not groups["permitted"]
+    assert "package-body license scope unresolved" in groups["undecidable"][0]["license"]
+
+
+@pytest.mark.parametrize("ecosystem", ["cargo", "npm"])
+def test_native_suffix_instruments_cannot_be_omitted(tmp_path, ecosystem):
+    from scripts.ci.dependency_inventory import _native_license_terms
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    prefix = "example-1.0" if ecosystem == "cargo" else "package"
+    payloads = {
+        f"{prefix}/data/extra.LICENSE": "separately scoped terms",
+        f"{prefix}/data/index.ABOUT": "about_resource: index.json\nlicense_expression: LicenseRef-unknown\n",
+        f"{prefix}/license.js": "// source module, not a grant\n",
+        f"{prefix}/license.rs": "// source module, not a grant\n",
+    }
+    package, _ = _native_archive(tmp_path, ecosystem, "example", "1.0",
+                                "Permission is hereby granted, free of charge.", extra=payloads)
+    terms, source, files = _native_license_terms(ecosystem, package, tmp_path, False)
+    assert {f["name"] for f in files} == {f"{prefix}/LICENSE", *list(payloads)[:2]}
+    for f in files:
+        if f["name"] in payloads:
+            assert f["sha256"] == hashlib.sha256(payloads[f["name"]].encode()).hexdigest()
+    package.update(licenses=terms, license_source=source, license_files=files)
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": ecosystem, "packages": [package]}]})
+    assert not groups["permitted"]
+    assert groups["undecidable"]
+
+
+def test_legacy_dotted_wheel_name_is_normalized_without_hiding_ambiguity(tmp_path):
+    from scripts.ci.dependency_inventory import _artifact_distributions
+
+    _wheel(tmp_path, "jaraco.classes", "3.4.0", ["License-Expression: MIT"])
+    records = _artifact_distributions(tmp_path, "jaraco-classes", "3.4.0")
+    assert len(records) == 1
+    assert records[0]["metadata_path"] == "jaraco.classes-3.4.0.dist-info/METADATA"
+    assert not _artifact_distributions(tmp_path, "jaraco-classes", "3.4")
+    _wheel(tmp_path, "jaraco_classes", "3.4.0", ["License-Expression: MIT"])
+    with pytest.raises(InventoryError, match="multiple wheels"):
+        _artifact_distributions(tmp_path, "jaraco-classes", "3.4.0")
+
+
+def test_workspace_license_instruments_stay_within_native_build_boundary():
+    """Both maturin generations require a crate-local license instrument."""
+    import tomllib
+
+    workspace = REPOSITORY_ROOT / "rust"
+    data = tomllib.loads((workspace / "Cargo.toml").read_text())
+    for member in data["workspace"]["members"]:
+        manifest = workspace / member / "Cargo.toml"
+        package = tomllib.loads(manifest.read_text())["package"]
+        instrument = (manifest.parent / package["license-file"]).resolve()
+        assert instrument.is_relative_to(manifest.parent)
+        assert instrument.read_bytes() == (REPOSITORY_ROOT / "LICENSE").read_bytes()

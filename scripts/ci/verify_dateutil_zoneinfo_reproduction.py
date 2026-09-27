@@ -14,18 +14,23 @@ def main() -> int:
         parser.add_argument('--' + option, required=True)
     args = parser.parse_args()
     wheel = Path(args.wheel)
-    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == 'a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427'
+    if not (hashlib.sha256(wheel.read_bytes()).hexdigest() == 'a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427'):
+        raise ValueError("invalid pinned archive evidence")
     source = Path(args.tzdata).read_bytes()
     with zipfile.ZipFile(wheel) as z:
         embedded = z.read('dateutil/zoneinfo/dateutil-zoneinfo.tar.gz')
     with tarfile.open(fileobj=io.BytesIO(embedded)) as t:
         members = t.getmembers()
-        assert len(members) < 1000
+        if not (len(members) < 1000):
+            raise ValueError("invalid pinned archive evidence")
         for m in members:
-            assert not PurePosixPath(m.name).is_absolute() and '..' not in PurePosixPath(m.name).parts
-            assert m.size < 65536 and (m.isfile() or m.islnk() or m.isdir())
+            if not (not PurePosixPath(m.name).is_absolute() and '..' not in PurePosixPath(m.name).parts):
+                raise ValueError("invalid pinned archive evidence")
+            if not (m.size < 65536 and (m.isfile() or m.islnk() or m.isdir())):
+                raise ValueError("invalid pinned archive evidence")
             if m.islnk():
-                assert not PurePosixPath(m.linkname).is_absolute() and '..' not in PurePosixPath(m.linkname).parts
+                if not (not PurePosixPath(m.linkname).is_absolute() and '..' not in PurePosixPath(m.linkname).parts):
+                    raise ValueError("invalid pinned archive evidence")
         with t.extractfile('METADATA') as f:
             metadata = json.load(f)
         expected = {}
@@ -34,9 +39,11 @@ def main() -> int:
                 continue
             with t.extractfile(m) as f:
                 expected[m.name] = f.read(65537)
-    assert hashlib.sha512(source).hexdigest() == metadata['tzdata_file_sha512']
+    if not (hashlib.sha512(source).hexdigest() == metadata['tzdata_file_sha512']):
+        raise ValueError("invalid pinned archive evidence")
     groups = metadata['zonegroups']
-    assert groups == ['africa', 'antarctica', 'asia', 'australasia', 'europe', 'northamerica', 'southamerica', 'etcetera', 'factory', 'backzone', 'backward']
+    if not (groups == ['africa', 'antarctica', 'asia', 'australasia', 'europe', 'northamerica', 'southamerica', 'etcetera', 'factory', 'backzone', 'backward']):
+        raise ValueError("invalid pinned archive evidence")
     owned = Path(tempfile.mkdtemp(prefix='co1083-zic-repro-'))
     inputs = owned / 'inputs'
     inputs.mkdir()
@@ -44,7 +51,8 @@ def main() -> int:
     with tarfile.open(fileobj=io.BytesIO(source)) as t:
         for name in groups:
             m = t.getmember(name)
-            assert m.isfile() and m.size < 1024 * 1024
+            if not (m.isfile() and m.size < 1024 * 1024):
+                raise ValueError("invalid pinned archive evidence")
             with t.extractfile(m) as f:
                 (inputs / name).write_bytes(f.read())
     cmd = [args.zic, '-b', 'fat', '-d', str(out), *[str(inputs / n) for n in groups]]

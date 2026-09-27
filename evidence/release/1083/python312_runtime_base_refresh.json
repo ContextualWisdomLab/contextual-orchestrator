@@ -1,0 +1,14 @@
+{
+  "registry": "docker.io/library/python",
+  "old_digest": "sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf",
+  "new_digest": "sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f",
+  "manifest_tool": "9b7f9e",
+  "new_scan_tool": "6acd50",
+  "new_scan_exit": 0,
+  "new_scan_sha256": "a6dc71ff4577bb45e16b81884763851e5801f707793a1aca011ceecc78fc0808",
+  "new_fixable_high_critical": 0,
+  "old_image_fixable_high": 40,
+  "old_image_fixable_critical": 3,
+  "platform": "linux/arm64",
+  "limits": "Base image scan only; full gateway image rebuild and scan remain necessary. No licence clearance, AMD64 proof or immutable release is claimed."
+}

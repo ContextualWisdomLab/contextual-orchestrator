@@ -1,0 +1,166 @@
+{
+  "inventory_source_sha": "8f788bda9b918ad7781dbc84d4477a9121294722",
+  "archives": [
+    {
+      "name": "opencode-darwin-arm64",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "5cce4019a6583ee7e144f2269a81f9db54596961acd59d5271a586bd8d487697",
+      "archive_bytes": 45937791,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "7cba9c3bce56a1fce39c4c3816eb82e1d524d3d17d11b8fc88fdba421334d24d6cba6d8d0fb95885355f92060367079781a32271ec8f163831a0e2c503fb1f05",
+      "source": "https://registry.npmjs.org/opencode-darwin-arm64/-/opencode-darwin-arm64-1.18.22.tgz (sha512 7cba9c3bce56a1fce39c4c3816eb82e1d524d3d17d11b8fc88fdba421334d24d6cba6d8d0fb95885355f92060367079781a32271ec8f163831a0e2c503fb1f05)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-darwin-x64",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "fdad1c720aa5cf3ad12152782fdcae14b3c9e1157a816a2c3c89b9715074011d",
+      "archive_bytes": 48113422,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "1536e46a09fbacbbf9c97b1d62cd4bac1ce47fccec568caf07a2678ce350f3c52d98770999cca6cd995b98ce3a45d1b96a9f31e74cc3b7ebfb9a278bdfee7b34",
+      "source": "https://registry.npmjs.org/opencode-darwin-x64/-/opencode-darwin-x64-1.18.22.tgz (sha512 1536e46a09fbacbbf9c97b1d62cd4bac1ce47fccec568caf07a2678ce350f3c52d98770999cca6cd995b98ce3a45d1b96a9f31e74cc3b7ebfb9a278bdfee7b34)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-darwin-x64-baseline",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "31807bbe871aba007a13b9760356f1e911d6857d0887d35561e1d5340922ba4e",
+      "archive_bytes": 48113487,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "3ae01a65d9f9e62cf8e18b9f4b2e63ceae01b581121c89b37188fd9f24b978f60fdc9e7b0e807f404e51ca740d1895e4a4dffb7a762586f86e1a21a52d67cf68",
+      "source": "https://registry.npmjs.org/opencode-darwin-x64-baseline/-/opencode-darwin-x64-baseline-1.18.22.tgz (sha512 3ae01a65d9f9e62cf8e18b9f4b2e63ceae01b581121c89b37188fd9f24b978f60fdc9e7b0e807f404e51ca740d1895e4a4dffb7a762586f86e1a21a52d67cf68)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-linux-arm64",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "8834305071beacc52799d88a07d51f612afd81e7ecbf60629b82c171ef9f4f6b",
+      "archive_bytes": 59943441,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "79828f583946848231b5475164c969ef75066e4eac9c160099e998bcf72f836382b389da9efa513cf6463df5140d286c8305015295adfa2d863864c905355876",
+      "source": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.18.22.tgz (sha512 79828f583946848231b5475164c969ef75066e4eac9c160099e998bcf72f836382b389da9efa513cf6463df5140d286c8305015295adfa2d863864c905355876)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-linux-arm64-musl",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "f47db50dd1b8d2362db5fe60d7658494862e534b9d61ff2cbbbd72ad43bcda6b",
+      "archive_bytes": 62069855,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "8f06b24fa44f1058da84c40f83fc5aa13c057402a67d979e13ba64e4671fb47ac100b74d7e756e94e9d810582c3c278845e1e54fd7aa74a2cc3d732c3fa610a7",
+      "source": "https://registry.npmjs.org/opencode-linux-arm64-musl/-/opencode-linux-arm64-musl-1.18.22.tgz (sha512 8f06b24fa44f1058da84c40f83fc5aa13c057402a67d979e13ba64e4671fb47ac100b74d7e756e94e9d810582c3c278845e1e54fd7aa74a2cc3d732c3fa610a7)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-linux-x64",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "b2deb0e5a54a4ad1823e5d2d5a8736009663a5ae8c57de3fa7b805afe7bd955f",
+      "archive_bytes": 60166060,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "4c58d2544804693d06e1b75aeb1dd3ff2063237b6ed28ecde9348190565b31e1654c247a158bd2e105243db4bdb99951e8f4a2fcabf225abbcdecf343c534818",
+      "source": "https://registry.npmjs.org/opencode-linux-x64/-/opencode-linux-x64-1.18.22.tgz (sha512 4c58d2544804693d06e1b75aeb1dd3ff2063237b6ed28ecde9348190565b31e1654c247a158bd2e105243db4bdb99951e8f4a2fcabf225abbcdecf343c534818)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-linux-x64-baseline",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "51fed3e74daf2595edcb8340aab0f4f4ede4fda7f0a05f0bf30d8a5f7c6e65c6",
+      "archive_bytes": 60166066,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "81c78124aa3b26faea34f5a718cdd2adb65cb0d319b73016c7738dad65b0622e1c43b8489da4b3c5ce44d86faa3d8e6f7e9eb8a2379da7e46dbd9d43cc8569e6",
+      "source": "https://registry.npmjs.org/opencode-linux-x64-baseline/-/opencode-linux-x64-baseline-1.18.22.tgz (sha512 81c78124aa3b26faea34f5a718cdd2adb65cb0d319b73016c7738dad65b0622e1c43b8489da4b3c5ce44d86faa3d8e6f7e9eb8a2379da7e46dbd9d43cc8569e6)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-linux-x64-baseline-musl",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "b5d23e4bb26c1d596a26a01658dbf4d92eb0610f191b437bbc2927682e8e72b8",
+      "archive_bytes": 62520736,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "31faa2de0009173b7fd5073dfe3eee61a1265bc15cde9a4f733e05e54497d797384a13217c03b85fce0233dcdd61489957c9856b1c313eade5ea6a71a06f0eee",
+      "source": "https://registry.npmjs.org/opencode-linux-x64-baseline-musl/-/opencode-linux-x64-baseline-musl-1.18.22.tgz (sha512 31faa2de0009173b7fd5073dfe3eee61a1265bc15cde9a4f733e05e54497d797384a13217c03b85fce0233dcdd61489957c9856b1c313eade5ea6a71a06f0eee)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-linux-x64-musl",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "2e8bf8693413a619f8099d1c4e7c36d3497a4f2de602e3fcc1242fce994e3b97",
+      "archive_bytes": 62520713,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "d99911f31b1aa716041b1843ab1b5afef85c68bb13d280765373fbb73ce756f1bf4d7fc8961ac06fc2ee33675cf7cb94694c655ad1b5ca2c88725b1befcd66a6",
+      "source": "https://registry.npmjs.org/opencode-linux-x64-musl/-/opencode-linux-x64-musl-1.18.22.tgz (sha512 d99911f31b1aa716041b1843ab1b5afef85c68bb13d280765373fbb73ce756f1bf4d7fc8961ac06fc2ee33675cf7cb94694c655ad1b5ca2c88725b1befcd66a6)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-windows-arm64",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "e33c433650d737580a73c7fb8910a580a16a3993d12093774b8ccf42957b7565",
+      "archive_bytes": 58396437,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "ef7d7d6949e85775379f6199aa6749d07c2b72b33f34c9b112d5496ff22f9b70743c4a17302367fc5f3e18f5549eae8473c5d8fb6e24a9f46df183a8313e3195",
+      "source": "https://registry.npmjs.org/opencode-windows-arm64/-/opencode-windows-arm64-1.18.22.tgz (sha512 ef7d7d6949e85775379f6199aa6749d07c2b72b33f34c9b112d5496ff22f9b70743c4a17302367fc5f3e18f5549eae8473c5d8fb6e24a9f46df183a8313e3195)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-windows-x64",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "995bcb9abdb23b0bd6ef5fc6e0de14df6f495e532966728fb47f8deac8b87892",
+      "archive_bytes": 60077841,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "ee67f57eeacb5cea2c88b8cd0ad9e664edd0b30f6bb269e260ffd24306eb54af8dfd19a09d608193c3485652d828f361833845d4c32d49f99e1434e9bd29c76f",
+      "source": "https://registry.npmjs.org/opencode-windows-x64/-/opencode-windows-x64-1.18.22.tgz (sha512 ee67f57eeacb5cea2c88b8cd0ad9e664edd0b30f6bb269e260ffd24306eb54af8dfd19a09d608193c3485652d828f361833845d4c32d49f99e1434e9bd29c76f)",
+      "declared_terms": [],
+      "license_files": []
+    },
+    {
+      "name": "opencode-windows-x64-baseline",
+      "version": "1.18.22",
+      "status": "verified",
+      "archive_sha256": "79793a5313e721a9e971e3ce940f98a5c88cad3dc24f7eee7b1e989d62537f8a",
+      "archive_bytes": 60077840,
+      "lock_digest_algorithm": "sha512",
+      "lock_digest": "c6d991c39df43bca3eadab7c77aa7528f4162badd68c58cfcc567c649bc4a146849da402d71a4532bf9373c08df42aff323c7f7d970efef43c0622190949a005",
+      "source": "https://registry.npmjs.org/opencode-windows-x64-baseline/-/opencode-windows-x64-baseline-1.18.22.tgz (sha512 c6d991c39df43bca3eadab7c77aa7528f4162badd68c58cfcc567c649bc4a146849da402d71a4532bf9373c08df42aff323c7f7d970efef43c0622190949a005)",
+      "declared_terms": [],
+      "license_files": []
+    }
+  ],
+  "limits": [
+    "Registry archives only; no package execution or native dependency composition clearance",
+    "Unknown metadata/instruments remain held; acquisition is not permission"
+  ],
+  "scope": "All twelve locked OpenCode 1.18.22 platform archives verified; no supported declaration or license instrument was found. This is not clearance for bundled components.",
+  "verification": {
+    "download_tool": "53c169",
+    "inventory_tool": "7b116a",
+    "classification_tool": "948266",
+    "counts": {
+      "permitted": 384,
+      "copyleft": 1,
+      "held": 144
+    },
+    "diagnostic_red": "16cc4f exit 1",
+    "diagnostic_green": "b5fcf0 session 94845 exit 0; 260 passed"
+  }
+}

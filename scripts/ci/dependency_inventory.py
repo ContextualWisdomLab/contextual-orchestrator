@@ -183,10 +183,22 @@ def _requirements_packages(path: Path, data: bytes) -> list[dict[str, str]]:
     return packages
 
 
+def _is_license_evidence(path: PurePosixPath) -> bool:
+    """Select candidate instruments and provenance, never infer their grant."""
+    if path.suffix.lower() in (".py", ".pyi", ".pyc", ".pyo", ".so", ".pyd", ".js", ".mjs", ".cjs", ".ts", ".rs", ".c", ".h", ".cpp"):
+        return False
+    name = path.name.upper()
+    return name.startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")) or name.endswith((".LICENSE", ".LICENCE", ".ABOUT"))
+
+
 def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list[dict[str, Any]]:
     """Read the root and every bundled Python distribution from one wheel."""
     normalized = _NAME_SEPARATORS.sub("_", name.strip().lower())
-    candidates = sorted(artifact_dir.glob(f"{normalized}-{version}-*.whl"))
+    candidates = sorted(
+        path for path in artifact_dir.glob("*.whl")
+        if _NAME_SEPARATORS.sub("_", path.name.partition("-")[0].lower()) == normalized
+        and path.name.partition("-")[2].startswith(f"{version}-")
+    )
     if not candidates:
         return []
     if len(candidates) != 1:
@@ -218,6 +230,17 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
                     bundled_digest.update(chunk)
             bundled_archives.append({"name": member, "sha256": bundled_digest.hexdigest(),
                                      "size": info.file_size, "license_source": "unresolved nested archive scope"})
+        unscoped_license_files = []
+        for member in members:
+            path = PurePosixPath(member)
+            if archive.getinfo(member).is_dir() or any(part.endswith(".dist-info") for part in path.parts):
+                continue
+            if _is_license_evidence(path):
+                if archive.getinfo(member).file_size > _NATIVE_TEXT_LIMIT:
+                    raise InventoryError("wheel package-body licence exceeds text evidence limit")
+                raw = archive.read(member)
+                unscoped_license_files.append({"name": member, "sha256": hashlib.sha256(raw).hexdigest(),
+                                               "text": raw.decode("utf-8", "replace")})
         metadata_members = [member for member in members if member.endswith(".dist-info/METADATA")]
         roots = [member for member in metadata_members if len(PurePosixPath(member).parts) == 2]
         if len(roots) != 1:
@@ -284,6 +307,8 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
                       "licenses": terms, "license_source": source, "license_files": license_files,
                       "artifact_sha256": digest, "metadata_sha256": hashlib.sha256(raw_metadata).hexdigest(),
                       "metadata_path": metadata_path}
+            if index == 0 and unscoped_license_files:
+                record["unscoped_license_files"] = unscoped_license_files
             if index == 0 and bundled_archives:
                 record["bundled_archives"] = bundled_archives
             if index:
@@ -406,9 +431,7 @@ def _native_license_terms(
             expanded += member.size
             if expanded > 2 * 1024 * 1024 * 1024:
                 raise InventoryError("native archive exceeds the 2 GiB expanded evidence limit")
-            selected = str(path) == f"{prefix}/{metadata_name}" or path.name.upper().startswith(
-                ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")
-            )
+            selected = str(path) == f"{prefix}/{metadata_name}" or _is_license_evidence(path)
             if not member.isfile() or not selected:
                 continue
             if str(path) in files or member.size > _NATIVE_TEXT_LIMIT:
@@ -455,7 +478,10 @@ def _native_license_terms(
         # Exclusive creation also refuses a cache entry replaced by a concurrent writer.
         with artifact.open("xb") as handle:
             handle.write(raw)
-    return terms, f"{url} ({algorithm} {digest})", license_files
+    source = f"{url} ({algorithm} {digest})"
+    if not terms:
+        source += "; declares no supported licence metadata"
+    return terms, source, license_files
 
 
 def _local_cargo_license_terms(

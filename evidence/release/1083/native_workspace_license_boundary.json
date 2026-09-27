@@ -1,0 +1,29 @@
+{
+  "defect_source": "stacked native licence declarations, not current main",
+  "red": {
+    "tool": "76fc12",
+    "exit": 1,
+    "message": "license file ../../LICENSE resolves outside Cargo workspace root"
+  },
+  "repair": "Both workspace crates reference ../LICENSE; rust/LICENSE equals root MIT instrument byte for byte.",
+  "green": {
+    "decision_wheel_tool": "28b438",
+    "exit": 0,
+    "wheel_sha256": "f13322a44b01d5c8f2f0da7c4b2d8e9fc523e29e31673d96f414225841d1cd29",
+    "instrument_verification": "c8d6e6",
+    "tests": "9a8216 exit0: 261 passed",
+    "token_wheel_tool": "fe50f3 exit0",
+    "token_wheel_sha256": "558d4d0447aad60766ac2286c696b1bedfd5f2dd16aa7867e49aae53145f8d3f"
+  },
+  "limits": "Native build and instrument packaging verified on macOS arm64 with pinned maturin1.15/Rust1.97.1/Python3.12.13. Full suite running in reused test dependency environment; not a hosted security gate or immutable release, no bundled licence waiver.",
+  "integration": {
+    "source_sha": "7af8a89a8aa015445e3d204960eda8a9c8727962",
+    "inventory": "971176 exit0",
+    "classification": "e78ad1: 384 permitted, 1 copyleft, 144 undecidable",
+    "license_sha256": "08f1fd81fb120bc468b69dc3e58ea0dc23c216305c766e45e107f56c76559e3f",
+    "native_rust_source_match": "a99fe3: no Rust tree diff against 9b44c7a9",
+    "full_suite_handle": 2089,
+    "full_suite_junit": "/private/tmp/co-current-full-suite-1083.xml",
+    "full_suite_status": "RUNNING, terminal acceptance not yet established"
+  }
+}

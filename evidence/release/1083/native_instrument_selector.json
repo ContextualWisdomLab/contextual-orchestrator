@@ -1,0 +1,70 @@
+{
+  "inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "checked_cached_registry_archives": 388,
+  "evidence_deltas": [
+    {
+      "ecosystem": "npm",
+      "name": "lz-string",
+      "version": "1.5.0",
+      "added": [
+        {
+          "name": "package/tests/lib/jasmine-1.3.1/MIT.LICENSE",
+          "sha256": "4980fbf7a066767fb0fe963464cbb1b8c566fb46c55848fcf940143fdca68046"
+        }
+      ],
+      "removed": []
+    },
+    {
+      "ecosystem": "npm",
+      "name": "playwright",
+      "version": "1.62.1",
+      "added": [
+        {
+          "name": "package/lib/matchers/expect.js.LICENSE",
+          "sha256": "78b2f60563d28cb3f9ea17e4cdc0657681e641e2f72766771d9e2da9ca94c065"
+        },
+        {
+          "name": "package/lib/transform/babelBundle.js.LICENSE",
+          "sha256": "6e396aded640f0bd2671d57442575ce8172aa1371b2dece6c5d4048f2f38f34c"
+        },
+        {
+          "name": "package/lib/transform/esmLoader.js.LICENSE",
+          "sha256": "3cec0c446526a449e4613b0defee0adb585f88f1d7fdba919421226d69be078e"
+        }
+      ],
+      "removed": []
+    },
+    {
+      "ecosystem": "npm",
+      "name": "playwright-core",
+      "version": "1.62.1",
+      "added": [
+        {
+          "name": "package/lib/webp_codec.LICENSE",
+          "sha256": "995c7ee35aceb7666829b7a501ca89c0864e12b493c1174b155774ab1e03d831"
+        },
+        {
+          "name": "package/lib/serverRegistry.js.LICENSE",
+          "sha256": "5cf540fe55a2ba9bcf0eb76e739b454faa8581e2f1a0f777602ef0855534302e"
+        },
+        {
+          "name": "package/lib/utilsBundle.js.LICENSE",
+          "sha256": "57945338cba4878e373646733528017fbe3db1503ec2b431fd30d2a390c70c33"
+        }
+      ],
+      "removed": []
+    }
+  ],
+  "errors": [],
+  "classification_totals": {
+    "permitted": 370,
+    "copyleft": 0,
+    "undecidable": 143
+  },
+  "regression": "two Cargo/npm failures before repair; 258 affected tests passed after repair",
+  "limits": [
+    "No registry downloads or package hooks executed",
+    "Unresolved cache/metadata records retained, never cleared",
+    "Candidate naming is not complete source or bundled-component scope proof"
+  ]
+}

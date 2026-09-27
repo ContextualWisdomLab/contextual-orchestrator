@@ -1,0 +1,53 @@
+diff --git a/.github/workflows/release_apps.yml b/.github/workflows/release_apps.yml
+index 94dd1e4..881704e 100644
+--- a/.github/workflows/release_apps.yml
++++ b/.github/workflows/release_apps.yml
+@@ -321,6 +321,14 @@ jobs:
+         run: |
+           cp -r apps/oxlint/dist-pkg-plugin-eslint/. ${plugin_eslint_package_path}/
+ 
++      - name: Include package license instruments
++        run: |
++          : "${npm_dir:?}"
++          for package in "${npm_dir}"/*; do
++            cp LICENSE "${package}/LICENSE"
++            cp THIRD-PARTY-LICENSE "${package}/LICENSE.third-party"
++          done
++
+       - name: Check Publish
+         run: |
+           node .github/scripts/check-npm-packages.js "${npm_dir}/*" "${package_path}"
+@@ -592,6 +600,14 @@ jobs:
+       - name: Copy dist files to npm package
+         run: cp -r apps/oxfmt/dist npm/oxfmt/dist
+ 
++      - name: Include package license instruments
++        run: |
++          : "${npm_dir:?}"
++          for package in "${npm_dir}"/*; do
++            cp LICENSE "${package}/LICENSE"
++            cp THIRD-PARTY-LICENSE "${package}/LICENSE.third-party"
++          done
++
+       - name: Check Publish
+         run: node .github/scripts/check-npm-packages.js "${npm_dir}/*" "${package_path}"
+ 
+diff --git a/.github/workflows/reusable_release_napi.yml b/.github/workflows/reusable_release_napi.yml
+index adf6cc3..c6076e9 100644
+--- a/.github/workflows/reusable_release_napi.yml
++++ b/.github/workflows/reusable_release_napi.yml
+@@ -239,6 +239,14 @@ jobs:
+       - run: pnpm -C ${package_path} build-browser-bundle --npmDir ../../${npm_dir}
+         if: ${{ inputs.name == 'parser' }}
+ 
++      - name: Include package license instruments
++        run: |
++          : "${npm_dir:?}"
++          for package in "${npm_dir}"/*; do
++            cp LICENSE "${package}/LICENSE"
++            cp THIRD-PARTY-LICENSE "${package}/LICENSE.third-party"
++          done
++
+       - name: Check Publish
+         run: node .github/scripts/check-npm-packages.js "${npm_dir}/*" "${package_path}"
+ 

@@ -287,6 +287,8 @@ def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dic
                 copyleft.append(row)
             elif any(verdict == "undecidable" for verdict, _ in verdicts):
                 undecidable.append(row)
+            elif package.get("unscoped_license_files"):
+                undecidable.append({**row, "license": f"{row['license']} (package-body license scope unresolved)"})
             elif package.get("bundled_archives"):
                 undecidable.append({**row, "license": f"{row['license']} (nested archive scope unresolved)"})
             elif "license_files" in package and not package.get("license_files"):
@@ -329,6 +331,7 @@ _LICENCE_FAMILY_TOKENS = {
 
 
 # Complete SPDX instruments from license-list-data@31ba1a50e5397e00a304dbadc76531740e89ee48.
+# Primary-source variants are recorded in the instrument-set runbook.
 # Only whitespace is normalized. No package, filename or keyword exemption.
 # The LLVM title's three/four leading dashes are the two verified archive forms.
 _CANONICAL_TEXT_HASHES = {
@@ -336,9 +339,73 @@ _CANONICAL_TEXT_HASHES = {
         "63bdd4702a2eaf44fc39da5567c649ee9a2da804b6434982b034ac37004eb459",
         "f42a00ac54d036890559853a40f95622ab3e63d52173f5714284134b2af11e3c",
     }),
+    "CC-BY-4.0": frozenset({
+        "1f5a529dc95849305307f0d6861169d8cae9e99807e4abcec68ef9ad19235652",
+        "25a40a30d753162c4026b87a389b9534c72436327abcd083f90da00ead6d6869",
+    }),
+    "PSF-2.0": frozenset({"350fbb5f093f61337b130b56e5a7119129c68975bebc1e7dd247d0206313d0e1"}),
     "MPL-2.0": frozenset({"e8ba82e63ba908724aaee6043943c5a2629b9ebf1af581ea0eea19a713123685"}),
-    "BlueOak-1.0.0": frozenset({"61c644f13191f65c6ff4e58322c5d92ca44702c37ef0e1bc36f08af1021835a7"}),
+    "BlueOak-1.0.0": frozenset({
+        "61c644f13191f65c6ff4e58322c5d92ca44702c37ef0e1bc36f08af1021835a7",
+        "d1d8b7a22428eba7e46e7e373d014141266ead51a00c9291a4792278110a8997",  # Complete equivalent Markdown rendering; see instrument-set record.
+    }),
 }
+
+
+# Complete reviewed permissive instrument sets and their selection notices.
+# See docs/doctoring/dual_license_instrument_set.md; no filename/package trust.
+_REVIEWED_INSTRUMENT_SETS = {
+    "Unlicense OR MIT": frozenset({
+        "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1",
+        "952115fb93510335fd97e1e479516553fa0c4da1b49acddf9cd5d18392a3e1cf",
+        "2069c208cba553e43cd0b730df8a0c10bf1b1101b96f661e2f1307c73b9722e3",
+    }),
+    'Apache-2.0 OR BSD-3-Clause': frozenset({
+        'c9a79affdaaa650e90a55607fef88e5c5e4f0547a78ccfe8014e1693ef839120',
+        'a0b9af0d1614b5e8f3004aaf2092bf005b64398ef067ca868d81a8beeb6cb0b5',
+        'c268cc09d949fefffa9309d0d6c0b44674a873823ad419680e623919478e4619',
+    }),
+    'Apache-2.0 OR BSD-2-Clause': frozenset({
+        '4456c8e282202cfddd8665522fd320e8b7f64d8a1f7d9abfd7802080576cf117',
+        '59d8f0ba87ad9a2f1a431123c8d16646e5b89ba53653e818f16d136d77263c99',
+        '13c6a3608faee72d1b3a7aad6d1c8036408ed82d9a28a7cf0ef87d6acc4f91c9',
+    }),
+    ('Apache Software License', 'MIT License', 'MIT OR Apache-2.0'): frozenset({
+        '5e776b61ef48708fd6760085a01c9acddc107b6a071f745b5969d1d5a97899d1',
+        '0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645',
+        'dcdd5bec314a2c06621a42d529b6c1e6705301c076bb641fff909129fbca8897',
+    }),
+}
+
+
+# Exact complete grant plus attribution; single-instrument grants keep their path.
+_REVIEWED_ATTRIBUTION_SETS = frozenset({
+    ("BSD-2-Clause", frozenset({
+        "1321ad494e7b299c2f0177b6347744906eeffdb5f3a6d4b963434104495f3e8b",
+        "2f576aa10646cff90c0b2aeb0632ed45de8cdc7c1f73e43bbf2cfb3f295e7e89",
+        "9236c94ea1a21a5396a6ea0e7d19e82d587d7b64a944c7e11bf42c982a17e75c",
+    })),
+    (("Apache Software License", "Apache-2.0"), frozenset({
+        "09ae9bf1886f530f7338889ef805f37b288ec6adedd1e1e32058921acf05a782",
+        "4dded41b5658c1d3b15c22e7515eaf5e1138b4932edb7886aa59c39dd1c901de",
+    })),
+    ("BSD-2-Clause", frozenset({
+        "24977015e801cd4c9bbb8c6e8094c6644d5a03c6f466e678a0d7410d4f2b5699",
+        "81276613b724215ef018bcb85fcd97eaf5a9c0be3e12084f81dba4777409d458",
+    })),
+    ("BSD-2-Clause", frozenset({
+        "24977015e801cd4c9bbb8c6e8094c6644d5a03c6f466e678a0d7410d4f2b5699",
+        "9a343abef2c0ea7bd2f67cc9696e9c32f1fb18d6efc603a034d757d09684e2d5",
+    })),
+    (("MIT", "MIT License"), frozenset({
+        "e6690babf4bc31029ccffd0fe1f35c698007d81008ff576274435aae1102d232",
+        "8c319ea357316cadb17350ef988afaefa44f9b635acb78d757a4048fd00ce2e2",
+    })),
+    (("Apache Software License", "Apache-2.0"), frozenset({
+        "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
+        "b70d362542e47e70df8e7ae570c48dee966450e73d06bdf236edf9446165e5e3",
+    })),
+})
 
 
 def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> bool:
@@ -358,6 +425,14 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
     if not texts or len(texts) != len(license_files):
         # A record with an empty or non-dict licence entry is incomplete.
         return False
+    reviewed_key = terms[0] if len(terms) == 1 else tuple(sorted(terms))
+    actual = frozenset(hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+                       for text in texts)
+    if len(texts) == len(actual) and (reviewed_key, actual) in _REVIEWED_ATTRIBUTION_SETS:
+        return True
+    if reviewed_key in _REVIEWED_INSTRUMENT_SETS:
+        required = _REVIEWED_INSTRUMENT_SETS[reviewed_key]
+        return len(texts) == len(required) and actual == required
     evidenced = False
     canonical_terms = set(terms) & _CANONICAL_TEXT_HASHES.keys()
     if canonical_terms != set(terms):

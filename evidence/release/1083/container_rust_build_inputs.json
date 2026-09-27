@@ -1,0 +1,10 @@
+{
+  "baseline_source": "20adbc9c75b51076b11866ee7f769d12271b4aee",
+  "root_cause": "Docker dependency-builder copied token_counter but omitted workspace member decision_receipt. It also omitted rust/LICENSE referenced by both crate manifests.",
+  "red": {"tool": "9dd651", "cargo_metadata_exit": 101, "failure": "missing rust/decision_receipt/Cargo.toml"},
+  "repair": "Copy the existing decision_receipt member and workspace LICENSE into the existing build stage.",
+  "green": {"tool": "76ea86", "cargo_metadata_exit": 0, "workspace_members": 2, "license_files_verified_against_root": 2},
+  "regression": {"tool": "7e2717", "command": ".venv/bin/python -m pytest -q tests/test_compose_contract.py", "passed": 3, "exit": 0},
+  "limitations": "This proves actual Cargo workspace admission and staged source instruments, not a full container build, container SBOM, runtime acceptance or license clearance. An initial proof harness resolved a relative license path incorrectly and failed; the corrected proof resolves it relative to each manifest.",
+  "security_boundary": "Pinned base image digests, hash-locked dependencies, runtime credentials and required gates are unchanged. No container was started or published."
+}

@@ -1,0 +1,21 @@
+{
+  "source_sha": "4d18bc186553ca6ce619049dfdd63d4100f504a3",
+  "wheel_sha256": "72a39b232279e36765f4a142f1462e92a99e3a4ac98fc3c0c38339e62a058219",
+  "license_files": [
+    {
+      "archive_member": "pip_requirements_parser-0.1.dev1+g4d18bc1.d20260927.dist-info/licenses/src/packaging_legacy_version.py.LICENSE",
+      "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+    },
+    {
+      "archive_member": "pip_requirements_parser-0.1.dev1+g4d18bc1.d20260927.dist-info/licenses/src/packaging_legacy_version.py.LICENSE.APACHE",
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+    },
+    {
+      "archive_member": "pip_requirements_parser-0.1.dev1+g4d18bc1.d20260927.dist-info/licenses/src/packaging_legacy_version.py.LICENSE.BSD",
+      "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+    }
+  ],
+  "source_unchanged": true,
+  "scope": "Local packaging inclusion proof with shallow-clone SCM development version, not released32.0.1 evidence or published upstream artifact",
+  "build_tools_lock_sha256": "fb3404d7cf4a748fd383f4a108ea9c77cf07bea0d04f03b0ed2338d4848ab95c"
+}

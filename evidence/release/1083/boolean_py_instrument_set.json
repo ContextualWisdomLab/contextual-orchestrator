@@ -1,0 +1,24 @@
+{
+  "inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "artifact_sha256": "ef28a70bd43115208441b53a045d1549e2f0ec6e3d08a9d142cbc41c1938e8d9",
+  "name": "boolean-py",
+  "version": "5.0",
+  "declarations": [
+    "BSD-2-Clause"
+  ],
+  "license_files": [
+    {
+      "name": "boolean_py-5.0.dist-info/licenses/CHANGELOG.rst",
+      "sha256": "668591601989e0845d728db39fdcbf005323965b1a0db7580988da78e163c519"
+    },
+    {
+      "name": "boolean_py-5.0.dist-info/licenses/LICENSE.txt",
+      "sha256": "5ea0cdf8cfc824b446cccf597ff6518c3607a659e9804bc75f1261f9c6ac4ada"
+    },
+    {
+      "name": "boolean_py-5.0.dist-info/licenses/README.rst",
+      "sha256": "c159099ed4ae91ff7e1ba43e52f7bef5fab963deeae47e4d6a2ec6fd73ea4cbb"
+    }
+  ],
+  "review": "Entire BSD two-condition grant, complete README and CHANGELOG read. README repeats copyright/SPDX designation. Changelog release/API history only; no further grant or restriction. Exact actual wheel/raw-file hashes verified. No filename exemption."
+}

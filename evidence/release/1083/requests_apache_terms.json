@@ -1,0 +1,23 @@
+{
+  "inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "artifact_sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+  "name": "requests",
+  "version": "2.34.2",
+  "declarations": [
+    "Apache-2.0",
+    "Apache Software License"
+  ],
+  "license_files": [
+    {
+      "name": "requests-2.34.2.dist-info/licenses/LICENSE",
+      "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b"
+    },
+    {
+      "name": "requests-2.34.2.dist-info/licenses/NOTICE",
+      "sha256": "f5110972dedad2b4e9d314518daf3b7d72d6e02e499acd802181de6f74571dcc"
+    }
+  ],
+  "primary_source": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+  "primary_source_raw_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "comparison": "All sections 1-9 equal authoritative source before END OF TERMS AND CONDITIONS under whitespace normalization. No term removed or altered; exact NOTICE retained. No general truncation waiver."
+}

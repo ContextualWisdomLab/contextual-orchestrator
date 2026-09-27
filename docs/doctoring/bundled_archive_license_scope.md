@@ -89,3 +89,18 @@ full inventory and scanner SBOM produces 616 components, including one explicit
 `dateutil/zoneinfo/dateutil-zoneinfo.tar.gz` file and its parent edges. This is
 projection proof using the recorded inventory revision, not a newly scanned
 release or complete license adjudication. The 159 holds remain.
+
+## Optimized Python validation
+
+The standalone reproduction verifier initially used `assert` for pinned wheel,
+source, archive path, entry and input-group validation. Python `-O` removes
+those checks. A modified wheel with the same embedded payload but different ZIP
+comment was accepted under `-O`, despite its different wheel digest.
+
+All verifier input checks now raise ValueError explicitly. The optimized
+wrong-wheel control is rejected before reading source or writing a receipt.
+A runnable regression covers that boundary. With `python -O`, the real pinned
+inputs still reproduce 598/598 timezone paths with exit 0, while native zic
+2022g still matches only 396/598 and returns 1. Historical receipts retain their
+original verifier hash; this change does not rewrite evidence history or clear
+any licensing hold.

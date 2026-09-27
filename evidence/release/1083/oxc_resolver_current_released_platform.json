@@ -1,0 +1,12 @@
+{
+  "name": "@oxc-resolver/binding-linux-x64-gnu",
+  "version": "11.24.2",
+  "url": "https://registry.npmjs.org/@oxc-resolver/binding-linux-x64-gnu/-/binding-linux-x64-gnu-11.24.2.tgz",
+  "archive_sha256": "7acd50695b02c66c7afd90651c34039b49ae51b44dc0393bc76936c434df5429",
+  "registry_integrity_verified": "sha512-k/VlMMcSzMlahb3/fENM4rTlsJ0s3fFROA0KXPBmKggqmTSaE383sl8F3KCOXPLmVsYfW6hCitMhXCEtNeZxxg==",
+  "license_candidate_paths": [],
+  "limits": [
+    "One representative current released platform, not all19",
+    "Current pnpm pack ancestry behavior does not prove production platform npm publication includes an instrument"
+  ]
+}

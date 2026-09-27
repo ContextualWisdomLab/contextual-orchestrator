@@ -1,0 +1,51 @@
+{
+  "source_sha": "7af8a89a8aa015445e3d204960eda8a9c8727962",
+  "first_full_run": {
+    "tool": "370d28",
+    "exit": 1,
+    "tests": 5671,
+    "passed": 5670,
+    "failed": [
+      {
+        "class": "tests.test_distribution_license_metadata",
+        "name": "test_generated_metadata_declares_the_license"
+      }
+    ],
+    "elapsed_seconds": 372.3,
+    "junit_sha256": "b50fdcc36a23f1d587065d0035a26a1065043f287287a4102875b5c98c2a74e8"
+  },
+  "root_cause": {
+    "tool": "ce026d",
+    "missing": "uv_build in selected build environment",
+    "code_change": false
+  },
+  "remedy": {
+    "tool": "6d54b9/f74f4b",
+    "project_local_venv": "/private/tmp/co-release-current-main-1083/.venv",
+    "pinned_backend": "uv_build==0.12.5",
+    "artifact_lock": {
+      "url": "https://files.pythonhosted.org/packages/54/28/f0531fc8494031552388ea1adbbc4a931bb35d04112c635ba0ef68455478/uv_build-0.12.5-py3-none-macosx_11_0_arm64.whl",
+      "hash": "sha256:292b2bf9eeb9b304974efad64ef26702c7133a641d2ac2b893201542c2909426",
+      "size": 1393951,
+      "upload-time": "2026-08-14T19:55:51.185Z"
+    }
+  },
+  "focused_followup": {
+    "tool": "bea47c",
+    "exit": 0,
+    "passed": 3
+  },
+  "full_followup": {
+    "tool": "57ab57",
+    "handle": 70270,
+    "status": "COMPLETED_SUCCESS",
+    "junit": "/private/tmp/co-current-full-suite-build-fixed-1083.xml",
+    "exit": 0,
+    "passed": 5671,
+    "warnings": 2,
+    "elapsed_seconds": 273.51,
+    "junit_sha256": "5a67b521410a863fe4c8b85fb48f2bc128db0edfb58c043175e7cb75c0eed9df",
+    "log_sha256": "5f00b3098610791d8aafa6f1ea29ab5389e9aa508800246054ce5ce51569519a"
+  },
+  "scope": "Reused test dependency environment with no known-lock version mismatches among 56 installed distributions; fresh build environment includes exact hash-verified pinned backend. Not a fresh full uv sync or hosted gate."
+}

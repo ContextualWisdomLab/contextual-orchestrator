@@ -1,0 +1,24 @@
+{
+  "source_sha": "7af8a89a8aa015445e3d204960eda8a9c8727962",
+  "trivy_version": "0.74.0",
+  "raw_components": 644,
+  "bound_components": 644,
+  "declared_inventory_packages": 529,
+  "gate_exit": 1,
+  "gate_summary": [
+    "permitted=987 copyleft=1 undecidable=185 coverage_findings=0",
+    "COPYLEFT python:docutils==0.23 license=Public Domain; BSD License; GNU General Public License (GPL)"
+  ],
+  "raw_sbom_sha256": "3d1f809c1108c681afecca06f3b9a9940b8c5c64d6162db9e24705d2b4628c4c",
+  "bound_sbom_sha256": "d2de90b5286ceba7c8fa6d6a1534b9041209fab51159367f13886ca4595eb6fe",
+  "inventory_sha256": "ebc8263a6e274a4e6e8effaa82003b871dc94f94eab3ad7d5a0ff03f5a0e1c5d",
+  "wheel_sha256": "00a9acfe00ae8b7996db6827f6e509959de8c7b993c3d7ba5e5cf99fd47d9ccf",
+  "wheel_version": "0.2.0 candidate, not a selected/released SemVer",
+  "limits": "Name/version coverage and root final-wheel gap resolved; copyleft/unknown/inlined/native/image grant evidence still blocks release. Trivy language-manifest application grouping nodes also lack licenses; no blanket exemption added.",
+  "tool_evidence": {
+    "source_scan_and_bind": "50aefb exit0",
+    "two_wheel_builds": "4d73df exit0",
+    "final_inventory": "ccde83 exit0",
+    "final_gate": "ec5cf2 actual gate exit1; coverage findings0"
+  }
+}
