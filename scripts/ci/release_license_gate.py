@@ -378,6 +378,10 @@ _REVIEWED_INSTRUMENT_SETS = {
 
 # Exact complete grant plus attribution; single-instrument grants keep their path.
 _REVIEWED_ATTRIBUTION_SETS = frozenset({
+    (("MIT", "MIT License"), frozenset({
+        "e6690babf4bc31029ccffd0fe1f35c698007d81008ff576274435aae1102d232",
+        "8c319ea357316cadb17350ef988afaefa44f9b635acb78d757a4048fd00ce2e2",
+    })),
     (("Apache Software License", "Apache-2.0"), frozenset({
         "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
         "b70d362542e47e70df8e7ae570c48dee966450e73d06bdf236edf9446165e5e3",

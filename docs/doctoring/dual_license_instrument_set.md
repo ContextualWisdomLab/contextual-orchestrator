@@ -162,3 +162,22 @@ container/toolchain provenance remain separate.
 
 Primary source:
 https://raw.githubusercontent.com/python/cpython/0fb18b02c8ad56299d6a2910be0bab8ad601ef24/LICENSE
+
+## Complete MIT grant and authors attribution
+
+pytest-cov 7.1.0 carries the full MIT grant and a separate AUTHORS list. Both
+were read in full; the author list contains attribution, not an additional
+grant or restriction. The artifact declares exactly `MIT` and `MIT License`.
+Reuse the existing exact complete-grant/attribution path for these terms and
+the two entire normalized hashes. The exact wheel and both raw files were
+rechecked against `evidence/release/1083/mit_attribution_set.json`.
+
+No AUTHORS filename exemption is introduced. Notice-only, changed grant or
+author list, additional GPL text and duplicate files remain rejected. The
+parameterized controls cover both Apache and MIT pairs, and the existing
+single-grant path remains intact. Both complete files are retained as fixtures.
+
+The real complete pair failed before repair. All 227 affected tests pass,
+process exit 0. Full retained inventory comparison changes only pytest-cov:
+366 permitted, zero copyleft, 147 held. Copyright/attribution obligations and
+all separate native/container/provenance/release requirements remain.
