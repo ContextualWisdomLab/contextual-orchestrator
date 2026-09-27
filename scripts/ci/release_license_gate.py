@@ -341,6 +341,17 @@ _CANONICAL_TEXT_HASHES = {
 }
 
 
+# Complete reviewed MIT/Unlicense instruments and their selection notice.
+# See docs/doctoring/dual_license_instrument_set.md; no filename/package trust.
+_REVIEWED_INSTRUMENT_SETS = {
+    "Unlicense OR MIT": frozenset({
+        "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1",
+        "952115fb93510335fd97e1e479516553fa0c4da1b49acddf9cd5d18392a3e1cf",
+        "2069c208cba553e43cd0b730df8a0c10bf1b1101b96f661e2f1307c73b9722e3",
+    }),
+}
+
+
 def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> bool:
     """Whether the bundled licence text evidences a declared, non-copyleft term.
 
@@ -358,6 +369,11 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
     if not texts or len(texts) != len(license_files):
         # A record with an empty or non-dict licence entry is incomplete.
         return False
+    if len(terms) == 1 and terms[0] in _REVIEWED_INSTRUMENT_SETS:
+        required = _REVIEWED_INSTRUMENT_SETS[terms[0]]
+        actual = {hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+                  for text in texts}
+        return len(texts) == len(required) and actual == required
     evidenced = False
     canonical_terms = set(terms) & _CANONICAL_TEXT_HASHES.keys()
     if canonical_terms != set(terms):

@@ -695,3 +695,22 @@ def test_ambiguous_dual_license_marker_remains_undecidable():
     from scripts.ci.release_license_gate import classify_license_term
 
     assert classify_license_term("Dual License")[0] == "undecidable"
+
+
+@pytest.mark.parametrize("change", ["none", "notice-only", "missing-mit", "missing-unlicense", "changed", "gpl"])
+def test_complete_reviewed_dual_instrument_set(change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / name).read_text() for name in
+             ("dual-selection.txt", "dual-mit.txt", "dual-unlicense.txt")]
+    if change == "notice-only":
+        texts = texts[:1]
+    elif change == "missing-mit":
+        del texts[1]
+    elif change == "missing-unlicense":
+        del texts[2]
+    elif change == "changed":
+        texts[0] += "Commercial use is prohibited."
+    elif change == "gpl":
+        texts.append("GNU General Public License version 3")
+    assert _declaration_matches_text(["Unlicense OR MIT"], [{"text": t} for t in texts]) is (change == "none")
