@@ -71,3 +71,24 @@ release acceptance. Full inventory adjudication and hosted checks remain require
 Official metadata contracts: [Cargo manifest](https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields),
 [npm lockfile](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/),
 [npm archive layout](https://docs.npmjs.com/cli/v11/commands/npm-install/#description).
+
+The completed full native scan at collector head `f55915af` read all 400
+registry archives plus both local crates. The unchanged classifier permitted
+41/43 Cargo and 212/359 npm entries, holding the rest. Cargo holds were
+`target-lexicon` (the LLVM exception mentions GPLv2, triggering the existing
+blanket text matcher) and `tiktoken-rs` (no bundled license text). Npm holds
+comprised 116 declarations without bundled text, 12 without declarations
+(the OpenCode platform packages), and 19 declaration/text holds (MPL,
+CC-BY and BlueOak declarations). These require policy/publisher evidence
+repairs, not invented permissive terms or dropped optional/dev scope.
+
+All 122 Python entries were intentionally held in this native-only scan because
+no Python wheels were staged. That count is not a Python license verdict.
+The combined inventory/classifier/workflow/install-gate command passed 175
+tests with exit 0; one inherited minimal-interpreter pytest config warning
+remained. Actionlint and diff checks passed. No hosted or release acceptance
+is inferred from these local results.
+
+Native scan `full-inventory.json` SHA256: `8aad87013314e782d813865552e644797bb49bfb491f265c6e13b4ead707f887`.
+
+Native scan `full-classification.json` SHA256: `d8a491278a94f7c78c813bf62f0806297fc41b6b9ab61beb4cddc5edb776d4a4`.
