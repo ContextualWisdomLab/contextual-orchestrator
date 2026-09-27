@@ -137,12 +137,16 @@ def _conduct(
 
 
 @pytest.mark.parametrize("with_image", [False, True], ids=["text", "image"])
-@pytest.mark.parametrize("retry_after", ["1", None], ids=["provider-cooldown", "assumed-cooldown"])
+@pytest.mark.parametrize("retry_after", ["1", None], ids=["provider-cooldown", "unavailable-cooldown"])
 def test_rate_limit_storm_on_the_used_candidates_is_waited_out(monkeypatch, with_image, retry_after) -> None:
-    """Both request shapes honor each candidate's cooldown before retrying."""
+    """Both shapes wait for provider timing and never invent missing timing."""
     status, attempts = _conduct(monkeypatch, with_image=with_image, retry_after=retry_after)
 
-    assert status == 200
+    assert status == (200 if retry_after is not None else 429)
+    if retry_after is None:
+        assert [model for model, _, _ in attempts] == ["vendor/text-a", "vendor/text-b"]
+        assert all(failed for _, _, failed in attempts)
+        return
     limited = [(model, at) for model, at, failed in attempts if failed]
     assert {model for model, _ in limited} == {"vendor/text-a", "vendor/text-b"}
     assert len(limited) == 2
@@ -150,7 +154,7 @@ def test_rate_limit_storm_on_the_used_candidates_is_waited_out(monkeypatch, with
     for model, at in limited:
         subsequent = [later for candidate, later, _ in attempts if candidate == model and later > at]
         if subsequent:
-            assert subsequent[0] - at >= (1.0 if retry_after else 0.5) - 0.02
+            assert subsequent[0] - at >= 1.0 - 0.02
 
 
 def test_cooldown_beyond_wait_budget_fails_without_replay(monkeypatch) -> None:
