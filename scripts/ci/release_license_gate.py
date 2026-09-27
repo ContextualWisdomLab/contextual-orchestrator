@@ -290,16 +290,16 @@ _RESTRICTION_PATTERN = re.compile(
 )
 
 _LICENCE_FAMILY_TOKENS = {
-    "MIT": ("mit", "permission is hereby granted"),
-    "BSD": ("bsd", "redistribution and use in source and binary forms"),
-    "APACHE": ("apache",),
+    "MIT": ("permission is hereby granted",),
+    "BSD": ("redistribution and use in source and binary forms",),
+    "APACHE": ("apache license",),
     "MPL": ("mozilla public license",),
-    "ISC": ("isc", "permission to use, copy, modify"),
+    "ISC": ("permission to use, copy, modify",),
     "0BSD": ("permission to use, copy, modify",),
     "PSF": ("python software foundation",),
-    "ZLIB": ("zlib", "altered source versions"),
-    "CC0": ("cc0", "public domain"),
-    "UNLICENSE": ("unlicense", "public domain"),
+    "ZLIB": ("altered source versions",),
+    "CC0": ("cc0 1.0 universal",),
+    "UNLICENSE": ("free and unencumbered software released into the public domain",),
 }
 
 
@@ -318,22 +318,24 @@ def _declaration_matches_text(terms: list[str], license_files: list[Any]) -> boo
         for entry in license_files
         if isinstance(entry, dict) and str(entry.get("text") or "").strip()
     ]
-    if not texts or len(texts) != len([entry for entry in license_files if isinstance(entry, dict)]):
+    if not texts or len(texts) != len(license_files):
         # A record with an empty or non-dict licence entry is incomplete.
         return False
-    evidenced = False
     for text in texts:
         # Every bundled text has to be acceptable: a permissive LICENSE next to
         # a separate GPL one is a package under both, not under the first.
         if _COPYLEFT_PATTERN.search(text) or _RESTRICTION_PATTERN.search(text):
             return False
         lowered = " ".join(text.split()).lower()
+        evidenced = False
         for term in terms:
             upper = term.upper()
             for family, tokens in _LICENCE_FAMILY_TOKENS.items():
                 if family in upper and any(token in lowered for token in tokens):
                     evidenced = True
-    return evidenced
+        if not evidenced:
+            return False
+    return True
 
 
 def _inventory_expectations(inventory: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
@@ -527,6 +529,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-sha", help="the released commit the inventory must describe")
     arguments = parser.parse_args(argv)
     if not arguments.sbom:
+        if arguments.mode == "release":
+            print("::error::--sbom is required in release mode; refusing to release.", file=sys.stderr)
+            return 1
         sbom = {"components": []}
     else:
       try:

@@ -178,7 +178,7 @@ def _artifact_license_terms(
     bytes, not to a registry's separate claim about them.
     """
     normalized = _NAME_SEPARATORS.sub("_", name.strip().lower())
-    candidates = sorted(artifact_dir.glob(f"{normalized}-{version}*.whl"))
+    candidates = sorted(artifact_dir.glob(f"{normalized}-{version}-*.whl"))
     if not candidates:
         # sdists are excluded on purpose: reading one usefully means running its
         # build backend, and an unreviewed package must not execute here.

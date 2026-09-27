@@ -312,3 +312,12 @@ def test_ordinary_lock_lines_are_not_refused(tmp_path, line) -> None:
     lock.write_text(f"{line}\n", encoding="utf-8")
 
     assert external_source_findings(lock, lock.read_bytes()) == []
+
+
+def test_wheel_version_prefix_is_not_exact_artifact_evidence(tmp_path):
+    """A nearby version cannot supply the pinned package's license evidence."""
+    _wheel(tmp_path, "library", "1.0.1", ["License-Expression: MIT"])
+    terms, source, files = _artifact_license_terms(tmp_path, "library", "1.0")
+    assert terms == []
+    assert "no wheel" in source
+    assert files == []

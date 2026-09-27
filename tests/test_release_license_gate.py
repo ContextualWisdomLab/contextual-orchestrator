@@ -106,7 +106,7 @@ def test_release_workflow_runs_the_gate_before_publishing() -> None:
     # Two adjudications, in this order: the inventory before any environment is
     # built, and the full gate once the SBOM for this commit is in hand.
     preinstall = verify_block.index("--mode preinstall")
-    environment = verify_block.index("run: uv run --locked")
+    environment = verify_block.index("uv sync --locked")
     sbom_fetch = verify_block.index("Fetch the required CycloneDX SBOM")
     release_gate = verify_block.index("--sbom sbom-download/cyclonedx-sbom.json")
     assert preinstall < environment < sbom_fetch < release_gate
@@ -548,3 +548,26 @@ def test_one_unmet_condition_holds_the_entry(package, expected) -> None:
     groups = classify_inventory_licenses(_inventory(packages=[package]))
 
     assert [row["name"] for row in groups[expected]] == [f"python:{package['name']}"]
+
+
+@pytest.mark.parametrize("mode, expected", [("preinstall", 0), ("release", 1)])
+def test_release_requires_sbom_even_with_valid_inventory(tmp_path, mode, expected):
+    """Only the preinstall gate may operate without a built-environment SBOM."""
+    package = {"name": "library", "version": "1", "licenses": ["MIT"],
+               "license_files": [{"text": "Permission is hereby granted, free of charge"}]}
+    path = tmp_path / "inventory.json"
+    path.write_text(json.dumps(_inventory(packages=[package])))
+    assert main(["--mode", mode, "--inventory", str(path), "--source-sha", "a" * 40]) == expected
+
+
+@pytest.mark.parametrize("files", [
+    [{"text": "Vendor EULA: submission is permitted subject to vendor terms."}],
+    [{"text": "Permission is hereby granted, free of charge"}, {"text": "Vendor EULA"}],
+    [{"text": "Permission is hereby granted, free of charge"}, None],
+])
+def test_every_license_text_must_evidence_the_declared_family(files):
+    """Unrelated words and a valid sibling must not certify unknown text."""
+    package = {"name": "library", "version": "1", "licenses": ["MIT"], "license_files": files}
+    groups = classify_inventory_licenses(_inventory(packages=[package]))
+    assert not groups["permitted"]
+    assert len(groups["undecidable"]) == 1
