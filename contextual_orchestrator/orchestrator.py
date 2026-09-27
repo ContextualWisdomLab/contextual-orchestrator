@@ -12762,10 +12762,12 @@ class TaskOrchestrator:
                     dict.fromkeys([*recovered_eligible_agent_ids, *current_eligible])
                 )
 
-                def raise_with_recovered_route() -> NoReturn:
+                def raise_with_recovered_route(
+                    failure: ProviderUpstreamError = exc,
+                ) -> NoReturn:
                     if merged_attempts:
                         raise _attach_route_evidence_to_upstream_error(
-                            exc,
+                            failure,
                             _route_evidence_payload(
                                 eligible_agent_ids=merged_eligible,
                                 attempted=merged_attempts,
@@ -12776,7 +12778,7 @@ class TaskOrchestrator:
                                 ),
                             ),
                         )
-                    raise exc
+                    raise failure
 
                 rejected_agent_ids = {
                     row.get("agent_id") for row in current_attempts
