@@ -234,14 +234,7 @@ def test_fractional_prior_refresh_preserves_single_observation_exactly() -> None
 def test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior() -> None:
     """Large prior mass must not erase completed Bernoulli outcomes."""
 
-    calls: list[tuple[float, float]] = []
-
-    class RecordingRng:
-        def betavariate(self, alpha: float, beta: float) -> float:
-            calls.append((alpha, beta))
-            return 0.5
-
-    router = ModelGroupRouter(rng=RecordingRng())
+    router = ModelGroupRouter()
     router.observe_success("member_d", 0.2)
     router.observe_failure("member_d")
 
@@ -252,8 +245,8 @@ def test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior() -> Non
     assert router.member_observation_count("member_d") == 2
 
     router.update_prior("member_d", 1.0, 1.0)
-    assert router.sampled_ranked_member_ids(["member_d"]) == ["member_d"]
-    assert calls == [(2.0, 2.0)]
+    report = router.member_report("member_d")
+    assert report["success_posterior_mean"] == 0.5
 
 
 def test_update_prior_rejects_invalid_components() -> None:

@@ -18,23 +18,16 @@ endpoint actually serves each request using only measured evidence:
   reports completion token counts, tokens-per-second samples are retained as
   diagnostic evidence. Routing consistently uses latency-derived
   responses-per-second.
-- **Deterministic report score** is ``P(success | data) / EWMA latency``:
-  expected successful responses per second. It has consistent physical units
-  and uses no hand-tuned weights. Unobserved report rows share one neutral
-  score; live selection does not use caller order as evidence.
-- **Live selection** (:meth:`ModelGroupRouter.sampled_ranked_member_ids`) draws
-  one Thompson sample (Thompson, 1933) per member from its own Beta(alpha,
-  beta) posterior instead of comparing the posterior mean, so traffic keeps
-  probabilistically exploring every credible member in proportion to
-  remaining uncertainty rather than concentrating on whichever member
-  currently leads the point estimate (Chapelle & Li, 2011; Agrawal & Goyal,
-  2012). Admin/report reads keep the deterministic mean-based order.
+- **Score** is ``P(success | data) / EWMA latency``: expected successful
+  responses per second. It has consistent physical units, uses no hand-tuned
+  weights, and degenerates gracefully -- members without any observation
+  share one identical neutral score, so ordering falls back to the caller's
+  static ranking until real evidence exists.
 """
 
 from __future__ import annotations
 
 import math
-import random
 import re
 import threading
 import time
@@ -55,8 +48,9 @@ BETA_PRIOR_FAILURE_COUNT = 1.0
 MIN_ROUTING_LATENCY_SECONDS = 1e-3
 RATE_OBSERVATION_WINDOW_SECONDS = 60.0
 
-#: Neutral deterministic report score for members with no observations.
-#: Live routing samples every member's explicit Beta prior instead.
+#: Neutral score assigned to members with no observations yet. All unobserved
+#: members share it exactly, which makes intra-group ordering fall back to the
+#: caller's static ranking instead of inventing a preference.
 UNOBSERVED_MEMBER_SCORE = BETA_PRIOR_SUCCESS_COUNT / (
     BETA_PRIOR_SUCCESS_COUNT + BETA_PRIOR_FAILURE_COUNT
 )
@@ -90,7 +84,6 @@ class ModelGroupRouter:
         min_latency_seconds: float = MIN_ROUTING_LATENCY_SECONDS,
         prior_resolver: Callable[[str], tuple[float, float]] | None = None,
         clock: Callable[[], float] = time.monotonic,
-        rng: random.Random | None = None,
     ) -> None:
         if not 0 < ewma_gain <= 1:
             raise ValueError("ewma_gain must be within (0, 1]")
@@ -100,11 +93,6 @@ class ModelGroupRouter:
         self._min_latency_seconds = float(min_latency_seconds)
         self._prior_resolver = prior_resolver
         self._clock = clock
-        # A literal default (`rng: random.Random = random.Random()`) would be
-        # evaluated once at def time -- one shared, unsynchronized instance
-        # reused by every router built without an explicit rng=. The
-        # None-sentinel gives each router its own private generator instead.
-        self._rng = rng if rng is not None else random.Random()
         self._lock = threading.Lock()
         # member_id -> posterior/prior floats, exact integer outcome counts,
         # and optional speed observations.
@@ -294,47 +282,6 @@ class ModelGroupRouter:
     def ranked_member_ids(self, member_ids: list[str] | tuple[str, ...]) -> list[str]:
         """Order member ids best-first by measured score, preserving input ties."""
         scored = {member_id: self.member_score(member_id) for member_id in member_ids}
-        return sorted(member_ids, key=lambda member_id: -scored[member_id])
-
-    def sampled_ranked_member_ids(
-        self, member_ids: list[str] | tuple[str, ...]
-    ) -> list[str]:
-        """Order member ids by one Thompson draw from every Beta posterior.
-
-        Every candidate, including a cold-start member still at its prior,
-        participates in posterior sampling. This is the Thompson (1933)
-        selection rule; caller order is not decision evidence. Invalid or
-        improper Beta shapes fail closed instead of falling back to a mean.
-
-        The sampled stability probability is divided by the same measured EWMA
-        latency term used by :meth:`ranked_member_ids`; members without a
-        latency observation retain the ledger's existing neutral reference
-        latency.
-        """
-        scored: dict[str, float] = {}
-        with self._lock:
-            for member_id in member_ids:
-                state = self._members.get(member_id)
-                if state is None:
-                    state = self._blank_state(member_id)
-                alpha = float(state["alpha"])
-                beta = float(state["beta"])
-                if (
-                    not math.isfinite(alpha)
-                    or not math.isfinite(beta)
-                    or alpha <= 0.0
-                    or beta <= 0.0
-                ):
-                    raise ValueError(
-                        "live Thompson sampling requires strictly positive Beta "
-                        f"shape parameters for {member_id!r}"
-                    )
-                stability_sample = self._rng.betavariate(alpha, beta)
-                ewma = state["ewma"]
-                latency = (
-                    1.0 if ewma is None else max(float(ewma), self._min_latency_seconds)
-                )
-                scored[member_id] = stability_sample / latency
         return sorted(member_ids, key=lambda member_id: -scored[member_id])
 
     def member_report(self, member_id: str) -> dict[str, float | int | None]:

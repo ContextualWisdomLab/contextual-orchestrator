@@ -150,13 +150,6 @@ redistribution is unclear.
   Cited by the request-partitioning ADR and doctoring receipts as external
   motivation for bounded ownership of long inputs. Citation only; this is not
   a reproduction of RLM experiments.
-- Thompson, W. R. (1933). On the likelihood that one unknown probability
-  exceeds another in view of the evidence of two samples. *Biometrika,
-  25*(3–4), 285–294. https://doi.org/10.1093/biomet/25.3-4.285
-  Grounds posterior probability-matching for live model-group member
-  selection. See
-  [Thompson-sampling routing traceability](thompson-sampling-model-group-routing.md).
-  Citation only; PDF not vendored.
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
@@ -419,7 +412,6 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
 - [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
 - [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
-- [DOI 10.1093/biomet/25.3-4.285](https://doi.org/10.1093/biomet/25.3-4.285)
 - [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
 - [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
 - [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)

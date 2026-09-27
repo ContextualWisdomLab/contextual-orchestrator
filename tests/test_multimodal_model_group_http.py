@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import random
 import threading
 import time
 import urllib.error
@@ -101,7 +100,6 @@ def test_json_capability_endpoints_use_measured_group_member(
     first = ModelAgent("first_member", "provider/first", tags=(capability,), group_name="media_group")
     second = ModelAgent("second_member", "provider/second", tags=(capability,), group_name="media_group")
     orchestrator = TaskOrchestrator([first, second])
-    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(first.id)
     orchestrator._group_router.observe_success(second.id, 0.1)
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
@@ -198,7 +196,6 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
         "second_video", "provider/second", tags=("video",), group_name="video_group"
     )
     orchestrator = TaskOrchestrator([first, second])
-    orchestrator._group_router._rng = random.Random(0)
     orchestrator._group_router.observe_failure(first.id)
     orchestrator._group_router.observe_success(second.id, 0.1)
     followups: list[tuple[str, str]] = []
