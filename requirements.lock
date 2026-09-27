@@ -12,9 +12,9 @@ annotated-types==0.7.0 \
     --hash=sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53 \
     --hash=sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89
     # via pydantic
-anyio==4.14.1 \
-    --hash=sha256:4e5533c5b8ff0a24f5d7a176cbe6877129cd183893f66b537f8f227d10527d72 \
-    --hash=sha256:8d648a3544c1a700e3ff78615cd679e4c5c3f149904287e73687b2596963629e
+anyio==4.14.2 \
+    --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 \
+    --hash=sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f
     # via
     #   httpx
     #   starlette
@@ -363,7 +363,20 @@ egressweave==0.1.0 \
     --hash=sha256:6bcb07109bdee25a6d49e5516f4c99ecd172ffe8536455d2cac860c44a4492f6 \
     --hash=sha256:e1e3a6dbabd4084fb03f19a95931ab96e4beeef96bc8fc7cf0d8e5b91e266057
     # via contextual-orchestrator (pyproject.toml)
-fast-mlsirm @ git+https://github.com/ContextualWisdomLab/fast-mlsirm.git@09f762ded35786dd1078222a4577ff09d649816f
+fast-mlsirm==0.11.4 \
+    --hash=sha256:1779228af4c5d932514e465e57e137fd88f0d7e51d9463e69f1c6efa901bc179 \
+    --hash=sha256:1ce70211d8f837e489d456863cba5c163d0d27972ecc1689b7787af0b40daed6 \
+    --hash=sha256:1e65070ffab835a8af7e3eef3f67740b5146e9325d1a52b84b72f30e8b23998e \
+    --hash=sha256:24bf3f0edd8a23a53a3e6ff4e9291f4574644c6e10b44c43294703dc97f0ebf8 \
+    --hash=sha256:761f13783484ba7ef82c810c9c740f113d20cf52f879556056dfae9b36e39731 \
+    --hash=sha256:9ee76243c95a548a5f988c070588256d8e8d3bc747356991588a1f0a22b04a2c \
+    --hash=sha256:a42038ee72a23220b3153153b3e290f454f5dee098ee0fbfc17d94aefbb215fa \
+    --hash=sha256:c3aaa8a526de58842dd2cddc759e25b765da3b6a2c36257de66db35ef191e664 \
+    --hash=sha256:c7af04c0d01e1a8c802d39278fac6edff7263f67a039a6e293fcbe42ecb440a1 \
+    --hash=sha256:d026033bc4f649534c1f4d9516c7cd081fc064bd292a4e2d302acdb9f2ee060e \
+    --hash=sha256:f010df97a1f8bc7e4800c1b341f40204e8b42ac467a4d96948886144a3a3575a \
+    --hash=sha256:f0980d90d2094ef01d482915b1786b8654445fde5d5ba97446eedac573aca1e0 \
+    --hash=sha256:f4923dfae8db5407d20cc9ce0a08baaf6273824a22d01709b4b0cbc8ccfdbb87
     # via contextual-orchestrator (pyproject.toml)
 fastapi==0.138.2 \
     --hash=sha256:6432359d067a432134620e7c5e4c6e5063e7f37815bbbbf20acef14b0d2e3fc8 \
@@ -453,7 +466,9 @@ greenlet==3.5.5 \
     --hash=sha256:f2e3d061b8e13aec2f0441689b3c71b244a20e5d274a52cb0f7e31bd1d139552 \
     --hash=sha256:f7278591501941bb2456af102bb9cd59aab48c6cfd6e2dd68fa1290bb0c49a42 \
     --hash=sha256:fef01bd457f11fc158b130ca0027a3c365693280e8e231b65bdaf57999f39f5b
-    # via contextual-orchestrator (pyproject.toml)
+    # via
+    #   contextual-orchestrator (pyproject.toml)
+    #   sqlalchemy
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86

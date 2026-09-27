@@ -206,3 +206,56 @@ def test_provider_shaped_workflow_keeps_policy_through_synthesis(monkeypatch, en
         assert gateway.policy.realtime_judge is True
     finally:
         gateway.close()
+
+
+@pytest.mark.parametrize("fail_worker", [False, True])
+def test_conduct_receipts_use_step_attempts_and_actual_served_agent(monkeypatch, fail_worker):
+    """Each assignment records only its own calls and the deployment that returned."""
+    agents = [
+        ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+        ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation"), priority=3),
+        ModelAgent("backup_agent", "mock-backup", tags=("coding", "implementation"), priority=1),
+        ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "security", "review"), priority=2),
+    ]
+    gateway = TaskOrchestrator(agents, tool_retry_attempts=0)
+    gateway.policy = replace(gateway.policy, realtime_judge=False)
+    calls = []
+
+    def chat(agent, messages, **kwargs):
+        role = messages[0]["content"].splitlines()[0].removeprefix("Role: ")
+        calls.append((role, agent.id))
+        if fail_worker and agent.id == "builder_agent":
+            raise RuntimeError("worker unavailable")
+        return "served answer"
+
+    monkeypatch.setattr(gateway.client, "chat", chat)
+    try:
+        result = gateway.conduct([{"role": "user", "content": "Analyze and implement a safe parser."}])
+        for row in result["trace"]:
+            receipt = row["selection_design"]
+            expected = [agent_id for role, agent_id in calls if role == row["role"]]
+            observed = [value.split(":", 1)[0] for value in receipt["attempted_deployment_ids"]]
+            assert observed == expected
+            served_id = row.get("served_agent_id", row["agent_id"])
+            assert observed[-1] == served_id
+            assert receipt["selected_deployment_id"] == gateway._psychometric_candidate_id(gateway._agent(served_id))
+        if fail_worker:
+            worker = next(row for row in result["trace"] if row["role"] == "worker")
+            assert worker["failover_from"] == "builder_agent"
+            assert worker["served_agent_id"] != "builder_agent"
+    finally:
+        gateway.close()
+
+
+def test_conduct_unknown_served_identity_cannot_publish_receipt(monkeypatch):
+    """An unknown returned deployment cannot be mislabeled as the planned candidate."""
+    gateway = _policy_gateway()
+    monkeypatch.setattr(gateway, "_invoke_with_rate_limit_recovery", lambda *a, **k: (
+        "answer", "unknown_deployment", "unknown-model", None,
+    ))
+    try:
+        with pytest.raises(KeyError, match="unknown_deployment"):
+            gateway.conduct([{"role": "user", "content": "analyze this task"}])
+        assert not gateway._workflow_runs
+    finally:
+        gateway.close()

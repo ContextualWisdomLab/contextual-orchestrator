@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from jsonschema import RefResolver, ValidationError, validate
+from jsonschema import ValidationError, validate
 from pathlib import Path
 import pytest
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dataclasses import replace
+
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.api_contract import OPENAPI_SPEC  # noqa: E402
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
+from contextual_orchestrator.orchestrator import chat_completion_response  # noqa: E402
 from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 
 
@@ -332,7 +335,7 @@ def test_orchestration_route_schema_validates_structured_synthesis_fallback() ->
     )
     route = result["orchestration"]["route"]
     schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
-    validate(route, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    validate(route, {**schema, "components": OPENAPI_SPEC["components"]})
     outcomes = [attempt["outcome"] for attempt in route["attempted"]]
     assert outcomes == ["retryable_transport", "served"]
 
@@ -350,5 +353,141 @@ def test_orchestration_route_attempt_schema_validates_streaming_fallback() -> No
         key: trace[0][key]
         for key in ("agent_id", "model", "outcome", "error_code", "provider_status", "retryable", "transport")
     }
-    validate(failed_attempt, schema, resolver=RefResolver.from_schema(OPENAPI_SPEC))
+    validate(failed_attempt, {**schema, "components": OPENAPI_SPEC["components"]})
     assert failed_attempt["outcome"] == "retryable_transport"
+
+
+class _RouteOnceFailThenServeClient:
+    """Minimal non-streaming double: first candidate's ``chat`` raises, second serves."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+        del messages, kwargs
+        self.calls.append(agent.id)
+        if agent.id == "primary_worker":
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="service_unavailable",
+                message="provider rejected the request with HTTP 503",
+                client_status=503,
+                provider_status=503,
+                retryable=True,
+                transport="chat",
+            )
+        return "served by fallback"
+
+    def take_usage(self) -> None:
+        return None
+
+
+def test_orchestration_route_schema_validates_route_once_failover() -> None:
+    """A real non-streaming route_once failover's route validates against the contract."""
+    client = _RouteOnceFailThenServeClient()
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=client)
+    # Mechanical failover only — judge traffic would obscure typed attempt rows.
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+    assert result["answer"] == "served by fallback"
+    route = result["route"]
+    schema = OPENAPI_SPEC["components"]["schemas"]["OrchestrationRoute"]
+    validate(route, {**schema, "components": OPENAPI_SPEC["components"]})
+    outcomes = [attempt["outcome"] for attempt in route["attempted"]]
+    # The default retry budget permits one retry on the primary candidate.
+    assert client.calls == ["primary_worker", "primary_worker", "fallback_worker"]
+    assert outcomes == ["retryable_transport", "retryable_transport", "served"]
+    assert route["terminal_reason"] == "served"
+    body = chat_completion_response(result, include_trace=True)
+    assert body["orchestration"]["route"] == route
+    assert body["orchestration"]["route"]["attempted"][0]["outcome"] == "retryable_transport"
+
+
+def test_route_once_success_on_first_attempt_omits_route_evidence() -> None:
+    """A clean first-try route_once response must not invent failed attempt rows."""
+
+    class _ServeFirstClient:
+        def chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+            del messages, kwargs
+            return "first-try answer"
+
+        def take_usage(self) -> None:
+            return None
+
+    orchestrator = TaskOrchestrator(
+        _stream_failover_agents()[:1],
+        client=_ServeFirstClient(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+    assert result["answer"] == "first-try answer"
+    assert "route" not in result
+    response = chat_completion_response(result)
+    assert "route" not in response.get("orchestration", {})
+
+
+def test_route_once_preserves_worker_failover_evidence_across_realtime_judge() -> None:
+    """The judge's nested invoke must not clear the worker's route evidence."""
+
+    class _WorkerFailoverThenJudgeClient:
+        def __init__(self) -> None:
+            self.worker_served = False
+            self.calls: list[str] = []
+
+        def chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+            del messages, kwargs
+            self.calls.append(agent.id)
+            if not self.worker_served and agent.id == "primary_worker":
+                raise ProviderUpstreamError(
+                    agent_id=agent.id,
+                    model=agent.model,
+                    error_code="service_unavailable",
+                    message="provider rejected the worker request with HTTP 503",
+                    client_status=503,
+                    provider_status=503,
+                    retryable=True,
+                    transport="chat",
+                )
+            self.worker_served = True
+            return "served output"
+
+        def take_usage(self) -> None:
+            return None
+
+    client = _WorkerFailoverThenJudgeClient()
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=client)
+
+    def nested_judge(**kwargs):  # noqa: ANN003 - mirrors the owned judge boundary
+        del kwargs
+        orchestrator._invoke(
+            orchestrator.agents[0],
+            [{"role": "user", "content": "judge the worker answer"}],
+            text="judge the worker answer",
+            role="worker",
+        )
+        return {
+            "accepted": True,
+            "reason": "judge accepted",
+            "verifier_output": "served output",
+            "judge": "model",
+        }
+
+    orchestrator._realtime_route_judge = nested_judge  # type: ignore[method-assign]
+
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+
+    assert result["answer"] == "served output"
+    assert client.calls == [
+        "primary_worker", "primary_worker", "fallback_worker", "primary_worker"
+    ]
+    assert [attempt["agent_id"] for attempt in result["route"]["attempted"]] == client.calls[:3]
+    assert [
+        value.split(":", 1)[0]
+        for value in result["trace"][0]["selection_design"]["attempted_deployment_ids"]
+    ] == client.calls[:3]
+    assert [attempt["outcome"] for attempt in result["route"]["attempted"]] == [
+        "retryable_transport",
+        "retryable_transport",
+        "served",
+    ]
