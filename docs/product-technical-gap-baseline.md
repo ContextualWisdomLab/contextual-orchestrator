@@ -7246,7 +7246,6 @@ directly from exact `ca5efdc0` authority. No force push or history rewrite was
 used. Exact-head hosted execution, independent approval, protected-main
 integration, and immutable release remain required; status stays Proposed.
 
-
 ## 2026-09-27 Streaming receipt stack authority repair — Proposed
 
 PR #1231 previously targeted protected `main@5665b0ad`; hosted Security and
@@ -7301,3 +7300,28 @@ Exact remote AST parsing passed for production and test files; two valid
 receipts passed and both contradictory receipts were rejected. Hosted exact-head
 checks, independent approval, protected-main integration, immutable release, and
 consumer bump remain required. Status stays Proposed.
+
+## 2026-09-27 PR #1266 review-boundary repair — Proposed
+
+Exact head `2a4bd5583f1dc03d563e013121d2d752e1d9fe46` retained three valid
+review findings. The OpenRouter uptime fake accepted no bounded-read size, so
+its `TypeError` was caught as availability failure and the assertion never
+proved the 8 MiB read ceiling. The finite embedding-wait worker used its own
+two-second escape, making completion race the assertion. Most importantly,
+`_observe_contextual_quality` held the psychometric persistence lock while
+`_embed_cached` could perform a provider-backed call under the product's
+`timeout=null` contract, serializing unrelated observation persistence and
+Agent-pool edits behind an intentionally unbounded wait.
+
+The repair makes the uptime fake record the exact requested size, keeps the
+embedding worker blocked until deterministic fixture cleanup, and splits the
+psychometric critical section around embedding. Deployment identity is checked
+before the call and revalidated under the same lock before mutation and
+persistence, so stale observations remain fail-closed without holding a shared
+lock across network I/O. The concurrent retirement regression test was RED on
+the reviewed head and GREEN after the change; the three affected test modules
+then reported `121 passed`. The existing pytest configuration warning and
+deprecated `logistic_dif_purified` call remain separate tracked debt. Hosted
+exact-head checks and independent approval remain required; status stays
+Proposed. All three reviewed threads are resolved and the PR is Ready; queued
+hosted checks are still non-terminal and do not establish merge authority.

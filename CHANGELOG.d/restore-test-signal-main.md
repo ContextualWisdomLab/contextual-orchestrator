@@ -2,3 +2,6 @@ Restore the OpenRouter availability collector's separation from the answer-quali
 Bind `rustfmt` and `clippy` to the repository's pinned Rust 1.97.1 toolchain. The minimal rustup profile does not include either component, so the hosted Rust gate previously selected the directory override and failed before formatting or linting could run.
 Bound the untrusted OpenRouter uptime response to the same 8 MiB provider-response ceiling and reject oversized JSON before parsing, while preserving valid endpoint telemetry.
 Preserve one deployment identity entry for every real same-agent retry in deterministic selection receipts, so replay evidence no longer understates provider calls.
+Keep provider-backed contextual embedding outside the psychometric persistence lock while revalidating the deployment on both sides of the call, so an unbounded provider wait cannot block observation persistence or Agent-pool edits.
+Repair the OpenRouter bounded-read test double and the finite embedding-wait fixture so both tests exercise their intended production boundary without a swallowed `TypeError` or a timer-driven race.
+Audit the hashed runtime index pins alongside the installed environment, and require the non-PyPI Git source to agree across locks before the security gate can pass.

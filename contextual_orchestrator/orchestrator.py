@@ -10249,12 +10249,18 @@ class TaskOrchestrator:
         """Record a fast-mlsirm judge outcome for contextual ability fitting."""
         del latency_seconds, output_tokens
         with self._psychometric_persistence_lock:
-            candidate_id = served_deployment_id or self._psychometric_candidate_id(self._agent(served_id))
+            candidate_id = served_deployment_id or self._psychometric_candidate_id(
+                self._agent(served_id)
+            )
+            if candidate_id not in self._psychometric_candidate_ids(self.candidates):
+                return
+        vector = self._embed_cached(prompt_context)
+        with self._psychometric_persistence_lock:
             if candidate_id not in self._psychometric_candidate_ids(self.candidates):
                 return
             self._psychometric_router.observe(
                 prompt_context, candidate_id, accepted,
-                self._embed_cached(prompt_context), irt_row,
+                vector, irt_row,
             )
             if self._store is not None:
                 context_id = self._psychometric_router.context_id(prompt_context)
