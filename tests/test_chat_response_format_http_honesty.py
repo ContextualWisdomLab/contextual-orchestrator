@@ -142,7 +142,7 @@ def test_http_free_structured_synthesis_recovers_from_429_storm() -> None:
     ]
     orchestrator = TaskOrchestrator(
         agents,
-        rate_limit_wait_seconds=2.0,
+        rate_limit_wait_seconds=1.0,
         rate_limit_unknown_cooldown_seconds=0.01,
     )
     calls: list[str] = []
@@ -154,7 +154,7 @@ def test_http_free_structured_synthesis_recovers_from_429_storm() -> None:
                 "https://provider.synthetic.invalid/v1/chat/completions",
                 429,
                 "Too Many Requests",
-                {"Retry-After": "1"},
+                {},
                 None,
             )
         return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}

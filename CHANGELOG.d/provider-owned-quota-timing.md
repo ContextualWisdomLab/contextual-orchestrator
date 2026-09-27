@@ -1,5 +1,1 @@
-Fix free-route quota recovery to honor provider-declared retry timing across
-chat, passthrough and structured requests. Requests with unavailable retry
-timing return an honest quota failure without a guessed retry deadline.
-Eligible alternatives remain available, and a fresh explicit provider success
-restores quota admission.
+Honor provider-declared retry timing that is already carried on a classified provider error (chat, passthrough and structured requests), stop replaying the same agent after an explicit quota rejection, and let a fresh successful provider call clear that agent's cooldown. A 429 without `Retry-After`/`x-ratelimit-reset*` still records the finite, administrator-owned `rate_limit_unknown_cooldown_seconds` assumed cooldown (`cooldown_source: assumed`), exactly as on `main`: the agent is skipped only while that cooldown runs and becomes selectable again once it elapses. An intermediate revision had recorded such a 429 as an infinite cooldown, which excluded the agent permanently whenever an alternative existed; that regression is fixed and covered by a test.

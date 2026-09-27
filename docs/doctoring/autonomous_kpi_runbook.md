@@ -829,3 +829,23 @@ claiming an all-provider storm or inventing a wait. Session `92108`: 176 passed
 with strict warnings across taxonomy, admission, structured fallback,
 exhausted-pool ordering and actual HTTP action fallback. No unknown-outcome
 candidate was granted replay authority.
+
+## Assumed 429 cooldown restored — 2026-09-27
+
+Review of #1266 head `1aa88da3` found that the provider-owned timing carryover
+above recorded a 429 without `Retry-After`/`x-ratelimit-reset*` as
+`_rate_limit_until = math.inf`. Only `_record_success` cleared it, and
+selection skips a rate-limited agent whenever an alternative exists, so such
+an agent was never selected again (still infinite after a simulated day,
+versus 5 s on `main`); `rate_limit_unknown_cooldown_seconds` had become dead
+code and `main`'s nine assumed-cooldown tests had been removed.
+
+The repair restores `main`'s finite assumed cooldown
+(`rate_limit_unknown_cooldown_seconds`, `cooldown_source: assumed`, "only
+extend forward"), the assumed-cooldown storm wait and its honest 429, and the
+nine `main` tests unchanged. It keeps the compatible parts of the carryover:
+classified provider timing is honored, an explicit quota rejection is not
+replayed on the same agent, and a fresh provider success clears the cooldown.
+The "unknown timing never retries" statements in the section above no longer
+describe the code. A new regression test shows the agent is skipped while its
+assumed cooldown runs and is selected again once it elapses.
