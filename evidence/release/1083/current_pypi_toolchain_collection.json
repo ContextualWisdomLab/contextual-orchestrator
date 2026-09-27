@@ -1,0 +1,207 @@
+{
+  "source_sha": "0d64cb01104fc3e7e573a75323a6c2ffcb8dcdd4",
+  "lockfile": "requirements-release-twine.txt",
+  "lockfile_sha256": "c315976ec38b282f2ee7a57d72c1eeaa547b7e8be769fa916c98ffa9133321eb",
+  "locked_tool_dependencies": 27,
+  "verified_wheels": [
+    {
+      "name": "jaraco.functools",
+      "version": "4.6.0",
+      "wheel": "jaraco_functools-4.6.0-py3-none-any.whl",
+      "sha256": "99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30"
+    },
+    {
+      "name": "SecretStorage",
+      "version": "3.5.0",
+      "wheel": "secretstorage-3.5.0-py3-none-any.whl",
+      "sha256": "0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137"
+    },
+    {
+      "name": "more-itertools",
+      "version": "11.1.0",
+      "wheel": "more_itertools-11.1.0-py3-none-any.whl",
+      "sha256": "4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192"
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.1",
+      "wheel": "cryptography-50.0.1-cp311-abi3-macosx_11_0_arm64.whl",
+      "sha256": "b8f852c65863251b9e3a1b8c150ce21e59b522dbb6a7d4bc80e680d38388e986"
+    },
+    {
+      "name": "jeepney",
+      "version": "0.9.0",
+      "wheel": "jeepney-0.9.0-py3-none-any.whl",
+      "sha256": "97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683"
+    },
+    {
+      "name": "jaraco.classes",
+      "version": "3.4.0",
+      "wheel": "jaraco.classes-3.4.0-py3-none-any.whl",
+      "sha256": "f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "wheel": "mdurl-0.1.2-py3-none-any.whl",
+      "sha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "wheel": "cffi-2.1.1-cp312-cp312-macosx_11_0_arm64.whl",
+      "sha256": "f81b3b8f3d4e343550fa4baa0e479bba9f2d29ce9c2e9b51d1ce1718d7442fcf"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "wheel": "cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf"
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0",
+      "wheel": "rich-15.0.0-py3-none-any.whl",
+      "sha256": "33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb"
+    },
+    {
+      "name": "readme_renderer",
+      "version": "46.0",
+      "wheel": "readme_renderer-46.0-py3-none-any.whl",
+      "sha256": "d0dae1f74bb273b534770cb4cccb6bb78735540afdb03c2146f4e19dcd412560"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0",
+      "wheel": "pycparser-3.0-py3-none-any.whl",
+      "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"
+    },
+    {
+      "name": "rfc3986",
+      "version": "2.0.0",
+      "wheel": "rfc3986-2.0.0-py2.py3-none-any.whl",
+      "sha256": "50b1502b60e289cb37883f3dfd34532b8873c7de9f49bb546641ce9cbd256ebd"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "wheel": "packaging-26.3-py3-none-any.whl",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+    },
+    {
+      "name": "twine",
+      "version": "7.0.0",
+      "wheel": "twine-7.0.0-py3-none-any.whl",
+      "sha256": "b854164df26db268af05f49aa5c0344b10e27a494343ff05b1e0bad3b135f5a7"
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.1",
+      "wheel": "charset_normalizer-3.5.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "b9af956078716df40d985fb0dfeb2c2120c5ca92ba4ff4b388acfd01cdc14d08"
+    },
+    {
+      "name": "nh3",
+      "version": "0.3.7",
+      "wheel": "nh3-0.3.7-cp38-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl",
+      "sha256": "6c3aa50eb26e9228238271db9f983cbc3b006dfbfeca2d4dc34c33ddc6ac5ea5"
+    },
+    {
+      "name": "Pygments",
+      "version": "2.21.0",
+      "wheel": "pygments-2.21.0-py3-none-any.whl",
+      "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "wheel": "markdown_it_py-4.2.0-py3-none-any.whl",
+      "sha256": "9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a"
+    },
+    {
+      "name": "requests-toolbelt",
+      "version": "1.0.0",
+      "wheel": "requests_toolbelt-1.0.0-py2.py3-none-any.whl",
+      "sha256": "cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06"
+    },
+    {
+      "name": "docutils",
+      "version": "0.23",
+      "wheel": "docutils-0.23-py3-none-any.whl",
+      "sha256": "25d013af9bf23bc1c7b2b093dff4208166c53a94786c9e447808335ef1185fea"
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "wheel": "idna-3.20-py3-none-any.whl",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c"
+    },
+    {
+      "name": "jaraco.context",
+      "version": "6.1.2",
+      "wheel": "jaraco_context-6.1.2-py3-none-any.whl",
+      "sha256": "bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535"
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "wheel": "requests-2.34.2-py3-none-any.whl",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0"
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.1",
+      "wheel": "cryptography-50.0.1-cp311-abi3-manylinux_2_28_x86_64.whl",
+      "sha256": "51593d180cf6d179bde5c5d065bed81386b1f381656ae7d042b7ffc87a9895ad"
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "wheel": "urllib3-2.8.0-py3-none-any.whl",
+      "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "wheel": "certifi-2026.7.22-py3-none-any.whl",
+      "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775"
+    },
+    {
+      "name": "id",
+      "version": "1.6.1",
+      "wheel": "id-1.6.1-py3-none-any.whl",
+      "sha256": "f5ec41ed2629a508f5d0988eda142e190c9c6da971100612c4de9ad9f9b237ca"
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.1",
+      "wheel": "charset_normalizer-3.5.1-cp312-cp312-macosx_10_13_universal2.whl",
+      "sha256": "5b6d1386bf0096d26d3a863dc0a487a5b4eb9aa93cf5ba69683d29dde6b9d60f"
+    },
+    {
+      "name": "keyring",
+      "version": "25.7.0",
+      "wheel": "keyring-25.7.0-py3-none-any.whl",
+      "sha256": "be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f"
+    }
+  ],
+  "inventory_scope_before_collection": {
+    "python": 127,
+    "cargo": 43,
+    "npm": 359
+  },
+  "classification_before_collection": {
+    "permitted": 370,
+    "copyleft": 0,
+    "undecidable": 159
+  },
+  "new_tool_dependencies_missing_before_collection": 16,
+  "collection_process_exit": 0,
+  "collection_tool_session": 1498,
+  "limits": [
+    "Downloaded only hash-locked binary wheels; no installation or package hooks",
+    "Multiple platform wheels are candidate evidence, not native-runtime acceptance",
+    "Post-collection inventory/classification pending; do not reuse the older 143-held total for current integration",
+    "Full inlined component/native/container/source provenance and release publication remain incomplete"
+  ]
+}
