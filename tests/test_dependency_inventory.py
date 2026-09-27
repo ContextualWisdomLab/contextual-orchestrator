@@ -248,7 +248,7 @@ def test_security_workflow_adjudicates_before_installing_and_installs_what_it_re
     """Collection must precede installation, and installation must not re-download."""
     workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
     sources = workflow.index("--check-sources-only")
-    download = workflow.index("pip download")
+    download = workflow.index("collect_python_license_artifacts.sh")
     collect = workflow.index("--artifact-dir license-artifacts")
     adjudicate = workflow.index("scripts.ci.release_license_gate")
     install = workflow.index("pip install --require-hashes --no-index")
@@ -256,10 +256,11 @@ def test_security_workflow_adjudicates_before_installing_and_installs_what_it_re
     # Refuse external sources before fetching, then gather, then judge, then
     # install: each step's evidence has to exist before the next one acts.
     assert sources < download < collect < adjudicate < install
-    assert "--only-binary=:all:" in workflow[download:collect], "sdist build backends must not run"
+    collector = (REPOSITORY_ROOT / "scripts/ci/collect_python_license_artifacts.sh").read_text()
+    assert "--only-binary=:all:" in collector, "sdist build backends must not run"
     install_block = workflow[install:install + 200]
     assert "--find-links license-artifacts" in install_block
-    assert workflow.count("pip download") == 1, "the adjudicated wheels are not downloaded twice"
+    assert workflow.count("collect_python_license_artifacts.sh") == 1
 
 
 def test_external_source_requirements_are_refused(tmp_path) -> None:

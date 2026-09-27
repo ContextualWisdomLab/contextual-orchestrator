@@ -112,3 +112,23 @@ wrong identity, escaping/missing files and explicit final-release refusal.
 
 [PyPA licence metadata guidance](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license-and-license-files)
 provides the string declaration and licence-file pattern contract.
+
+## Python artifact collection scope repair (2026-09-27)
+
+The preinstall workflow previously downloaded only `requirements.lock`, while
+its inventory included `uv.lock` plus every root and fuzz `requirements*.txt`.
+The missing wheels were missing evidence, not permission to omit those scopes.
+Both Security and release now reuse `collect_python_license_artifacts.sh`: it
+exports all groups and extras from the locked offline uv resolution, excludes
+only the root project (whose committed source is checked before its wheel
+exists), refuses external sources in the export, and downloads every independent
+hash lock separately. Binary-only, hash-required downloads do not install
+packages or execute their build backends. A download failure stops the job
+before adjudication or installation.
+
+This collects the current runner's compatible wheels. Platform markers can
+exclude another platform's artifact; the complete inventory still includes it
+and keeps that identity unresolved. Bundled distributions, container image
+layers and unknown native instruments remain separate publication requirements.
+The final release gate still reads the exact built root wheel, never prebuild
+source evidence. Export options: [uv CLI reference](https://docs.astral.sh/uv/reference/cli/#uv-export).
