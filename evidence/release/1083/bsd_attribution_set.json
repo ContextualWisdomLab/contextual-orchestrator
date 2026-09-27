@@ -1,0 +1,47 @@
+{
+  "inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "packages": [
+    {
+      "name": "pygments",
+      "version": "2.20.0",
+      "artifact_sha256": "81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176",
+      "declarations": [
+        "BSD-2-Clause"
+      ],
+      "license_files": [
+        {
+          "name": "pygments-2.20.0.dist-info/licenses/AUTHORS",
+          "raw_sha256": "0db603a5f4499f690c4425477ff664c166da325d3acc3b5a8d4de3db072443d0",
+          "normalized_sha256": "81276613b724215ef018bcb85fcd97eaf5a9c0be3e12084f81dba4777409d458"
+        },
+        {
+          "name": "pygments-2.20.0.dist-info/licenses/LICENSE",
+          "raw_sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17",
+          "normalized_sha256": "24977015e801cd4c9bbb8c6e8094c6644d5a03c6f466e678a0d7410d4f2b5699"
+        }
+      ]
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0",
+      "artifact_sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+      "declarations": [
+        "BSD-2-Clause"
+      ],
+      "license_files": [
+        {
+          "name": "pygments-2.21.0.dist-info/licenses/AUTHORS",
+          "raw_sha256": "71a83872ad82f57be692cf827e048e2cd51d45169cfa1ea3f28706d97a872c0f",
+          "normalized_sha256": "9a343abef2c0ea7bd2f67cc9696e9c32f1fb18d6efc603a034d757d09684e2d5"
+        },
+        {
+          "name": "pygments-2.21.0.dist-info/licenses/LICENSE",
+          "raw_sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17",
+          "normalized_sha256": "24977015e801cd4c9bbb8c6e8094c6644d5a03c6f466e678a0d7410d4f2b5699"
+        }
+      ]
+    }
+  ],
+  "review": "Both full BSD-2-Clause grants and full contributor attribution lists read. Version delta only four contributor rows. No additional grant/restriction in either AUTHORS. Exact actual wheel and raw file hashes verified.",
+  "scope": "Full grant plus exact attribution only; all retained dependency scopes unchanged."
+}

@@ -378,6 +378,14 @@ _REVIEWED_INSTRUMENT_SETS = {
 
 # Exact complete grant plus attribution; single-instrument grants keep their path.
 _REVIEWED_ATTRIBUTION_SETS = frozenset({
+    ("BSD-2-Clause", frozenset({
+        "24977015e801cd4c9bbb8c6e8094c6644d5a03c6f466e678a0d7410d4f2b5699",
+        "81276613b724215ef018bcb85fcd97eaf5a9c0be3e12084f81dba4777409d458",
+    })),
+    ("BSD-2-Clause", frozenset({
+        "24977015e801cd4c9bbb8c6e8094c6644d5a03c6f466e678a0d7410d4f2b5699",
+        "9a343abef2c0ea7bd2f67cc9696e9c32f1fb18d6efc603a034d757d09684e2d5",
+    })),
     (("MIT", "MIT License"), frozenset({
         "e6690babf4bc31029ccffd0fe1f35c698007d81008ff576274435aae1102d232",
         "8c319ea357316cadb17350ef988afaefa44f9b635acb78d757a4048fd00ce2e2",

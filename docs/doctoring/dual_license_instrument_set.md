@@ -181,3 +181,21 @@ The real complete pair failed before repair. All 227 affected tests pass,
 process exit 0. Full retained inventory comparison changes only pytest-cov:
 366 permitted, zero copyleft, 147 held. Copyright/attribution obligations and
 all separate native/container/provenance/release requirements remain.
+
+## Complete BSD grant and Pygments attribution
+
+Pygments 2.20.0 and 2.21.0 include the complete BSD-2-Clause grant and its
+explicitly referenced AUTHORS list. Both lists were read in full; the version
+change adds four contributor rows and no additional grant or restriction.
+The actual retained wheel and every raw license file digest were verified.
+`evidence/release/1083/bsd_attribution_set.json` preserves those identities and
+the original inventory source SHA. Both complete versions remain fixtures.
+
+Reuse the exact complete-grant/attribution path with two separately reviewed
+full hash sets. This introduces no filename exemption. Changed grant,
+changed attribution, notice-only, duplicate and additional GPL text remain
+rejected; existing single-instrument grants retain their original path.
+The real two complete pairs failed before repair. The license-gate suite
+passes 153 tests with process exit 0. Full inventory comparison changes only
+these two Pygments identities: 368 permitted, zero copyleft, 145 held.
+Distribution attribution obligations and separate release requirements remain.

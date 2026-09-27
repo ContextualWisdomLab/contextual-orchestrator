@@ -767,6 +767,8 @@ def test_complete_multi_term_instrument_set(change):
 @pytest.mark.parametrize("terms, filenames", [
     (["Apache-2.0", "Apache Software License"], ["sniffio-instrument-1.txt", "cyclonedx-notice.txt"]),
     (["MIT", "MIT License"], ["pytest-cov-license.txt", "pytest-cov-authors.txt"]),
+    (["BSD-2-Clause"], ["pygments-license.txt", "pygments-2.20.0-authors.txt"]),
+    (["BSD-2-Clause"], ["pygments-license.txt", "pygments-2.21.0-authors.txt"]),
 ])
 def test_complete_grant_attribution_set(change, terms, filenames):
     from scripts.ci.release_license_gate import _declaration_matches_text
