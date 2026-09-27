@@ -287,6 +287,8 @@ def classify_inventory_licenses(inventory: dict[str, Any]) -> dict[str, list[dic
                 copyleft.append(row)
             elif any(verdict == "undecidable" for verdict, _ in verdicts):
                 undecidable.append(row)
+            elif package.get("unscoped_license_files"):
+                undecidable.append({**row, "license": f"{row['license']} (package-body license scope unresolved)"})
             elif package.get("bundled_archives"):
                 undecidable.append({**row, "license": f"{row['license']} (nested archive scope unresolved)"})
             elif "license_files" in package and not package.get("license_files"):

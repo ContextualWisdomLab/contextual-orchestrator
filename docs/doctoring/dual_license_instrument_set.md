@@ -410,3 +410,24 @@ The full diff and hashes are retained in
 `evidence/release/1083/license_expression_original_code_provenance.json`.
 Later modification grants, bundled data and documentation scope remain to be
 resolved. No license was transplanted and no classification was changed.
+
+## Package-body instrument collection repair
+
+The actual license-expression wheel includes cc-by-4.0.LICENSE and both
+ABOUT records outside dist-info. Previous inventory evidence omitted these
+files because collection was restricted to distribution metadata directories.
+The bundled index is byte-identical to ScanCode LicenseDB revision
+1dfa89ae348338b23a359c4c6b23e39c128a41e5 docs/index.json; its bundled ABOUT
+explicitly declares cc-by-4.0. The provenance and instrument exist in the wheel,
+so this is a collector gap, not a missing upstream packaging instrument.
+
+The collector now retains bounded package-body license/notice/ABOUT candidates
+separately, excluding source/binary modules named license. Root declarations
+do not authorize these instruments: classification holds their unresolved
+package-body scope. Actual archive probes recover license-expression, numpy
+and pip evidence; existing distribution metadata ownership checks remain.
+The retained full inventory still classifies 370 permitted, zero copyleft and
+143 held. A regression fails before repair and the affected suites pass 256
+tests afterward. This does not cover every arbitrary instrument filename or
+source-header grant. Receipt:
+`evidence/release/1083/package_body_license_collection.json`.

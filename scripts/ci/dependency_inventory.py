@@ -218,6 +218,17 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
                     bundled_digest.update(chunk)
             bundled_archives.append({"name": member, "sha256": bundled_digest.hexdigest(),
                                      "size": info.file_size, "license_source": "unresolved nested archive scope"})
+        unscoped_license_files = []
+        for member in members:
+            path = PurePosixPath(member)
+            if archive.getinfo(member).is_dir() or path.suffix.lower() in (".py", ".pyi", ".pyc", ".pyo", ".so", ".pyd") or any(part.endswith(".dist-info") for part in path.parts):
+                continue
+            if path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")) or path.name.upper().endswith((".LICENSE", ".LICENCE", ".ABOUT")):
+                if archive.getinfo(member).file_size > _NATIVE_TEXT_LIMIT:
+                    raise InventoryError("wheel package-body licence exceeds text evidence limit")
+                raw = archive.read(member)
+                unscoped_license_files.append({"name": member, "sha256": hashlib.sha256(raw).hexdigest(),
+                                               "text": raw.decode("utf-8", "replace")})
         metadata_members = [member for member in members if member.endswith(".dist-info/METADATA")]
         roots = [member for member in metadata_members if len(PurePosixPath(member).parts) == 2]
         if len(roots) != 1:
@@ -284,6 +295,8 @@ def _artifact_distributions(artifact_dir: Path, name: str, version: str) -> list
                       "licenses": terms, "license_source": source, "license_files": license_files,
                       "artifact_sha256": digest, "metadata_sha256": hashlib.sha256(raw_metadata).hexdigest(),
                       "metadata_path": metadata_path}
+            if index == 0 and unscoped_license_files:
+                record["unscoped_license_files"] = unscoped_license_files
             if index == 0 and bundled_archives:
                 record["bundled_archives"] = bundled_archives
             if index:

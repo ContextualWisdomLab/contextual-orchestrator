@@ -1,0 +1,151 @@
+{
+  "inventory_source_sha": "1cb7d3cf4c254dc0dd2e0e60a370ca8dec9c2975",
+  "artifact_scope": "retained hash-bound inventory; supplement package-body evidence only",
+  "delta": [
+    {
+      "name": "license-expression",
+      "version": "30.4.4",
+      "artifact_sha256": "421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4",
+      "files": [
+        {
+          "name": "license_expression/_pyahocorasick.ABOUT",
+          "sha256": "75d79cccf1fc302cb4a99bd32aac8bd4fc80926b15d31f0ba994d16cdf844032"
+        },
+        {
+          "name": "license_expression/data/cc-by-4.0.LICENSE",
+          "sha256": "2a82ac9bbc3e3ee066908381e8d373896db5a6025d083fbd59692fe9ccfb9111"
+        },
+        {
+          "name": "license_expression/data/license_key_index.json.ABOUT",
+          "sha256": "fb5ce1f2dbd2bedc01fad9507be71ca19ec37b4d6f8dfb9516fbfefee410d85d"
+        }
+      ]
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.2",
+      "artifact_sha256": "3cdec01fa790a186d430433fdd4d4ffb70eed6f0eeb4bf05c8dbe2dce0a9bcb8",
+      "files": [
+        {
+          "name": "numpy/_core/include/numpy/random/LICENSE.txt",
+          "sha256": "fbc539f47d0cf83bc61378080fb873d5c14630126cacbfe754035c3926daa5ec"
+        },
+        {
+          "name": "numpy/ma/LICENSE",
+          "sha256": "05f3b88351988ecfad10abe92c0c50e5875c6452d5009a0084cc291551ffcca6"
+        },
+        {
+          "name": "numpy/random/LICENSE.md",
+          "sha256": "103166b62b80443afb9eb3488e052ea06be0cff566b908f199e561fde49af19f"
+        }
+      ]
+    },
+    {
+      "name": "pip",
+      "version": "26.2.1",
+      "artifact_sha256": "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e",
+      "files": [
+        {
+          "name": "pip/_vendor/cachecontrol/LICENSE.txt",
+          "sha256": "86eeee87be2a43f3ff1f56496f451f69243926f025fedbb033666c304c4c161b"
+        },
+        {
+          "name": "pip/_vendor/certifi/LICENSE",
+          "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+        },
+        {
+          "name": "pip/_vendor/distlib/LICENSE.txt",
+          "sha256": "808e10c8a6ab8deb149ff9b3fb19f447a808094606d712a9ca57fead3552599d"
+        },
+        {
+          "name": "pip/_vendor/distro/LICENSE",
+          "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+        },
+        {
+          "name": "pip/_vendor/idna/LICENSE.md",
+          "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        },
+        {
+          "name": "pip/_vendor/msgpack/COPYING",
+          "sha256": "492dedba85da5872f78e6091bcd1fea474d660d35acb4dee964b8aab3f007427"
+        },
+        {
+          "name": "pip/_vendor/packaging/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "name": "pip/_vendor/packaging/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "name": "pip/_vendor/packaging/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        },
+        {
+          "name": "pip/_vendor/pkg_resources/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "name": "pip/_vendor/platformdirs/LICENSE",
+          "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6"
+        },
+        {
+          "name": "pip/_vendor/pygments/LICENSE",
+          "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+        },
+        {
+          "name": "pip/_vendor/pyproject_hooks/LICENSE",
+          "sha256": "1b22b049b5267d6dfc23a67bf4a84d8ec04b9fdfb1a51d360e42b4342c8b4154"
+        },
+        {
+          "name": "pip/_vendor/requests/LICENSE",
+          "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b"
+        },
+        {
+          "name": "pip/_vendor/resolvelib/LICENSE",
+          "sha256": "f388fd38cad13112c1dc0f669bbe80e7f84541edbafb72f3030d2ca7642c3c9d"
+        },
+        {
+          "name": "pip/_vendor/rich/LICENSE",
+          "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+        },
+        {
+          "name": "pip/_vendor/tomli/LICENSE",
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+        },
+        {
+          "name": "pip/_vendor/tomli_w/LICENSE",
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+        },
+        {
+          "name": "pip/_vendor/truststore/LICENSE",
+          "sha256": "33be7b7e8fa4fd19b1760e1a8ed8a668bdab852c91b692dd41424bcb725a9fca"
+        },
+        {
+          "name": "pip/_vendor/urllib3/LICENSE.txt",
+          "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+        }
+      ]
+    }
+  ],
+  "classification_totals": {
+    "permitted": 370,
+    "copyleft": 0,
+    "undecidable": 143
+  },
+  "regression_red": "missing unscoped_license_files before repair; pytest process exit1",
+  "limits": [
+    "Evidence names are candidate instruments, not scope adjudication.",
+    "No root declaration applied to package-body instruments.",
+    "Source/binary modules named license.py are excluded.",
+    "Unrepresented instrument filenames and source-header grants still require audit."
+  ],
+  "data_origin": {
+    "revision": "1dfa89ae348338b23a359c4c6b23e39c128a41e5",
+    "path": "docs/index.json",
+    "sha256": "d7594273825a68b2d5676d76d336c560210072f07a77edb193ad608694067596",
+    "byte_identical_to_wheel": true,
+    "ABOUT_sha256": "fb5ce1f2dbd2bedc01fad9507be71ca19ec37b4d6f8dfb9516fbfefee410d85d",
+    "declared_license": "cc-by-4.0"
+  }
+}

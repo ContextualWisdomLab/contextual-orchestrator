@@ -830,3 +830,28 @@ def test_nested_archive_size_limit_is_checked_before_read(tmp_path, monkeypatch)
     monkeypatch.setattr(inventory, "_NATIVE_ARCHIVE_LIMIT", 2048)
     with pytest.raises(InventoryError, match="nested wheel archive exceeds"):
         inventory._artifact_distributions(tmp_path, "example", "1.0")
+
+
+def test_package_body_license_evidence_cannot_be_hidden_by_root_metadata(tmp_path):
+    """Keep separately scoped package evidence without applying the root grant."""
+    from scripts.ci.dependency_inventory import _artifact_distributions
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    wheel = _wheel(tmp_path, "example", "1.0", ["License-Expression: MIT"])
+    payloads = {
+        "example/data/cc-by-4.0.LICENSE": b"separately scoped license terms",
+        "example/data/index.json.ABOUT": b"about_resource: index.json\nlicense_expression: cc-by-4.0\n",
+    }
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("example-1.0.dist-info/LICENSE", "Permission is hereby granted, free of charge.")
+        for name, data in payloads.items():
+            archive.writestr(name, data)
+        archive.writestr("example/license.py", "# source module, not a license instrument\n")
+    records = _artifact_distributions(tmp_path, "example", "1.0")
+    assert records[0]["unscoped_license_files"] == [
+        {"name": name, "sha256": hashlib.sha256(data).hexdigest(), "text": data.decode()}
+        for name, data in payloads.items()
+    ]
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "python", "packages": records}]})
+    assert not groups["permitted"]
+    assert "package-body license scope unresolved" in groups["undecidable"][0]["license"]
