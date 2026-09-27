@@ -189,14 +189,32 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Locate relocated Python shared library
+        id: python-library
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          import sysconfig
+          directory = Path(sys.base_prefix) / "lib"
+          library = directory / sysconfig.get_config_var("LDLIBRARY")
+          if not library.is_file():
+              raise SystemExit(f"Python shared library missing: {library}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"directory={directory}\n")
+          PY
+
       - name: Clippy (deny warnings)
         env:
           PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
+          RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test workspace
         env:
           PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
+          RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}
         run: cargo test --workspace --locked
 
       - name: Install cargo-audit
