@@ -227,12 +227,8 @@ jobs:
       - name: Enumerate every declared dependency scope from the lockfiles
         run: |
           set -euo pipefail
-          # The SBOM above describes one installed environment, so it cannot see
-          # the dev, fuzz and native-build groups, the Rust workspace or the npm
-          # tree, while it does see whatever CI tooling happens to be installed.
-          # Scoping the SBOM down does not discharge licence adjudication, so the
-          # excluded classes are enumerated here from the lockfiles and published
-          # beside it, bound to the same commit.
+          # Bind the full source inventory and staged licence evidence to the
+          # SBOM below, including dev, fuzz, build, optional and native scopes.
           # The source check runs before any download: a direct URL or VCS
           # requirement is fetched and built outside the hash-pinned wheel set,
           # so it must be refused before pip is asked to fetch anything at all.
@@ -264,11 +260,25 @@ jobs:
             --find-links license-artifacts -r requirements.lock
           python -m pip install --no-deps -e .
 
-      - name: Audit pinned dependencies and generate SBOM
+      - name: Audit pinned dependencies
+        run: python -m pip_audit -r requirements.lock
+
+      - name: Set up the existing organization SBOM scanner
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: false
+
+      - name: Generate and validate the complete declared dependency SBOM
         run: |
           set -euo pipefail
-          python -m pip_audit -r requirements.lock
-          cyclonedx-py environment --output-format json --output-file cyclonedx-sbom.json
+          trivy fs --format cyclonedx --include-dev-deps \
+            --file-patterns 'pip:requirements.*\.(txt|lock)$' \
+            --skip-dirs .codegraph --skip-dirs .venv \
+            --output cyclonedx-raw.json .
+          python -m scripts.ci.release_sbom \
+            --sbom cyclonedx-raw.json --inventory dependency-inventory.json \
+            --source-sha "${GITHUB_SHA}" --output cyclonedx-sbom.json
 
       - name: Upload CycloneDX SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1
