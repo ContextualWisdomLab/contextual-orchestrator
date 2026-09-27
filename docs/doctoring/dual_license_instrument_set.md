@@ -111,3 +111,28 @@ All 207 affected tests pass with process exit 0.
 Requests remains held: its license file omits the Apache appendix and end marker,
 so it is not this complete instrument. This evidence does not waive retained
 notices, establish native/container provenance or authorize release.
+
+## Complete CC-BY-4.0 instrument
+
+caniuse-lite 1.0.30001810 carries the complete Attribution 4.0 International
+text. Its declared identifier was already recognized, but the legacy matcher
+had no text-evidence branch for this family. The complete instrument was read
+and compared with the official Creative Commons plain text, including
+attribution, database rights, termination and surviving conditions. After
+whitespace normalization, the only difference is `More_considerations` versus
+`More considerations` in the introductory informational paragraph.
+
+Both complete-text hashes are pinned; no punctuation/word normalizer or
+filename exemption is added. The fixture retains the exact archive text and
+a regression reconstructs the official normalized digest with only that
+explicit introductory substitution. Existing mutation, truncation, additional
+unknown/GPL file and wrong-declaration controls also cover this instrument.
+Artifact identity, full source/text digests and the retained inventory's
+original source identity are in `evidence/release/1083/cc_by_instrument.json`.
+
+The real complete-text positive control failed before the repair. All 214
+affected tests pass with process exit 0. Reclassification changes exactly
+caniuse-lite: 363 permitted, zero copyleft, 150 held. Attribution and notice
+obligations remain; this is not release or container/native provenance approval.
+
+Primary source: https://creativecommons.org/licenses/by/4.0/legalcode.txt

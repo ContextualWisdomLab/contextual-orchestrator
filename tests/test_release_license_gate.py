@@ -558,7 +558,7 @@ def test_one_unmet_condition_holds_the_entry(package, expected) -> None:
     assert [row["name"] for row in groups[expected]] == [f"python:{package['name']}"]
 
 
-@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0"])
+@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0", "CC-BY-4.0"])
 def test_complete_canonical_license_instrument_is_not_rejected_by_keyword_mentions(expression):
     """An entire known instrument evidences its declaration, including compatibility clauses."""
     text = (Path(__file__).parent / "fixtures/license_text" / f"{expression.replace(' ', '_')}.txt").read_text()
@@ -569,7 +569,7 @@ def test_complete_canonical_license_instrument_is_not_rejected_by_keyword_mentio
     assert not groups["undecidable"] and not groups["copyleft"]
 
 
-@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0"])
+@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0", "CC-BY-4.0"])
 @pytest.mark.parametrize("change", ["append", "truncate", "second_file", "second_unknown_file", "wrong_declaration"])
 def test_canonical_text_matching_cannot_hide_changed_or_additional_terms(expression, change):
     text = (Path(__file__).parent / "fixtures/license_text" / f"{expression.replace(' ', '_')}.txt").read_text()
@@ -783,3 +783,12 @@ def test_complete_apache_attribution_set(change):
         texts.append(texts[1])
     terms = ["Apache-2.0", "Apache Software License"]
     assert _declaration_matches_text(terms, [{"text": t} for t in texts]) is (change in {"none", "missing-notice"})
+
+
+def test_cc_by_fixture_matches_full_official_instrument():
+    import hashlib
+    text = (Path(__file__).parent / "fixtures/license_text/CC-BY-4.0.txt").read_text()
+    official = text.replace("More_considerations", "More considerations")
+    assert hashlib.sha256(" ".join(official.split()).encode()).hexdigest() == (
+        "1f5a529dc95849305307f0d6861169d8cae9e99807e4abcec68ef9ad19235652"
+    )

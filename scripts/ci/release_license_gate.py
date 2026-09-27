@@ -329,12 +329,17 @@ _LICENCE_FAMILY_TOKENS = {
 
 
 # Complete SPDX instruments from license-list-data@31ba1a50e5397e00a304dbadc76531740e89ee48.
+# Primary-source variants are recorded in the instrument-set runbook.
 # Only whitespace is normalized. No package, filename or keyword exemption.
 # The LLVM title's three/four leading dashes are the two verified archive forms.
 _CANONICAL_TEXT_HASHES = {
     "Apache-2.0 WITH LLVM-exception": frozenset({
         "63bdd4702a2eaf44fc39da5567c649ee9a2da804b6434982b034ac37004eb459",
         "f42a00ac54d036890559853a40f95622ab3e63d52173f5714284134b2af11e3c",
+    }),
+    "CC-BY-4.0": frozenset({
+        "1f5a529dc95849305307f0d6861169d8cae9e99807e4abcec68ef9ad19235652",
+        "25a40a30d753162c4026b87a389b9534c72436327abcd083f90da00ead6d6869",
     }),
     "MPL-2.0": frozenset({"e8ba82e63ba908724aaee6043943c5a2629b9ebf1af581ea0eea19a713123685"}),
     "BlueOak-1.0.0": frozenset({
