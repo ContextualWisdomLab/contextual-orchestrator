@@ -65,7 +65,10 @@ class _FakeProvider:
         return self
 
     def __exit__(self, *exc: object) -> None:
+        del exc
         self._server.shutdown()
+        self._thread.join(timeout=5)
+        self._server.server_close()
 
     @property
     def base_url(self) -> str:
