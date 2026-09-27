@@ -43,3 +43,19 @@ provider call.
   public repositories, mirroring its `require_zdr` visibility decision.
 - Every model finding must quote at least one envelope span; a hash-only
   figure/page finding without a quote is rejected (`502 unsupported_evidence`).
+
+## Current-main integration, 2026-09-27
+
+The merge with main `8df067ac` preserves every main test definition and both
+branch quota regressions. The zero-wait case now checks the exhausted eligible
+quota result while retaining both provider statuses, exact attempt order, no
+replay, and independent circuit failure counts. Three tests that replace the
+client retain and close their own synthetic HTTP errors with `ExitStack`; they
+do not exercise or alter production transport response ownership.
+
+The document envelope, structured fallback, image quota, exhausted-pool error
+ordering, rate admission, HTTP response-format, and free multimodal regressions
+passed together: 208 passed with warnings as errors, process exit 0. The earlier
+`d9815f90` full default suite separately passed 5,115 tests with five native
+tokenizer skips and two deprecated-API warnings; it is predecessor evidence,
+not a full-suite result for this merged tree or hosted review approval.

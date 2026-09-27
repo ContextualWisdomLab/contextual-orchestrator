@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import json
 import threading
 import urllib.error
@@ -93,16 +95,17 @@ def test_http_chat_accepts_response_format_json_object() -> None:
 
 def test_http_structured_synthesis_classifies_upstream_404() -> None:
     """Final synthesis provider rejection is typed and never a raw 500."""
+    upstream_errors = ExitStack()
     orchestrator = build()
 
     def reject_synthesis(*_args, **_kwargs):
-        raise urllib.error.HTTPError(
+        raise upstream_errors.enter_context(urllib.error.HTTPError(
             "https://provider.synthetic.invalid/v1/chat/completions",
             404,
             "not found",
             {},
             None,
-        )
+        ))
 
     orchestrator.client.proxy_send = reject_synthesis
     server = build_server(
@@ -125,6 +128,7 @@ def test_http_structured_synthesis_classifies_upstream_404() -> None:
         assert body["error"]["code"] == "model_not_found"
         assert body["error"]["detail"]["transport"] == "structured_synthesis"
     finally:
+        upstream_errors.close()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
@@ -541,6 +545,7 @@ def test_virtual_structured_workflow_exhausts_each_missing_model_once() -> None:
 
 def test_explicit_structured_model_preserves_model_not_found() -> None:
     """An explicit model pin never switches models after a provider 404."""
+    upstream_errors = ExitStack()
     orchestrator = TaskOrchestrator([
         ModelAgent("stale_agent", "stale-model", "mock://catalog", tags=("reasoning", "writing")),
         ModelAgent("live_agent", "live-model", "mock://catalog", tags=("reasoning", "writing")),
@@ -549,7 +554,7 @@ def test_explicit_structured_model_preserves_model_not_found() -> None:
 
     def send(agent, _endpoint, _payload):
         calls.append(agent.id)
-        raise urllib.error.HTTPError("https://synthetic.invalid", 404, "missing", {}, None)
+        raise upstream_errors.enter_context(urllib.error.HTTPError("https://synthetic.invalid", 404, "missing", {}, None))
 
     orchestrator.client.proxy_send = send
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
@@ -569,6 +574,7 @@ def test_explicit_structured_model_preserves_model_not_found() -> None:
         assert calls
         assert set(calls) == {"stale_agent"}
     finally:
+        upstream_errors.close()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
@@ -576,6 +582,7 @@ def test_explicit_structured_model_preserves_model_not_found() -> None:
 
 def test_explicit_structured_model_preserves_authentication_error() -> None:
     """An explicit model pin returns its own 401 and never changes endpoints."""
+    upstream_errors = ExitStack()
     orchestrator = TaskOrchestrator([
         ModelAgent("auth_failing", "pinned-model", "mock://pinned", tags=("reasoning", "writing")),
         ModelAgent("other_endpoint", "other-model", "mock://other", tags=("reasoning", "writing")),
@@ -584,7 +591,7 @@ def test_explicit_structured_model_preserves_authentication_error() -> None:
 
     def send(agent, _endpoint, _payload):
         calls.append(agent.id)
-        raise urllib.error.HTTPError("https://synthetic.invalid", 401, "unauthorized", {}, None)
+        raise upstream_errors.enter_context(urllib.error.HTTPError("https://synthetic.invalid", 401, "unauthorized", {}, None))
 
     orchestrator.client.proxy_send = send
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
@@ -603,6 +610,7 @@ def test_explicit_structured_model_preserves_authentication_error() -> None:
         assert body["error"]["code"] == "authentication_error"
         assert calls and set(calls) == {"auth_failing"}
     finally:
+        upstream_errors.close()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
@@ -760,7 +768,7 @@ def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> 
             },
         )
         assert status == 400, body
-        assert body["error"]["code"] == "invalid_request"
+        assert body["error"]["code"] == "invalid_model"
     finally:
         server.shutdown()
         thread.join(timeout=5)
