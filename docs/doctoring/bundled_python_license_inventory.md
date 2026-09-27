@@ -26,10 +26,12 @@ three independently. MIT root plus LGPL child and undeclared child controls
 retain the child findings. Production collection keeps both nested identities.
 
 Reusing the complete staged Python/Cargo/npm artifacts produces 109 Python,
-43 Cargo and 359 npm records. Python: 93 permitted, 2 GPL-family, 14 held;
+43 Cargo and 359 npm records. Python: 88 permitted, 2 GPL-family, 19 held;
 Cargo: 40 permitted, 3 held; npm: 223 permitted, 136 held. These are current
 classifier results, not legal clearance or release acceptance. Stricter owner
 text checks retain additional holds rather than reusing older weaker results.
+The final declared-file audit supersedes the earlier 93/14 scan: five identities
+now hold because their explicitly declared instruments were previously omitted.
 
 Trivy 0.74.0 source scanning plus the bound inventory produces 610 components
 and 609 dependency rows. The binder adds both bundled components with distinct
