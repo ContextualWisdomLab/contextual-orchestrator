@@ -419,6 +419,138 @@ def test_close_fences_failure_before_renewal_observes_close() -> None:
 
 
 
+@pytest.mark.parametrize("provider_fails", [False, True])
+def test_close_between_claim_check_and_publication_fences_terminal_state(monkeypatch, provider_fails) -> None:
+    """Shutdown winning after provider return must fence success and failure."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    publishing = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def runner(_requests):
+        if provider_fails:
+            raise RuntimeError("synthetic provider failure")
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner, job_registry=JobRegistryFactory(client), claim_lease_seconds=10,
+    )
+    publish = backend._publish_terminal
+
+    def paused_publish(*args, **kwargs):
+        publishing.set()
+        assert release.wait(timeout=2)
+        try:
+            return publish(*args, **kwargs)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(backend, "_publish_terminal", paused_publish)
+    job = backend.submit([EmbeddingBatchRequest(input_text="recoverable")])
+    try:
+        assert publishing.wait(timeout=1)
+        backend.close()
+        release.set()
+        assert finished.wait(timeout=1)
+        assert backend.poll(job)["status"] == "running"
+        assert backend.retrieve(job) == []
+        assert backend.usage(job) == {}
+        assert job.job_id not in backend._errors
+    finally:
+        release.set()
+        backend.close()
+
+
+def test_close_waits_for_already_started_durable_publication(monkeypatch) -> None:
+    """A terminal commit that wins first finishes before shutdown becomes visible."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    registry = JobRegistryFactory(client)
+    publishing = threading.Event()
+    release = threading.Event()
+    closing = threading.Event()
+    closed = threading.Event()
+    publish = registry.publish_provider_embedding_terminal
+
+    def paused_publish(*args, **kwargs):
+        publishing.set()
+        assert release.wait(timeout=2)
+        return publish(*args, **kwargs)
+
+    monkeypatch.setattr(registry, "publish_provider_embedding_terminal", paused_publish)
+    backend = ProviderEmbeddingBatchBackend(
+        lambda _requests: ([[1.0]], 1), job_registry=registry, claim_lease_seconds=10,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="recoverable")])
+
+    def close():
+        closing.set()
+        backend.close()
+        closed.set()
+
+    closer = threading.Thread(target=close)
+    try:
+        assert publishing.wait(timeout=1)
+        closer.start()
+        assert closing.wait(timeout=1)
+        assert not closed.wait(timeout=0.05)
+        assert not backend._closed.is_set()
+        release.set()
+        closer.join(timeout=1)
+        assert closed.is_set()
+        assert backend.poll(job)["status"] == "completed"
+        assert backend.retrieve(job)[0].embedding == [1.0]
+    finally:
+        release.set()
+        if closer.ident is not None:
+            closer.join(timeout=1)
+        backend.close()
+
+
+@pytest.mark.parametrize("timeout", [None, float("inf")])
+def test_unbounded_wait_observes_another_registry_cancellation(timeout) -> None:
+    """A durable terminal update cannot depend on this process's local event."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    registry = JobRegistryFactory(client)
+    started = threading.Event()
+    release = threading.Event()
+    waiting = threading.Event()
+    result = {}
+
+    def runner(_requests):
+        started.set()
+        assert release.wait(timeout=3)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner, job_registry=registry, claim_lease_seconds=0.3,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="recoverable")])
+    assert started.wait(timeout=1)
+
+    class ObservedEvent(threading.Event):
+        def wait(self, timeout=None):
+            waiting.set()
+            return super().wait(timeout)
+
+    backend._terminal_events[job.job_id] = ObservedEvent()
+    waiter = threading.Thread(target=lambda: result.update(backend.wait(job, timeout=timeout)), daemon=True)
+    try:
+        waiter.start()
+        assert waiting.wait(timeout=1)
+        assert JobRegistryFactory(client).cancel_provider_embedding(job.job_id, reason="remote cancellation")
+        waiter.join(timeout=1)
+        assert not waiter.is_alive()
+        assert result["status"] == "cancelled"
+        assert result["cancellation"] == {"reason": "remote cancellation"}
+    finally:
+        release.set()
+        backend.close()
+        waiter.join(timeout=1)
+
+
 def test_provider_job_recovers_after_claim_renewal_loss_without_restart() -> None:
     """A stale attempt cannot publish; the live worker reclaims and completes."""
     client = FakeValkeyClient()
