@@ -248,6 +248,9 @@ jobs:
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/security-tools/bin/pip-audit" --require-hashes -r requirements-security-ci.txt
+          audit_lock="${RUNNER_TEMP}/requirements-audit.txt"
+          python scripts/ci/prepare_runtime_lock_audit.py requirements.lock uv.lock "$audit_lock"
+          "$RUNNER_TEMP/security-tools/bin/pip-audit" --require-hashes --disable-pip -r "$audit_lock"
           "$RUNNER_TEMP/security-tools/bin/pip-audit" --path "$PWD/.venv/lib/python3.12/site-packages" --format json --output "$RUNNER_TEMP/dependency-audit.json"
           jq -e '([.dependencies[] | select(.skip_reason) | .name] | sort) == ["contextual-orchestrator", "fast-mlsirm"]' "$RUNNER_TEMP/dependency-audit.json"
           "$RUNNER_TEMP/security-tools/bin/cyclonedx-py" environment "$PWD/.venv/bin/python" --output-format json --output-file cyclonedx-sbom.json
