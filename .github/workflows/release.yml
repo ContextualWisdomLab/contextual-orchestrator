@@ -253,6 +253,12 @@ jobs:
             exit 1
           fi
 
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: "1.97.1" # Keep aligned with mise.toml.
+          components: rustfmt, clippy
+
       - name: Build locked native decision measurement for the full test suite
         run: |
           set -euo pipefail
