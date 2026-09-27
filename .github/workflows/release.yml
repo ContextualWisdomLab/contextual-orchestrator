@@ -264,11 +264,19 @@ jobs:
             echo "::error::The 'pypi' GitHub environment has no required_reviewers protection rule with at least one reviewer; a PyPI upload must need human approval. See the pre-merge checklist in docs/RELEASING.md." >&2
             exit 1
           fi
-          if ! jq -e '.deployment_branch_policy != null' <<<"${environment}" >/dev/null; then
-            echo "::error::The 'pypi' GitHub environment allows deployments from any branch (deployment_branch_policy is null); restrict it to main. See the pre-merge checklist in docs/RELEASING.md." >&2
+          if ! jq -e '.deployment_branch_policy.protected_branches == false and .deployment_branch_policy.custom_branch_policies == true' <<<"${environment}" >/dev/null; then
+            echo "::error::The 'pypi' environment must use explicit custom branch policies, not all protected branches. Restrict it to main; see docs/RELEASING.md." >&2
             exit 1
           fi
-          echo "::notice::The 'pypi' GitHub environment exists with required reviewers and a deployment branch policy."
+          if ! policies="$(gh api "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment-branch-policies?per_page=100")"; then
+            echo "::error::The 'pypi' environment branch policies are NOT confirmed. Failing closed; see docs/RELEASING.md." >&2
+            exit 1
+          fi
+          if ! jq -e '.total_count == 1 and (.branch_policies | type) == "array" and (.branch_policies | length) == 1 and .branch_policies[0].name == "main" and .branch_policies[0].type == "branch"' <<<"${policies}" >/dev/null; then
+            echo "::error::The 'pypi' environment must allow exactly the main branch, with no extra branch or tag patterns. See docs/RELEASING.md." >&2
+            exit 1
+          fi
+          echo "::notice::The 'pypi' GitHub environment exists with required reviewers and exactly the main branch policy."
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6

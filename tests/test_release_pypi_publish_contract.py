@@ -518,6 +518,19 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "${GH_CALLS}"
 printf '%s\\n' "${GH_TOKEN:-<unset>}" >> "${GH_TOKENS}"
 [ "$1" = "api" ] || { echo "unexpected gh call: $*" >&2; exit 98; }
+if [[ "$2" == *deployment-branch-policies* ]]; then
+    case "${FAKE_ENV_SCENARIO}" in
+      policy-error) exit 1 ;;
+      policy-malformed) echo '<html>oops</html>' ;;
+      policy-empty) echo '{"total_count":0,"branch_policies":[]}' ;;
+      policy-wildcard) echo '{"total_count":1,"branch_policies":[{"name":"*","type":"branch"}]}' ;;
+      policy-tag) echo '{"total_count":1,"branch_policies":[{"name":"main","type":"tag"}]}' ;;
+      policy-extra) echo '{"total_count":2,"branch_policies":[{"name":"main","type":"branch"},{"name":"release/*","type":"branch"}]}' ;;
+      policy-hidden-page) echo '{"total_count":101,"branch_policies":[{"name":"main","type":"branch"}]}' ;;
+      *) echo '{"total_count":1,"branch_policies":[{"name":"main","type":"branch"}]}' ;;
+    esac
+    exit 0
+fi
 case "${FAKE_ENV_SCENARIO}" in
     missing)
         echo '{"message":"Not Found","status":"404"}'
@@ -576,11 +589,13 @@ def test_environment_guard_checks_reviewers_and_branch_policy_and_fails_closed()
     assert body.startswith("set -euo pipefail\n")
     assert 'gh api "repos/${GITHUB_REPOSITORY}/environments/pypi"' in body
     assert 'select(.type == "required_reviewers"' in body
-    assert ".deployment_branch_policy != null" in body
+    assert ".deployment_branch_policy.custom_branch_policies == true" in body
+    assert ".total_count == 1" in body
+    assert 'branch_policies[0].type == "branch"' in body
     assert "HTTP 404" in body
     # Every failure path exits non-zero and points at the checklist.
-    assert body.count("exit 1") == 4
-    assert body.count("docs/RELEASING.md") == 4
+    assert body.count("exit 1") == 6
+    assert body.count("docs/RELEASING.md") == 6
     assert "continue-on-error" not in step
 
 
@@ -603,16 +618,23 @@ def test_environment_guard_token_is_step_scoped_and_read_only() -> None:
         (
             "ok-protected-branches",
             _environment([_REVIEWERS_RULE], {"protected_branches": True, "custom_branch_policies": False}),
-            True,
-            "::notice::",
+            False,
+            "explicit custom branch policies",
         ),
+        ("policy-error", _environment([_REVIEWERS_RULE], _MAIN_ONLY), False, "NOT confirmed"),
+        ("policy-malformed", _environment([_REVIEWERS_RULE], _MAIN_ONLY), False, "exactly the main"),
+        ("policy-empty", _environment([_REVIEWERS_RULE], _MAIN_ONLY), False, "exactly the main"),
+        ("policy-wildcard", _environment([_REVIEWERS_RULE], _MAIN_ONLY), False, "exactly the main"),
+        ("policy-tag", _environment([_REVIEWERS_RULE], _MAIN_ONLY), False, "exactly the main"),
+        ("policy-extra", _environment([_REVIEWERS_RULE], _MAIN_ONLY), False, "exactly the main"),
+        ("policy-hidden-page", _environment([_REVIEWERS_RULE], _MAIN_ONLY), False, "exactly the main"),
         ("missing", None, False, "does not exist"),
         ("server-error", None, False, "NOT confirmed"),
         ("no-rules", _environment([], _MAIN_ONLY), False, "no required_reviewers"),
         ("rules-absent", {"id": 7, "name": "pypi", "deployment_branch_policy": _MAIN_ONLY}, False, "no required_reviewers"),
         ("only-wait-timer", _environment([{"id": 3, "type": "wait_timer", "wait_timer": 5}], _MAIN_ONLY), False, "no required_reviewers"),
         ("reviewers-empty", _environment([{**_REVIEWERS_RULE, "reviewers": []}], _MAIN_ONLY), False, "no required_reviewers"),
-        ("any-branch", _environment([_REVIEWERS_RULE], None), False, "deployment_branch_policy is null"),
+        ("any-branch", _environment([_REVIEWERS_RULE], None), False, "explicit custom branch policies"),
         ("not-json", "<html>oops</html>", False, "no required_reviewers"),
     ],
 )
@@ -653,7 +675,8 @@ def test_environment_guard_executes(
     if not success:
         assert "::error::" in result.stderr
         assert "docs/RELEASING.md" in result.stderr
-    assert calls.read_text(encoding="utf-8").splitlines() == [
-        "api repos/ContextualWisdomLab/contextual-orchestrator/environments/pypi"
-    ]
-    assert tokens.read_text(encoding="utf-8").splitlines() == ["step-scoped-token"]
+    expected_calls = ["api repos/ContextualWisdomLab/contextual-orchestrator/environments/pypi"]
+    if scenario == "ok" or scenario.startswith("policy-"):
+        expected_calls.append("api repos/ContextualWisdomLab/contextual-orchestrator/environments/pypi/deployment-branch-policies?per_page=100")
+    assert calls.read_text(encoding="utf-8").splitlines() == expected_calls
+    assert tokens.read_text(encoding="utf-8").splitlines() == ["step-scoped-token"] * len(expected_calls)
