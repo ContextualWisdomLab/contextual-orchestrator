@@ -1,8 +1,8 @@
-# Multi-model combination foundation
+# Multi-model combination: gap and reintroduction record
 
-Status: Proposed (2026-09-26). Implements a conflict-free slice of
-[ADR 0124](../adr/) step 4 (combination domain) while step 1
-(PR #1262) and steps 2–3 are in flight.
+Status: Gap open (2026-09-27). A Proposed combination/fan-out surface was
+added to PR #1267 and then withdrawn under review 5328347433, because it had
+no selection authority. No combination code is present on this branch.
 
 ## Gap on `main` (`5665b0ad`)
 
@@ -18,69 +18,48 @@ combines two models' *answers*:
 - `nim_benchmark.evaluate_policies` compares route, conduct, and direct
   single workers; it has no arm in which several workers answer the same task.
 
-So the "combination beats the best single model" claim cannot currently be
-tested, let alone achieved.
+The claim that combining models beats the best single model is therefore
+neither implemented nor measurable today.
 
-## What this change adds
+## Why the Proposed surface was withdrawn
 
-| Module | Role | Source | Divergence |
-| --- | --- | --- | --- |
-| `domain/candidates.py` | `CandidateAnswer`, `CandidateSet`, `CombinationOutcome` value objects | — | — |
-| `domain/combination.py` `RankedFirst` | Today's route semantics as a strategy | — | — |
-| `domain/combination.py` `PluralityVote` | Vote over extracted final answers; agreement share reported as `support` | Wang et al. (2023), arXiv:2203.11171 §2, §3.5 | Voters are different workers, not samples of one model. Only a unique plurality is selected; a tied plurality abstains (`plurality_tie`). No support threshold is applied. |
-| `domain/combination.py` `ScoredBestOfN` | Pick the unique highest score from an external scorer port; an exact top-score tie abstains (`score_tie`) | — | Rank is not scorer evidence. Wang et al. (2024) find an LLM ranker weaker than MoA aggregation (§3.3); kept as a baseline arm. |
-| `domain/moa.py` | Aggregate-and-Synthesize aggregator messages | Wang et al. (2024), arXiv:2406.04692 Table 1, Eq. 1 | One proposer layer (MoA-Lite depth). Proposers anonymised. "open-source models" → "models". |
-| `application/fan_out.py` | Parallel fan-out through a bounded-concurrency completion port; MoA runner | — | `deadline_seconds` defaults to `None`, so upstream completion owns termination. A finite value is an explicit administrative bound for the proposer layer only. |
+Review 5328347433 on PR #1267 found that the surface decided which model
+answer to return without an authority for that decision:
 
-Fail-closed rules, consistent with planning ADR 0001:
+- `RankedFirst` selected by caller-supplied rank, with no model.
+- `PluralityVote` applied single-model self-consistency (Wang et al., 2023)
+  to different workers, whose errors correlate; no live paired evidence
+  existed.
+- `ScoredBestOfN` accepted any float-returning callable, with no released
+  schema, calibration identity, uncertainty, or provenance.
+- `collect_candidates` / `mixture_of_agents` accepted caller-chosen proposer
+  sets and concurrency without a Fugu/Conductor/TRINITY-compatible allocation
+  receipt.
 
-- No heuristic decides between answers: prior rank never breaks a vote or
-  score tie; ties abstain. Rank only picks the representative text among
-  candidates that already agree on the same extracted answer.
-- A strategy that lacks evidence abstains (`selected is None`); it never
-  invents or silently substitutes an answer.
-- Provider error messages are never recorded; only the exception class name.
-- Cost is `None` whenever any part is unknown, including when a proposer
-  failed (a failed call may still be billed).
-- A vote-count tie or external-score tie abstains. Rank is evidence ordering,
-  not an uncalibrated secondary quality score.
-- No support threshold is accepted. The cited plurality rule selects only a
-  unique mode; an unsupported policy threshold cannot change admission.
-- Fan-out has no default elapsed-time cutoff. A finite deadline is explicit
-  administrative input, while the completion port owns upstream cancellation.
+Tie abstention (`0940e654`) repaired a symptom but not the missing
+authority. Because the surface was not wired into serving, removal is the
+fail-closed outcome.
 
-## 2026-09-27 no-heuristics repair
+## Reintroduction conditions
 
-Exact head `a4183535` required every caller to invent a finite
-`deadline_seconds`, accepted an arbitrary plurality `min_support`, and used
-prior rank to decide both vote-count and score ties. The module documentation
-identified the first two plurality controls as repository choices rather than
-results of the cited self-consistency algorithm.
+A combination surface may return only when all of these exist (from review
+5328347433):
 
-RED commit `e34a038b` adds contracts for default-null completion, tied-mode
-abstention, unique-plurality selection without a threshold, and score-tie
-abstention. GREEN commit `0940e654` removes the unsupported controls. The
-focused combination/fan-out suite passes 58 tests. This evidence is PR-head
-only until exact-head hosted checks and independent approval complete.
+1. An immutable owner contract for the selection decision.
+2. Released fast-mlsirm evidence for any scorer used to choose between
+   answers (schema, calibration identity, uncertainty, provenance).
+3. A typed `no_decision` outcome instead of an implicit fallback.
+4. Executable allocation and paired-evaluation acceptance: live paired arms
+   in `nim_benchmark` against `best_single_worker_hindsight`
+   (`paired_bootstrap_mean_difference`), and an allocation receipt for
+   proposer sets and concurrency.
 
-## Evidence boundary
+Known prerequisites outside this record:
 
-- `tests/test_combination_domain.py::test_plurality_vote_mechanism_beats_best_single_on_independent_errors`
-  shows the *mechanism* on synthetic, independent-error workers (Condorcet).
-  It is not evidence that real providers, whose errors correlate, gain.
-- The product claim requires a live paired evaluation: add `plurality_vote`
-  and `mixture_of_agents` arms to `nim_benchmark.evaluate_policies` and compare
-  against `best_single_worker_hindsight` with
-  `paired_bootstrap_mean_difference`. That wiring touches `nim_benchmark.py`
-  and, for serving, `TaskOrchestrator`; it follows after PR #1262 and ADR 0124
-  step 2 land.
-- The modules import no IO and not `orchestrator`
-  (`tests/test_domain_import_boundary.py`). Importing them still loads
-  `orchestrator` through the package `__init__` until step 2 makes it lazy.
-
-## Reproduction
-
-```bash
-python -m pytest -q tests/test_combination_domain.py tests/test_fan_out.py \
-  tests/test_domain_import_boundary.py tests/test_docstring_coverage.py
-```
+- Live evaluation needs the production provider keys, which exist only as
+  `production`-environment secrets usable from `main`; a `workflow_dispatch`
+  paid/free canary on `main` is required (see the coordination note on PR
+  #1263).
+- ADR 0124 step 1 (PR #1262) and step 2 (ports/adapters) before serving
+  wiring.
+- PR #1209 for the `main`-side test and security gates.

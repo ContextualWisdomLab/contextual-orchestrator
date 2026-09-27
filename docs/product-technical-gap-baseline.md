@@ -7148,7 +7148,7 @@ suite: 3663 passed, 1 skipped, 5 known local-only failures (the openai SDK
 `python -m interrogate -v contextual_orchestrator/` remains 100% (no production
 code touched).
 
-## 2026-09-27 Proposed multi-model selection authority repair — PR #1267
+## 2026-09-27 Proposed multi-model selection authority repair (withdrawn) — PR #1267
 
 **Observed exact-head gap.** PR #1267 head `a4183535` added a new decision
 surface whose documentation explicitly described plurality `min_support` and
@@ -7168,6 +7168,18 @@ cancellation. Focused combination/fan-out tests are 58/58 GREEN and the four
 changed Python files compile. Status remains **Proposed / PR-head only** until
 exact-head hosted Security and Quality checks and an independent approval are
 terminal GREEN; no merge or release claim follows from local evidence.
+
+**Withdrawal (2026-09-27, review 5328347433).** Tie abstention repaired one
+symptom but did not establish selection authority: `RankedFirst` selects by
+caller rank, `PluralityVote` applies one-model self-consistency to different
+workers whose errors correlate, `ScoredBestOfN` accepts an uncalibrated
+callable, and the fan-out accepts caller-chosen proposer sets without an
+allocation receipt. Because the surface was Proposed and not wired into
+serving, it is removed from PR #1267 (fail closed). The combination gap and
+its reintroduction conditions are recorded in
+[multi-model combination](doctoring/multi_model_combination.md). PR #1267
+keeps only the constant-SQL decision-window fix and the hash-locked
+`fast-mlsirm`/`anyio`/Rust-toolchain CI repairs.
 
 ## 2026-09-14 Generated-plan step bound origin (section 3.1 / 5.1 fidelity)
 
