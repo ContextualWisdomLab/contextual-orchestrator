@@ -391,3 +391,6 @@ Result: 60 passed in 7.62s, exit 0, CPython 3.14.6, real native extension.
 The explicit config path avoids an unavailable pytest-asyncio configuration
 plugin; this is local strict-warning evidence, not the exact hosted command.
 Full-suite and protected delivery remain unverified.
+
+The repaired ten-module suite improved to 272 passed, 2 failed (148.26s).
+One late 503 response owner was `test_timeout_history_read_requires_durable_authorization_audit`: its `pytest.raises` retained the real urllib response without closing it. Closing that test-owned handle in `finally` preserves assertion failures. Focused `tests/test_model_timeout_policy.py` then returned 52 passed in 48.61s, exit 0, with the same strict-warning command prefix. A late 401 owner remains under allocation tracing; the expanded suite is not clean acceptance.
