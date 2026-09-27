@@ -341,13 +341,23 @@ _CANONICAL_TEXT_HASHES = {
 }
 
 
-# Complete reviewed MIT/Unlicense instruments and their selection notice.
+# Complete reviewed permissive instrument sets and their selection notices.
 # See docs/doctoring/dual_license_instrument_set.md; no filename/package trust.
 _REVIEWED_INSTRUMENT_SETS = {
     "Unlicense OR MIT": frozenset({
         "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1",
         "952115fb93510335fd97e1e479516553fa0c4da1b49acddf9cd5d18392a3e1cf",
         "2069c208cba553e43cd0b730df8a0c10bf1b1101b96f661e2f1307c73b9722e3",
+    }),
+    'Apache-2.0 OR BSD-3-Clause': frozenset({
+        'c9a79affdaaa650e90a55607fef88e5c5e4f0547a78ccfe8014e1693ef839120',
+        'a0b9af0d1614b5e8f3004aaf2092bf005b64398ef067ca868d81a8beeb6cb0b5',
+        'c268cc09d949fefffa9309d0d6c0b44674a873823ad419680e623919478e4619',
+    }),
+    'Apache-2.0 OR BSD-2-Clause': frozenset({
+        '4456c8e282202cfddd8665522fd320e8b7f64d8a1f7d9abfd7802080576cf117',
+        '59d8f0ba87ad9a2f1a431123c8d16646e5b89ba53653e818f16d136d77263c99',
+        '13c6a3608faee72d1b3a7aad6d1c8036408ed82d9a28a7cf0ef87d6acc4f91c9',
     }),
 }
 

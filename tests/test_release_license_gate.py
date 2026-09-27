@@ -714,3 +714,20 @@ def test_complete_reviewed_dual_instrument_set(change):
     elif change == "gpl":
         texts.append("GNU General Public License version 3")
     assert _declaration_matches_text(["Unlicense OR MIT"], [{"text": t} for t in texts]) is (change == "none")
+
+
+@pytest.mark.parametrize("name,term", [("cryptography", "Apache-2.0 OR BSD-3-Clause"), ("packaging", "Apache-2.0 OR BSD-2-Clause")])
+@pytest.mark.parametrize("change", ["none", "notice-only", "missing-grant", "restriction", "extra"])
+def test_complete_apache_bsd_instrument_sets(name, term, change):
+    from scripts.ci.release_license_gate import _declaration_matches_text
+    directory = Path(__file__).parent / "fixtures" / "license_text"
+    texts = [(directory / f"{name}-instrument-{i}.txt").read_text() for i in range(3)]
+    if change == "notice-only":
+        texts = texts[:1]
+    elif change == "missing-grant":
+        del texts[1]
+    elif change == "restriction":
+        texts[0] += "Redistribution requires written permission."
+    elif change == "extra":
+        texts.append("Unreviewed additional terms")
+    assert _declaration_matches_text([term], [{"text": t} for t in texts]) is (change == "none")
