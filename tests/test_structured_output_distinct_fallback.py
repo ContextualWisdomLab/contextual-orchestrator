@@ -202,6 +202,50 @@ def test_free_structured_synthesis_waits_out_an_all_429_storm() -> None:
     assert second.id not in orchestrator._circuit
 
 
+@pytest.mark.parametrize("second_status", [429, 413])
+def test_free_structured_zero_cooldown_does_not_repeat_rejected_round(second_status: int) -> None:
+    """An exhausted quota round without a live cooldown receives no immediate replay."""
+    agents = [
+        ModelAgent(f"agent_{index}", f"model-{index}", f"mock://{index}", tags=("cost:free",))
+        for index in range(2)
+    ]
+    orchestrator = TaskOrchestrator(
+        agents, rate_limit_wait_seconds=0.02, rate_limit_unknown_cooldown_seconds=0.0
+    )
+    calls: list[str] = []
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict[str, object]):
+        calls.append(agent.id)
+        if agent.id == agents[1].id and second_status == 413:
+            raise ProviderRequestTooLargeError("provider rejected request size")
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="rate_limit_exceeded",
+            message="provider rejected the request",
+            client_status=429,
+            provider_status=429,
+            retryable=True,
+            transport="structured_synthesis",
+        )
+
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=agents[0]),
+        patch.object(orchestrator, "_ranked_agents", return_value=agents),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderUpstreamError) as caught,
+    ):
+        orchestrator.proxy_completion(_request(TaskOrchestrator.FREE_MODEL), single_agent=False)
+
+    assert calls == [agent.id for agent in agents]
+    assert caught.value.provider_status == 429
+    assert caught.value.error_code == "rate_limit_exceeded"
+    assert caught.value.extra_detail["route"]["terminal_reason"] == "eligible_set_exhausted"
+    assert len(caught.value.extra_detail["route"]["attempted"]) == 2
+    assert not orchestrator._circuit
+
+
 def test_free_structured_synthesis_zero_cooldown_does_not_replay() -> None:
     """A quota rejection without an active cooldown must not cause hammering."""
     agent = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
