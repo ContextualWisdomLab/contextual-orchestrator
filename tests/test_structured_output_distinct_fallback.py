@@ -200,6 +200,32 @@ def test_free_structured_synthesis_waits_out_an_all_429_storm() -> None:
     assert second.id not in orchestrator._circuit
 
 
+def test_free_structured_synthesis_zero_cooldown_does_not_replay() -> None:
+    """A quota rejection without an active cooldown must not cause hammering."""
+    agent = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
+    orchestrator = TaskOrchestrator(
+        [agent], rate_limit_wait_seconds=1.0, rate_limit_unknown_cooldown_seconds=0.0
+    )
+    error = ProviderUpstreamError(
+        agent_id=agent.id, model=agent.model, error_code="rate_limit_exceeded",
+        message="provider rejected the request", client_status=429,
+        provider_status=429, retryable=True, transport="structured_synthesis",
+    )
+    with (
+        patch.object(orchestrator, "conduct", return_value=_workflow()),
+        patch.object(orchestrator, "_select_agent", return_value=agent),
+        patch.object(orchestrator, "_ranked_agents", return_value=[agent]),
+        patch.object(orchestrator.client, "proxy_send_once",
+                     side_effect=[error, _completion('{"input_count":10}', 1)]) as send,
+        pytest.raises(ProviderUpstreamError) as caught,
+    ):
+        orchestrator.proxy_completion(_request(TaskOrchestrator.FREE_MODEL), single_agent=False)
+    send.assert_called_once()
+    assert caught.value.provider_status == error.provider_status
+    assert caught.value.error_code == error.error_code
+    assert len(caught.value.extra_detail["route"]["attempted"]) == 1
+
+
 def test_free_structured_synthesis_closes_429_response_before_retry() -> None:
     """An HTTP quota response supplies the cooldown and is closed after classification."""
     agent = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
@@ -231,7 +257,11 @@ def test_free_structured_synthesis_waits_for_preexisting_cooldown() -> None:
     """A conduct-stage cooldown cannot make final synthesis report a size error."""
     agent = ModelAgent("first_agent", "first-model", "mock://first", tags=("cost:free",))
     orchestrator = TaskOrchestrator([agent], rate_limit_wait_seconds=1.0)
-    orchestrator._record_rate_limit(agent.id, 0.01)
+    orchestrator._record_rate_limit(agent.id, 0.1)
+
+    def send_after_cooldown(*_args):
+        assert orchestrator._rate_limit_remaining(agent.id) is None
+        return _completion('{"input_count":10}', 1)
 
     with (
         patch.object(orchestrator, "conduct", return_value=_workflow()),
@@ -240,7 +270,7 @@ def test_free_structured_synthesis_waits_for_preexisting_cooldown() -> None:
         patch.object(
             orchestrator.client,
             "proxy_send_once",
-            return_value=_completion('{"input_count":10}', 1),
+            side_effect=send_after_cooldown,
         ) as send,
     ):
         result = orchestrator.proxy_completion(
