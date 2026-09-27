@@ -337,3 +337,23 @@ if __name__ == "__main__":  # pragma: no cover
     test_python_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
     print("ok")
+
+
+def test_native_workflows_bootstrap_the_repository_pinned_rust_toolchain():
+    """Fresh runners must install Rust before any native command."""
+    import tomllib
+
+    version = tomllib.loads(read_text("mise.toml"))["tools"]["rust"]
+    action = "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87"
+    for path, expected_count in ((".github/workflows/security.yml", 2),
+                                 (".github/workflows/release.yml", 1)):
+        text = read_text(path)
+        assert text.count(action) == expected_count
+        assert text.count(f'toolchain: "{version}"') == expected_count
+        assert "rustup toolchain install stable" not in text
+        for job in text.split("    steps:")[1:]:
+            if "rustup " in job or "cargo fmt " in job:
+                assert job.index(action) < min(
+                    job.index(token) for token in ("rustup ", "cargo fmt ")
+                    if token in job
+                )

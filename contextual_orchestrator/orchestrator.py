@@ -7396,7 +7396,8 @@ class TaskOrchestrator:
                                 self._record_rate_limit(
                                     candidate.id,
                                     resolve_retry_after_seconds(http_error)
-                                    if http_error is not None else None,
+                                    if http_error is not None
+                                    else classified.extra_detail.get("retry_after_seconds"),
                                     status=status,
                                 )
                             record_synthesis_failure(
