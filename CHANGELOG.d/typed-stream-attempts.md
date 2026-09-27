@@ -23,3 +23,7 @@ The route contract now also binds that terminal reason to the attempt evidence:
 `served` requires exactly one `served` attempt, while non-served termination
 reasons reject every `served` attempt. A self-contradictory receipt therefore
 fails schema validation instead of presenting two competing authorities.
+
+A provider stream that closes without its completion marker now reports a typed
+failure with the attempted candidate and stops without retrying an unknown
+upstream outcome or claiming a served completion.

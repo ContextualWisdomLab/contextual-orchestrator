@@ -3401,6 +3401,7 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         response_bytes = 0
+        saw_done = False
         try:
             with self._open_model_provider(
                 request,
@@ -3430,6 +3431,7 @@ class ModelClient:
                         continue
                     data = line[len("data:") :].strip()
                     if data == "[DONE]":
+                        saw_done = True
                         break
                     try:
                         chunk = json.loads(data)
@@ -3458,6 +3460,16 @@ class ModelClient:
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
+            if not saw_done:
+                raise ProviderUpstreamError(
+                    agent_id=agent.id,
+                    model=agent.model,
+                    error_code="provider_stream_incomplete",
+                    message="provider stream ended before terminal marker",
+                    client_status=502,
+                    retryable=False,
+                    transport="stream",
+                )
             _record_provider_response_telemetry(
                 {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
                 started,
@@ -7866,6 +7878,10 @@ class TaskOrchestrator:
                 request_too_large = _is_request_too_large_error(exc)
                 if (agent.group_name or free_only) and not request_too_large:
                     self._group_router.observe_failure(agent.id)
+                if isinstance(exc, ProviderUpstreamError) and exc.error_code == "provider_stream_incomplete":
+                    route_attempts.append(_typed_attempt_entry(agent.id, agent.model, exc))
+                    exc.extra_detail["route"] = route_evidence("fail_closed")
+                    raise
                 if emitted or pinned is not None:
                     raise
                 if isinstance(exc, ToolFallbackStoppedError):
