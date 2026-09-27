@@ -488,11 +488,8 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     The fake client raises exactly what ``ModelClient._send_with_retry`` now
     produces -- a classified ``ProviderUpstreamError`` -- so this exercises the
     real boundary contract between the transport layer and agent failover.
-    Time is simulated: each provider call costs ``call_seconds`` and the
-    rate-limit sleep advances the clock. With real time, calls that take any
-    time made the two assumed cooldowns expire at different instants; the
-    candidate skipped while still cooling became ready before the storm check
-    and was read as a mixed failure, surfacing the raw 429 early.
+    Instant and timed calls both retain every distinct provider rejection;
+    neither invents a retry instant when the provider supplied no timing.
     """
     now = [1000.0]
     slept: list[float] = []
@@ -527,11 +524,13 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     exc = excinfo.value
     assert exc.error_code == PROVIDER_RATE_LIMITED_CODE
     assert exc.client_status == 429
-    assert exc.retryable is True
-    assert exc.extra_detail["cooldown_source"] == "assumed"
+    assert exc.retryable is False
+    assert exc.extra_detail["cooldown_source"] == "unavailable"
     assert exc.extra_detail["route"]["terminal_reason"] == "rate_limit_wait_budget_exhausted"
     assert exc.agent_id in {"primary_worker", "backup_worker"}
-    assert slept and sum(slept) <= orchestrator.rate_limit_wait_seconds
+    assert slept == []
+    assert "retry_after_seconds" not in exc.extra_detail
+    assert len(exc.extra_detail["route"]["attempted"]) == 2
 
 
 def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
