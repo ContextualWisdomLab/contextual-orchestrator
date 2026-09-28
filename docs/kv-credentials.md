@@ -405,6 +405,29 @@ keys from the gateway process environment. Keep the admin token on the owner;
 give CI consumers only the inference token. Public binding is explicit and
 requires a trusted TLS ingress and network controls. The CLI does not create
 that ingress, publish an immutable release, or establish hosted acceptance.
+Production review credentials can discover and request only `orchestrator/free`
+through the chat API; provider models, caller routing hints, file routes, and
+provider-refresh probes are outside this review contract.
+
+To give OpenCode, Noema, and Strix separate review identities, store a distinct
+credential for each workload in the owner KV and replace the shared inference
+token with repeated workload mappings:
+
+```bash
+python -m contextual_orchestrator.review_gateway --preseeded-kv --production \
+  --workload-token-key opencode=REVIEW_OPENCODE_TOKEN \
+  --workload-token-key noema=REVIEW_NOEMA_TOKEN \
+  --workload-token-key strix=REVIEW_STRIX_TOKEN
+```
+
+Each mapping grants inference access only; the admin token stays separate.
+Deleting or rotating one KV credential takes effect on the next request and
+does not revoke the other workloads. This mode does not accept the shared
+inference token. Consumers still need a brokered, short-lived credential
+before an LLM-controlled process can use the remote gateway safely.
+The revocation check follows [RFC 7662](https://www.rfc-editor.org/rfc/rfc7662)'s
+freshness principle; [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750) explains
+why a bearer exposed to a model-controlled process remains reusable.
 
 ## Gateway direction
 
