@@ -98,6 +98,29 @@ def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path, receipt_f
         store.close()
 
 
+@pytest.mark.parametrize("initial_selection", [None, 11])
+def test_acknowledged_receipt_requires_matching_initial_decision(tmp_path, initial_selection):
+    store = _StateStore(str(tmp_path / "missing_initial.db"))
+    try:
+        store.save("accepted_request", "request_one", {"request_id": "request_one"}, durable=True)
+        if initial_selection is not None:
+            store.save("initial_decision", "request_one", {
+                "request_id": "request_one", "status": "selected",
+                "selection_elapsed_ns": initial_selection,
+                "durable_ack_elapsed_ns": None,
+            }, durable=True)
+        store.save("decision_receipt", "request_one", {
+            "request_id": "request_one", "status": "acknowledged",
+            "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
+        }, durable=True)
+        observation = store.export_request_outcomes()["observations"][0]
+        assert observation["durable_ack_elapsed_ns"] is None
+        assert observation["decision_latency_ms"] is None
+        assert observation["invalid_association_count"] >= 1
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("field_name,bad_value", [
     ("selection_elapsed_ns", -1), ("durable_ack_elapsed_ns", True),
     ("first_provider_elapsed_ns", 2**64),

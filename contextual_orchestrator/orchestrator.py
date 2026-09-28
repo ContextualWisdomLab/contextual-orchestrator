@@ -5321,7 +5321,8 @@ class _StateStore:
                 acknowledgement = row["durable_ack_elapsed_ns"]
                 selection = row["selection_elapsed_ns"]
                 if acknowledgement is not None and (
-                    status != "acknowledged" or selection is None or acknowledgement < selection
+                    status != "acknowledged" or not valid_initial
+                    or selection != initial_selection or acknowledgement < selection
                 ):
                     row["durable_ack_elapsed_ns"] = None
                     row["invalid_association_count"] += 1
