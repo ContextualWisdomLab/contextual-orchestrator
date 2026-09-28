@@ -2386,15 +2386,6 @@ def evaluate_policies(
 
 
 
-def _require_declared_positive_int(value: object, field_name: str) -> int:
-    """Reject missing, boolean, or non-positive integer declarations."""
-    if type(value) is not int or value < 1:
-        raise BenchmarkContractError(
-            f"{field_name} must be a declared positive integer"
-        )
-    return value
-
-
 # --------------------------------------------------------------------------
 # Statistics: paired bootstrap + Pareto frontiers
 # --------------------------------------------------------------------------
