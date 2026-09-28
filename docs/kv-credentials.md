@@ -429,6 +429,32 @@ The revocation check follows [RFC 7662](https://www.rfc-editor.org/rfc/rfc7662)'
 freshness principle; [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750) explains
 why a bearer exposed to a model-controlled process remains reusable.
 
+For a separately isolated Actions credential broker, the owner can instead
+authenticate signed, short-lived GitHub job tokens. Among review authentication
+credentials, keep only the admin credential in the owner KV; provider keys
+remain in that KV. Configure the exact central workflow refs:
+
+```bash
+python -m contextual_orchestrator.review_gateway --preseeded-kv --production \
+  --github-oidc-audience contextual-orchestrator/review \
+  --github-oidc-owner-id 295022177 \
+  --github-oidc-workflow opencode=ContextualWisdomLab/.github/.github/workflows/opencode-review-dispatch.yml@refs/heads/main
+```
+
+Repeat `--github-oidc-workflow` for Noema and Strix after their exact hosted
+workflow identities are checked. This mode rejects static inference-token
+mappings. It validates GitHub's signing key, issuer, exact audience, immutable
+organization ID, signed target-repository ID/name, allowed central main-branch
+workflow ref, run ID, and token lifetime. Persisted owner identity is scoped
+to the workload and target-repository ID;
+unknown signing keys and unavailable key retrieval fail closed. Signing keys
+are cached for at most five minutes, so rotation can deny new keys for that
+interval. The broker must mint a token for each gateway operation while keeping
+the Actions token-request capability outside the model-controlled process.
+This owner adapter does not create that broker, a TLS ingress, or hosted
+cutover evidence. Claim definitions: [GitHub Actions OIDC reference](https://docs.github.com/en/actions/reference/security/oidc);
+validation principles: [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725).
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing
