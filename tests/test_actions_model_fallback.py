@@ -467,6 +467,8 @@ def test_http_virtual_free_tool_session_continues_after_failover(
     assert isinstance(second, dict)
     assert second["choices"][0]["message"]["content"] == "inspection complete"
     first_attempts = first["orchestration"]["route"]["attempted"]
+    assert len(first_attempts) >= 2
+    assert first_attempts[0]["agent_id"] == "primary_free_agent"
     assert [attempt["agent_id"] for attempt in first_attempts] == client.calls[:first_call_count]
     assert all(attempt["outcome"] == "retryable_transport" for attempt in first_attempts[:-1])
     assert first_attempts[-1]["outcome"] == "served"
