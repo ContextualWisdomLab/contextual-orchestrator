@@ -187,6 +187,78 @@ def test_http_typed_stream_failure_before_selection_is_retained(tmp_path, monkey
         orchestrator.close()
 
 
+def test_stream_disconnect_records_cancelled_request_outcome(tmp_path, monkeypatch):
+    """A failed SSE write closes the accepted request as cancelled, not served."""
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement, export_decision_receipts
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db"
+    )
+    consumed = []
+
+    def stream_route(_messages, *, workflow_run_id, model_name):
+        del workflow_run_id, model_name
+        for delta in ("first", "second"):
+            consumed.append(delta)
+            yield delta
+
+    monkeypatch.setattr(orchestrator, "stream_route", stream_route)
+    server = build_server(
+        orchestrator, port=0, decision_receipts=True,
+        security=SecurityConfig(auth_token="test-token"),
+    )
+    handler = server.RequestHandlerClass
+    original_write = handler._write_sse
+    writes = 0
+
+    def disconnect_on_content(self, frame):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            def broken_write():
+                raise BrokenPipeError
+
+            return self._write_response(broken_write)
+        return original_write(self, frame)
+
+    monkeypatch.setattr(handler, "_write_sse", disconnect_on_content)
+    closed = threading.Event()
+    original_close = DecisionMeasurement.close
+
+    def close_and_signal(measurement, reason="unfinished"):
+        try:
+            return original_close(measurement, reason)
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(DecisionMeasurement, "close", close_and_signal)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        connection.request(
+            "POST", "/v1/chat/completions",
+            json.dumps({"model": "orchestrator/auto", "mode": "route", "stream": True,
+                        "messages": [{"role": "user", "content": "question"}]}),
+            {"Content-Type": "application/json", "Authorization": "Bearer test-token"},
+        )
+        with closing(connection.getresponse()) as response:
+            assert response.status == 200
+            request_id = response.getheader("x-request-id")
+            assert b'"finish_reason": "stop"' not in response.read()
+        assert closed.wait(timeout=2)
+        observation, = export_decision_receipts(orchestrator._store)["observations"]
+        assert observation["status"] == "cancelled"
+        assert observation["request_id"] == request_id
+        assert consumed == ["first"]
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 def test_http_evidence_embedding_cold_and_warm_keep_task_interval(tmp_path, monkeypatch):
     """Routing evidence calls occur only cold and remain before task acknowledgement."""
     from contextual_orchestrator.decision_receipts import DecisionMeasurement, _CURRENT_DECISION, export_decision_receipts
