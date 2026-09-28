@@ -444,15 +444,19 @@ def test_main_production_rejects_unsafe_startup(monkeypatch, capsys, tmp_path, a
     assert message in capsys.readouterr().err
 
 
-def test_main_production_requires_durable_state_before_discovery(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production"])
+@pytest.mark.parametrize(
+    "state_args, message",
+    [([], "requires --state-db"), (["--state-db", ":memory:"], "persistent --state-db path")],
+)
+def test_main_production_requires_durable_state_before_discovery(monkeypatch, capsys, state_args, message):
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production", *state_args])
     monkeypatch.setattr(
         review_gateway, "discover_all_models",
         lambda *_args: pytest.fail("discovery before state validation"),
     )
     with pytest.raises(SystemExit):
         review_gateway.main()
-    assert "requires --state-db" in capsys.readouterr().err
+    assert message in capsys.readouterr().err
 
 
 def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch):

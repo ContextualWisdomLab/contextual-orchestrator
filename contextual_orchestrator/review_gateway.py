@@ -350,6 +350,8 @@ def main() -> None:
         parser.error("--production requires --preseeded-kv")
     if args.production and not (args.state_db and args.state_db.strip()):
         parser.error("--production requires --state-db")
+    if args.production and args.state_db == ":memory:":
+        parser.error("--production requires a persistent --state-db path")
     if args.allow_public_bind and not args.production:
         parser.error("--allow-public-bind requires --production")
     if args.preseeded_kv and args.auth_token:
