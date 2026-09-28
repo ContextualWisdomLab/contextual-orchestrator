@@ -14,8 +14,11 @@ import copy
 import hashlib
 import io
 import json
+import random
+import re
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -28,7 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.document_diff_review import (  # noqa: E402
+    _DATA_URI,
     DocumentDiffReviewError,
+    _scan_for_leaks,
     validate_document_diff_envelope,
     validate_document_diff_findings,
 )
@@ -261,6 +266,7 @@ def _mutated(**changes) -> dict:
     [
         (_mutated(**{"objects.0.head_text": "data:image/png;base64,iVBORw0KGgo="}), 422, "inline_binary_content"),
         (_mutated(**{"objects.0.head_text": "data:image/png;name=" + "x" * 101 + ";base64,AAAA"}), 422, "inline_binary_content"),
+        (_mutated(**{"objects.0.head_text": "DATA:,x"}), 422, "inline_binary_content"),
         (_mutated(**{"objects.0.head_text": base64.b64encode(HEAD_DOCX).decode()[:4000]}), 422, "inline_binary_content"),
         (
             _mutated(**{"objects.0.head_text": base64.urlsafe_b64encode(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8).decode()}),
@@ -302,6 +308,7 @@ def _mutated(**changes) -> dict:
     ids=[
         "data_uri",
         "long_data_uri_header",
+        "uppercase_empty_data_uri",
         "base64_docx",
         "urlsafe_base64_image",
         "secret",
@@ -473,3 +480,55 @@ def test_total_extracted_text_budget_rejects_individually_bounded_objects() -> N
         validate_document_diff_envelope(envelope)
     assert (error.value.status, error.value.code) == (413, "request_too_large")
     assert "envelope text" in str(error.value)
+
+
+def test_data_uri_scan_is_linear_on_repeated_scheme_without_comma() -> None:
+    """CodeQL py/polynomial-redos: ``"data:" * n`` without a comma must not rescan to the end."""
+    pathological = "data:" * 20_000
+    started = time.perf_counter()
+    assert _DATA_URI.search(pathological) is None
+    _scan_for_leaks(pathological, "objects[0].head_text")
+    assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "data:image/png;base64,iVBORw0KGgo=",
+        "DATA:,x",
+        "Data:text/plain;charset=utf-8,hello",
+        "see data:,x inline",
+        "data:" + "a;" * 128 + ",AAAA",
+    ],
+    ids=["png_base64", "uppercase_empty", "mixed_case_charset", "embedded", "header_at_256_bound"],
+)
+def test_data_uri_is_rejected_as_inline_binary(value) -> None:
+    with pytest.raises(DocumentDiffReviewError) as error:
+        _scan_for_leaks(value, "objects[0].head_text")
+    assert (error.value.status, error.value.code) == (422, "inline_binary_content")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "data:" + "a;" * 150,
+        "data:" + "a;" * 150 + ",AAAA",
+        "data: image/png, not a uri",
+        "the data, as reported",
+    ],
+    ids=["long_header_without_comma", "header_over_256_bound", "whitespace_in_header", "no_scheme"],
+)
+def test_non_data_uri_text_is_not_flagged(value) -> None:
+    """The header is bounded to 256 characters, so a 300-character header is not a data URI here."""
+    assert _DATA_URI.search(value) is None
+    _scan_for_leaks(value, "objects[0].head_text")
+
+
+def test_bounded_data_uri_matches_unbounded_pattern_below_the_header_bound() -> None:
+    """Below the 256-character bound the linear pattern agrees with the old unbounded one."""
+    unbounded = re.compile(r"data:[^,\s]*,", re.IGNORECASE)
+    rng = random.Random(1262)
+    alphabet = ["data:", "DATA:", "Data:", ",", ";", "/", " ", "\n", "a", "b64", "="]
+    for _ in range(3000):
+        value = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        assert bool(_DATA_URI.search(value)) == bool(unbounded.search(value)), value
