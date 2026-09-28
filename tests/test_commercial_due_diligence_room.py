@@ -80,27 +80,27 @@ def test_commercial_due_diligence_room_report_packages_buyer_evidence_room() -> 
     )
     sections = section_by_name(report)
 
-    assert report["due_diligence_status"] == "commercial_due_diligence_ready_with_warnings"
+    assert report["due_diligence_status"] == "commercial_due_diligence_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_due_diligence_room"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["diligence_summary"]["blocked_count"] == 0
+    assert report["diligence_summary"]["blocked_count"] == 4
     assert report["diligence_summary"]["warning_count"] == 2
     assert report["diligence_summary"]["section_count"] == 10
-    assert report["diligence_summary"]["review_process_is_blocker"] is False
+    assert report["diligence_summary"]["review_process_is_blocker"] is True
     assert report["diligence_summary"]["code_connect_used"] is False
-    assert report["concrete_blockers"] == []
+    assert report["concrete_blockers"] == ["commercial_launch_blocked"]
     for section_name in [
-        "purchase_approval_packet",
-        "runtime_api_evidence",
         "admin_trace_evidence",
         "security_and_compliance",
-        "commercial_terms",
         "value_and_analytics",
         "implementation_readiness",
         "figma_and_design_review",
     ]:
         assert sections[section_name]["completion_state"] == "ready"
+    assert sections["purchase_approval_packet"]["completion_state"] == "blocked"
+    assert sections["runtime_api_evidence"]["completion_state"] == "blocked"
+    assert sections["commercial_terms"]["completion_state"] == "blocked"
     assert sections["buyer_authority_documents"]["completion_state"] == "warning"
     assert sections["production_external_attestations"]["completion_state"] == "warning"
     assert "/api/v1/commercial_due_diligence_rooms/latest" in report["required_runtime_endpoints"]
@@ -114,7 +114,7 @@ def test_commercial_due_diligence_room_report_packages_buyer_evidence_room() -> 
         "third-party security attestation",
     ]
     assert report["related_runtime_reports"]["commercial_purchase_approval_status"] == (
-        "commercial_purchase_approval_ready_with_warnings"
+        "commercial_purchase_approval_blocked"
     )
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["due_diligence_links"]["runtime_endpoint"] == "/api/v1/commercial_due_diligence_rooms/latest"
@@ -140,7 +140,7 @@ def test_commercial_due_diligence_room_endpoint_openapi_admin_and_docs_contract(
         "KRW 2B Commercial Due Diligence Room",
         "local_commercial_due_diligence_room",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
     ]:
         assert expected_text in due_diligence_doc

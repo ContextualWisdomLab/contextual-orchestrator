@@ -48,7 +48,7 @@ from .chat_capability import (
 )
 from .conventions import legacy_discovered_agent_id, require_object_name
 from .credentials import NotConfigured, get_credential
-from .release_authorization import evaluate_release_authorization
+from .release_authorization import evaluate_release_authorization, review_process_policy
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
@@ -14868,6 +14868,7 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer-facing saleability decision for high-value review."""
         handoff = self.commercial_handoff_bundle_report(
@@ -14888,16 +14889,20 @@ class TaskOrchestrator:
             for item in handoff["follow_up_items"]
             if item["completion_state"] == "warning"
         ]
-        if concrete_blockers:
+        review_policy = review_process_policy(release_authority)
+        if concrete_blockers or review_policy["is_blocker"]:
             saleability_status = "saleability_blocked"
-            decision_label = "Blocked by concrete defect"
+            decision_label = (
+                "Blocked by concrete defect"
+                if concrete_blockers
+                else "Blocked until release authorization passes"
+            )
         elif warning_conditions:
             saleability_status = "saleability_ready_with_warnings"
             decision_label = "Ready for buyer diligence with explicit warnings"
         else:  # pragma: no cover - unreachable while handoff follow-up warnings are literal report sections
             saleability_status = "saleability_ready"  # pragma: no cover
             decision_label = "Ready for buyer diligence"  # pragma: no cover
-
         return {
             "saleability_status": saleability_status,
             "decision_label": decision_label,
@@ -14912,9 +14917,9 @@ class TaskOrchestrator:
             ),
             "decision_summary": {
                 "included_artifact_count": len(handoff["included_artifacts"]),
-                "blocked_count": len(concrete_blockers),
+                "blocked_count": len(concrete_blockers) + (1 if review_policy["is_blocker"] else 0),
                 "warning_count": len(warning_conditions),
-                "review_process_is_blocker": False,
+                "review_process_is_blocker": review_policy["is_blocker"],
             },
             "decision_basis": [
                 {
@@ -14940,16 +14945,7 @@ class TaskOrchestrator:
             ],
             "concrete_blockers": concrete_blockers,
             "warning_conditions": warning_conditions,
-            "review_process_policy": {
-                "is_blocker": False,
-                "non_blocker_examples": [
-                    "reviewer delay",
-                    "review bot delay",
-                    "queued model review",
-                    "pending check without concrete failure",
-                ],
-                "blocker_definition": "concrete security, API contract, document, or product defect",
-            },
+            "review_process_policy": review_policy,
             "related_runtime_reports": {
                 "buyer_handoff_status": handoff["bundle_status"],
                 **handoff["related_runtime_reports"],
@@ -14963,12 +14959,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a portable buyer due-diligence export index for commercial review."""
         saleability = self.saleability_decision_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -14988,7 +14986,9 @@ class TaskOrchestrator:
             }
             for item in saleability["warning_conditions"]
         ]
-        saleability_state = "blocked" if saleability["saleability_status"] == "saleability_blocked" else "ready"
+        # Saleability status also blocks when the authority snapshot is missing.
+        # That gate stays on export_status and must not mark this product section blocked.
+        saleability_state = "blocked" if concrete_blockers else "ready"
         export_sections = [
             self._buyer_evidence_item(
                 "saleability_decision",
@@ -15091,9 +15091,17 @@ class TaskOrchestrator:
                 "Deal owner",
                 ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
                 "repository_artifact",
-                "ready",
-                "Reviewer delay, review bot delay, and queued model review are not concrete blockers.",
-                "Escalate only concrete security, API contract, document, or product defects.",
+                "warning" if saleability["review_process_policy"]["is_blocker"] else "ready",
+                (
+                    saleability["review_process_policy"]["blocker_definition"]
+                    if saleability["review_process_policy"]["is_blocker"]
+                    else "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers."
+                ),
+                (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if saleability["review_process_policy"]["is_blocker"]
+                    else "Block only on concrete security, API contract, document, or product defects."
+                ),
             ),
             self._buyer_evidence_item(
                 "packaging_decision",
@@ -15109,7 +15117,7 @@ class TaskOrchestrator:
         export_section_summary = self._buyer_manifest_summary(export_sections)
         blocked_count = export_section_summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = len(required_external_evidence)
-        if blocked_count:
+        if blocked_count or saleability["review_process_policy"]["is_blocker"]:
             export_status = "commercial_export_blocked"
         elif warning_count:
             export_status = "commercial_export_ready_with_warnings"
@@ -15156,12 +15164,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer acceptance check over the commercial evidence export."""
         evidence_export = self.commercial_evidence_export_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -15169,8 +15179,10 @@ class TaskOrchestrator:
             return (root / path).is_file()
 
         concrete_blockers = evidence_export["concrete_blockers"]
-        export_blocked = evidence_export["export_status"] == "commercial_export_blocked"
-        runtime_state = "blocked" if export_blocked or concrete_blockers else "ready"
+        # Export status also blocks when the authority snapshot is missing.
+        # That gate must not mark the product runtime chain blocked.
+        export_product_blocked = evidence_export["export_summary"]["blocked_count"] > 0
+        runtime_state = "blocked" if export_product_blocked or concrete_blockers else "ready"
         acceptance_items = [
             self._buyer_evidence_item(
                 "runtime_endpoint_chain",
@@ -15275,9 +15287,17 @@ class TaskOrchestrator:
                 "Deal owner",
                 ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
                 "repository_artifact",
-                "ready",
-                "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
-                "Block only on concrete security, API contract, document, or product defects.",
+                "warning" if evidence_export["review_process_policy"]["is_blocker"] else "ready",
+                (
+                    evidence_export["review_process_policy"]["blocker_definition"]
+                    if evidence_export["review_process_policy"]["is_blocker"]
+                    else "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers."
+                ),
+                (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if evidence_export["review_process_policy"]["is_blocker"]
+                    else "Block only on concrete security, API contract, document, or product defects."
+                ),
             ),
             self._buyer_evidence_item(
                 "packaging_decision",
@@ -15307,7 +15327,7 @@ class TaskOrchestrator:
         summary = self._buyer_manifest_summary(all_items)
         blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
+        if blocked_count or evidence_export["review_process_policy"]["is_blocker"]:
             acceptance_status = "commercial_acceptance_blocked"
         elif warning_count:
             acceptance_status = "commercial_acceptance_ready_with_warnings"
@@ -15376,6 +15396,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -15383,8 +15404,11 @@ class TaskOrchestrator:
             return (root / path).is_file()
 
         concrete_blockers = acceptance["concrete_blockers"]
-        acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
-        runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
+        # Authorization is its own gate. An acceptance block that exists only
+        # because the snapshot is missing must not mark product artifacts
+        # blocked or change product_evidence_status.
+        product_acceptance_blocked = acceptance["acceptance_summary"]["blocked_count"] > 0
+        runtime_state = "blocked" if product_acceptance_blocked else "ready"
         release_authorization = evaluate_release_authorization(release_authority)
         release_artifacts = [
             self._buyer_evidence_item(
@@ -16831,6 +16855,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -17104,6 +17129,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -17264,10 +17290,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_close_readiness.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review process delay is not a close blocker unless a concrete product, security, API-contract, or document failure is produced.",
-                "action": "Keep commercial close work moving while queued review processes are pending.",
-                "exit_criteria": "Only concrete failures block close readiness.",
+                "completion_state": "warning" if value["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    value["review_process_policy"]["blocker_definition"]
+                    if value["review_process_policy"]["is_blocker"]
+                    else "Review process delay is not a close blocker unless a concrete product, security, API-contract, or document failure is produced."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if value["review_process_policy"]["is_blocker"]
+                    else "Keep commercial close work moving while queued review processes are pending."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if value["review_process_policy"]["is_blocker"]
+                    else "Only concrete failures block close readiness."
+                ),
             },
             {
                 "item_name": "packaging_decision",
@@ -17381,6 +17419,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -17391,6 +17430,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         root = Path(__file__).resolve().parents[1]
@@ -17574,10 +17614,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_go_to_market_readiness.md", "docs/commercial_saleability_decision.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review process delay is not a GTM blocker unless a concrete failure is produced.",
-                "action": "Continue GTM readiness work while queued reviews are pending.",
-                "exit_criteria": "Only concrete product, security, API contract, or document failures block GTM readiness.",
+                "completion_state": "warning" if close["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    close["review_process_policy"]["blocker_definition"]
+                    if close["review_process_policy"]["is_blocker"]
+                    else "Review process delay is not a GTM blocker unless a concrete failure is produced."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if close["review_process_policy"]["is_blocker"]
+                    else "Continue GTM readiness work while queued reviews are pending."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if close["review_process_policy"]["is_blocker"]
+                    else "Only concrete product, security, API contract, or document failures block GTM readiness."
+                ),
             },
             {
                 "item_name": "packaging_decision",
@@ -17695,6 +17747,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
@@ -17878,10 +17931,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_launch_readiness.md", "docs/commercial_go_to_market_readiness.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review process delay is not a launch blocker unless a concrete failure is produced.",
-                "action": "Continue launch readiness work while queued review processes are pending.",
-                "exit_criteria": "Only concrete product, security, API contract, or document failures block launch readiness.",
+                "completion_state": "warning" if gtm["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    gtm["review_process_policy"]["blocker_definition"]
+                    if gtm["review_process_policy"]["is_blocker"]
+                    else "Review process delay is not a launch blocker unless a concrete failure is produced."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if gtm["review_process_policy"]["is_blocker"]
+                    else "Continue launch readiness work while queued review processes are pending."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if gtm["review_process_policy"]["is_blocker"]
+                    else "Only concrete product, security, API contract, or document failures block launch readiness."
+                ),
             },
             {
                 "item_name": "packaging_decision",
@@ -18162,10 +18227,22 @@ class TaskOrchestrator:
                 "owner": "Deal owner",
                 "sources": ["docs/commercial_completion_scorecard.md", "docs/commercial_launch_readiness.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready",
-                "evidence": "Review delay, model-review delay, and queued review automation are not product blockers.",
-                "action": "Block only on concrete security, API contract, document, or functional defects.",
-                "exit_criteria": "Review process delay remains non-blocking without concrete failure evidence.",
+                "completion_state": "warning" if launch["review_process_policy"]["is_blocker"] else "ready",
+                "evidence": (
+                    launch["review_process_policy"]["blocker_definition"]
+                    if launch["review_process_policy"]["is_blocker"]
+                    else "Review delay, model-review delay, and queued review automation are not product blockers."
+                ),
+                "action": (
+                    "Pass exact-head checks, independent approval, and findings evidence before treating review delay as non-blocking."
+                    if launch["review_process_policy"]["is_blocker"]
+                    else "Block only on concrete security, API contract, document, or functional defects."
+                ),
+                "exit_criteria": (
+                    "Release authorization passes before review delay is treated as non-blocking."
+                    if launch["review_process_policy"]["is_blocker"]
+                    else "Review process delay remains non-blocking without concrete failure evidence."
+                ),
             },
             {
                 "item_name": "production_buyer_followups",
@@ -18256,17 +18333,20 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return owner-scoped buyer acceptance workflow evidence."""
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         completion = self.commercial_completion_scorecard_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -18506,17 +18586,20 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return buyer-demo scenarios for the KRW 2B completion standard."""
         completion = self.commercial_completion_scorecard_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
@@ -18794,47 +18877,56 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return buyer proposal sections for the KRW 2B saleability standard."""
         completion = self.commercial_completion_scorecard_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         demo = self.commercial_demo_scenario_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
@@ -19147,47 +19239,56 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return buyer-side purchase approval gates for the KRW 2B standard."""
         proposal = self.commercial_proposal_packet_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         close = self.commercial_close_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         procurement = self.commercial_procurement_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
@@ -19491,67 +19592,80 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return buyer due diligence room sections for the KRW 2B standard."""
         purchase = self.commercial_purchase_approval_packet_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         proposal = self.commercial_proposal_packet_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         completion = self.commercial_completion_scorecard_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         demo = self.commercial_demo_scenario_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         close = self.commercial_close_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         procurement = self.commercial_procurement_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
@@ -19903,72 +20017,86 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return executive investment committee memo sections for the KRW 2B standard."""
         due_diligence = self.commercial_due_diligence_room_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         purchase = self.commercial_purchase_approval_packet_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         proposal = self.commercial_proposal_packet_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         completion = self.commercial_completion_scorecard_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         demo = self.commercial_demo_scenario_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         close = self.commercial_close_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         procurement = self.commercial_procurement_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()

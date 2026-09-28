@@ -88,7 +88,7 @@ def test_commercial_security_attestation_report_separates_local_and_external_evi
     assert report["security_attestation_summary"]["warning_count"] == 3
     assert report["security_attestation_summary"]["external_attestation_gap_count"] == 2
     assert report["security_attestation_summary"]["buyer_privacy_gap_count"] == 1
-    assert report["security_attestation_summary"]["review_process_is_blocker"] is False
+    assert report["security_attestation_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     assert items["security_policy"]["completion_state"] == "ready"
     assert items["dependency_lock_package_metadata"]["completion_state"] == "ready"

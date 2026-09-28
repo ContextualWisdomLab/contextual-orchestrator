@@ -88,7 +88,7 @@ def test_commercial_value_readiness_report_separates_local_evidence_from_buyer_f
     assert report["value_summary"]["warning_count"] == 4
     assert report["value_summary"]["buyer_financial_gap_count"] == 4
     assert report["value_summary"]["external_value_proof_gap_count"] == 1
-    assert report["value_summary"]["review_process_is_blocker"] is False
+    assert report["value_summary"]["review_process_is_blocker"] is True
     assert report["concrete_blockers"] == []
     assert items["commercial_value_case_basis"]["completion_state"] == "ready"
     assert items["local_analytics_evidence"]["completion_state"] == "ready"

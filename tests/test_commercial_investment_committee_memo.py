@@ -80,28 +80,31 @@ def test_commercial_investment_committee_memo_report_packages_executive_decision
     )
     sections = section_by_name(report)
 
-    assert report["investment_committee_status"] == "commercial_investment_committee_ready_with_warnings"
+    assert report["investment_committee_status"] == "commercial_investment_committee_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_investment_committee_memo"
-    assert report["executive_recommendation"]["recommendation_status"] == "recommend_with_buyer_conditions"
+    assert report["executive_recommendation"]["recommendation_status"] == "do_not_recommend_until_blockers_cleared"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["memo_summary"]["blocked_count"] == 0
+    assert report["memo_summary"]["blocked_count"] == 5
     assert report["memo_summary"]["warning_count"] == 2
     assert report["memo_summary"]["section_count"] == 10
-    assert report["memo_summary"]["review_process_is_blocker"] is False
+    assert report["memo_summary"]["review_process_is_blocker"] is True
     assert report["memo_summary"]["code_connect_used"] is False
-    assert report["concrete_blockers"] == []
+    assert report["concrete_blockers"] == ["commercial_launch_blocked"]
     for section_name in [
-        "executive_recommendation",
-        "diligence_room_ready",
-        "purchase_approval_ready",
         "financial_case",
         "risk_and_security_summary",
-        "commercial_terms_summary",
         "implementation_readiness_summary",
         "design_and_figma_review",
     ]:
         assert sections[section_name]["completion_state"] == "ready"
+    for section_name in [
+        "executive_recommendation",
+        "diligence_room_ready",
+        "purchase_approval_ready",
+        "commercial_terms_summary",
+    ]:
+        assert sections[section_name]["completion_state"] == "blocked"
     assert sections["buyer_final_authority"]["completion_state"] == "warning"
     assert sections["production_external_evidence"]["completion_state"] == "warning"
     assert "/api/v1/commercial_investment_committee_memos/latest" in report["required_runtime_endpoints"]
@@ -114,7 +117,7 @@ def test_commercial_investment_committee_memo_report_packages_executive_decision
         "Is any concrete blocker present?",
     ]
     assert report["related_runtime_reports"]["commercial_due_diligence_status"] == (
-        "commercial_due_diligence_ready_with_warnings"
+        "commercial_due_diligence_blocked"
     )
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["committee_links"]["runtime_endpoint"] == "/api/v1/commercial_investment_committee_memos/latest"
@@ -140,7 +143,7 @@ def test_commercial_investment_committee_memo_endpoint_openapi_admin_and_docs_co
         "KRW 2B Commercial Investment Committee Memo",
         "local_commercial_investment_committee_memo",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Review process matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
     ]:
         assert expected_text in memo_doc
