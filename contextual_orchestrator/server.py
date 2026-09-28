@@ -32,6 +32,14 @@ from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .decision_receipts import DecisionMeasurement, export_decision_receipts
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
+from .document_diff_review import (
+    DOCUMENT_DIFF_REVIEW_RESPONSE_FORMAT,
+    DocumentDiffReviewError,
+    document_diff_review_messages,
+    rule_findings,
+    validate_document_diff_envelope,
+    validate_document_diff_findings,
+)
 from .cost_router import (
     BatchModelSelectionError,
     CostRoutingCoordinator,
@@ -912,6 +920,9 @@ def _tool_fallback_error_detail(error: ToolFallbackStoppedError) -> dict[str, An
     observed_kind = decision.observed_kind or decision.kind
     if observed_kind is not decision.kind:
         detail["observed_failure_kind"] = observed_kind.value
+    route = error.detail.get("route")
+    if isinstance(route, dict):
+        detail["route"] = route
     return detail
 
 
@@ -2478,7 +2489,13 @@ def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
 
 
 def _require_pool_model(
-    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+    orchestrator: Any,
+    model_name: str,
+    *,
+    required_capability: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    chat_body: Mapping[str, Any] | None = None,
+    orchestration_mode: str = "route",
 ) -> str:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
@@ -2505,9 +2522,60 @@ def _require_pool_model(
     }:
         if required_capability is None:
             if model_name != TaskOrchestrator.FREE_MODEL:
+                if messages is not None and orchestrator._image_input_required_tags(messages):
+                    roles = (
+                        ("thinker", "worker", "verifier", "synthesizer")
+                        if orchestration_mode == "conduct" else ("worker",)
+                    )
+                    if all(
+                        orchestrator._chat_pool_agent_ids(
+                            messages=messages, chat_body=chat_body, role=role
+                        )
+                        for role in roles
+                    ):
+                        return model_name
+                    raise RequestError(
+                        400, "invalid_model",
+                        "no enabled model supports required text/image input and roles",
+                    )
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
+            if messages is not None:
+                required_roles = (
+                    ("thinker", "worker", "verifier", "synthesizer")
+                    if orchestration_mode == "conduct"
+                    else ("worker",)
+                )
+                missing_role = next(
+                    (
+                        role
+                        for role in required_roles
+                        if not orchestrator._free_pool_agent_ids(
+                            messages=messages,
+                            chat_body=chat_body,
+                            role=role,
+                        )
+                    ),
+                    None,
+                )
+                if missing_role is None:
+                    return model_name
+                if orchestration_mode == "conduct":
+                    raise RequestError(
+                        400,
+                        "invalid_model",
+                        "no enabled zero-cost model is available for "
+                        f"conduct role: {missing_role}",
+                    )
+            if messages is not None and orchestrator._image_input_required_tags(
+                messages
+            ):
+                raise RequestError(
+                    400,
+                    "invalid_model",
+                    "no enabled zero-cost model supports required tags: input:image",
+                )
             if any(zdr_allowed(agent) and orchestrator._is_general_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
@@ -6720,6 +6788,49 @@ def build_server(
                         extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
                     )
                     return
+                if path == "/v1/document_diff_reviews":
+                    self._authorize("inference", state_changing=True)
+                    try:
+                        envelope = validate_document_diff_envelope(self._read_json())
+                    except DocumentDiffReviewError as exc:
+                        raise RequestError(exc.status, exc.code, str(exc)) from None
+                    review_messages = document_diff_review_messages(envelope)
+                    review_request = {
+                        "model": TaskOrchestrator.FREE_MODEL,
+                        "messages": review_messages,
+                        "response_format": DOCUMENT_DIFF_REVIEW_RESPONSE_FORMAT,
+                    }
+                    proxied = self._run(
+                        lambda: coordinator.complete(
+                            review_messages,
+                            # One fixed structured task; no conduct plan is needed.
+                            mode="route",
+                            attribution={
+                                "service": "document_diff_review",
+                                "model_name": TaskOrchestrator.FREE_MODEL,
+                            },
+                            model_name=TaskOrchestrator.FREE_MODEL,
+                            provider_request=review_request,
+                            zdr_only=envelope["zdr_only"],
+                        )
+                    )
+                    try:
+                        answer = proxied["choices"][0]["message"]["content"]
+                        findings = validate_document_diff_findings(answer, envelope)
+                    except DocumentDiffReviewError as exc:
+                        raise RequestError(exc.status, exc.code, str(exc)) from None
+                    except (KeyError, IndexError, TypeError):
+                        raise RequestError(
+                            502, "invalid_structured_output", "review model returned no message content"
+                        ) from None
+                    self._send(
+                        {
+                            key: envelope[key]
+                            for key in ("contract_version", "repo", "path", "base_blob", "head_blob", "extractor_version")
+                        }
+                        | {"model": proxied.get("model"), "findings": rule_findings(envelope) + findings}
+                    )
+                    return
                 if path == "/v1/files":
                     self._authorize("inference", state_changing=True)
                     content_type = self.headers.get("content-type", "")
@@ -6843,13 +6954,37 @@ def build_server(
                 request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
                 if path in {"/v1/chat/completions", "/v1/responses"}:
+                    if "parallel_tool_calls" in body:
+                        normalized_parallel_tool_calls = _coerce_optional_bool(
+                            body.get("parallel_tool_calls"),
+                            error_code="invalid_parallel_tool_calls",
+                            message="parallel_tool_calls must be a boolean",
+                        )
+                        if normalized_parallel_tool_calls is not None:
+                            body["parallel_tool_calls"] = normalized_parallel_tool_calls
                     endpoint_routing = _validate_routing(
                         body.get("routing"), allow_endpoint=True
                     )
+                    endpoint_messages = body.get("messages")
+                    if path == "/v1/chat/completions":
+                        endpoint_messages = _validate_messages(endpoint_messages)
+                    else:
+                        try:
+                            endpoint_messages = _responses_to_chat_payload(body)[
+                                "messages"
+                            ]
+                        except ValueError:
+                            endpoint_messages = None
                     endpoint_policy = orchestrator.routing_endpoint_scope(
                         endpoint_routing.get("endpoint") if endpoint_routing else None,
                         body.get("model"),
                         model_was_provided="model" in body,
+                        messages=(
+                            endpoint_messages
+                            if isinstance(endpoint_messages, list)
+                            else None
+                        ),
+                        chat_body=body,
                     )
                     try:
                         endpoint_policy.__enter__()
@@ -7190,7 +7325,33 @@ def build_server(
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    mode = _validate_mode(
+                        next(
+                            (
+                                body[key]
+                                for key in (
+                                    "orchestration",
+                                    "orchestration_mode",
+                                    "mode",
+                                )
+                                if key in body
+                            ),
+                            "auto",
+                        )
+                    )
+                    _require_pool_model(
+                        orchestrator,
+                        model_name,
+                        messages=(
+                            endpoint_messages
+                            if isinstance(endpoint_messages, list)
+                            else None
+                        ),
+                        chat_body=body,
+                        orchestration_mode=(
+                            "conduct" if body.get("response_format") else mode
+                        ),
+                    )
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -7401,7 +7562,6 @@ def build_server(
                             self._send(response_payload)
                         return
                     messages = _validate_messages(body.get("messages"))
-                    mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     # Require model — silent default to contextual-orchestrator hid
@@ -8052,12 +8212,33 @@ def build_server(
                                 "invalid_stream",
                                 "stream is not supported for this model on /v1/responses; use the gateway default, orchestrator/auto, or orchestrator/free",
                             )
+                    responses_requires_conduct = not stream and (
+                        bool(body.get("tools"))
+                        or bool(body.get("response_format"))
+                        or (
+                            isinstance(body.get("text"), dict)
+                            and bool(body["text"].get("format"))
+                        )
+                        or _responses_virtual_requires_provider_path(input_value, body)
+                    )
                     if model_name in {
                         TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
                         TaskOrchestrator.AUTO_MODEL,
                         TaskOrchestrator.FREE_MODEL,
                     }:
-                        _require_pool_model(orchestrator, model_name)
+                        _require_pool_model(
+                            orchestrator,
+                            model_name,
+                            messages=(
+                                endpoint_messages
+                                if isinstance(endpoint_messages, list)
+                                else None
+                            ),
+                            chat_body=body,
+                            orchestration_mode=(
+                                "conduct" if responses_requires_conduct else "route"
+                            ),
+                        )
                     responses_attribution = dict(
                         _validate_attribution(body.get("attribution")) or {}
                     )
@@ -8332,7 +8513,7 @@ def build_server(
                     _tool_fallback_error_detail(exc),
                 )
             except ProviderRequestTooLargeError as exc:
-                self._send_error(413, "request_too_large", str(exc))
+                self._send_error(413, "request_too_large", str(exc), exc.detail)
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except BatchModelSelectionError:
