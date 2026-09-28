@@ -8728,6 +8728,12 @@ def build_server(
             *,
             extra_headers: dict[str, str] | None = None,
         ) -> None:
+            measurement = getattr(self, "_decision_measurement", None)
+            if measurement is not None and measurement.receipt.status == "write_failed":
+                status, code = 503, "measurement_unavailable"
+                message = "The routing decision could not be recorded; check the request outcome before retrying."
+                detail = {"measurement_complete": False, "reconciliation_required": True}
+                extra_headers = {"x-should-retry": "false"}
             if decision_receipts and status >= 400:
                 measurement = self._decision_measurement
                 if (measurement is not None
@@ -8903,6 +8909,7 @@ def build_server(
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream; charset=utf-8")
                 self.send_header("cache-control", "no-cache")
+                self.send_header("x-should-retry", "false")
                 self._send_security_headers()
                 self.end_headers()
                 self._response_headers_sent = True  # see _write_response

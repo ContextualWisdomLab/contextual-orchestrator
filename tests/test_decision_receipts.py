@@ -11,6 +11,123 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+@pytest.mark.parametrize("route_decision, expected_mode", [(True, "route"), (False, "conduct")])
+def test_effective_orchestration_mode_follows_dispatch_not_selection_hook(
+    tmp_path, monkeypatch, route_decision, expected_mode,
+):
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement, record_initial_selection
+
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                    state_db=tmp_path / "state.db")
+    def selected(*args, **kwargs):
+        record_initial_selection(["worker_one"], "invocation_worker")
+        return {"mode": expected_mode}
+    monkeypatch.setattr(orchestrator, "route_once", selected)
+    monkeypatch.setattr(orchestrator, "conduct", selected)
+    try:
+        measurement = DecisionMeasurement(orchestrator._store, request_id="observed_request")
+        try:
+            orchestrator._dispatch([{"role": "user", "content": "question"}], "auto",
+                                   route_decision=route_decision)
+        finally:
+            measurement.close()
+        observation, = orchestrator._store.export_request_outcomes()["observations"]
+        assert observation["route_mode"] == "invocation_worker"
+        assert observation["effective_orchestration_mode"] == expected_mode
+    finally:
+        orchestrator.close()
+
+
+def test_multiple_execution_modes_in_one_request_remain_mixed(tmp_path):
+    from contextual_orchestrator.decision_receipts import (
+        DecisionMeasurement, record_effective_orchestration_mode,
+    )
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    store = _StateStore(str(tmp_path / "mixed.db"))
+    try:
+        measurement = DecisionMeasurement(store, request_id="mixed_request")
+        try:
+            record_effective_orchestration_mode("route")
+            record_effective_orchestration_mode("conduct")
+        finally:
+            measurement.close()
+        observation, = store.export_request_outcomes()["observations"]
+        assert observation["effective_orchestration_mode"] == "mixed"
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/responses"])
+def test_http_structured_chat_records_conduct_mode(tmp_path, endpoint):
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker", tags=("reasoning", "writing"))],
+        state_db=tmp_path / "state.db",
+    )
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        body = {"model": "mock/worker"}
+        if endpoint == "/v1/responses":
+            body["input"] = "json object"
+        else:
+            body["messages"] = [{"role": "user", "content": "json object"}]
+            body["response_format"] = {"type": "json_object"}
+        connection.request("POST", endpoint, json.dumps(body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 200
+        connection.close()
+        server.shutdown()
+        observation, = orchestrator._store.export_request_outcomes()["observations"]
+        assert observation["endpoint_path"] == endpoint
+        assert observation["effective_orchestration_mode"] == "conduct"
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+def test_http_explicit_tool_passthrough_records_proxy_mode(tmp_path):
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker", tags=("tools", "writing"))],
+        state_db=tmp_path / "state.db",
+    )
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        connection.request("POST", "/v1/chat/completions", json.dumps({
+            "model": "mock/worker",
+            "messages": [{"role": "user", "content": "look up one item"}],
+            "tools": [{"type": "function", "function": {
+                "name": "lookup_item", "parameters": {"type": "object", "properties": {}}
+            }}],
+        }), {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 200
+        connection.close()
+        server.shutdown()
+        observation, = orchestrator._store.export_request_outcomes()["observations"]
+        assert observation["endpoint_path"] == "/v1/chat/completions"
+        assert observation["effective_orchestration_mode"] == "proxy"
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 @pytest.mark.parametrize("scenario", ["saturated", "success", "conduct_success", "classifier_error", "trace_rejection"])
 @pytest.mark.parametrize("measurement_enabled", [False, True])
 def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatch, scenario, measurement_enabled):
@@ -59,6 +176,16 @@ def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatc
                                    "classifier_error": 400, "trace_rejection": 400}[scenario]
         connection.close()
         server.shutdown()
+        if measurement_enabled:
+            observations = orchestrator._store.export_request_outcomes()["observations"]
+            assert len(observations) == 1
+            assert observations[0]["effective_orchestration_mode"] == {
+                "saturated": None,
+                "success": "route",
+                "conduct_success": "conduct",
+                "classifier_error": None,
+                "trace_rejection": None,
+            }[scenario]
         if scenario == "saturated":
             assert calls == []
             assert acquired == released == []
@@ -122,6 +249,7 @@ def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_fi
             observation, = export_decision_receipts(orchestrator._store)["observations"]
             assert observation["status"] == "selection_failed"
             assert observation["durable_ack_elapsed_ns"] is None
+            assert observation["effective_orchestration_mode"] is None
             assert snapshots[0]["request_id"] == observation["request_id"]
             return
         if expected_status != 200:
@@ -132,6 +260,8 @@ def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_fi
         observation, = export_decision_receipts(orchestrator._store)["observations"]
         assert observation["first_provider_phase"] == "structured_triage"
         assert observation["durable_ack_elapsed_ns"] is not None
+        assert snapshots[0]["effective_orchestration_mode"] is None
+        assert observation["effective_orchestration_mode"] == "route"
         assert snapshots[0]["request_id"] == observation["request_id"]
     finally:
         connection.close()
@@ -339,6 +469,7 @@ def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path, m
         assert len(observations) == 2
         assert observations[0]["status"] == "acknowledged"
         assert observations[1]["status"] == "cache_hit"
+        assert [row["effective_orchestration_mode"] for row in observations] == ["route", "route"]
         assert observations[1]["selection_elapsed_ns"] is None
         assert observations[1]["durable_ack_elapsed_ns"] is None
         assert observations[1]["first_provider_elapsed_ns"] is None
@@ -467,7 +598,8 @@ def test_write_failure_has_no_ack_and_does_not_log_exception_contents(caplog):
 
     measurement = DecisionMeasurement(FailedStore())
     try:
-        measurement.select(["worker_one"], "route")
+        with pytest.raises(RuntimeError, match="initial decision could not be persisted"):
+            measurement.select(["worker_one"], "route")
         snapshot = measurement.snapshot()
         assert snapshot["status"] == "write_failed"
         assert snapshot["durable_ack_elapsed_ns"] is None
@@ -524,6 +656,172 @@ def test_admission_write_failure_rejects_before_dispatch_and_recovers(tmp_path, 
                 assert '"measurement_complete": false' in payload
         assert len(orchestrator._store.load("accepted_request")) == 1
         assert len(orchestrator._store.load("decision_receipt")) == 1
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+def test_initial_decision_write_failure_rejects_before_dispatch_and_recovers(tmp_path, monkeypatch):
+    """A failed route commit cannot send upstream or poison the next request."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker"),
+         ModelAgent("worker_two", "mock/worker-two")], state_db=tmp_path / "state.db"
+    )
+    original_save = orchestrator._store.save
+    original_chat = orchestrator.client.chat
+    failed_once = []
+    dispatched = []
+
+    def fail_first_decision(kind, *args, **kwargs):
+        if kind == "initial_decision" and not failed_once:
+            failed_once.append(True)
+            raise RuntimeError("never-disclose-decision-secret")
+        return original_save(kind, *args, **kwargs)
+
+    def record_dispatch(*args, **kwargs):
+        dispatched.append(True)
+        return original_chat(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator._store, "save", fail_first_decision)
+    monkeypatch.setattr(orchestrator.client, "chat", record_dispatch)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        for expected_status in (503, 200):
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "orchestrator/auto", "mode": "route",
+                "messages": [{"role": "user", "content": "hello"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+            response = connection.getresponse()
+            payload = response.read().decode()
+            assert response.status == expected_status
+            assert "never-disclose-decision-secret" not in payload
+            if expected_status == 503:
+                assert not dispatched
+                assert '"measurement_complete": false' in payload
+                assert response.getheader("x-should-retry") == "false"
+        assert dispatched
+        assert [record["status"] for record in orchestrator._store.load("decision_receipt")] == [
+            "write_failed", "acknowledged",
+        ]
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/responses"])
+def test_stream_decision_write_failure_has_terminal_error_without_provider_send(
+    tmp_path, monkeypatch, endpoint,
+):
+    """An open SSE response must end as failed when its route cannot commit."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db"
+    )
+    original_save = orchestrator._store.save
+    provider_calls = []
+
+    def fail_decision(kind, *args, **kwargs):
+        if kind == "initial_decision":
+            raise RuntimeError("never-disclose-stream-secret")
+        return original_save(kind, *args, **kwargs)
+
+    def record_stream(*args, **kwargs):
+        provider_calls.append(True)
+        yield "unexpected"
+
+    monkeypatch.setattr(orchestrator._store, "save", fail_decision)
+    monkeypatch.setattr(orchestrator.client, "stream_chat", record_stream)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        body = ({"model": "orchestrator/auto", "stream": True, "input": "hello"}
+                if endpoint == "/v1/responses" else {
+                    "model": "orchestrator/auto", "mode": "route", "stream": True,
+                    "messages": [{"role": "user", "content": "hello"}],
+                })
+        connection.request("POST", endpoint, json.dumps(body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        frames = response.read().decode()
+        assert response.status == 200  # headers precede lazy selection
+        assert response.getheader("x-should-retry") == "false"
+        assert "never-disclose-stream-secret" not in frames
+        assert "data: [DONE]" in frames
+        if endpoint == "/v1/responses":
+            assert "event: response.failed" in frames
+            assert "event: response.completed" not in frames
+        else:
+            assert '"finish_reason": "error"' in frames
+            assert '"finish_reason": "stop"' not in frames
+        assert not provider_calls
+        assert orchestrator._store.load("decision_receipt")[0]["status"] == "write_failed"
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("surface", ["tools", "image"])
+def test_proxy_decision_write_failure_stops_tool_and_image_send(tmp_path, monkeypatch, surface):
+    """Proxy transport is never entered without a committed route."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker", tags=("tools", "image", "writing"))],
+        state_db=tmp_path / "state.db",
+    )
+    original_save = orchestrator._store.save
+    provider_calls = []
+
+    def fail_decision(kind, *args, **kwargs):
+        if kind == "initial_decision":
+            raise RuntimeError("never-disclose-proxy-secret")
+        return original_save(kind, *args, **kwargs)
+
+    def record_provider(*args, **kwargs):
+        provider_calls.append(True)
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr(orchestrator._store, "save", fail_decision)
+    for method_name in ("chat", "proxy_send", "proxy_send_bytes"):
+        monkeypatch.setattr(orchestrator.client, method_name, record_provider)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        if surface == "image":
+            endpoint = "/v1/images/generations"
+            body = {"model": "mock/worker", "prompt": "a figure"}
+        else:
+            endpoint = "/v1/chat/completions"
+            body = {"model": "mock/worker",
+                    "messages": [{"role": "user", "content": "look up one item"}],
+                    "tools": [{"type": "function", "function": {
+                        "name": "lookup_item", "parameters": {"type": "object", "properties": {}}
+                    }}]}
+        connection.request("POST", endpoint, json.dumps(body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        payload = response.read().decode()
+        assert response.status == 503
+        assert response.getheader("x-should-retry") == "false"
+        assert "never-disclose-proxy-secret" not in payload
+        assert not provider_calls
+        assert orchestrator._store.load("decision_receipt")[0]["status"] == "write_failed"
     finally:
         connection.close()
         server.shutdown()

@@ -30,6 +30,7 @@ class DecisionMeasurement:
             policy_snapshot, sort_keys=True, separators=(",", ":")
         ).encode()).hexdigest() if policy_snapshot is not None else None
         self.route_mode = route_mode
+        self.effective_orchestration_mode = None
         self.endpoint_path = endpoint_path
         self.request_method = request_method
         self.admission_boundary = admission_boundary
@@ -56,6 +57,7 @@ class DecisionMeasurement:
             "identity_source": self.identity_source,
             "policy_snapshot_hash": self.policy_hash,
             "route_mode": self.route_mode,
+            "effective_orchestration_mode": self.effective_orchestration_mode,
             "endpoint_path": self.endpoint_path,
             "request_method": self.request_method,
             "measurement_unit": "http_request" if self.endpoint_path else "explicit_scope",
@@ -74,6 +76,8 @@ class DecisionMeasurement:
     def select(self, agent_ids, route_mode, *, attempt_id=None):
         """Acknowledge the first decision synchronously before provider dispatch."""
         with self._lock:
+            if self.receipt.status == "write_failed":
+                raise RuntimeError("initial decision could not be persisted")
             if attempt_id is not None:
                 if attempt_id in self._race_attempt_ids:
                     return
@@ -100,9 +104,19 @@ class DecisionMeasurement:
             except Exception as exc:
                 self.receipt.record_failure("write_failed")
                 _LOGGER.warning("Initial decision measurement write failed error_type=%s", type(exc).__name__)
-                return
+                raise RuntimeError("initial decision could not be persisted") from None
             self.receipt.record_durable_ack()
             self._record_provider_locked(agent_ids, "task_execution")
+
+    def set_effective_orchestration_mode(self, mode):
+        """Retain the executed route/conduct/proxy choice separately from selection kind."""
+        if mode not in {"route", "conduct", "proxy"}:
+            raise ValueError("unknown effective orchestration mode")
+        with self._lock:
+            if self.effective_orchestration_mode is None:
+                self.effective_orchestration_mode = mode
+            elif self.effective_orchestration_mode != mode:
+                self.effective_orchestration_mode = "mixed"
 
     def _record_provider_locked(self, agent_ids, phase):
         """Keep a first-provider diagnostic independent of the task-route clock."""
@@ -166,6 +180,13 @@ def record_initial_selection(agent_ids, route_mode="unclassified", *, attempt_id
     measurement = _CURRENT_DECISION.get()
     if measurement is not None:
         measurement.select(agent_ids, route_mode, attempt_id=attempt_id)
+
+
+def record_effective_orchestration_mode(mode):
+    """Observe a resolved orchestration branch in the active request only."""
+    measurement = _CURRENT_DECISION.get()
+    if measurement is not None:
+        measurement.set_effective_orchestration_mode(mode)
 
 
 def record_answer_cache_hit():

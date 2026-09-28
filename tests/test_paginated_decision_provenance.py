@@ -7,9 +7,9 @@ import pytest
 def test_export_keeps_bounded_cohort_identity_without_provider_text(tmp_path):
     store = _StateStore(str(tmp_path / "cohort.db"))
     try:
-        for request_id, endpoint, mode in (
-            ("route", "/v1/chat/completions", "invocation_worker"),
-            ("invalid", "private endpoint text", "private provider text"),
+        for request_id, endpoint, mode, effective_mode in (
+            ("route", "/v1/chat/completions", "invocation_worker", "route"),
+            ("invalid", "private endpoint text", "private provider text", "private mode text"),
         ):
             store.save("accepted_request", request_id, {
                 "request_id": request_id, "endpoint_path": endpoint, "route_mode": mode,
@@ -22,11 +22,58 @@ def test_export_keeps_bounded_cohort_identity_without_provider_text(tmp_path):
                 "request_id": request_id, "status": "acknowledged",
                 "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
                 "endpoint_path": endpoint, "route_mode": mode,
+                "effective_orchestration_mode": effective_mode,
             }, durable=True)
         valid, invalid = store.export_request_outcomes()["observations"]
         assert (valid["endpoint_path"], valid["route_mode"]) == (
             "/v1/chat/completions", "invocation_worker")
         assert (invalid["endpoint_path"], invalid["route_mode"]) == (None, None)
+        assert valid["effective_orchestration_mode"] == "route"
+        assert invalid["effective_orchestration_mode"] is None
+    finally:
+        store.close()
+
+
+def test_later_receipts_cannot_supply_or_rewrite_admission_cohort(tmp_path):
+    store = _StateStore(str(tmp_path / "admission_identity.db"))
+    try:
+        admitted = {
+            "request_id": "admitted", "policy_snapshot_hash": "a" * 64,
+            "measurement_unit": "http_request",
+            "metric_scope": "initial_task_route_decision",
+            "admission_boundary": "validated_endpoint",
+            "endpoint_path": "/v1/chat/completions",
+        }
+        for request_id, admission in (
+            ("admitted", admitted), ("missing", {"request_id": "missing"}),
+        ):
+            store.save("accepted_request", request_id, admission, durable=True)
+            store.save("initial_decision", request_id, {
+                "request_id": request_id, "status": "selected", "selection_elapsed_ns": 10,
+                "durable_ack_elapsed_ns": None, "route_mode": "text_race",
+            }, durable=True)
+            store.save("decision_receipt", request_id, {
+                "request_id": request_id, "status": "acknowledged",
+                "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
+                "policy_snapshot_hash": "b" * 64,
+                "measurement_unit": "explicit_scope",
+                "metric_scope": "initial_task_route_decision",
+                "admission_boundary": "first_execution_slot",
+                "endpoint_path": "/v1/embeddings",
+                "route_mode": "invocation_worker",
+                "effective_orchestration_mode": "route",
+            }, durable=True)
+        rows = store.export_request_outcomes()["observations"]
+        admission_fields = (
+            "policy_snapshot_hash", "measurement_unit", "metric_scope",
+            "admission_boundary", "endpoint_path",
+        )
+        assert {field: rows[0][field] for field in admission_fields} == {
+            field: admitted[field] for field in admission_fields
+        }
+        assert all(rows[1][field] is None for field in admission_fields)
+        assert all(row["route_mode"] == "text_race" for row in rows)
+        assert all(row["effective_orchestration_mode"] == "route" for row in rows)
     finally:
         store.close()
 
@@ -47,6 +94,56 @@ def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path, receipt_f
         observation = store.export_request_outcomes()["observations"][0]
         assert observation["durable_ack_elapsed_ns"] is None
         assert observation["decision_latency_ms"] is None
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("initial_selection", [None, 11])
+def test_acknowledged_receipt_requires_matching_initial_decision(tmp_path, initial_selection):
+    store = _StateStore(str(tmp_path / "missing_initial.db"))
+    try:
+        store.save("accepted_request", "request_one", {"request_id": "request_one"}, durable=True)
+        if initial_selection is not None:
+            store.save("initial_decision", "request_one", {
+                "request_id": "request_one", "status": "selected",
+                "selection_elapsed_ns": initial_selection,
+                "durable_ack_elapsed_ns": None,
+            }, durable=True)
+        store.save("decision_receipt", "request_one", {
+            "request_id": "request_one", "status": "acknowledged",
+            "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
+        }, durable=True)
+        observation = store.export_request_outcomes()["observations"][0]
+        assert observation["durable_ack_elapsed_ns"] is None
+        assert observation["decision_latency_ms"] is None
+        assert observation["invalid_association_count"] >= 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("record_order", ["before_admission", "receipt_before_initial"])
+def test_acknowledgement_cannot_precede_its_admission_or_selection(tmp_path, record_order):
+    store = _StateStore(str(tmp_path / "reordered.db"))
+    request_id = "request_one"
+    admission = ("accepted_request", {"request_id": request_id})
+    initial = ("initial_decision", {
+        "request_id": request_id, "status": "selected",
+        "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": None,
+    })
+    receipt = ("decision_receipt", {
+        "request_id": request_id, "status": "acknowledged",
+        "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
+    })
+    try:
+        records = ((initial, receipt, admission) if record_order == "before_admission"
+                   else (admission, receipt, initial))
+        for kind, payload in records:
+            store.save(kind, request_id, payload, durable=True)
+        observation = store.export_request_outcomes()["observations"][0]
+        assert observation["durable_ack_elapsed_ns"] is None
+        assert observation["decision_latency_ms"] is None
+        if record_order == "before_admission":
+            assert observation["decision_status"] == "unfinished"
     finally:
         store.close()
 
