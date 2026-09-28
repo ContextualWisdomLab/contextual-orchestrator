@@ -438,6 +438,7 @@ class SecurityConfig:
     # Optional companion seam for external verifiers that can expose a stable,
     # tenant-scoped principal key without exposing the bearer itself.
     principal_resolver: Callable[[str], str | None] | None = None
+    review_only: bool = False
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -5923,7 +5924,13 @@ def build_server(
                     # OpenAI model discovery is inference-scope (same bearer as chat).
                     self._authorize("inference")
                     if path == "/v1/models":
-                        self._send(orchestrator.list_openai_models())
+                        models = orchestrator.list_openai_models()
+                        if security.review_only:
+                            models["data"] = [
+                                row for row in models["data"]
+                                if row["id"] == TaskOrchestrator.FREE_MODEL
+                            ]
+                        self._send(models)
                         return
                     raw_model_id = path[len("/v1/models/") :]
                     if not raw_model_id or "/" in raw_model_id:
@@ -5949,6 +5956,8 @@ def build_server(
                     raw_refresh = (query.get("refresh") or ["false"])[0].lower()
                     if raw_refresh not in {"true", "false"}:
                         raise ValueError("refresh must be true or false")
+                    if security.review_only and raw_refresh == "true":
+                        raise RequestError(403, "route_not_allowed", "review credentials cannot refresh readiness")
                     self._send(orchestrator.inference_readiness_report(refresh=raw_refresh == "true"))
                     return
                 if path == "/v1/files" or path.startswith("/v1/files/"):
@@ -7259,6 +7268,10 @@ def build_server(
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     model_name = _validate_chat_model(body)
+                    if security.review_only and model_name != TaskOrchestrator.FREE_MODEL:
+                        raise RequestError(400, "invalid_model", "review requests require orchestrator/free")
+                    if security.review_only and "routing" in body:
+                        raise RequestError(400, "invalid_routing", "review requests cannot select routing")
                     mode = _validate_mode(
                         next(
                             (
@@ -8526,6 +8539,14 @@ def build_server(
                 effective_purpose = security.authorize(
                     self.headers, scope, self.client_address[0], purpose=purpose
                 )
+                if scope == "inference" and security.review_only and (
+                    self.command, urllib.parse.urlparse(self.path).path
+                ) not in {
+                    ("GET", "/v1/models"),
+                    ("GET", "/v1/readiness"),
+                    ("POST", "/v1/chat/completions"),
+                }:
+                    raise RequestError(403, "route_not_allowed", "review credentials cannot access this route")
                 if state_changing and scope == "admin":
                     security.validate_admin_session_origin(self.headers)
             except RequestError as exc:

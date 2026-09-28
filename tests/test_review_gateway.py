@@ -464,7 +464,27 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         assert provider_headers == []
         status, models = request("/v1/models", token)
         assert status == 200
-        assert "orchestrator/free" in {row["id"] for row in models["data"]}
+        assert {row["id"] for row in models["data"]} == {"orchestrator/free"}
+        assert request(
+            "/v1/chat/completions", token,
+            {"model": "review-model", "messages": [{"role": "user", "content": "review"}]},
+        )[0] == 400
+        assert request(
+            "/v1/chat/completions", token,
+            {"model": "orchestrator/auto", "messages": [{"role": "user", "content": "review"}]},
+        )[0] == 400
+        assert request(
+            "/v1/chat/completions", token,
+            {"messages": [{"role": "user", "content": "review"}]},
+        )[0] == 400
+        assert request(
+            "/v1/chat/completions", token,
+            {"model": "orchestrator/free", "messages": [{"role": "user", "content": "review"}],
+             "routing": {"endpoint": "https://openrouter.example/v1"}},
+        )[0] == 400
+        assert request("/v1/files", token)[0] == 403
+        assert request("/v1/readiness?refresh=true", token)[0] == 403
+        assert provider_headers == []
         status, answer = request(
             "/v1/chat/completions",
             token,

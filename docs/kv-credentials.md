@@ -405,6 +405,9 @@ keys from the gateway process environment. Keep the admin token on the owner;
 give CI consumers only the inference token. Public binding is explicit and
 requires a trusted TLS ingress and network controls. The CLI does not create
 that ingress, publish an immutable release, or establish hosted acceptance.
+Production review credentials can discover and request only `orchestrator/free`
+through the chat API; provider models, caller routing hints, file routes, and
+provider-refresh probes are outside this review contract.
 
 To give OpenCode, Noema, and Strix separate review identities, store a distinct
 credential for each workload in the owner KV and replace the shared inference

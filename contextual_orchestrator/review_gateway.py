@@ -433,6 +433,7 @@ def main() -> None:
                 ) if (identity := current_identity(token)) else None,
                 allow_public_bind=args.allow_public_bind,
                 max_body_bytes=REVIEW_MAX_BODY_BYTES,
+                review_only=True,
             )
         else:
             auth_token = args.auth_token or get_credential(args.auth_token_key)
