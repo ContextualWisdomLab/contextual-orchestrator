@@ -141,24 +141,25 @@ def test_restore_rejects_foreign_backend_during_rollback() -> None:
 class _FakeCursor:
     def __init__(self, log: list[tuple[str, tuple[Any, ...]]]) -> None:
         self._log = log
+        self.closed = False
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> None:
         self._log.append((sql.split()[0], params))
 
-    def __enter__(self) -> "_FakeCursor":
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakeConnection:
     def __init__(self, log: list[tuple[str, tuple[Any, ...]]]) -> None:
         self._log = log
         self.commits = 0
+        self.cursors: list[_FakeCursor] = []
 
     def cursor(self) -> _FakeCursor:
-        return _FakeCursor(self._log)
+        cursor = _FakeCursor(self._log)
+        self.cursors.append(cursor)
+        return cursor
 
     def commit(self) -> None:
         self.commits += 1
@@ -201,6 +202,8 @@ def test_restore_postgres_backend_deletes_and_upserts_atomically() -> None:
         assert upsert_params[:2] == ("BBB_KEY", "previous-secret")
         assert upsert_params[2] == "phrase"
         assert backend.connection.commits == 1
+        assert backend.connection.cursors
+        assert all(cursor.closed for cursor in backend.connection.cursors)
     finally:
         set_backend(None)
 

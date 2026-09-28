@@ -601,12 +601,10 @@ class _FakeCursor:
         self.privacy_rows = list(privacy_rows or [])
         self.unit_price_rows = list(unit_price_rows or [])
         self._current_rows = self.rows
+        self.closed = False
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args) -> None:
-        return None
+    def close(self) -> None:
+        self.closed = True
 
     def execute(self, statement: str, params=None) -> None:
         self.calls.append((statement, params))
@@ -695,6 +693,7 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert "UPDATE provider_model SET enabled_flag = false" not in failure_sql
     assert "INSERT INTO catalog_refresh_run" in failure_sql
     assert store.refresh_evidence()[-1].error_code == "unknown_error"
+    assert all(connection.cursor_object.closed for connection in connections)
 
 
 def test_postgres_success_clears_limits_marked_as_conflicting() -> None:
