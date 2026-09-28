@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 
 import pytest
@@ -143,8 +144,15 @@ def test_build_review_orchestrator_excludes_explicit_non_chat_models(monkeypatch
     assert [agent.model for agent in orchestrator.agents] == ["review-model"]
 
 
-def test_build_review_orchestrator_excludes_free_multimodal_input_model(monkeypatch):
-    """Blind review selection must reuse the general-free modality boundary."""
+def test_build_review_orchestrator_admits_free_image_chat_model_for_figure_review(
+    monkeypatch,
+):
+    """Free text+image chat rows join the review pool for figure-bearing requests.
+
+    Blind text ``orchestrator/free`` still cannot select them
+    (:meth:`TaskOrchestrator._is_general_free_agent`); image-bearing free
+    traffic uses :meth:`TaskOrchestrator._free_pool_agent_ids` instead.
+    """
     discovered = [
         _discovered(
             "openrouter",
@@ -155,10 +163,40 @@ def test_build_review_orchestrator_excludes_free_multimodal_input_model(monkeypa
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
-    with pytest.raises(NotConfigured, match="eligible zero-cost"):
-        review_gateway.build_review_orchestrator(
-            {"OPENROUTER_API_KEY": "router-secret"}
-        )
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENROUTER_API_KEY": "router-secret"}
+    )
+
+    assert [agent.model for agent in orchestrator.agents] == ["vision-review-model"]
+    assert "input:image" in orchestrator.agents[0].tags
+    assert not orchestrator._is_general_free_agent(orchestrator.agents[0])
+    assert orchestrator._is_free_agent(orchestrator.agents[0])
+    assert orchestrator._agent_supports_image_input(orchestrator.agents[0])
+
+
+def test_build_review_orchestrator_unions_blind_free_and_image_chat_models(
+    monkeypatch,
+):
+    """Text-only and text+image free rows both remain available after bootstrap."""
+    discovered = [
+        _discovered("openrouter", "text-review", "OPENROUTER_API_KEY"),
+        _discovered(
+            "openrouter",
+            "vision-review",
+            "OPENROUTER_API_KEY",
+            input_modalities=("text", "image"),
+        ),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENROUTER_API_KEY": "router-secret"}
+    )
+
+    assert {agent.model for agent in orchestrator.agents} == {
+        "text-review",
+        "vision-review",
+    }
 
 
 def test_build_review_orchestrator_fails_closed_without_credentials():
@@ -209,7 +247,42 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     security = captured["security"]
     assert security.auth_token == "local-review-token"
     assert security.allow_public_bind is False
+    assert security.max_body_bytes == review_gateway.REVIEW_MAX_BODY_BYTES
+    assert review_gateway.REVIEW_MAX_BODY_BYTES == 32 * 1024 * 1024
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
+
+
+def test_main_configures_redacted_logging_before_discovery(monkeypatch, capsys):
+    """INFO sends discovery and request summaries to redacted stderr."""
+    discovered = [
+        _discovered("openrouter", "review-model", "OPENROUTER_API_KEY")
+    ]
+
+    def fake_discover():
+        """Emit a discovery record before the server starts."""
+        logging.getLogger("contextual_orchestrator.model_discovery").info(
+            "discovery_complete token=non-credential-fixture"
+        )
+        return discovered, []
+
+    monkeypatch.setattr(review_gateway, "discover_all_models", fake_discover)
+    monkeypatch.setattr(
+        review_gateway,
+        "serve",
+        lambda orchestrator, **kwargs: logging.getLogger(
+            "contextual_orchestrator.server"
+        ).info("http_request status=200 latency_ms=1 request_id=test-request"),
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--log-level", "info"])
+
+    review_gateway.main()
+
+    stderr = capsys.readouterr().err
+    assert "discovery_complete token=[REDACTED]" in stderr
+    assert "http_request status=200 latency_ms=1 request_id=test-request" in stderr
+    assert "non-credential-fixture" not in stderr
 
 
 def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch):
