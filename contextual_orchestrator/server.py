@@ -8909,6 +8909,7 @@ def build_server(
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream; charset=utf-8")
                 self.send_header("cache-control", "no-cache")
+                self.send_header("x-should-retry", "false")
                 self._send_security_headers()
                 self.end_headers()
                 self._response_headers_sent = True  # see _write_response

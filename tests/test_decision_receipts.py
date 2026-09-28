@@ -718,6 +718,118 @@ def test_initial_decision_write_failure_rejects_before_dispatch_and_recovers(tmp
         orchestrator.close()
 
 
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/responses"])
+def test_stream_decision_write_failure_has_terminal_error_without_provider_send(
+    tmp_path, monkeypatch, endpoint,
+):
+    """An open SSE response must end as failed when its route cannot commit."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db"
+    )
+    original_save = orchestrator._store.save
+    provider_calls = []
+
+    def fail_decision(kind, *args, **kwargs):
+        if kind == "initial_decision":
+            raise RuntimeError("never-disclose-stream-secret")
+        return original_save(kind, *args, **kwargs)
+
+    def record_stream(*args, **kwargs):
+        provider_calls.append(True)
+        yield "unexpected"
+
+    monkeypatch.setattr(orchestrator._store, "save", fail_decision)
+    monkeypatch.setattr(orchestrator.client, "stream_chat", record_stream)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        body = ({"model": "orchestrator/auto", "stream": True, "input": "hello"}
+                if endpoint == "/v1/responses" else {
+                    "model": "orchestrator/auto", "mode": "route", "stream": True,
+                    "messages": [{"role": "user", "content": "hello"}],
+                })
+        connection.request("POST", endpoint, json.dumps(body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        frames = response.read().decode()
+        assert response.status == 200  # headers precede lazy selection
+        assert response.getheader("x-should-retry") == "false"
+        assert "never-disclose-stream-secret" not in frames
+        assert "data: [DONE]" in frames
+        if endpoint == "/v1/responses":
+            assert "event: response.failed" in frames
+            assert "event: response.completed" not in frames
+        else:
+            assert '"finish_reason": "error"' in frames
+            assert '"finish_reason": "stop"' not in frames
+        assert not provider_calls
+        assert orchestrator._store.load("decision_receipt")[0]["status"] == "write_failed"
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+@pytest.mark.parametrize("surface", ["tools", "image"])
+def test_proxy_decision_write_failure_stops_tool_and_image_send(tmp_path, monkeypatch, surface):
+    """Proxy transport is never entered without a committed route."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker", tags=("tools", "image", "writing"))],
+        state_db=tmp_path / "state.db",
+    )
+    original_save = orchestrator._store.save
+    provider_calls = []
+
+    def fail_decision(kind, *args, **kwargs):
+        if kind == "initial_decision":
+            raise RuntimeError("never-disclose-proxy-secret")
+        return original_save(kind, *args, **kwargs)
+
+    def record_provider(*args, **kwargs):
+        provider_calls.append(True)
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr(orchestrator._store, "save", fail_decision)
+    for method_name in ("chat", "proxy_send", "proxy_send_bytes"):
+        monkeypatch.setattr(orchestrator.client, method_name, record_provider)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        if surface == "image":
+            endpoint = "/v1/images/generations"
+            body = {"model": "mock/worker", "prompt": "a figure"}
+        else:
+            endpoint = "/v1/chat/completions"
+            body = {"model": "mock/worker",
+                    "messages": [{"role": "user", "content": "look up one item"}],
+                    "tools": [{"type": "function", "function": {
+                        "name": "lookup_item", "parameters": {"type": "object", "properties": {}}
+                    }}]}
+        connection.request("POST", endpoint, json.dumps(body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        payload = response.read().decode()
+        assert response.status == 503
+        assert response.getheader("x-should-retry") == "false"
+        assert "never-disclose-proxy-secret" not in payload
+        assert not provider_calls
+        assert orchestrator._store.load("decision_receipt")[0]["status"] == "write_failed"
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 def test_export_retains_accepted_request_without_finalization(tmp_path):
     """Crash-like missing finalization stays an unfinished denominator row."""
     from contextual_orchestrator.decision_receipts import export_decision_receipts

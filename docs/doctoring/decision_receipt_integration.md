@@ -135,6 +135,13 @@ recovered. The local strict receipt/export/latency set passed 123 tests. This
 does not prove hosted Linux, every endpoint branch, ingress completeness, or
 customer KPI improvement.
 
+Follow-up HTTP regressions also cover streaming Chat and Responses plus tool
+and image proxy requests: the failed decision sends no provider call. Streams
+already opened as HTTP 200 before lazy selection emit a terminal error; their
+opening header now signals no automatic retry because any later failure could
+follow upstream egress. The expanded local strict set passed 196 tests. Client
+compliance and wire-level delivery remain unverified.
+
 Focused verification in the isolated local Python 3.14 environment: 4 tests
 passed in 1.49 s. The real HTTP route's dispatch callback queries a separate
 SQLite connection (never flush-on-read store.load), verifies the committed
