@@ -78,6 +78,7 @@ from .provider_errors import (
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
+from . import runtime_identity
 from .telemetry import (
     attach_trace_context,
     configure_telemetry,
@@ -5913,6 +5914,17 @@ def build_server(
                     self._authorize("admin")
                     readiness, status = _readiness_payload(orchestrator, coordinator)
                     self._send(readiness, status)
+                    return
+                if path == "/v1/gateway/identity":
+                    self._authorize("inference")
+                    try:
+                        self._send(runtime_identity.verified_runtime_identity())
+                    except runtime_identity.RuntimeIdentityUnavailable:
+                        raise RequestError(
+                            503,
+                            "release_identity_unavailable",
+                            "The gateway cannot verify its installed release.",
+                        ) from None
                     return
                 if path in ("/", "/admin"):
                     # The shell is public so an operator can establish a session;

@@ -298,6 +298,18 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Model collection"}},
             }
         },
+        "/v1/gateway/identity": {
+            "get": {
+                "operationId": "get_gateway_identity",
+                "summary": "Get verified installed gateway release identity",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {
+                    "200": {"description": "Verified release identity"},
+                    "401": {"description": "Inference authentication required"},
+                    "503": {"description": "Installed release identity cannot be verified"},
+                },
+            }
+        },
         "/v1/models/{model_id}": {
             "get": {
                 "operationId": "get_model",

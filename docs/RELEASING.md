@@ -28,10 +28,26 @@ LifeOS and other consumers must verify their specific owner contracts too.
 
 The first version remains a candidate until an ordinary protected-main change
 selects its SemVer number and records API/schema compatibility in CHANGELOG.md.
-The current `0.2.0` project declaration is not release evidence. In particular,
-the wheel and signed assets do not prove a deployed gateway's runtime identity
-or provide the scoped Actions credential required by #1023. Consumers must
-check those contracts separately before replacing a source pin.
+The current `0.2.0` project declaration is not release evidence. A released
+wheel includes a source SHA and API schema digest. The inference-authenticated
+`GET /v1/gateway/identity` checks installed package files against the wheel's
+RECORD and returns those values plus a package-tree digest. Consumers must
+compare that digest with independently verified release assets over an
+authenticated transport. This receipt alone does not prove which deployment
+answered, and the scoped Actions credential required by #1023 remains open.
+The tree digest is SHA-256 over sorted wheel package paths; each entry adds
+its UTF-8 path, one zero byte, and the raw SHA-256 digest of its file bytes.
+The identity endpoint refuses an installation containing Python bytecode
+caches: they can execute different code while the wheel's recorded source
+remains intact. Install without bytecode compilation and launch with
+`python -B` from a fresh package tree. The receipt does not verify code
+already loaded into process memory.
+Torres-Arias et al., *in-toto: Providing farm-to-table guarantees for bits and
+bytes*, USENIX Security 2019 ([paper PDF](https://www.usenix.org/system/files/sec19-torres-arias.pdf)),
+grounds the independent artifact-chain verification requirement. The runtime
+receipt here supplies one checkable link; it does not implement in-toto's
+signed supply-chain layout. Redistribution terms for the paper were not
+established, so the PDF is linked rather than copied into this repository.
 
 ## Preconditions
 
