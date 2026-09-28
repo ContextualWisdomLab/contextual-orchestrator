@@ -6,6 +6,8 @@ import base64
 import hashlib
 import importlib.util
 import json
+import marshal
+import py_compile
 import threading
 import urllib.error
 import urllib.request
@@ -34,7 +36,7 @@ def _recorded_file(name: str, content: bytes) -> str:
 def test_runtime_identity_verifies_installed_bytes_and_rejects_mutation(tmp_path, monkeypatch):
     package = tmp_path / "contextual_orchestrator"
     package.mkdir()
-    content = b"real installed module\n"
+    content = b"VALUE = 'expected'\n"
     (package / "__init__.py").write_bytes(b"")
     (package / "worker.py").write_bytes(content)
     (package / "runtime_identity.py").write_bytes(b"identity module\n")
@@ -69,9 +71,16 @@ def test_runtime_identity_verifies_installed_bytes_and_rejects_mutation(tmp_path
     )
 
     cache = Path(importlib.util.cache_from_source(str(package / "worker.py")))
-    cache.parent.mkdir()
-    cache.write_bytes(b"generated cache")
+    py_compile.compile(str(package / "worker.py"), doraise=True)
     assert runtime_identity.verified_runtime_identity()["source_sha"] == "a" * 40
+    original_cache = cache.read_bytes()
+    cache.write_bytes(
+        original_cache[:16]
+        + marshal.dumps(compile("VALUE = 'modified'\n", str(package / "worker.py"), "exec"))
+    )
+    with pytest.raises(runtime_identity.RuntimeIdentityUnavailable):
+        runtime_identity.verified_runtime_identity()
+    cache.write_bytes(original_cache)
 
     (package / "worker.py").write_bytes(b"altered installed module\n")
     with pytest.raises(runtime_identity.RuntimeIdentityUnavailable):
