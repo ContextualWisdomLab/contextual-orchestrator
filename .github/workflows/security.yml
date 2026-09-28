@@ -276,7 +276,13 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip_audit -r requirements.lock
-          cyclonedx-py environment --output-format json --output-file cyclonedx-sbom.json
+          runtime_venv="${RUNNER_TEMP}/sbom-runtime-venv"
+          python -m venv --without-pip --clear "${runtime_venv}"
+          runtime_python="${runtime_venv}/bin/python"
+          runtime_site="$("${runtime_python}" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+          python -m pip install --no-deps --require-hashes --target "${runtime_site}" -r requirements.lock
+          cyclonedx-py environment "${runtime_python}" --pyproject pyproject.toml --output-reproducible --output-format JSON --output-file cyclonedx-sbom.json
+          python scripts/ci/verify_runtime_sbom.py requirements.lock pyproject.toml cyclonedx-sbom.json
 
       - name: Upload CycloneDX SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact@v7.0.1
