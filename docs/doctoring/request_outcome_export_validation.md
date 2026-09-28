@@ -8,12 +8,13 @@ Unrecognized stored text becomes null, so an operator can separate known
 endpoint and initial selection kinds without disclosing arbitrary record text.
 This is additive cohort metadata, not a p95 estimator. `route_mode` identifies
 the selection hook, not the caller's route/conduct choice.
-The follow-up records `effective_orchestration_mode` only when execution
-chooses `route` or `conduct`, including a validated cached result or a route
-stream. If one request executes both, the bounded value is `mixed` rather than
-an exception or a misleading first choice. It keeps the selection hook in
-`route_mode`. Requests that fail before
-the choice, embedding requests, and unclassified proxy paths retain null
+The follow-up records `effective_orchestration_mode` when execution chooses
+`route`, `conduct`, or an eligible direct `proxy`, including a validated cached
+result, a route stream, structured Chat Completions or Responses conduct, and
+explicit-model tool passthrough. If one request
+executes both, the bounded value is `mixed` rather than an exception or a
+misleading first choice. It keeps the selection hook in `route_mode`. Requests
+that fail before the choice and embedding requests retain null
 effective mode; no mode is inferred from endpoint or a requested `auto` value.
 The export remains local and incomplete until ingress reconciliation and real
 outcome adjudication are available.
@@ -26,12 +27,16 @@ also owns the first selection kind; a later receipt cannot rewrite it. The
 contradictory-record regression failed before each repair and passed after it.
 The effective mode still comes from the final execution receipt.
 
+Structured Chat Completions and Responses HTTP regressions first returned null
+effective mode and then passed after recording the validated conduct branch.
+An explicit-model tool request similarly returned null before the direct
+proxy-path observation; its HTTP regression now reports `proxy`.
 The successor projection test first failed with
 `KeyError: 'effective_orchestration_mode'`. The native module was rebuilt in
-the isolated worktree; the strict receipt, cohort, and cache aggregation tests
-then passed 81 cases, including a RED-to-GREEN mixed-mode regression. HTTP
-stream, conduct, and cache assertions exercise the request path. These are
-local correctness checks, not pilot measurements.
+the isolated worktree. The strict receipt, cohort, retained-outcome, and cache
+suite passed 121 cases at this revision, including mixed-mode and HTTP
+stream, conduct, and cache regressions. These are local correctness checks,
+not pilot measurements.
 
 RED: the new projection case failed with `KeyError: 'endpoint_path'`.
 After the native module was built in this isolated worktree, the strict

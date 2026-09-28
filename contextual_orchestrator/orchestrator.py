@@ -5346,7 +5346,7 @@ class _StateStore:
                                     "capability_race", "capability_proxy", "text_race",
                                     "embedding_submission", "unclassified"}
                      | {"invocation_" + role for role in ("thinker", "worker", "verifier", "judge", "synthesizer")}),
-                    ("effective_orchestration_mode", {"route", "conduct", "mixed"}),
+                    ("effective_orchestration_mode", {"route", "conduct", "proxy", "mixed"}),
                 ):
                     field_value = (
                         admission_measurement if field_name in {
@@ -6318,6 +6318,7 @@ class TaskOrchestrator:
             )
             if agent is None:
                 raise RuntimeError("required file provider is unavailable")
+        record_effective_orchestration_mode("proxy")
         upstream = {
             key: value
             for key, value in body.items()
@@ -6781,6 +6782,7 @@ class TaskOrchestrator:
             raise ProviderResponseError(
                 "response_format.json_schema is missing a schema"
             )
+        record_effective_orchestration_mode("conduct")
         task = self._latest_user_text(messages)
         # Vision is a hard entitling capability the request payload cannot
         # grant, so it stays a required tag. ``response_format`` is a gateway

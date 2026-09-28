@@ -58,6 +58,76 @@ def test_multiple_execution_modes_in_one_request_remain_mixed(tmp_path):
         store.close()
 
 
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/responses"])
+def test_http_structured_chat_records_conduct_mode(tmp_path, endpoint):
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker", tags=("reasoning", "writing"))],
+        state_db=tmp_path / "state.db",
+    )
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        body = {"model": "mock/worker"}
+        if endpoint == "/v1/responses":
+            body["input"] = "json object"
+        else:
+            body["messages"] = [{"role": "user", "content": "json object"}]
+            body["response_format"] = {"type": "json_object"}
+        connection.request("POST", endpoint, json.dumps(body),
+                           {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 200
+        connection.close()
+        server.shutdown()
+        observation, = orchestrator._store.export_request_outcomes()["observations"]
+        assert observation["endpoint_path"] == endpoint
+        assert observation["effective_orchestration_mode"] == "conduct"
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+def test_http_explicit_tool_passthrough_records_proxy_mode(tmp_path):
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker", tags=("tools", "writing"))],
+        state_db=tmp_path / "state.db",
+    )
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        connection.request("POST", "/v1/chat/completions", json.dumps({
+            "model": "mock/worker",
+            "messages": [{"role": "user", "content": "look up one item"}],
+            "tools": [{"type": "function", "function": {
+                "name": "lookup_item", "parameters": {"type": "object", "properties": {}}
+            }}],
+        }), {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 200
+        connection.close()
+        server.shutdown()
+        observation, = orchestrator._store.export_request_outcomes()["observations"]
+        assert observation["endpoint_path"] == "/v1/chat/completions"
+        assert observation["effective_orchestration_mode"] == "proxy"
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
 @pytest.mark.parametrize("scenario", ["saturated", "success", "conduct_success", "classifier_error", "trace_rejection"])
 @pytest.mark.parametrize("measurement_enabled", [False, True])
 def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatch, scenario, measurement_enabled):

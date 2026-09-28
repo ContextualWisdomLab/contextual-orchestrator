@@ -107,8 +107,8 @@ class DecisionMeasurement:
             self._record_provider_locked(agent_ids, "task_execution")
 
     def set_effective_orchestration_mode(self, mode):
-        """Retain the executed route/conduct choice separately from selection kind."""
-        if mode not in {"route", "conduct"}:
+        """Retain the executed route/conduct/proxy choice separately from selection kind."""
+        if mode not in {"route", "conduct", "proxy"}:
             raise ValueError("unknown effective orchestration mode")
         with self._lock:
             if self.effective_orchestration_mode is None:
