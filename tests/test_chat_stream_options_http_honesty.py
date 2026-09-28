@@ -42,11 +42,12 @@ def _post(port: int, payload: dict) -> tuple[int, dict | str]:
             except json.JSONDecodeError:
                 return response.status, raw
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8")
-        try:
-            return exc.code, json.loads(raw)
-        except json.JSONDecodeError:
-            return exc.code, raw
+        with exc:
+            raw = exc.read().decode("utf-8")
+            try:
+                return exc.code, json.loads(raw)
+            except json.JSONDecodeError:
+                return exc.code, raw
 
 
 def _server():

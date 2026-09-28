@@ -177,7 +177,8 @@ def post_json(url: str, payload: dict[str, object], token: str | None = None) ->
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def request_json(
@@ -199,7 +200,8 @@ def request_json(
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8")), response.headers
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8")), exc.headers
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8")), exc.headers
 
 
 def test_admin_session_is_opaque_scoped_and_revocable() -> None:
@@ -262,6 +264,7 @@ def test_admin_session_is_opaque_scoped_and_revocable() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 
@@ -308,6 +311,7 @@ def test_admin_session_requests_partition_cache_without_bearer() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
@@ -326,6 +330,7 @@ def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert unauthorized_status == 401
     assert unauthorized_body["error"]["code"] == "unauthorized"
@@ -360,6 +365,7 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert admin_for_chat_status == 401
     assert inference_status == 200
@@ -389,7 +395,8 @@ def test_inference_readiness_is_read_only_and_admin_refresh_stays_privileged() -
             with urllib.request.urlopen(request, timeout=5) as response:
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read())
+            with exc:
+                return exc.code, json.loads(exc.read())
 
     try:
         inference_status, inference_body = get(
@@ -401,6 +408,7 @@ def test_inference_readiness_is_read_only_and_admin_refresh_stays_privileged() -
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert inference_status == 400
     assert inference_body["error"]["code"] == "readiness_refresh_forbidden"
@@ -461,6 +469,7 @@ def test_loopback_without_configured_token_is_rejected() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == 401
     assert body["error"]["code"] == "unauthorized"
@@ -481,6 +490,7 @@ def test_http_api_validates_mode_and_request_shape() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == 400
     assert body["error"]["code"] in {"invalid_message", "invalid_mode"}
@@ -501,6 +511,7 @@ def test_http_api_rejects_unknown_request_fields() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert status == 400
     assert body["error"]["code"] == "unknown_fields"
@@ -527,6 +538,7 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert first_status == 200
     assert second_status == 429
