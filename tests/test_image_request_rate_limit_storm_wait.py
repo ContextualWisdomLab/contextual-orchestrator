@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import time
 import urllib.error
@@ -159,3 +160,114 @@ def test_cooldown_beyond_wait_budget_fails_without_replay(monkeypatch) -> None:
 
     assert status == 429
     assert [model for model, _, _ in attempts] == ["vendor/text-a", "vendor/text-b"]
+
+
+def test_image_storm_recovery_counts_provider_http_requests(monkeypatch) -> None:
+    """Observe retries at a real local provider socket, beyond transport calls."""
+    set_backend(InMemoryCredentialBackend())
+    register_credential("NVIDIA_NIM_API_KEY", "synthetic-not-a-key")
+    hits: list[tuple[str, float, bool, bool]] = []
+    rejected: set[str] = set()
+    guard = threading.Lock()
+    image_url = "data:image/png;base64," + _PNG
+
+    class Provider(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            payload = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            model = payload["model"]
+            system = (payload.get("messages") or [{}])[0].get("content", "")
+            triage = system == TaskOrchestrator.TRIAGE_SYSTEM_PROMPT
+            has_image = any(
+                isinstance(message.get("content"), list)
+                and any(
+                    isinstance(part, dict)
+                    and part.get("type") == "image_url"
+                    and isinstance(part.get("image_url"), dict)
+                    and part["image_url"].get("url") == image_url
+                    for part in message["content"]
+                )
+                for message in payload.get("messages", [])
+                if isinstance(message, dict)
+            )
+            with guard:
+                limited = not triage and model not in rejected
+                if limited:
+                    rejected.add(model)
+                if not triage:
+                    hits.append((model, time.monotonic(), limited, has_image))
+            if limited:
+                status, body = 429, {"error": {"message": "rate limited"}}
+            else:
+                content = '{"workflow_required": true}' if triage else "PASS: evidence reviewed."
+                status, body = 200, {
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            encoded = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            if limited:
+                self.send_header("Retry-After", "1")
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    provider_thread = threading.Thread(target=provider.serve_forever, daemon=True)
+    provider_thread.start()
+    gateway = None
+    gateway_thread = None
+    try:
+        monkeypatch.setattr(ModelClient, "_validate_provider", lambda self, agent: None)
+        tags = _TEXT_TAGS + ("vision", "input:image")
+        agents = [
+            ModelAgent(name, model, base_url=f"http://127.0.0.1:{provider.server_address[1]}/v1",
+                       api_key_env="NVIDIA_NIM_API_KEY", tags=tags, priority=priority)
+            for name, model, priority in (("text_a", "vendor/text-a", 10), ("text_b", "vendor/text-b", 5))
+        ]
+        gateway = build_server(
+            TaskOrchestrator(agents, tool_retry_attempts=0, rate_limit_wait_seconds=3.0),
+            port=0, security=SecurityConfig(auth_token=_TOKEN),
+        )
+        gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
+        gateway_thread.start()
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{gateway.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "mode": "conduct",
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "Review this change set in depth: plan, implement, verify."},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ]}],
+            }).encode(),
+            headers={"content-type": "application/json", "authorization": f"Bearer {_TOKEN}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            assert response.status == 200
+            response.read()
+    finally:
+        if gateway is not None:
+            gateway.shutdown()
+            assert gateway_thread is not None
+            gateway_thread.join(timeout=5)
+            gateway.server_close()
+        provider.shutdown()
+        provider_thread.join(timeout=5)
+        provider.server_close()
+        set_backend(None)
+
+    limited = [(model, at) for model, at, failed, _ in hits if failed]
+    assert len(hits) == 7  # two refusals plus five conduct workflow calls
+    assert {model for model, _ in limited} == {"vendor/text-a", "vendor/text-b"}
+    assert len(limited) == 2
+    assert sum(not failed for _, _, failed, _ in hits) == 5
+    assert all(has_image for _, _, failed, has_image in hits if failed)
+    for model, at in limited:
+        next_hit = next((later for candidate, later, _, _ in hits if candidate == model and later > at), None)
+        if next_hit is not None:
+            assert next_hit - at >= 0.98
