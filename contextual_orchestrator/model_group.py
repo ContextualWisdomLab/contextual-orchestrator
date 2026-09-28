@@ -19,10 +19,10 @@ endpoint actually serves each request using only measured evidence:
   diagnostic evidence. Routing consistently uses latency-derived
   responses-per-second.
 - **Score** is ``P(success | data) / EWMA latency``: expected successful
-  responses per second. It has consistent physical units, uses no hand-tuned weights, and
-  degenerates gracefully -- members without any observation share one
-  identical neutral score, so ordering falls back to the caller's static
-  ranking until real evidence exists.
+  responses per second. It has consistent physical units, uses no hand-tuned
+  weights, and degenerates gracefully -- members without any observation
+  share one identical neutral score, so ordering falls back to the caller's
+  static ranking until real evidence exists.
 """
 
 from __future__ import annotations
@@ -94,9 +94,9 @@ class ModelGroupRouter:
         self._prior_resolver = prior_resolver
         self._clock = clock
         self._lock = threading.Lock()
-        # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
-        # None until the first observation of each kind arrives.
-        self._members: dict[str, dict[str, float | None]] = {}
+        # member_id -> posterior/prior floats, exact integer outcome counts,
+        # and optional speed observations.
+        self._members: dict[str, dict[str, float | int | None]] = {}
         self._minute_observations: dict[str, deque[tuple[float, int | None]]] = {}
         self._max_observed_rpm: dict[str, int] = {}
         self._max_observed_tpm: dict[str, int] = {}
@@ -106,7 +106,7 @@ class ModelGroupRouter:
         with self._lock:
             self._members.setdefault(member_id, self._blank_state(member_id))
 
-    def _blank_state(self, member_id: str) -> dict[str, float | None]:
+    def _blank_state(self, member_id: str) -> dict[str, float | int | None]:
         """Fresh per-member ledger row: Laplace prior counts, no speed samples."""
         if self._prior_resolver is not None:
             alpha, beta = self._prior_resolver(member_id)
@@ -117,6 +117,8 @@ class ModelGroupRouter:
             "beta": beta,
             "prior_alpha": alpha,
             "prior_beta": beta,
+            "success_count": 0,
+            "failure_count": 0,
             "ewma": None,
             "ewma_tps": None,
         }
@@ -149,10 +151,9 @@ class ModelGroupRouter:
         """Replace a member's prior evidence without touching outcomes.
 
         Callers (benchmark initialization, telemetry collectors) own the
-        prior component; this ledger owns measured outcomes. The current
-        ``alpha``/``beta`` mass shifts by exactly the same delta as the
-        prior pair, so ``success_count``/``failure_count`` — the ledger's
-        observed-outcome accounting — remain bit-identical.
+        prior component; this ledger owns measured outcomes as exact integer
+        counters. Posterior shapes are rebuilt from the new prior plus those
+        counters, so floating-point cancellation cannot erase observations.
 
         Args:
             member_id: Ledger member to refresh.
@@ -167,14 +168,12 @@ class ModelGroupRouter:
                 raise ValueError(f"{name} must be finite and non-negative")
         with self._lock:
             state = self._ensure_locked(member_id)
-            old_alpha = float(state.get("prior_alpha") or 0.0)
-            old_beta = float(state.get("prior_beta") or 0.0)
-            delta_alpha = float(prior_alpha) - old_alpha
-            delta_beta = float(prior_beta) - old_beta
+            success_count = int(state["success_count"])
+            failure_count = int(state["failure_count"])
             state["prior_alpha"] = float(prior_alpha)
             state["prior_beta"] = float(prior_beta)
-            state["alpha"] = float(state.get("alpha") or 0.0) + delta_alpha
-            state["beta"] = float(state.get("beta") or 0.0) + delta_beta
+            state["alpha"] = float(prior_alpha) + success_count
+            state["beta"] = float(prior_beta) + failure_count
 
     def observe_success(
         self,
@@ -230,7 +229,9 @@ class ModelGroupRouter:
                 raise ValueError("output_tokens must be representable as a finite float")
         with self._lock:
             state = self._ensure_locked(member_id)
-            state["alpha"] = float(state["alpha"]) + 1.0
+            success_count = int(state["success_count"]) + 1
+            state["success_count"] = success_count
+            state["alpha"] = float(state["prior_alpha"]) + success_count
             if clamped is not None:
                 ewma = state["ewma"]
                 state["ewma"] = (
@@ -264,7 +265,9 @@ class ModelGroupRouter:
         """Record one failed attempt (stability evidence only; no latency)."""
         with self._lock:
             state = self._ensure_locked(member_id)
-            state["beta"] = float(state["beta"]) + 1.0
+            failure_count = int(state["failure_count"]) + 1
+            state["failure_count"] = failure_count
+            state["beta"] = float(state["prior_beta"]) + failure_count
 
     def member_score(self, member_id: str) -> float:
         """Return the expected successful responses per second for a member."""
@@ -274,12 +277,7 @@ class ModelGroupRouter:
     def member_observation_count(self, member_id: str) -> int:
         """Total completed attempts recorded for one member (success + failure)."""
         with self._lock:
-            state = self._members.get(member_id)
-            if state is None:
-                return 0
-            alpha = float(state["alpha"]) - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))
-            beta = float(state["beta"]) - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))
-            return int(max(alpha, 0.0)) + int(max(beta, 0.0))
+            return self._observation_count_locked(member_id)
 
     def ranked_member_ids(self, member_ids: list[str] | tuple[str, ...]) -> list[str]:
         """Order member ids best-first by measured score, preserving input ties."""
@@ -298,8 +296,14 @@ class ModelGroupRouter:
 
     # --- internal helpers (callers must hold ``self._lock``) ---------------
 
-    def _ensure_locked(self, member_id: str) -> dict[str, float | None]:
+    def _ensure_locked(self, member_id: str) -> dict[str, float | int | None]:
         return self._members.setdefault(member_id, self._blank_state(member_id))
+
+    def _observation_count_locked(self, member_id: str) -> int:
+        state = self._members.get(member_id)
+        if state is None:
+            return 0
+        return int(state["success_count"]) + int(state["failure_count"])
 
     def _score_locked(self, member_id: str) -> float:
         state = self._members.get(member_id)
@@ -342,7 +346,7 @@ class ModelGroupRouter:
             "max_observed_rpm": self._max_observed_rpm.get(member_id, 0),
             "max_observed_tpm": self._max_observed_tpm.get(member_id, 0),
             "rate_observation_window_seconds": int(RATE_OBSERVATION_WINDOW_SECONDS),
-            "success_count": int(alpha - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))),
-            "failure_count": int(beta - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))),
+            "success_count": int(state["success_count"]),
+            "failure_count": int(state["failure_count"]),
             "score": round(self._score_locked(member_id), 9),
         }

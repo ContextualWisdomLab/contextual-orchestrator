@@ -7443,7 +7443,6 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
 
-
 ## 2026-09-20 Protected-main CI regression RCA
 
 PR #995 exact head `d4f7e135719b16a0f0d72377d1bbe9b3614a8600`
@@ -7491,3 +7490,33 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-27 Model-group sampled admission authority — Proposed
+
+**Problem.** PR #1034 activated live ordering by `Beta stability draw / EWMA
+latency`. The cited Thompson-sampling results cover their stated reward models,
+not this composite utility; the PR's own research record explicitly said that a
+separate model and acceptance experiment were still required.
+
+**Constraint and decision.** Judged-answer routing requires released
+fast-mlsirm calibration evidence, and every decision-affecting fallback must
+fail closed when that authority is absent. Keeping the stochastic switch
+default-off was rejected because `_refine_partition` enabled it for every live
+group. Adding another threshold or fallback was rejected as a second heuristic.
+The selected repair removes the `rng`, `sampled_ranked_member_ids`, and
+`sample` activation surface while preserving the independently valid integer
+success/failure ledger and OpenRouter availability/quality separation.
+
+**Evidence.** RED `77b48e133d5b5df160ad98663ef40456129a67e7`
+fails both authority contracts on exact predecessor `e099aa20`; the repair
+requires constructor and live-order signatures to expose no sampled policy.
+
+**Effects, risks, and follow-up.** Operators regain deterministic measured
+ordering and no longer deploy an unvalidated exploration policy. This does not
+claim that the retained posterior-mean/latency score is a released calibrated
+quality model. A future owner release must define the reward/outcome model,
+fast-mlsirm calibration and uncertainty contract, immutable policy identity,
+offline/online experimental design, operational rollback, and explicit
+`no_decision` behavior before stochastic admission can return. Until then a
+user request cannot be routed differently merely because an undocumented
+random draw changed.
