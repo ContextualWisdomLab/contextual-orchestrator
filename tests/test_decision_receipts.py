@@ -598,7 +598,8 @@ def test_write_failure_has_no_ack_and_does_not_log_exception_contents(caplog):
 
     measurement = DecisionMeasurement(FailedStore())
     try:
-        measurement.select(["worker_one"], "route")
+        with pytest.raises(RuntimeError, match="initial decision could not be persisted"):
+            measurement.select(["worker_one"], "route")
         snapshot = measurement.snapshot()
         assert snapshot["status"] == "write_failed"
         assert snapshot["durable_ack_elapsed_ns"] is None
@@ -655,6 +656,60 @@ def test_admission_write_failure_rejects_before_dispatch_and_recovers(tmp_path, 
                 assert '"measurement_complete": false' in payload
         assert len(orchestrator._store.load("accepted_request")) == 1
         assert len(orchestrator._store.load("decision_receipt")) == 1
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join()
+        server.server_close()
+        orchestrator.close()
+
+
+def test_initial_decision_write_failure_rejects_before_dispatch_and_recovers(tmp_path, monkeypatch):
+    """A failed route commit cannot send upstream or poison the next request."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_one", "mock/worker"),
+         ModelAgent("worker_two", "mock/worker-two")], state_db=tmp_path / "state.db"
+    )
+    original_save = orchestrator._store.save
+    original_chat = orchestrator.client.chat
+    failed_once = []
+    dispatched = []
+
+    def fail_first_decision(kind, *args, **kwargs):
+        if kind == "initial_decision" and not failed_once:
+            failed_once.append(True)
+            raise RuntimeError("never-disclose-decision-secret")
+        return original_save(kind, *args, **kwargs)
+
+    def record_dispatch(*args, **kwargs):
+        dispatched.append(True)
+        return original_chat(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator._store, "save", fail_first_decision)
+    monkeypatch.setattr(orchestrator.client, "chat", record_dispatch)
+    server = build_server(orchestrator, port=0, decision_receipts=True,
+                          security=SecurityConfig(auth_token="test-token"))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address)
+    try:
+        for expected_status in (503, 200):
+            connection.request("POST", "/v1/chat/completions", json.dumps({
+                "model": "orchestrator/auto", "mode": "route",
+                "messages": [{"role": "user", "content": "hello"}],
+            }), {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
+            response = connection.getresponse()
+            payload = response.read().decode()
+            assert response.status == expected_status
+            assert "never-disclose-decision-secret" not in payload
+            if expected_status == 503:
+                assert not dispatched
+                assert '"measurement_complete": false' in payload
+                assert response.getheader("x-should-retry") == "false"
+        assert dispatched
+        assert [record["status"] for record in orchestrator._store.load("decision_receipt")] == [
+            "write_failed", "acknowledged",
+        ]
     finally:
         connection.close()
         server.shutdown()

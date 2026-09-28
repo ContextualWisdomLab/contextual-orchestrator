@@ -76,6 +76,8 @@ class DecisionMeasurement:
     def select(self, agent_ids, route_mode, *, attempt_id=None):
         """Acknowledge the first decision synchronously before provider dispatch."""
         with self._lock:
+            if self.receipt.status == "write_failed":
+                raise RuntimeError("initial decision could not be persisted")
             if attempt_id is not None:
                 if attempt_id in self._race_attempt_ids:
                     return
@@ -102,7 +104,7 @@ class DecisionMeasurement:
             except Exception as exc:
                 self.receipt.record_failure("write_failed")
                 _LOGGER.warning("Initial decision measurement write failed error_type=%s", type(exc).__name__)
-                return
+                raise RuntimeError("initial decision could not be persisted") from None
             self.receipt.record_durable_ack()
             self._record_provider_locked(agent_ids, "task_execution")
 

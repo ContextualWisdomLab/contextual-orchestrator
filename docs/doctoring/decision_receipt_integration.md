@@ -121,6 +121,20 @@ cannot be its own acknowledgement. A process crash between these writes leaves
 an initial decision without a receipt, which must remain in the unfinished
 denominator. Persisted successful receipts alone are not an all-request sample.
 
+### Decision-write failure gate, 2026-09-28
+
+At candidate `c06a534b`, a failed `initial_decision` write marked `write_failed`
+but returned to the caller. A real HTTP request then returned 200 and invoked a
+provider without a persisted route. The regression was RED at 200 versus the
+required 503. The shared selection hook now raises after that failure and on
+later selections in the same request; the HTTP error path returns a secret-safe
+503 with incomplete-measurement markers and disables automatic replay because
+an earlier auxiliary provider call may have occurred. With two candidate
+workers, the failed request made zero provider calls and a subsequent request
+recovered. The local strict receipt/export/latency set passed 123 tests. This
+does not prove hosted Linux, every endpoint branch, ingress completeness, or
+customer KPI improvement.
+
 Focused verification in the isolated local Python 3.14 environment: 4 tests
 passed in 1.49 s. The real HTTP route's dispatch callback queries a separate
 SQLite connection (never flush-on-read store.load), verifies the committed
