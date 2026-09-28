@@ -10,7 +10,9 @@ This is additive cohort metadata, not a p95 estimator. `route_mode` identifies
 the selection hook, not the caller's route/conduct choice.
 The follow-up records `effective_orchestration_mode` only when execution
 chooses `route` or `conduct`, including a validated cached result or a route
-stream. It keeps the selection hook in `route_mode`. Requests that fail before
+stream. If one request executes both, the bounded value is `mixed` rather than
+an exception or a misleading first choice. It keeps the selection hook in
+`route_mode`. Requests that fail before
 the choice, embedding requests, and unclassified proxy paths retain null
 effective mode; no mode is inferred from endpoint or a requested `auto` value.
 The export remains local and incomplete until ingress reconciliation and real
@@ -19,8 +21,9 @@ outcome adjudication are available.
 The successor projection test first failed with
 `KeyError: 'effective_orchestration_mode'`. The native module was rebuilt in
 the isolated worktree; the strict receipt, cohort, and cache aggregation tests
-then passed 80 cases. A targeted 11-case rerun also passed after adding HTTP
-stream assertions. These are local correctness checks, not pilot measurements.
+then passed 81 cases, including a RED-to-GREEN mixed-mode regression. HTTP
+stream, conduct, and cache assertions exercise the request path. These are
+local correctness checks, not pilot measurements.
 
 RED: the new projection case failed with `KeyError: 'endpoint_path'`.
 After the native module was built in this isolated worktree, the strict

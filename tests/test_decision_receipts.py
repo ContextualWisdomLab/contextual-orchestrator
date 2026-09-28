@@ -38,6 +38,26 @@ def test_effective_orchestration_mode_follows_dispatch_not_selection_hook(
         orchestrator.close()
 
 
+def test_multiple_execution_modes_in_one_request_remain_mixed(tmp_path):
+    from contextual_orchestrator.decision_receipts import (
+        DecisionMeasurement, record_effective_orchestration_mode,
+    )
+    from contextual_orchestrator.orchestrator import _StateStore
+
+    store = _StateStore(str(tmp_path / "mixed.db"))
+    try:
+        measurement = DecisionMeasurement(store, request_id="mixed_request")
+        try:
+            record_effective_orchestration_mode("route")
+            record_effective_orchestration_mode("conduct")
+        finally:
+            measurement.close()
+        observation, = store.export_request_outcomes()["observations"]
+        assert observation["effective_orchestration_mode"] == "mixed"
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("scenario", ["saturated", "success", "conduct_success", "classifier_error", "trace_rejection"])
 @pytest.mark.parametrize("measurement_enabled", [False, True])
 def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatch, scenario, measurement_enabled):
@@ -86,6 +106,16 @@ def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatc
                                    "classifier_error": 400, "trace_rejection": 400}[scenario]
         connection.close()
         server.shutdown()
+        if measurement_enabled:
+            observations = orchestrator._store.export_request_outcomes()["observations"]
+            assert len(observations) == 1
+            assert observations[0]["effective_orchestration_mode"] == {
+                "saturated": None,
+                "success": "route",
+                "conduct_success": "conduct",
+                "classifier_error": None,
+                "trace_rejection": None,
+            }[scenario]
         if scenario == "saturated":
             assert calls == []
             assert acquired == released == []
@@ -369,6 +399,7 @@ def test_http_answer_cache_keeps_admission_without_provider_duration(tmp_path, m
         assert len(observations) == 2
         assert observations[0]["status"] == "acknowledged"
         assert observations[1]["status"] == "cache_hit"
+        assert [row["effective_orchestration_mode"] for row in observations] == ["route", "route"]
         assert observations[1]["selection_elapsed_ns"] is None
         assert observations[1]["durable_ack_elapsed_ns"] is None
         assert observations[1]["first_provider_elapsed_ns"] is None

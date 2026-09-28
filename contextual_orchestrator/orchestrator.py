@@ -5346,7 +5346,7 @@ class _StateStore:
                                     "capability_race", "capability_proxy", "text_race",
                                     "embedding_submission", "unclassified"}
                      | {"invocation_" + role for role in ("thinker", "worker", "verifier", "judge", "synthesizer")}),
-                    ("effective_orchestration_mode", {"route", "conduct"}),
+                    ("effective_orchestration_mode", {"route", "conduct", "mixed"}),
                 ):
                     field_value = measurement.get(field_name)
                     row[field_name] = field_value if isinstance(field_value, str) and field_value in allowed_values else None

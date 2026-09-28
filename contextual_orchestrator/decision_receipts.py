@@ -111,9 +111,10 @@ class DecisionMeasurement:
         if mode not in {"route", "conduct"}:
             raise ValueError("unknown effective orchestration mode")
         with self._lock:
-            if self.effective_orchestration_mode not in (None, mode):
-                raise RuntimeError("effective orchestration mode changed within one request")
-            self.effective_orchestration_mode = mode
+            if self.effective_orchestration_mode is None:
+                self.effective_orchestration_mode = mode
+            elif self.effective_orchestration_mode != mode:
+                self.effective_orchestration_mode = "mixed"
 
     def _record_provider_locked(self, agent_ids, phase):
         """Keep a first-provider diagnostic independent of the task-route clock."""
