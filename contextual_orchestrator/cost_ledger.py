@@ -38,6 +38,8 @@ import time
 from typing import Any, Dict, List, Optional, Protocol
 import uuid
 
+from .decision_receipts import record_usage_link
+
 
 # ---------------------------------------------------------------------------
 # Attribution dimensions
@@ -1433,6 +1435,7 @@ class CostLedger:
             attribution=dims,
         )
         accepted = False
+        ledger_state = "append_failed"
         try:
             # ``None`` remains a successful result for legacy third-party
             # stores; internal stores return an explicit bool.
@@ -1448,6 +1451,7 @@ class CostLedger:
                 ),
             )
         else:
+            ledger_state = "append_accepted" if accepted else "append_rejected"
             if accepted and not isinstance(self.store, NonBlockingLedgerStore):
                 self._mark_inline_success()
                 _emit_usage_event(
@@ -1464,6 +1468,7 @@ class CostLedger:
                         error_type="duplicate",
                     ),
                 )
+        record_usage_link(record.usage_record_id, ledger_state, record.measurement_status)
         if (
             accepted
             and self.usage_sink is not None

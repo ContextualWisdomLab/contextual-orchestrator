@@ -1,5 +1,32 @@
 # Retained outcome export validation
 
+## Request-to-usage reconciliation candidate, 2026-09-28
+
+The opt-in paginated admin export now includes bounded `usage_links` for each
+retained request admission. Each link carries a `usage_record_id`, the ledger
+append result (`append_accepted`, `append_rejected`, or `append_failed`), and the
+usage measurement status. It is written after each attempted ledger append,
+including failed attempts. A rejected diagnostic write increments
+`usage_link_write_failures` in the final decision receipt without replacing the
+provider response. Invalid or content-shaped identifiers are excluded from the
+export; `invalid_association_count` and `links_truncated` disclose projection
+gaps. The same high-water sequence freezes links across pages.
+
+`append_accepted` means only that the store's append interface accepted the
+record. It does not prove that an asynchronous store persisted it. Reconcile
+these identifiers against actual ledger rows before calculating request cost;
+exclude incomplete or truncated cohorts from a complete-cost denominator. This
+candidate does not provide a deployed baseline or a KPI improvement.
+
+At source base `8e1f1a8b`, the HTTP request/restart regression failed RED with
+missing `usage_links`. After the change, 40 request-outcome tests passed with
+warnings treated as errors; five related router/metering modules passed 150
+tests with the same warning policy. The four-module default ledger/receipt/export
+run passed 150 tests. Its strict-warning variant exposed two SQLite resource
+warnings; unmodified `main` also failed two cases under the same strict command,
+including the same receipt case. Warning collection timing varies, so the
+expanded strict suite remains nonclean and is not acceptance evidence.
+
 ## Request decision milliseconds, 2026-09-13
 
 Hosted acceptance remains outstanding at documentation head
