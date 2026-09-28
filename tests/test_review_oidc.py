@@ -89,6 +89,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
         "repository_id": "1274066402",
         "repository_owner": "ContextualWisdomLab",
         "repository_owner_id": "295022177",
+        "repository_visibility": "public",
         "ref": "refs/heads/main",
         "workflow_ref": "ContextualWisdomLab/.github/.github/workflows/opencode-review-dispatch.yml@refs/heads/main",
         "run_id": "123456",
@@ -98,6 +99,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
     }
     valid = _token(private_key, claims)
     assert verifier.identity(valid) == "opencode:1274066402:123456"
+    assert verifier.requires_zdr(valid) is True
     assert (
         verifier.identity(
             _token(
@@ -142,11 +144,17 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
         "sub": "repo:ContextualWisdomLab/contextual-orchestrator:pull_request",
         "repository": "ContextualWisdomLab/contextual-orchestrator",
         "repository_id": "1277018702",
+        "repository_visibility": "private",
         "workflow_ref": "ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main",
     }
     assert (
         noema.identity(_token(private_key, target_claims)) == "noema:1277018702:123456"
     )
+    assert noema.requires_zdr(_token(private_key, target_claims)) is True
+    assert noema.requires_zdr(_token(private_key, target_claims | {"repository_visibility": "public"})) is False
+    assert noema.requires_zdr(_token(private_key, target_claims | {"repository_visibility": "internal"})) is True
+    assert noema.requires_zdr(_token(private_key, target_claims | {"repository_visibility": "unknown"})) is True
+    assert noema.requires_zdr(_token(private_key, {key: value for key, value in target_claims.items() if key != "repository_visibility"})) is True
     assert (
         noema.identity(
             _token(private_key, target_claims | {"repository_owner_id": "7"})
@@ -265,7 +273,8 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
                     "identity": lambda self, token: {
                         "signed-job": "opencode:1274066402:123456",
                         "other-signed-job": "opencode:1274066402:654321",
-                    }.get(token)
+                    }.get(token),
+                    "requires_zdr": lambda self, token: True if token == "signed-job" else None,
                 },
             )(),
         ),
@@ -300,6 +309,9 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
         == "message_delivery"
     )
     assert security.principal_id(headers) != security.principal_id(other_headers)
+    assert security.zdr_required(headers) is True
+    with pytest.raises(RequestError):
+        security.zdr_required(other_headers)
     for token, scope in (
         ("signed-job", "admin"),
         ("admin-secret", "inference"),

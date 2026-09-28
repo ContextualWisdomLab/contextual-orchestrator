@@ -476,6 +476,9 @@ def main() -> None:
                 principal_resolver=lambda token: (
                     f"review-workload:{identity}" if workload_keys or oidc_mode else "review-gateway"
                 ) if (identity := current_identity(token)) else None,
+                zdr_required_resolver=(
+                    oidc_verifier.requires_zdr if oidc_verifier is not None else lambda _token: True
+                ),
                 allow_public_bind=args.allow_public_bind,
                 max_body_bytes=REVIEW_MAX_BODY_BYTES,
                 review_only=True,

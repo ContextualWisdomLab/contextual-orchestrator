@@ -58,6 +58,16 @@ class GitHubReviewOIDC:
 
     def identity(self, token: str) -> str | None:
         """Return workload, running repository ID, and run ID for a signed job."""
+        verified = self._verified_identity(token)
+        return verified[0] if verified else None
+
+    def requires_zdr(self, token: str) -> bool | None:
+        """Require ZDR unless a signed native review job runs in a public repo."""
+        verified = self._verified_identity(token)
+        return verified[1] if verified else None
+
+    def _verified_identity(self, token: str) -> tuple[str, bool] | None:
+        """Verify one token before returning its owner and privacy boundary."""
         try:
             if not isinstance(token, str) or len(token) > 16384:
                 return None
@@ -144,7 +154,11 @@ class GitHubReviewOIDC:
                     return None
             elif workload == "opencode":
                 return None
-            return f"{workload}:{repository_id}:{claims['run_id']}"
+            return (
+                f"{workload}:{repository_id}:{claims['run_id']}",
+                repository == "ContextualWisdomLab/.github"
+                or claims.get("repository_visibility") != "public",
+            )
         except (
             jwt.PyJWTError,
             ValueError,

@@ -29,6 +29,12 @@ external-verifier seam; the gateway checks its own workload claims afterward.
   contextual-orchestrator #1227 reports `repository=ContextualWisdomLab/contextual-orchestrator`
   and the expected workflow paths. This establishes the running
   repository for those runs; no OIDC token from either job was captured.
+- Shared production serving now forces ZDR before model selection for private
+  or internal signed native jobs, central dispatch jobs with no signed target,
+  and static inference bearers with no target identity. Missing/unknown signed
+  visibility is treated conservatively. The HTTP regression sends explicit
+  `zdr_only=false` with only a non-ZDR model and observes rejection before
+  provider transport. Existing ZDR model tags remain the route evidence.
 
 ## Limits and next gate
 
