@@ -382,6 +382,30 @@ provider-reported per-token pricing into `PriceBook`. Discovery selectors rank
 complete, valid price evidence first and keep unknown-priced candidates as a
 deterministic fallback.
 
+The dedicated review gateway can opt into credentials already stored in the
+production KV without copying provider keys into its process environment:
+
+```bash
+python -m contextual_orchestrator.review_gateway --preseeded-kv
+```
+
+This mode defaults to the reviewed free-pool credential names and only queries
+catalog sources backed by those KV entries. `--credential-name` can narrow the
+set; it cannot add OpenAI or an unreviewed source. The local sidecar resolves
+`CONTEXTUAL_ORCHESTRATOR_TOKEN` from the KV. For a remotely called owner,
+register distinct `CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN` and
+`CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN` values in the KV, then run:
+
+```bash
+python -m contextual_orchestrator.review_gateway --preseeded-kv --production --host 0.0.0.0 --allow-public-bind
+```
+
+Production mode requires the stored split tokens and never imports provider
+keys from the gateway process environment. Keep the admin token on the owner;
+give CI consumers only the inference token. Public binding is explicit and
+requires a trusted TLS ingress and network controls. The CLI does not create
+that ingress, publish an immutable release, or establish hosted acceptance.
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing
@@ -390,4 +414,3 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
-

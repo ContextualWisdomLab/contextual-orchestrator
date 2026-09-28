@@ -6,6 +6,7 @@ import pytest
 
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
+    NotConfigured,
     get_credential,
     register_credential,
     set_backend,
@@ -197,6 +198,20 @@ def test_build_review_orchestrator_excludes_preexisting_openai_credential(
     assert [agent.credential_key for agent in orchestrator.agents] == [
         "OPENROUTER_API_KEY"
     ]
+
+
+def test_preseeded_kv_refuses_non_review_credential_names() -> None:
+    register_credential("OPENAI_API_KEY", "stored-openai-secret")
+    with pytest.raises(ValueError, match="reviewed free-pool credentials"):
+        review_gateway.build_review_orchestrator(
+            credential_names=["OPENAI_API_KEY"], preseeded_kv=True
+        )
+
+
+def test_local_sidecar_does_not_admit_stored_provider_without_bootstrap() -> None:
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    with pytest.raises(NotConfigured, match="at least one provider credential"):
+        review_gateway.build_review_orchestrator({}, credential_names=["OPENROUTER_API_KEY"])
 
 
 def test_build_review_orchestrator_excludes_unrequested_stored_free_provider(

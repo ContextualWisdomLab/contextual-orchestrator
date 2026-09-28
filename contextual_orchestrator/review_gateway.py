@@ -23,6 +23,7 @@ from typing import Any, Mapping, Sequence
 from .credentials import NotConfigured, get_credential, register_credential
 from .model_discovery import (
     DiscoveredModel,
+    PROVIDER_MODEL_SOURCES,
     agent_from_discovered,
     discover_all_models,
     free_image_chat_serving_candidates,
@@ -62,6 +63,8 @@ general-free serving contract enter the pool.
 REVIEW_MAX_BODY_BYTES = 32 * 1024 * 1024
 
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+REVIEW_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
+REVIEW_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
 
 REVIEW_READINESS_CONTRACT_VERSION = "2"
 """Versioned owner readiness/admission contract for the free review pool.
@@ -209,6 +212,7 @@ def build_review_orchestrator(
     environment: Mapping[str, str] | None = None,
     *,
     credential_names: Sequence[str] | None = None,
+    preseeded_kv: bool = False,
 ) -> TaskOrchestrator:
     """Build the free review orchestrator from current bootstrap credentials.
 
@@ -229,16 +233,36 @@ def build_review_orchestrator(
     Any subsequent model choice remains the routing layer's responsibility and
     must be supported by its own executable evidence contract.
     """
-    requested_names = _validated_credential_names(credential_names)
-    source_environment = os.environ if environment is None else environment
-    registered = register_review_credentials(
-        source_environment, credential_names=requested_names
+    if preseeded_kv and environment is not None:
+        raise ValueError("preseeded KV mode cannot accept environment credentials")
+    requested_names = _validated_credential_names(
+        REVIEW_FREE_POOL_CREDENTIAL_NAMES
+        if preseeded_kv and credential_names is None
+        else credential_names
     )
-    registered_provider_names = frozenset(registered) & frozenset(requested_names)
+    if preseeded_kv:
+        if set(requested_names) - set(REVIEW_FREE_POOL_CREDENTIAL_NAMES):
+            raise ValueError("preseeded KV mode accepts only reviewed free-pool credentials")
+        registered_provider_names = frozenset(
+            name for name in requested_names if get_credential(name)
+        )
+    else:
+        source_environment = os.environ if environment is None else environment
+        registered = register_review_credentials(
+            source_environment, credential_names=requested_names
+        )
+        registered_provider_names = frozenset(registered) & frozenset(requested_names)
     if not registered_provider_names:
         raise NotConfigured("review gateway requires at least one provider credential")
 
-    discovered, errors = discover_all_models()
+    if preseeded_kv:
+        sources = tuple(
+            source for source in PROVIDER_MODEL_SOURCES
+            if source.credential_name in registered_provider_names
+        )
+        discovered, errors = discover_all_models(sources)
+    else:
+        discovered, errors = discover_all_models()
     if not discovered:
         providers = ", ".join(sorted({error.provider_name for error in errors}))
         detail = f"; failed providers: {providers}" if providers else ""
@@ -303,6 +327,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Explicit local bearer token; otherwise resolve --auth-token-key from the KV.",
     )
     parser.add_argument("--auth-token-key", default=REVIEW_AUTH_CREDENTIAL_NAME)
+    parser.add_argument("--admin-token-key", default=REVIEW_ADMIN_CREDENTIAL_NAME)
+    parser.add_argument("--inference-token-key", default=REVIEW_INFERENCE_CREDENTIAL_NAME)
+    parser.add_argument("--production", action="store_true")
+    parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument(
+        "--preseeded-kv",
+        action="store_true",
+        help="Use only reviewed provider credentials already registered in the KV.",
+    )
     return parser
 
 
@@ -310,27 +343,56 @@ def main() -> None:
     """Discover providers and serve the authenticated OpenAI-compatible sidecar."""
     parser = _build_parser()
     args = parser.parse_args()
+    if args.production and not args.preseeded_kv:
+        parser.error("--production requires --preseeded-kv")
+    if args.allow_public_bind and not args.production:
+        parser.error("--allow-public-bind requires --production")
+    if args.preseeded_kv and args.auth_token:
+        parser.error("--preseeded-kv requires a KV auth token, not --auth-token")
     try:
-        register_review_credentials(
-            os.environ,
+        SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if not args.preseeded_kv:
+        try:
+            register_review_credentials(
+                os.environ,
+                credential_names=args.credential_names,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    try:
+        if args.production:
+            admin_token = get_credential(args.admin_token_key)
+            inference_token = get_credential(args.inference_token_key)
+            if not admin_token or not inference_token or admin_token == inference_token:
+                parser.error("--production requires distinct admin and inference KV credentials")
+            security = SecurityConfig(
+                admin_token=admin_token,
+                inference_token=inference_token,
+                allow_public_bind=args.allow_public_bind,
+                max_body_bytes=REVIEW_MAX_BODY_BYTES,
+            )
+        else:
+            auth_token = args.auth_token or get_credential(args.auth_token_key)
+            if not auth_token:
+                raise SystemExit(f"KV credential {args.auth_token_key!r} or --auth-token is required")
+            security = SecurityConfig(auth_token=auth_token, max_body_bytes=REVIEW_MAX_BODY_BYTES)
+        security.check_bind(args.host)
+    except ValueError as exc:
+        parser.error(str(exc))
+    try:
+        orchestrator = build_review_orchestrator(
             credential_names=args.credential_names,
+            preseeded_kv=args.preseeded_kv,
         )
     except ValueError as exc:
         parser.error(str(exc))
-    auth_token = args.auth_token or get_credential(args.auth_token_key)
-    if not auth_token:
-        raise SystemExit(f"KV credential {args.auth_token_key!r} or --auth-token is required")
-    orchestrator = build_review_orchestrator(
-        credential_names=args.credential_names,
-    )
     serve(
         orchestrator,
         host=args.host,
         port=args.port,
-        security=SecurityConfig(
-            auth_token=auth_token,
-            max_body_bytes=REVIEW_MAX_BODY_BYTES,
-        ),
+        security=security,
     )
 
 

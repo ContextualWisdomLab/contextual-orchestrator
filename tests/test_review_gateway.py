@@ -10,6 +10,7 @@ from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     NotConfigured,
     get_credential,
+    register_credential,
     set_backend,
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
@@ -249,6 +250,94 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     assert security.max_body_bytes == review_gateway.REVIEW_MAX_BODY_BYTES
     assert review_gateway.REVIEW_MAX_BODY_BYTES == 32 * 1024 * 1024
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
+
+
+def test_main_preseeded_kv_uses_only_selected_registry_credentials(monkeypatch):
+    """Remote-owner bootstrap needs no provider secret in its process environment."""
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    register_credential("OPENAI_API_KEY", "stored-openai-secret")
+    register_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME, "stored-review-token")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "untrusted-environment-secret")
+
+    def unexpected_bootstrap(*_args, **_kwargs):
+        raise AssertionError("preseeded mode read provider environment")
+
+    monkeypatch.setattr(
+        review_gateway,
+        "register_review_credentials",
+        unexpected_bootstrap,
+    )
+    discovered = [_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")]
+
+    def fake_discover(sources):
+        assert {source.credential_name for source in sources} == {"OPENROUTER_API_KEY"}
+        return discovered, []
+
+    monkeypatch.setattr(review_gateway, "discover_all_models", fake_discover)
+    captured = {}
+    monkeypatch.setattr(review_gateway, "serve", lambda orchestrator, **kwargs: captured.update(orchestrator=orchestrator, **kwargs))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_gateway", "--preseeded-kv", "--credential-name", "OPENROUTER_API_KEY"],
+    )
+
+    review_gateway.main()
+
+    assert get_credential("OPENROUTER_API_KEY") == "stored-router-secret"
+    assert captured["security"].auth_token == "stored-review-token"
+    assert [agent.credential_key for agent in captured["orchestrator"].agents] == [
+        "OPENROUTER_API_KEY"
+    ]
+    captured["orchestrator"].close()
+
+
+def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypatch):
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
+    register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
+    monkeypatch.setattr(review_gateway, "register_review_credentials", lambda *_a, **_kw: pytest.fail("environment bootstrap"))
+    monkeypatch.setattr(
+        review_gateway,
+        "discover_all_models",
+        lambda sources: ([_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")], []),
+    )
+    captured = {}
+    monkeypatch.setattr(review_gateway, "serve", lambda orchestrator, **kwargs: captured.update(orchestrator=orchestrator, **kwargs))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_gateway", "--preseeded-kv", "--production", "--allow-public-bind", "--host", "0.0.0.0"],
+    )
+
+    review_gateway.main()
+
+    assert captured["host"] == "0.0.0.0"
+    assert captured["security"].auth_token == ""
+    assert captured["security"].admin_token == "admin-secret"
+    assert captured["security"].inference_token == "inference-secret"
+    assert captured["security"].allow_public_bind is True
+    captured["orchestrator"].close()
+
+
+@pytest.mark.parametrize(
+    "argv, admin_token, inference_token, message",
+    [
+        (["--production"], "admin", "inference", "requires --preseeded-kv"),
+        (["--preseeded-kv", "--production"], "admin", "", "distinct admin and inference"),
+        (["--preseeded-kv", "--production"], "same", "same", "distinct admin and inference"),
+        (["--preseeded-kv", "--production", "--host", "0.0.0.0"], "admin", "inference", "public bind requires"),
+    ],
+)
+def test_main_production_rejects_unsafe_startup(monkeypatch, capsys, argv, admin_token, inference_token, message):
+    if admin_token:
+        register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, admin_token)
+    if inference_token:
+        register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, inference_token)
+    monkeypatch.setattr(sys, "argv", ["review_gateway", *argv])
+    with pytest.raises(SystemExit):
+        review_gateway.main()
+    assert message in capsys.readouterr().err
 
 
 def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch):
