@@ -544,36 +544,56 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
     assert slept and sum(slept) <= orchestrator.rate_limit_wait_seconds
 
 
-def test_invoke_reraises_mixed_failure_without_waiting(monkeypatch) -> None:
-    """A candidate that failed for a non-rate-limit reason is not a storm."""
+@pytest.mark.parametrize("wait_seconds", [0.0, 10.0])
+def test_invoke_mixed_failure_retries_only_rejected_candidate(monkeypatch, wait_seconds) -> None:
+    """A 429 can recover within budget; an unknown-outcome 500 is never replayed."""
     now = [1000.0]
     slept: list[float] = []
+    calls: list[str] = []
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
 
     class MixedFailure(ModelClient):
         def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            calls.append(agent.id)
             now[0] += 0.01
+            if agent.id == "primary_worker" and calls.count(agent.id) == 2:
+                return "recovered"
             status = 429 if agent.id == "primary_worker" else 500
             with _http_error(status) as response_error:
                 raise classify_provider_failure(
                     response_error, agent_id=agent.id, model=agent.model
                 )
 
+    def advance_clock(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
     agents = [
         ModelAgent("primary_worker", "mock-a", tags=("reasoning",), priority=1),
         ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
     ]
-    orchestrator = TaskOrchestrator(agents, client=MixedFailure())
+    orchestrator = TaskOrchestrator(
+        agents, client=MixedFailure(), tool_retry_attempts=0, rate_limit_wait_seconds=wait_seconds,
+        rate_limit_unknown_cooldown_seconds=5.0,
+    )
     orchestrator._triage_fn = lambda text: False
-    orchestrator._rate_limit_sleep = slept.append
+    orchestrator._rate_limit_sleep = advance_clock
     try:
-        with pytest.raises(ProviderUpstreamError) as excinfo:
-            orchestrator.route_once([{"role": "user", "content": "route this"}])
+        if wait_seconds:
+            result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+            assert result["answer"] == "recovered"
+            assert calls == ["primary_worker", "backup_worker", "primary_worker"]
+            assert slept and sum(slept) <= wait_seconds
+        else:
+            with pytest.raises(ProviderUpstreamError) as excinfo:
+                orchestrator.route_once([{"role": "user", "content": "route this"}])
+            assert excinfo.value.error_code == PROVIDER_RATE_LIMITED_CODE
+            assert excinfo.value.retryable
+            assert excinfo.value.extra_detail["route"]["terminal_reason"] == "rate_limit_wait_budget_exhausted"
+            assert calls == ["primary_worker", "backup_worker"]
+            assert slept == []
     finally:
         orchestrator.close()
-
-    assert excinfo.value.error_code != PROVIDER_RATE_LIMITED_CODE
-    assert slept == []
 
 
 def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> None:
