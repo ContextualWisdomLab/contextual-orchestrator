@@ -1,4 +1,4 @@
-# Provider route outcome, API contract 0.3.2
+# Provider route outcome, API contract 0.3.3
 
 Status: proposed. This contract requires a reviewed immutable gateway release
 before a consumer pins it. `/v1/provider_readiness` reports preflight state; it
@@ -9,7 +9,7 @@ An inference-authorized caller sends a Chat Completions request with
 response header. The gateway owns candidate selection and fallback. A successful
 streaming response places `orchestration.route` in its final completion chunk;
 the route uses the same `OrchestrationRoute` and `OrchestrationRouteAttempt`
-schemas published by the OpenAPI 0.3.2 contract. The `attempted` entries are in
+schemas published by the OpenAPI 0.3.3 contract. The `attempted` entries are in
 execution order. `terminal_reason` is mandatory. Its values are `served`,
 `eligible_set_exhausted`, `fail_closed`, `request_too_large_exhausted`,
 `rate_limit_wait_budget_exhausted`, `rate_limited_storm`,
@@ -38,10 +38,11 @@ interval is a gateway estimate, not a provider promise. Size exhaustion uses
 `request_too_large_exhausted`. All preserve ordered failed attempts and forbid
 a final served claim.
 
-A provider connection that closes without the Chat Completions `[DONE]` marker
-reports `provider_stream_incomplete` with a `fail_closed` or `stream_interrupted`
-route and no served receipt, even if an earlier provider frame carried
-`finish_reason: "stop"`.
+A provider `[DONE]` marker or non-empty `finish_reason` is an explicit
+completion signal. If the provider connection closes with neither, the caller
+receives a non-retryable `provider_outcome_unknown` 502 with a `fail_closed` or
+`stream_interrupted` route, never a served receipt. Partial output does not
+authorize replay.
 The gateway does not retry that request on another provider because the
 upstream outcome is unknown.
 

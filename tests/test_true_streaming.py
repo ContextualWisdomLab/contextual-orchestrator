@@ -152,12 +152,9 @@ def test_stream_send_parses_real_provider_sse() -> None:
     assert "".join(deltas) == "Hello streamed world"
 
 
-def test_http_route_stream_rejects_provider_eof_without_done() -> None:
+def test_http_route_stream_rejects_eof_without_provider_end() -> None:
     """An interrupted provider stream must not become a served route receipt."""
-    frames = [
-        _delta("partial"),
-        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
-    ]
+    frames = [_delta("partial")]
     token = "incomplete_stream_token"
     with _FakeSSEProvider(frames) as provider:
         orchestrator = TaskOrchestrator([
@@ -193,7 +190,7 @@ def test_http_route_stream_rejects_provider_eof_without_done() -> None:
                for chunk in chunks)
     errors = [chunk["error"] for chunk in chunks if "error" in chunk]
     assert len(errors) == 1
-    assert errors[0]["code"] == "provider_stream_incomplete"
+    assert errors[0]["code"] == "provider_outcome_unknown"
     assert errors[0]["detail"]["request_id"] == request_id
     assert errors[0]["detail"]["retryable"] is False
     assert errors[0]["detail"]["route"]["terminal_reason"] == "stream_interrupted"
@@ -217,10 +214,19 @@ def test_provider_eof_before_content_does_not_replay_unknown_outcome() -> None:
             list(orchestrator.stream_route(
                 [{"role": "user", "content": "answer"}], model_name=TaskOrchestrator.FREE_MODEL,
             ))
-    assert caught.value.error_code == "provider_stream_incomplete"
+    assert caught.value.error_code == "provider_outcome_unknown"
     assert caught.value.retryable is False
     assert caught.value.extra_detail["route"]["terminal_reason"] == "fail_closed"
     assert len(provider.payloads) == 1
+
+
+def test_stream_send_accepts_finish_reason_without_done() -> None:
+    """A declared finish is sufficient when the provider omits [DONE]."""
+    terminal = 'data: {"choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}]}\n\n'
+    with _FakeSSEProvider([terminal]) as provider:
+        client = ModelClient()
+        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url)
+        assert list(client._stream_send(agent, {"model": "gpt-x", "stream": True})) == ["complete"]
 
 
 def test_stream_send_rejects_response_body_above_configured_limit() -> None:
