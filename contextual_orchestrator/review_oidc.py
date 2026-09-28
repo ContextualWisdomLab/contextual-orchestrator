@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping
 
@@ -12,7 +13,7 @@ JWKS_URL = f"{ISSUER}/.well-known/jwks"
 
 
 class GitHubReviewOIDC:
-    """Map a verified central Actions job identity to a review workload."""
+    """Map a signed review job to its workload, running repository, and run."""
 
     def __init__(
         self,
@@ -56,7 +57,7 @@ class GitHubReviewOIDC:
         )
 
     def identity(self, token: str) -> str | None:
-        """Return workload and run ID for a signed central job token."""
+        """Return workload, running repository ID, and run ID for a signed job."""
         try:
             if not isinstance(token, str) or len(token) > 16384:
                 return None
@@ -112,18 +113,6 @@ class GitHubReviewOIDC:
                 and now < expiry <= issued + 600
             ):
                 return None
-            if (
-                claims["repository_owner_id"] != self.owner_id
-                or claims["repository_owner"] != "ContextualWisdomLab"
-                or claims["repository"] != "ContextualWisdomLab/.github"
-                or claims["repository_id"] != self.repository_id
-                or not isinstance(claims["sub"], str)
-                or not claims["sub"]
-                or not isinstance(claims["run_id"], str)
-                or not claims["run_id"].isascii()
-                or not claims["run_id"].isdecimal()
-            ):
-                return None
             workload = next(
                 (
                     name
@@ -132,7 +121,30 @@ class GitHubReviewOIDC:
                 ),
                 None,
             )
-            return f"{workload}:{claims['run_id']}" if workload else None
+            repository = claims["repository"]
+            repository_id = claims["repository_id"]
+            if (
+                workload is None
+                or claims["repository_owner_id"] != self.owner_id
+                or claims["repository_owner"] != "ContextualWisdomLab"
+                or not isinstance(repository, str)
+                or re.fullmatch(r"ContextualWisdomLab/[A-Za-z0-9._-]+", repository) is None
+                or not isinstance(repository_id, str)
+                or not repository_id.isascii()
+                or not repository_id.isdecimal()
+                or not isinstance(claims["sub"], str)
+                or not claims["sub"]
+                or not isinstance(claims["run_id"], str)
+                or not claims["run_id"].isascii()
+                or not claims["run_id"].isdecimal()
+            ):
+                return None
+            if repository == "ContextualWisdomLab/.github":
+                if repository_id != self.repository_id:
+                    return None
+            elif workload == "opencode":
+                return None
+            return f"{workload}:{repository_id}:{claims['run_id']}"
         except (
             jwt.PyJWTError,
             ValueError,

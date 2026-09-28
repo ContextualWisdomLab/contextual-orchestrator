@@ -97,7 +97,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
         "exp": now + 240,
     }
     valid = _token(private_key, claims)
-    assert verifier.identity(valid) == "opencode:123456"
+    assert verifier.identity(valid) == "opencode:1274066402:123456"
     assert (
         verifier.identity(
             _token(
@@ -108,11 +108,11 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
                 },
             )
         )
-        == "opencode:123456"
+        == "opencode:1274066402:123456"
     )
     assert (
         verifier.identity(_token(private_key, claims | {"run_id": "654321"}))
-        == "opencode:654321"
+        == "opencode:1274066402:654321"
     )
     assert (
         verifier.identity(
@@ -128,6 +128,64 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
             )
         )
         is None
+    )
+    noema = GitHubReviewOIDC(
+        audience="contextual-orchestrator/review",
+        owner_id="295022177",
+        repository_id="1274066402",
+        workflows={
+            "noema": "ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main"
+        },
+        key_client=StaticKeys(),
+    )
+    target_claims = claims | {
+        "sub": "repo:ContextualWisdomLab/contextual-orchestrator:pull_request",
+        "repository": "ContextualWisdomLab/contextual-orchestrator",
+        "repository_id": "1277018702",
+        "workflow_ref": "ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main",
+    }
+    assert (
+        noema.identity(_token(private_key, target_claims)) == "noema:1277018702:123456"
+    )
+    assert (
+        noema.identity(
+            _token(private_key, target_claims | {"repository_owner_id": "7"})
+        )
+        is None
+    )
+    assert (
+        noema.identity(
+            _token(
+                private_key,
+                target_claims
+                | {
+                    "repository": "ContextualWisdomLab/.github",
+                    "repository_id": "12345",
+                },
+            )
+        )
+        is None
+    )
+    strix = GitHubReviewOIDC(
+        audience="contextual-orchestrator/review",
+        owner_id="295022177",
+        repository_id="1274066402",
+        workflows={
+            "strix": "ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main"
+        },
+        key_client=StaticKeys(),
+    )
+    assert (
+        strix.identity(
+            _token(
+                private_key,
+                target_claims
+                | {
+                    "workflow_ref": "ContextualWisdomLab/.github/.github/workflows/strix.yml@refs/heads/main"
+                },
+            )
+        )
+        == "strix:1277018702:123456"
     )
     assert (
         verifier.identity(
@@ -205,8 +263,8 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
                 (),
                 {
                     "identity": lambda self, token: {
-                        "signed-job": "opencode:123456",
-                        "other-signed-job": "opencode:654321",
+                        "signed-job": "opencode:1274066402:123456",
+                        "other-signed-job": "opencode:1274066402:654321",
                     }.get(token)
                 },
             )(),
@@ -237,7 +295,10 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
         {"authorization": "Bearer admin-secret"}
     )
     other_headers = {"authorization": "Bearer other-signed-job"}
-    assert security.authorize(other_headers, "inference", "127.0.0.1") == "message_delivery"
+    assert (
+        security.authorize(other_headers, "inference", "127.0.0.1")
+        == "message_delivery"
+    )
     assert security.principal_id(headers) != security.principal_id(other_headers)
     for token, scope in (
         ("signed-job", "admin"),
@@ -258,7 +319,10 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
     "extra,expected",
     [
         (["--github-oidc-audience", "a"], "require --github-oidc-workflow"),
-        (["--github-oidc-repository-id", "1274066402"], "require --github-oidc-workflow"),
+        (
+            ["--github-oidc-repository-id", "1274066402"],
+            "require --github-oidc-workflow",
+        ),
         (
             ["--github-oidc-workflow", "opencode=bad"],
             "requires production, audience, owner ID, and central repository ID",
