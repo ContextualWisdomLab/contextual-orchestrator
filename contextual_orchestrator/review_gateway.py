@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from .credentials import NotConfigured, get_credential, register_credential
+from .debug_logging import LOG_LEVEL_NAMES, configure_logging
 from .model_discovery import (
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
@@ -29,7 +30,7 @@ from .model_discovery import (
     free_image_chat_serving_candidates,
     general_free_serving_candidates,
 )
-from .orchestrator import ModelClient, TaskOrchestrator
+from .orchestrator import ModelClient, TaskOrchestrator, redact_text
 from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
 from .tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
@@ -339,6 +340,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use only reviewed provider credentials already registered in the KV.",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=LOG_LEVEL_NAMES,
+        default="WARNING",
+        help=(
+            "Root log level. INFO emits discovery_complete and the body-free "
+            "per-request status/latency_ms/request_id summary."
+        ),
+    )
     return parser
 
 
@@ -356,6 +367,7 @@ def main() -> None:
         parser.error("--allow-public-bind requires --production")
     if args.preseeded_kv and args.auth_token:
         parser.error("--preseeded-kv requires a KV auth token, not --auth-token")
+    configure_logging(args.log_level, redactor=redact_text)
     try:
         SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
     except ValueError as exc:
