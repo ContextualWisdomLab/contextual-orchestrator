@@ -331,6 +331,8 @@ def test_exact_commit_dependency_lock_is_verified_as_a_release_asset() -> None:
     assert "cp requirements.lock dist/requirements.lock" in verify
     assert 'sha256sum "${wheel##*/}" requirements.lock > SHA256SUMS' in verify
     assert "test -s dist/requirements.lock" in publish
+    assert 'sha256sum "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" requirements.lock' in publish
+    assert '"$(cat dist/SHA256SUMS)" != "${expected_manifest}"' in publish
     assert 'for asset in "${wheel}" requirements.lock SHA256SUMS' in publish
     assert publish.count('.name == "requirements.lock"') == 2
     assert "gh release verify-asset \"v${RELEASE_VERSION}\" dist/requirements.lock" in publish

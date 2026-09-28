@@ -402,7 +402,12 @@ jobs:
           test -s sbom-download/cyclonedx-sbom.json
           test -s "dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
           test -s dist/requirements.lock
-          (cd dist && sha256sum -c SHA256SUMS)
+          test -s dist/SHA256SUMS
+          expected_manifest="$(cd dist && sha256sum "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" requirements.lock)"
+          if [ "$(cat dist/SHA256SUMS)" != "${expected_manifest}" ]; then
+            echo "::error::Release manifest must contain exactly the verified wheel and dependency lock." >&2
+            exit 1
+          fi
 
       - name: Create the annotated release tag
         if: env.TAG_RESUME != 'true'
