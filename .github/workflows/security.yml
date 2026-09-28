@@ -34,6 +34,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up pinned Docker Compose
+        uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # docker/setup-compose-action@v2
+        with:
+          version: "v5.4.0"
+
+      - name: Verify Docker Compose CLI
+        run: docker compose version
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
         with:
@@ -174,6 +182,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: Set up pinned Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
@@ -183,10 +197,32 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Locate relocated Python shared library
+        id: python-library
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          import sysconfig
+          directory = Path(sys.base_prefix) / "lib"
+          library = directory / sysconfig.get_config_var("LDLIBRARY")
+          if not library.is_file():
+              raise SystemExit(f"Python shared library missing: {library}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"directory={directory}\n")
+          PY
+
       - name: Clippy (deny warnings)
+        env:
+          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
+          RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test workspace
+        env:
+          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
+          RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}
         run: cargo test --workspace --locked
 
       - name: Install cargo-audit
@@ -198,10 +234,12 @@ jobs:
             "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${audit_version}/${archive}" \
             -o "${RUNNER_TEMP}/${archive}"
           tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          mkdir -p "${RUNNER_TEMP}/cargo-audit-bin"
           install -m 0755 \
             "${RUNNER_TEMP}/cargo-audit-x86_64-unknown-linux-gnu-v${audit_version}/cargo-audit" \
-            /usr/local/bin/cargo-audit
-          cargo audit --version
+            "${RUNNER_TEMP}/cargo-audit-bin/cargo-audit"
+          echo "${RUNNER_TEMP}/cargo-audit-bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/cargo-audit-bin/cargo-audit" --version
 
       - name: Audit Cargo.lock advisories
         run: cargo audit --file Cargo.lock
