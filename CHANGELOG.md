@@ -10,6 +10,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Release decision and compatibility
+
+- Select `0.2.0` for the first immutable gateway package release. `0.1.0`
+  was a development baseline, not a published release, so this is not a
+  compatibility claim about upgrading an existing release. The minor version
+  identifies the expanded image, structured-output, routing and typed-outcome
+  contracts described below.
+- The release carries the current OpenAI-compatible Chat Completions and
+  Responses API, including additive route evidence and bounded HTTP 429
+  recovery. It does not authorize automatic SemVer selection: that still
+  requires a calibrated fast-mlsirm receipt and a separately adopted consumer
+  contract. A verified wheel and tag also do not prove that a gateway is
+  deployed or that Noema consumes this version.
+
 ### Changed
 
 - `orchestrator/free` JSON-schema final synthesis now waits within the
@@ -93,47 +107,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Release notes longer than GitHub's 125,000-character Release body limit are
   cut on a line boundary and link the complete CHANGELOG.md at the exact
   release commit, so an oversized section cannot strand a pushed tag.
-- A canonical, immutable release mechanism: `.github/workflows/release.yml`
-  (`workflow_dispatch` only, explicit `version` input, never triggered by
-  push/schedule/merge), split into a read-only, credential-less `verify` job
-  and a write-scoped `publish` job for least privilege. `verify` checks the
-  dispatched commit is protected `main`'s untampered current tip and that
-  every one of this repository's own known push-triggered checks (Tests,
-  Fuzz, Security's jobs — `RELEASE_EXPECTED_PUSH_CHECKS`) has actually
-  registered as a check-run for that exact commit *and* every check GitHub
-  reports for it is complete with an acceptable conclusion (excluding this
-  release run's own checks) — a dispatch fired moments after a merge, before
-  GitHub has finished registering those push-triggered check-runs at all,
-  is correctly "not ready" rather than a vacuous pass on an empty report —
-  checks the requested version against `pyproject.toml`'s `[project]` table
-  (table-boundary aware, so a same-named `version` key in an unrelated table
-  can never be mistaken for it), resolves any existing `vX.Y.Z` tag via the
-  GitHub commits API (rejecting only one that points at a different commit;
-  a tag at this commit is always a safe idempotent resume, whether or not
-  its Release already exists — see below; a failed tag or Release lookup is
-  read as "absent" only on a confirmed 404 / "release not found" — any other
-  lookup failure, e.g. a rate limit or transient network/5xx error, fails
-  the step closed instead of guessing, so a later dispatch retries and
-  resolves cleanly rather than compounding a wrong assumption), re-runs the
-  full test suite fresh, renders release notes from this file's matching
-  `## [X.Y.Z]` section via the tested `scripts/ci/release_notes.py`, and
-  best-effort looks up a CycloneDX SBOM (a missing SBOM or failed lookup
-  warns, never blocks). `publish` re-verifies `main`'s tip has not advanced
-  and every expected check is still registered and green since `verify`
-  started testing — immediately before it creates anything — then creates
-  the annotated `vX.Y.Z` tag (skipped on a tag resume) and the GitHub
-  Release (skipped on a Release resume, e.g. a prior run whose asset upload
-  failed after the Release itself was already created), always attempting
-  the best-effort SBOM asset attach afterward either way. Gives downstream
-  consumers (`ContextualWisdomLab/keyverse#132`, `bandscope#881`, and the
-  Wardnet consumer-owner handoff, all recorded on
-  `contextual-orchestrator#971`) an immutable pin target
-  (`.../releases/tag/vX.Y.Z` — not the mutable `.../releases/latest` alias)
-  instead of a vendored source SHA. See
-  `docs/planning/adrs/0129-canonical-immutable-release.md` and
-  `docs/RELEASING.md`. No release has been cut yet — landing this mechanism
-  and dispatching the first `v0.2.0` release are deliberately separate
-  actions.
+- The release workflow requires exact protected-main checks, a fresh full
+  suite, matching project and changelog versions, and the exact-commit
+  CycloneDX SBOM before publication. It verifies the annotated tag, wheel
+  bytes, SHA-256 manifest, immutable Release state and signed assets. A Draft
+  can resume only with matching tag and asset bytes; an incomplete or mutable
+  public release fails closed. See `docs/RELEASING.md`. Publishing `v0.2.0`
+  is a separate workflow run after this version decision is reviewed and
+  merged.
 
 - **Cross-session agent know-how in `AGENTS.md`.** Added two append-only
   sections — "Recurring bug class: hardcoded review-cadence dates" (the
