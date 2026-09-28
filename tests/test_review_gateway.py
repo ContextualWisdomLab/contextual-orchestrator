@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import sys
+import io
+import json
+import threading
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -15,6 +20,7 @@ from contextual_orchestrator.credentials import (
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
+from contextual_orchestrator.server import build_server
 
 
 @pytest.fixture(autouse=True)
@@ -318,6 +324,88 @@ def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypat
     assert captured["security"].inference_token == "inference-secret"
     assert captured["security"].allow_public_bind is True
     captured["orchestrator"].close()
+
+
+def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch):
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
+    register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "wrong-environment-secret")
+    monkeypatch.setattr(review_gateway, "register_review_credentials", lambda *_a, **_kw: pytest.fail("environment bootstrap"))
+    monkeypatch.setattr(
+        review_gateway,
+        "discover_all_models",
+        lambda sources: ([_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.ModelClient._validate_provider",
+        lambda self, agent: (0, ("127.0.0.1", 443)),
+    )
+    provider_headers = []
+
+    def fake_open_provider(self, request, destination=None, *, timeout=None):
+        provider_headers.append(request.get_header("Authorization"))
+        return io.BytesIO(json.dumps({
+            "id": "chatcmpl-review", "object": "chat.completion", "model": "review-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "reviewed"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }).encode())
+
+    monkeypatch.setattr("contextual_orchestrator.orchestrator.ModelClient._open_provider", fake_open_provider)
+    captured = {}
+
+    def fake_serve(orchestrator, **kwargs):
+        server = build_server(orchestrator, **kwargs)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        captured.update(orchestrator=orchestrator, server=server, thread=thread)
+
+    monkeypatch.setattr(review_gateway, "serve", fake_serve)
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production", "--port", "0"])
+    review_gateway.main()
+
+    server = captured["server"]
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def request(path, token, body=None):
+            headers = {"connection": "close"}
+            if token:
+                headers["authorization"] = f"Bearer {token}"
+            if body is not None:
+                headers["content-type"] = "application/json"
+            call = urllib.request.Request(
+                url + path,
+                data=json.dumps(body).encode() if body is not None else None,
+                headers=headers,
+            )
+            try:
+                with urllib.request.urlopen(call, timeout=5) as response:
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                with error:
+                    return error.code, json.loads(error.read())
+
+        assert request("/v1/models", None)[0] == 401
+        assert request("/v1/models", "admin-secret")[0] == 401
+        assert provider_headers == []
+        status, models = request("/v1/models", "inference-secret")
+        assert status == 200
+        assert "orchestrator/free" in {row["id"] for row in models["data"]}
+        status, answer = request(
+            "/v1/chat/completions",
+            "inference-secret",
+            {"model": "orchestrator/free", "messages": [{"role": "user", "content": "review"}]},
+        )
+        assert status == 200, answer
+        assert answer["model"] == "orchestrator/free"
+        assert provider_headers
+        assert set(provider_headers) == {"Bearer stored-router-secret"}
+    finally:
+        server.shutdown()
+        captured["thread"].join(timeout=5)
+        server.server_close()
+        captured["orchestrator"].close()
 
 
 @pytest.mark.parametrize(
