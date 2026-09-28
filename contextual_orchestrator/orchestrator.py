@@ -5397,9 +5397,11 @@ class _StateStore:
                     link = self._export_record(payload)
                     if (link.get("request_id") != request_id
                             or not is_safe_usage_record_id(link.get("usage_record_id"))
+                            or not isinstance(link.get("ledger_state"), str)
                             or link.get("ledger_state") not in {
                                 "append_accepted", "append_rejected", "append_failed"
                             }
+                            or not isinstance(link.get("measurement_status"), str)
                             or link.get("measurement_status") not in {
                                 "measured", "estimated", "unavailable"
                             }):

@@ -245,6 +245,23 @@ def test_export_rejects_malformed_private_association(export_server):
     assert "do not disclose" not in str(result)
 
 
+@pytest.mark.parametrize("field", ["ledger_state", "measurement_status"])
+def test_export_rejects_unhashable_usage_link_state(export_server, field):
+    orchestrator, export_url = export_server
+    store = orchestrator._store
+    store.save("accepted_request", "request_one", {"request_id": "request_one"}, durable=True)
+    link = {"request_id": "request_one", "usage_record_id": "usage_valid_one",
+            "ledger_state": "append_accepted", "measurement_status": "measured"}
+    link[field] = {"private_payload": "do not disclose"}
+    store.save("usage_link", "request_one", link, durable=True)
+
+    status, result = _request("GET", export_url, "admin-token")
+    assert status == 200
+    assert result["observations"][0]["usage_links"] == []
+    assert result["observations"][0]["invalid_association_count"] == 1
+    assert "do not disclose" not in str(result)
+
+
 @pytest.mark.parametrize("append_mode", ["rejected", "failed"])
 def test_usage_link_keeps_failed_ledger_append_explicit(tmp_path, append_mode):
     """A billed attempt cannot turn a rejected usage write into measured cost."""
