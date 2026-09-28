@@ -12,6 +12,7 @@ import urllib.request
 
 import pytest
 
+from contextual_orchestrator import review_gateway
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     NotConfigured,
@@ -21,8 +22,7 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
-from contextual_orchestrator import review_gateway
-from contextual_orchestrator.server import build_server
+from contextual_orchestrator.server import RequestError, build_server
 
 
 @pytest.fixture(autouse=True)
@@ -328,10 +328,76 @@ def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypat
     captured["orchestrator"].close()
 
 
-def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch):
+def test_production_review_workloads_have_distinct_revocable_principals(monkeypatch):
+    register_credential("OPENROUTER_API_KEY", "provider-secret")
+    register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
+    register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "shared-secret")
+    for workload in ("opencode", "noema", "strix"):
+        register_credential(f"REVIEW_{workload.upper()}_TOKEN", f"{workload}-secret")
+    monkeypatch.setattr(
+        review_gateway,
+        "discover_all_models",
+        lambda sources: ([_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")], []),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        review_gateway,
+        "serve",
+        lambda orchestrator, **kwargs: captured.update(orchestrator=orchestrator, **kwargs),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "review_gateway", "--preseeded-kv", "--production",
+        *(part for workload in ("opencode", "noema", "strix")
+          for part in ("--workload-token-key", f"{workload}=REVIEW_{workload.upper()}_TOKEN")),
+    ])
+
+    review_gateway.main()
+    security = captured["security"]
+
+    def headers(token):
+        return {"authorization": f"Bearer {token}"}
+
+    try:
+        principals = {}
+        for workload in ("opencode", "noema", "strix"):
+            token = f"{workload}-secret"
+            assert security.authorize(headers(token), "inference", "127.0.0.1") == "message_delivery"
+            principals[workload] = security.principal_id(headers(token))
+            with pytest.raises(RequestError) as denied:
+                security.authorize(headers(token), "admin", "127.0.0.1")
+            assert denied.value.status == 401
+        assert len(set(principals.values())) == 3
+        with pytest.raises(RequestError):
+            security.authorize(headers("admin-secret"), "inference", "127.0.0.1")
+        with pytest.raises(RequestError):
+            security.authorize(headers("shared-secret"), "inference", "127.0.0.1")
+        delete_credential("REVIEW_NOEMA_TOKEN")
+        with pytest.raises(RequestError):
+            security.authorize(headers("noema-secret"), "inference", "127.0.0.1")
+        assert security.authorize(headers("strix-secret"), "inference", "127.0.0.1") == "message_delivery"
+        register_credential("REVIEW_OPENCODE_TOKEN", "opencode-rotated")
+        with pytest.raises(RequestError):
+            security.authorize(headers("opencode-secret"), "inference", "127.0.0.1")
+        security.authorize(headers("opencode-rotated"), "inference", "127.0.0.1")
+        assert security.principal_id(headers("opencode-rotated")) == principals["opencode"]
+        register_credential("REVIEW_NOEMA_TOKEN", "opencode-rotated")
+        with pytest.raises(RequestError):
+            security.authorize(headers("opencode-rotated"), "inference", "127.0.0.1")
+        assert security.authorize(headers("strix-secret"), "inference", "127.0.0.1") == "message_delivery"
+    finally:
+        captured["orchestrator"].close()
+
+
+@pytest.mark.parametrize("workload_mode", [False, True])
+def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch, workload_mode):
     register_credential("OPENROUTER_API_KEY", "stored-router-secret")
     register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
-    register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
+    token_key = "REVIEW_OPENCODE_TOKEN" if workload_mode else review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME
+    token = "opencode-secret" if workload_mode else "inference-secret"
+    rotated_token = f"rotated-{token}"
+    register_credential(token_key, token)
+    if workload_mode:
+        register_credential("REVIEW_NOEMA_TOKEN", "noema-secret")
     monkeypatch.setenv("OPENROUTER_API_KEY", "wrong-environment-secret")
     monkeypatch.setattr(review_gateway, "register_review_credentials", lambda *_a, **_kw: pytest.fail("environment bootstrap"))
     monkeypatch.setattr(
@@ -360,10 +426,14 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         server = build_server(orchestrator, **kwargs)
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
-        captured.update(orchestrator=orchestrator, server=server, thread=thread)
+        captured.update(orchestrator=orchestrator, security=kwargs["security"], server=server, thread=thread)
 
     monkeypatch.setattr(review_gateway, "serve", fake_serve)
-    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production", "--port", "0"])
+    argv = ["review_gateway", "--preseeded-kv", "--production", "--port", "0"]
+    if workload_mode:
+        argv.extend(["--workload-token-key", f"opencode={token_key}",
+                     "--workload-token-key", "noema=REVIEW_NOEMA_TOKEN"])
+    monkeypatch.setattr(sys, "argv", argv)
     review_gateway.main()
 
     server = captured["server"]
@@ -392,30 +462,40 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         assert request("/v1/models", "admin-secret")[0] == 401
         assert request("/admin/state", "admin-secret")[0] == 200
         assert provider_headers == []
-        status, models = request("/v1/models", "inference-secret")
+        status, models = request("/v1/models", token)
         assert status == 200
         assert "orchestrator/free" in {row["id"] for row in models["data"]}
         status, answer = request(
             "/v1/chat/completions",
-            "inference-secret",
+            token,
             {"model": "orchestrator/free", "messages": [{"role": "user", "content": "review"}]},
         )
         assert status == 200, answer
         assert answer["model"] == "orchestrator/free"
         assert provider_headers
         assert set(provider_headers) == {"Bearer stored-router-secret"}
+        if workload_mode:
+            security = captured["security"]
+            run_id = next(iter(captured["orchestrator"]._workflow_runs))
+            opencode_principal = security.principal_id({"authorization": f"Bearer {token}"})
+            noema_principal = security.principal_id({"authorization": "Bearer noema-secret"})
+            assert captured["orchestrator"].get_workflow_run(run_id, owner_id=opencode_principal)
+            with pytest.raises(KeyError):
+                captured["orchestrator"].get_workflow_run(run_id, owner_id=noema_principal)
         sent_before_revocation = len(provider_headers)
-        delete_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME)
-        assert request("/v1/models", "inference-secret")[0] == 401
+        delete_credential(token_key)
+        assert request("/v1/models", token)[0] == 401
         assert request(
             "/v1/chat/completions",
-            "inference-secret",
+            token,
             {"model": "orchestrator/free", "messages": [{"role": "user", "content": "review"}]},
         )[0] == 401
         assert len(provider_headers) == sent_before_revocation
-        register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "rotated-inference-secret")
-        assert request("/v1/models", "inference-secret")[0] == 401
-        assert request("/v1/models", "rotated-inference-secret")[0] == 200
+        if workload_mode:
+            assert request("/v1/models", "noema-secret")[0] == 200
+        register_credential(token_key, rotated_token)
+        assert request("/v1/models", token)[0] == 401
+        assert request("/v1/models", rotated_token)[0] == 200
         delete_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME)
         assert request("/admin/state", "admin-secret")[0] == 401
     finally:
@@ -432,6 +512,18 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         (["--preseeded-kv", "--production"], "admin", "", "distinct admin and inference"),
         (["--preseeded-kv", "--production"], "same", "same", "distinct admin and inference"),
         (["--preseeded-kv", "--production", "--host", "0.0.0.0"], "admin", "inference", "public bind requires"),
+        (["--preseeded-kv", "--production", "--workload-token-key",
+          f"opencode={review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME}"],
+         "admin", "inference", "requires a unique"),
+        (["--preseeded-kv", "--production", "--workload-token-key", "opencode=REVIEW_OPENCODE_TOKEN"],
+         "admin", "inference", "distinct admin and inference KV credentials"),
+        (["--preseeded-kv", "--production", "--workload-token-key", "opencode=REVIEW_OPENCODE_TOKEN",
+          "--inference-token-key", review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME],
+         "admin", "inference", "cannot be combined"),
+        (["--preseeded-kv", "--production", "--inference-token-key", ""],
+         "admin", "inference", "requires a KV key name"),
+        (["--preseeded-kv", "--production", "--workload-token-key", "opencode=BAD=KEY"],
+         "admin", "inference", "requires a unique"),
     ],
 )
 def test_main_production_rejects_unsafe_startup(monkeypatch, capsys, argv, admin_token, inference_token, message):

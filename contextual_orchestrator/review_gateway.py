@@ -17,14 +17,15 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .credentials import NotConfigured, get_credential, register_credential
 from .debug_logging import LOG_LEVEL_NAMES, configure_logging
 from .model_discovery import (
-    DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
+    DiscoveredModel,
     agent_from_discovered,
     discover_all_models,
     free_image_chat_serving_candidates,
@@ -329,7 +330,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--auth-token-key", default=REVIEW_AUTH_CREDENTIAL_NAME)
     parser.add_argument("--admin-token-key", default=REVIEW_ADMIN_CREDENTIAL_NAME)
-    parser.add_argument("--inference-token-key", default=REVIEW_INFERENCE_CREDENTIAL_NAME)
+    parser.add_argument("--inference-token-key")
+    parser.add_argument(
+        "--workload-token-key", action="append", default=[], metavar="NAME=KV_KEY",
+        help="Separate production inference credential for opencode, noema, or strix; repeat per workload.",
+    )
     parser.add_argument("--production", action="store_true")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
@@ -361,6 +366,23 @@ def main() -> None:
         parser.error("--allow-public-bind requires --production")
     if args.preseeded_kv and args.auth_token:
         parser.error("--preseeded-kv requires a KV auth token, not --auth-token")
+    if args.workload_token_key and not args.production:
+        parser.error("--workload-token-key requires --production")
+    if args.workload_token_key and args.inference_token_key:
+        parser.error("--workload-token-key cannot be combined with --inference-token-key")
+    if args.inference_token_key is not None and not args.inference_token_key.strip():
+        parser.error("--inference-token-key requires a KV key name")
+    workload_keys = {}
+    for specification in args.workload_token_key:
+        workload, separator, credential_key = specification.partition("=")
+        if (
+            not separator or workload not in {"opencode", "noema", "strix"}
+            or not credential_key.isascii() or not credential_key.isidentifier()
+            or workload in workload_keys or credential_key == args.admin_token_key
+            or credential_key in workload_keys.values()
+        ):
+            parser.error("--workload-token-key requires a unique opencode, noema, or strix KV key")
+        workload_keys[workload] = credential_key
     try:
         SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
     except ValueError as exc:
@@ -375,27 +397,40 @@ def main() -> None:
             parser.error(str(exc))
     try:
         if args.production:
-            admin_token = get_credential(args.admin_token_key)
-            inference_token = get_credential(args.inference_token_key)
-            if not admin_token or not inference_token or admin_token == inference_token:
+            credential_keys = {"admin": args.admin_token_key, **(
+                workload_keys or {"review": (
+                    args.inference_token_key if args.inference_token_key is not None
+                    else REVIEW_INFERENCE_CREDENTIAL_NAME
+                )}
+            )}
+            initial_tokens = {name: get_credential(key) for name, key in credential_keys.items()}
+            values = list(initial_tokens.values())
+            if not all(isinstance(value, str) and value.strip() for value in values) or len(set(values)) != len(values):
                 parser.error("--production requires distinct admin and inference KV credentials")
 
-            def current_scope(token: str) -> str | None:
-                admin = get_credential(args.admin_token_key)
-                inference = get_credential(args.inference_token_key)
-                if not token or not admin or not inference or admin == inference:
+            def current_identity(token: str) -> str | None:
+                if not token:
                     return None
-                if SecurityConfig._constant_time_token_match(token, admin):
-                    return "admin"
-                if SecurityConfig._constant_time_token_match(token, inference):
-                    return "inference"
-                return None
+                values = {name: get_credential(key) for name, key in credential_keys.items()}
+                if not workload_keys and not all(values.values()):
+                    return None
+                matches = [
+                    name for name, value in values.items()
+                    if value and SecurityConfig._constant_time_token_match(token, value)
+                ]
+                return matches[0] if len(matches) == 1 else None
+
+            def current_scope(token: str) -> str | None:
+                identity = current_identity(token)
+                return "admin" if identity == "admin" else "inference" if identity else None
 
             security = SecurityConfig(
-                admin_token=admin_token,
-                inference_token=inference_token,
+                admin_token="" if workload_keys else initial_tokens["admin"],
+                inference_token="" if workload_keys else initial_tokens["review"],
                 bearer_verifier=lambda token, scope: current_scope(token) == scope,
-                principal_resolver=lambda token: "review-gateway" if current_scope(token) else None,
+                principal_resolver=lambda token: (
+                    f"review-workload:{identity}" if workload_keys else "review-gateway"
+                ) if (identity := current_identity(token)) else None,
                 allow_public_bind=args.allow_public_bind,
                 max_body_bytes=REVIEW_MAX_BODY_BYTES,
             )
