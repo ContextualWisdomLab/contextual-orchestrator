@@ -300,7 +300,7 @@ def test_main_preseeded_kv_uses_only_selected_registry_credentials(monkeypatch):
     captured["orchestrator"].close()
 
 
-def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypatch):
+def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypatch, tmp_path):
     register_credential("OPENROUTER_API_KEY", "stored-router-secret")
     register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
     register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
@@ -315,7 +315,11 @@ def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypat
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review_gateway", "--preseeded-kv", "--production", "--allow-public-bind", "--host", "0.0.0.0"],
+        [
+            "review_gateway", "--preseeded-kv", "--production",
+            "--allow-public-bind", "--host", "0.0.0.0",
+            "--state-db", str(tmp_path / "review.db"),
+        ],
     )
 
     review_gateway.main()
@@ -325,10 +329,11 @@ def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypat
     assert captured["security"].admin_token == "admin-secret"
     assert captured["security"].inference_token == "inference-secret"
     assert captured["security"].allow_public_bind is True
+    assert captured["orchestrator"]._store is not None
     captured["orchestrator"].close()
 
 
-def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch):
+def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch, tmp_path):
     register_credential("OPENROUTER_API_KEY", "stored-router-secret")
     register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
     register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
@@ -363,7 +368,11 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         captured.update(orchestrator=orchestrator, server=server, thread=thread)
 
     monkeypatch.setattr(review_gateway, "serve", fake_serve)
-    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production", "--port", "0"])
+    state_db = tmp_path / "review.db"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["review_gateway", "--preseeded-kv", "--production", "--port", "0", "--state-db", str(state_db)],
+    )
     review_gateway.main()
 
     server = captured["server"]
@@ -404,6 +413,8 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         assert answer["model"] == "orchestrator/free"
         assert provider_headers
         assert set(provider_headers) == {"Bearer stored-router-secret"}
+        run_ids = list(captured["orchestrator"]._workflow_runs)
+        assert run_ids
         sent_before_revocation = len(provider_headers)
         delete_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME)
         assert request("/v1/models", "inference-secret")[0] == 401
@@ -423,6 +434,11 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         captured["thread"].join(timeout=5)
         server.server_close()
         captured["orchestrator"].close()
+    restored = review_gateway.build_review_orchestrator(preseeded_kv=True, state_db=str(state_db))
+    try:
+        assert restored.get_workflow_run(run_ids[0])["answer"] == "reviewed"
+    finally:
+        restored.close()
 
 
 @pytest.mark.parametrize(
@@ -434,15 +450,31 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         (["--preseeded-kv", "--production", "--host", "0.0.0.0"], "admin", "inference", "public bind requires"),
     ],
 )
-def test_main_production_rejects_unsafe_startup(monkeypatch, capsys, argv, admin_token, inference_token, message):
+def test_main_production_rejects_unsafe_startup(monkeypatch, capsys, tmp_path, argv, admin_token, inference_token, message):
     if admin_token:
         register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, admin_token)
     if inference_token:
         register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, inference_token)
-    monkeypatch.setattr(sys, "argv", ["review_gateway", *argv])
+    monkeypatch.setattr(sys, "argv", ["review_gateway", *argv, "--state-db", str(tmp_path / "review.db")])
     with pytest.raises(SystemExit):
         review_gateway.main()
     assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "state_args, message",
+    [([], "requires --state-db"), (["--state-db", ":memory:"], "persistent --state-db path")],
+)
+def test_main_production_requires_durable_state_before_discovery(monkeypatch, capsys, state_args, message):
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production", *state_args])
+    monkeypatch.setattr(
+        review_gateway, "discover_all_models",
+        lambda *_args: pytest.fail("discovery before state validation"),
+    )
+    with pytest.raises(SystemExit):
+        review_gateway.main()
+    assert message in capsys.readouterr().err
+
 
 def test_main_configures_redacted_logging_before_discovery(monkeypatch, capsys):
     """INFO sends discovery and request summaries to redacted stderr."""

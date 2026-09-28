@@ -214,6 +214,7 @@ def build_review_orchestrator(
     *,
     credential_names: Sequence[str] | None = None,
     preseeded_kv: bool = False,
+    state_db: str | None = None,
 ) -> TaskOrchestrator:
     """Build the free review orchestrator from current bootstrap credentials.
 
@@ -304,6 +305,7 @@ def build_review_orchestrator(
         agents,
         client=ModelClient(),
         tool_retry_attempts=tool_retry_attempts,
+        state_db=state_db,
     )
 
 
@@ -331,6 +333,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-token-key", default=REVIEW_ADMIN_CREDENTIAL_NAME)
     parser.add_argument("--inference-token-key", default=REVIEW_INFERENCE_CREDENTIAL_NAME)
     parser.add_argument("--production", action="store_true")
+    parser.add_argument("--state-db", help="Persistent workflow, audit, and usage database path.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
         "--preseeded-kv",
@@ -354,13 +357,17 @@ def main() -> None:
     """Discover providers and serve the authenticated OpenAI-compatible sidecar."""
     parser = _build_parser()
     args = parser.parse_args()
-    configure_logging(args.log_level, redactor=redact_text)
     if args.production and not args.preseeded_kv:
         parser.error("--production requires --preseeded-kv")
+    if args.production and not (args.state_db and args.state_db.strip()):
+        parser.error("--production requires --state-db")
+    if args.production and args.state_db == ":memory:":
+        parser.error("--production requires a persistent --state-db path")
     if args.allow_public_bind and not args.production:
         parser.error("--allow-public-bind requires --production")
     if args.preseeded_kv and args.auth_token:
         parser.error("--preseeded-kv requires a KV auth token, not --auth-token")
+    configure_logging(args.log_level, redactor=redact_text)
     try:
         SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
     except ValueError as exc:
@@ -411,6 +418,7 @@ def main() -> None:
         orchestrator = build_review_orchestrator(
             credential_names=args.credential_names,
             preseeded_kv=args.preseeded_kv,
+            state_db=args.state_db,
         )
     except ValueError as exc:
         parser.error(str(exc))

@@ -397,14 +397,19 @@ register distinct `CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN` and
 `CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN` values in the KV, then run:
 
 ```bash
-python -m contextual_orchestrator.review_gateway --preseeded-kv --production --host 0.0.0.0 --allow-public-bind
+python -m contextual_orchestrator.review_gateway \
+  --preseeded-kv --production \
+  --state-db /var/lib/contextual-orchestrator/review-state.db \
+  --host 0.0.0.0 --allow-public-bind
 ```
 
 Production mode requires the stored split tokens and never imports provider
 keys from the gateway process environment. Keep the admin token on the owner;
 give CI consumers only the inference token. Public binding is explicit and
-requires a trusted TLS ingress and network controls. The CLI does not create
-that ingress, publish an immutable release, or establish hosted acceptance.
+requires a trusted TLS ingress and network controls. Put `--state-db` on a
+persistent, backed-up volume so workflow, audit, and usage records survive
+process restart. The CLI does not create that ingress, publish an immutable
+release, or establish hosted acceptance.
 
 ## Gateway direction
 
