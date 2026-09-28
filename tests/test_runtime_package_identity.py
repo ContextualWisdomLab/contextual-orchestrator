@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.util
 import json
 import threading
 import urllib.error
@@ -67,12 +68,24 @@ def test_runtime_identity_verifies_installed_bytes_and_rejects_mutation(tmp_path
         [(str(item), (tmp_path / str(item)).read_bytes()) for item in Distribution.files]
     )
 
+    cache = Path(importlib.util.cache_from_source(str(package / "worker.py")))
+    cache.parent.mkdir()
+    cache.write_bytes(b"generated cache")
+    assert runtime_identity.verified_runtime_identity()["source_sha"] == "a" * 40
+
     (package / "worker.py").write_bytes(b"altered installed module\n")
     with pytest.raises(runtime_identity.RuntimeIdentityUnavailable):
         runtime_identity.verified_runtime_identity()
 
     (package / "worker.py").write_bytes(content)
-    (package / "injected.py").write_bytes(b"pass\n")
+    (package / "injected.txt").write_bytes(b"unrecorded data\n")
+    with pytest.raises(runtime_identity.RuntimeIdentityUnavailable):
+        runtime_identity.verified_runtime_identity()
+
+    (package / "injected.txt").unlink()
+    (package / "worker.py").unlink()
+    (package / "worker.py").symlink_to(tmp_path / "worker.py")
+    (tmp_path / "worker.py").write_bytes(content)
     with pytest.raises(runtime_identity.RuntimeIdentityUnavailable):
         runtime_identity.verified_runtime_identity()
 

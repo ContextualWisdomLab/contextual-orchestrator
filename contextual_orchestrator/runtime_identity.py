@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib.metadata
-import importlib.machinery
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -49,7 +49,10 @@ def verified_runtime_identity() -> dict[str, str]:
                 continue
             if item.hash is None or item.hash.mode != "sha256":
                 raise RuntimeIdentityUnavailable()
-            data = Path(distribution.locate_file(item)).read_bytes()
+            recorded_path = Path(distribution.locate_file(item))
+            if recorded_path.is_symlink():
+                raise RuntimeIdentityUnavailable()
+            data = recorded_path.read_bytes()
             actual_hash = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode("ascii")
             if actual_hash != item.hash.value or name in names:
                 raise RuntimeIdentityUnavailable()
@@ -59,11 +62,20 @@ def verified_runtime_identity() -> dict[str, str]:
         manifest_name = "contextual_orchestrator/_release_identity.json"
         if manifest_name not in names or "contextual_orchestrator/runtime_identity.py" not in names:
             raise RuntimeIdentityUnavailable()
-        # An extra importable file could shadow the verified wheel contents.
-        importable_suffixes = tuple(importlib.machinery.all_suffixes()) + (".json",)
+        # Extra files can alter runtime behavior even when Python cannot import them.
         for path in package.rglob("*"):
-            if path.is_file() and "__pycache__" not in path.parts and path.name.endswith(importable_suffixes):
-                if f"contextual_orchestrator/{path.relative_to(package).as_posix()}" not in names:
+            if path.is_symlink():
+                raise RuntimeIdentityUnavailable()
+            if path.is_file():
+                relative = path.relative_to(package)
+                if "__pycache__" in relative.parts and path.suffix == ".pyc":
+                    try:
+                        source = Path(importlib.util.source_from_cache(str(path))).relative_to(package)
+                    except ValueError as exc:
+                        raise RuntimeIdentityUnavailable() from exc
+                    if f"contextual_orchestrator/{source.as_posix()}" in names:
+                        continue
+                if f"contextual_orchestrator/{relative.as_posix()}" not in names:
                     raise RuntimeIdentityUnavailable()
 
         manifest = json.loads(dict(verified)[manifest_name].decode("utf-8"))
