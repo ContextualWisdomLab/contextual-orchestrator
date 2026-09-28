@@ -386,9 +386,23 @@ def main() -> None:
             inference_token = get_credential(args.inference_token_key)
             if not admin_token or not inference_token or admin_token == inference_token:
                 parser.error("--production requires distinct admin and inference KV credentials")
+
+            def current_scope(token: str) -> str | None:
+                admin = get_credential(args.admin_token_key)
+                inference = get_credential(args.inference_token_key)
+                if not token or not admin or not inference or admin == inference:
+                    return None
+                if SecurityConfig._constant_time_token_match(token, admin):
+                    return "admin"
+                if SecurityConfig._constant_time_token_match(token, inference):
+                    return "inference"
+                return None
+
             security = SecurityConfig(
                 admin_token=admin_token,
                 inference_token=inference_token,
+                bearer_verifier=lambda token, scope: current_scope(token) == scope,
+                principal_resolver=lambda token: "review-gateway" if current_scope(token) else None,
                 allow_public_bind=args.allow_public_bind,
                 max_body_bytes=REVIEW_MAX_BODY_BYTES,
             )

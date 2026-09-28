@@ -15,6 +15,7 @@ import pytest
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     NotConfigured,
+    delete_credential,
     get_credential,
     register_credential,
     set_backend,
@@ -398,6 +399,7 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
 
         assert request("/v1/models", None)[0] == 401
         assert request("/v1/models", "admin-secret")[0] == 401
+        assert request("/admin/state", "admin-secret")[0] == 200
         assert provider_headers == []
         status, models = request("/v1/models", "inference-secret")
         assert status == 200
@@ -413,6 +415,20 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         assert set(provider_headers) == {"Bearer stored-router-secret"}
         run_ids = list(captured["orchestrator"]._workflow_runs)
         assert run_ids
+        sent_before_revocation = len(provider_headers)
+        delete_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME)
+        assert request("/v1/models", "inference-secret")[0] == 401
+        assert request(
+            "/v1/chat/completions",
+            "inference-secret",
+            {"model": "orchestrator/free", "messages": [{"role": "user", "content": "review"}]},
+        )[0] == 401
+        assert len(provider_headers) == sent_before_revocation
+        register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "rotated-inference-secret")
+        assert request("/v1/models", "inference-secret")[0] == 401
+        assert request("/v1/models", "rotated-inference-secret")[0] == 200
+        delete_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME)
+        assert request("/admin/state", "admin-secret")[0] == 401
     finally:
         server.shutdown()
         captured["thread"].join(timeout=5)
