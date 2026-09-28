@@ -59,6 +59,7 @@ def test_openapi_uses_resource_oriented_operation_ids() -> None:
 
 
 def test_openapi_documents_compatibility_front_door() -> None:
+    assert OPENAPI_SPEC["info"]["version"] == "0.3.1"
     expected_paths = {
         "/openapi.json",
         "/healthz",
@@ -78,6 +79,15 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["security"] == [
         {"inference_bearer_auth": []}
     ]
+    chat_errors = OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["responses"]["default"]
+    assert chat_errors["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/GatewayError"
+    }
+    assert chat_errors["headers"]["x-should-retry"]["schema"]["enum"] == ["false"]
+    stream_schema = OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["responses"][
+        "200"
+    ]["content"]["text/event-stream"]["schema"]
+    assert "finish_reason=error" in stream_schema["description"]
     chat_schema = OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["requestBody"][
         "content"
     ]["application/json"]["schema"]
