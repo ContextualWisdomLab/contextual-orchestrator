@@ -14,9 +14,6 @@
 ARG MATURIN_BUILDER_IMAGE=ghcr.io/pyo3/maturin@sha256:b6c8b59a0170b77eb31a35b56034abd39972483ad0ebfff344deaa42a85f3bd3
 FROM ${MATURIN_BUILDER_IMAGE} AS maturin-tools
 FROM rust:1.97.1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS dependency-builder
-RUN apt-get update \
-    && apt-get install --no-install-recommends --yes build-essential \
-    && rm -rf /var/lib/apt/lists/*
 COPY --from=maturin-tools /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=maturin-tools /usr/bin/maturin /usr/local/bin/maturin
 COPY requirements.lock /build/requirements.lock
