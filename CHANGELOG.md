@@ -85,6 +85,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Production review deployments can authenticate eligible GitHub Actions jobs
+  with short-lived signed identity from the exact central workflow, scoped to
+  the review workload, running repository, and workflow run. Central dispatch
+  target binding, consumer isolation, and hosted adoption remain separate work.
+- Production review inference enforces ZDR when signed job visibility is
+  private, internal, or unavailable, and for central dispatch or static
+  bearers with no signed reviewed-target visibility.
 - Release publication now builds the installable Python wheel at the exact
   source commit and requires its SHA-256 manifest and signed release asset
   verification alongside the existing SBOM. Two builds at the commit's fixed

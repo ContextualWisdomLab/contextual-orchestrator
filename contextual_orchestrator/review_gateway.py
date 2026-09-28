@@ -33,6 +33,7 @@ from .model_discovery import (
 )
 from .orchestrator import ModelClient, TaskOrchestrator, redact_text
 from .provider_bootstrap import PROVIDER_ACCEPTED_CREDENTIAL_NAMES
+from .review_oidc import GitHubReviewOIDC
 from .server import SecurityConfig, serve
 from .tool_fallback import MAX_TOOL_RETRY_ATTEMPTS
 
@@ -336,6 +337,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Separate production inference credential for opencode, noema, or strix; repeat per workload.",
     )
     parser.add_argument("--production", action="store_true")
+    parser.add_argument("--github-oidc-audience")
+    parser.add_argument("--github-oidc-owner-id")
+    parser.add_argument("--github-oidc-repository-id")
+    parser.add_argument(
+        "--github-oidc-workflow", action="append", default=[], metavar="NAME=WORKFLOW_REF",
+        help="Permit one central main-branch workflow to authenticate as a review workload.",
+    )
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
         "--preseeded-kv",
@@ -370,6 +378,21 @@ def main() -> None:
         parser.error("--workload-token-key requires --production")
     if args.workload_token_key and args.inference_token_key:
         parser.error("--workload-token-key cannot be combined with --inference-token-key")
+    oidc_mode = bool(args.github_oidc_workflow)
+    if oidc_mode:
+        if not (
+            args.production
+            and args.github_oidc_audience
+            and args.github_oidc_owner_id
+            and args.github_oidc_repository_id
+        ):
+            parser.error(
+                "--github-oidc-workflow requires production, audience, owner ID, and central repository ID"
+            )
+        if args.workload_token_key or args.inference_token_key:
+            parser.error("GitHub OIDC inference cannot be combined with static inference credentials")
+    elif args.github_oidc_audience or args.github_oidc_owner_id or args.github_oidc_repository_id:
+        parser.error("GitHub OIDC identity options require --github-oidc-workflow")
     if args.inference_token_key is not None and not args.inference_token_key.strip():
         parser.error("--inference-token-key requires a KV key name")
     workload_keys = {}
@@ -383,6 +406,21 @@ def main() -> None:
         ):
             parser.error("--workload-token-key requires a unique opencode, noema, or strix KV key")
         workload_keys[workload] = credential_key
+    oidc_workflows = {}
+    for specification in args.github_oidc_workflow:
+        workload, separator, workflow_ref = specification.partition("=")
+        if not separator or workload in oidc_workflows:
+            parser.error("--github-oidc-workflow requires a unique workload=workflow_ref")
+        oidc_workflows[workload] = workflow_ref
+    try:
+        oidc_verifier = GitHubReviewOIDC(
+            audience=args.github_oidc_audience,
+            owner_id=args.github_oidc_owner_id,
+            repository_id=args.github_oidc_repository_id,
+            workflows=oidc_workflows,
+        ) if oidc_mode else None
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
         SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
     except ValueError as exc:
@@ -397,7 +435,7 @@ def main() -> None:
             parser.error(str(exc))
     try:
         if args.production:
-            credential_keys = {"admin": args.admin_token_key, **(
+            credential_keys = {"admin": args.admin_token_key} if oidc_mode else {"admin": args.admin_token_key, **(
                 workload_keys or {"review": (
                     args.inference_token_key if args.inference_token_key is not None
                     else REVIEW_INFERENCE_CREDENTIAL_NAME
@@ -406,11 +444,18 @@ def main() -> None:
             initial_tokens = {name: get_credential(key) for name, key in credential_keys.items()}
             values = list(initial_tokens.values())
             if not all(isinstance(value, str) and value.strip() for value in values) or len(set(values)) != len(values):
-                parser.error("--production requires distinct admin and inference KV credentials")
+                parser.error(
+                    "--production requires an admin KV credential" if oidc_mode
+                    else "--production requires distinct admin and inference KV credentials"
+                )
 
             def current_identity(token: str) -> str | None:
                 if not token:
                     return None
+                if oidc_verifier is not None:
+                    if SecurityConfig._constant_time_token_match(token, get_credential(args.admin_token_key)):
+                        return "admin"
+                    return oidc_verifier.identity(token)
                 values = {name: get_credential(key) for name, key in credential_keys.items()}
                 if not workload_keys and not all(values.values()):
                     return None
@@ -425,12 +470,15 @@ def main() -> None:
                 return "admin" if identity == "admin" else "inference" if identity else None
 
             security = SecurityConfig(
-                admin_token="" if workload_keys else initial_tokens["admin"],
-                inference_token="" if workload_keys else initial_tokens["review"],
+                admin_token="" if workload_keys or oidc_mode else initial_tokens["admin"],
+                inference_token="" if workload_keys or oidc_mode else initial_tokens["review"],
                 bearer_verifier=lambda token, scope: current_scope(token) == scope,
                 principal_resolver=lambda token: (
-                    f"review-workload:{identity}" if workload_keys else "review-gateway"
+                    f"review-workload:{identity}" if workload_keys or oidc_mode else "review-gateway"
                 ) if (identity := current_identity(token)) else None,
+                zdr_required_resolver=(
+                    oidc_verifier.requires_zdr if oidc_verifier is not None else lambda _token: True
+                ),
                 allow_public_bind=args.allow_public_bind,
                 max_body_bytes=REVIEW_MAX_BODY_BYTES,
                 review_only=True,

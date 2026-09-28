@@ -408,6 +408,10 @@ that ingress, publish an immutable release, or establish hosted acceptance.
 Production review credentials can discover and request only `orchestrator/free`
 through the chat API; provider models, caller routing hints, file routes, and
 provider-refresh probes are outside this review contract.
+Static production review tokens carry no signed target visibility, so their
+inference requests require ZDR routes even when the body says
+`"zdr_only": false`. An unavailable attested ZDR model fails before provider
+send. The existing local sidecar can still select its per-target pool.
 
 To give OpenCode, Noema, and Strix separate review identities, store a distinct
 credential for each workload in the owner KV and replace the shared inference
@@ -428,6 +432,40 @@ before an LLM-controlled process can use the remote gateway safely.
 The revocation check follows [RFC 7662](https://www.rfc-editor.org/rfc/rfc7662)'s
 freshness principle; [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750) explains
 why a bearer exposed to a model-controlled process remains reusable.
+
+For a separately isolated Actions credential broker, the owner can instead
+authenticate signed, short-lived GitHub job tokens. Among review authentication
+credentials, keep only the admin credential in the owner KV; provider keys
+remain in that KV. Configure the exact central workflow refs:
+
+```bash
+python -m contextual_orchestrator.review_gateway --preseeded-kv --production \
+  --github-oidc-audience contextual-orchestrator/review \
+  --github-oidc-owner-id 295022177 \
+  --github-oidc-repository-id 1274066402 \
+  --github-oidc-workflow opencode=ContextualWisdomLab/.github/.github/workflows/opencode-review-dispatch.yml@refs/heads/main
+```
+
+Repeat `--github-oidc-workflow` for Noema and Strix after their exact hosted
+workflow identities are checked. This mode rejects static inference-token
+mappings. It validates GitHub's signing key, issuer, exact audience, immutable
+organization ID, running repository ID/name, allowed central main-branch
+workflow ref, run ID, and token lifetime. OpenCode dispatch must run in the
+configured central `.github` repository. Org-required Noema and Strix jobs may
+run in their target repositories. Persisted owner identity is scoped to the
+workload, signed running-repository ID, and run ID. A central dispatch for a
+different target still needs a separate trusted target binding. Unknown signing
+keys and unavailable key retrieval fail closed. Signing keys are cached for at
+most five minutes, so rotation can deny new keys for that interval. The broker
+must mint a token for each gateway operation while keeping the Actions
+token-request capability outside the model-controlled process.
+The owner forces ZDR for a signed private/internal native job, missing or
+unknown visibility, and every central dispatch whose reviewed target is not
+signed into the job identity. Only a signed public native Noema/Strix job may
+use the general free pool without ZDR. Caller `zdr_only=true` remains stricter.
+This owner adapter does not create that broker, a TLS ingress, or hosted
+cutover evidence. Claim definitions: [GitHub Actions OIDC reference](https://docs.github.com/en/actions/reference/security/oidc);
+validation principles: [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725).
 
 ## Gateway direction
 

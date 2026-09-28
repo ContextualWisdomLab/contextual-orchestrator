@@ -438,6 +438,7 @@ class SecurityConfig:
     # Optional companion seam for external verifiers that can expose a stable,
     # tenant-scoped principal key without exposing the bearer itself.
     principal_resolver: Callable[[str], str | None] | None = None
+    zdr_required_resolver: Callable[[str], bool | None] | None = None
     review_only: bool = False
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
@@ -583,6 +584,19 @@ class SecurityConfig:
                     return principal
             raise RequestError(401, "unauthorized", "authenticated principal is required")
         return self._principal_digest(token)
+
+    def zdr_required(self, headers: Any) -> bool:
+        """Return the trusted review privacy requirement; deny unresolved identity."""
+        if self.zdr_required_resolver is None:
+            return self.review_only
+        token = self._extract_bearer_token(headers)
+        try:
+            required = self.zdr_required_resolver(token)
+        except Exception as exc:
+            raise RequestError(401, "unauthorized", "review privacy policy is unavailable") from exc
+        if type(required) is not bool:
+            raise RequestError(401, "unauthorized", "review privacy policy is unavailable")
+        return required
 
     def _principal_digest(self, token: str) -> str:
         """Hash a stable deployment principal without retaining bearer material."""
@@ -6900,6 +6914,8 @@ def build_server(
                     )
                 )
                 zdr_only = _validate_zdr_only(body)
+                if scope == "inference" and security.review_only:
+                    zdr_only = zdr_only or security.zdr_required(self.headers)
                 request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
                 if path in {"/v1/chat/completions", "/v1/responses"}:

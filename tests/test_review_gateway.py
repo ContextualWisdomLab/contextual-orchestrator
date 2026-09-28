@@ -45,6 +45,7 @@ def _discovered(
     capabilities: tuple[str, ...] = ("chat",),
     input_modalities: tuple[str, ...] = ("text",),
     output_modalities: tuple[str, ...] = ("text",),
+    zdr_capable: bool = False,
 ) -> DiscoveredModel:
     """Build one explicitly evidenced discovered candidate for the tests."""
     return DiscoveredModel(
@@ -60,6 +61,7 @@ def _discovered(
         capabilities=capabilities,
         input_modalities=input_modalities,
         output_modalities=output_modalities,
+        zdr_capable=zdr_capable,
     )
 
 
@@ -421,7 +423,7 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
     monkeypatch.setattr(
         review_gateway,
         "discover_all_models",
-        lambda sources: ([_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")], []),
+        lambda sources: ([_discovered("openrouter", "review-model", "OPENROUTER_API_KEY", zdr_capable=True)], []),
     )
     monkeypatch.setattr(
         "contextual_orchestrator.orchestrator.ModelClient._validate_provider",
@@ -540,6 +542,60 @@ def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch
         server.shutdown()
         captured["thread"].join(timeout=5)
         server.server_close()
+        captured["orchestrator"].close()
+
+
+def test_production_review_forces_zdr_before_provider_send(monkeypatch):
+    """An unscoped production bearer cannot send a private review to a non-ZDR model."""
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
+    register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
+    monkeypatch.setattr(
+        review_gateway,
+        "discover_all_models",
+        lambda _sources: ([_discovered("openrouter", "non-zdr", "OPENROUTER_API_KEY")], []),
+    )
+    sent = []
+
+    def fake_open_provider(self, request, destination=None, *, timeout=None):
+        sent.append(request)
+        return io.BytesIO(json.dumps({
+            "id": "reply", "object": "chat.completion", "model": "non-zdr",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+        }).encode())
+
+    monkeypatch.setattr("contextual_orchestrator.orchestrator.ModelClient._open_provider", fake_open_provider)
+    captured = {}
+
+    def fake_serve(orchestrator, **kwargs):
+        server = build_server(orchestrator, **kwargs)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        captured.update(orchestrator=orchestrator, server=server, thread=thread)
+
+    monkeypatch.setattr(review_gateway, "serve", fake_serve)
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production", "--port", "0"])
+    review_gateway.main()
+    try:
+        server = captured["server"]
+        call = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            data=json.dumps({
+                "model": "orchestrator/free", "zdr_only": False,
+                "messages": [{"role": "user", "content": "private review"}],
+            }).encode(),
+            headers={"authorization": "Bearer inference-secret", "content-type": "application/json", "connection": "close"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as response:
+            urllib.request.urlopen(call, timeout=5)
+        with response.value as error:
+            assert error.code == 400
+            assert json.load(error)["error"]["code"] == "invalid_model"
+        assert sent == []
+    finally:
+        captured["server"].shutdown()
+        captured["thread"].join(timeout=5)
+        captured["server"].server_close()
         captured["orchestrator"].close()
 
 
