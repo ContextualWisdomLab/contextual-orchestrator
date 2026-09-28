@@ -12,6 +12,36 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- `orchestrator/free` JSON-schema final synthesis now waits within the
+  configured request budget when every eligible route returns HTTP 429, then
+  retries only final synthesis on a ready route. After HTTP 413 retires one
+  route, another rate-limited route can still recover. This repair changes
+  retry timing, not the Chat Completions JSON-schema request or response
+  fields; explicit model pins and expired budgets remain fail-closed.
+- Structured non-stream `/v1/responses` requests now preflight every required
+  conduct role for `orchestrator/free`. Image-capable worker-only pools fail
+  closed with typed HTTP 400 before template planning instead of surfacing a
+  missing-role HTTP 500; ordinary and streamed route admission remains
+  worker-scoped.
+- Removed a shadowed benchmark validation helper so the required benchmark
+  branch coverage gate reaches 100% on the current code.
+- Safe same-agent retries now preserve every failed attempt before retrying and the eventual served attempt in the typed route receipt, without misclassifying tool failures as provider API errors.
+- Terminal `route_once` tool stops now retain every prior candidate attempt and
+  the final `fail_closed` attempt in the existing secret-free HTTP 409 route
+  receipt. API-contract tests no longer use deprecated `jsonschema.RefResolver`.
+- Route evidence now preserves the original error subtype for malformed-response
+  and all-413 exhaustion, survives rate-limit recovery retries, and remains on
+  the persisted workflow record returned by the Chat Completions API. A
+  malformed-response exhaustion after a recovered 429/503 round now also
+  retains every attempt from both rounds without changing its
+  `ProviderResponseError` taxonomy. Mixed malformed-response/413 exhaustion
+  likewise retains that taxonomy in either candidate order, and the HTTP 413
+  response now exposes the attached all-413 route receipt. Judge-rejected
+  worker rounds no longer overwrite earlier failover attempts, and a
+  rate-limit wait-budget exhaustion returns the attempts that consumed it.
+- Non-streaming `route_once` now snapshots worker failover evidence before the
+  realtime judge performs its own model call, so judge routing cannot erase or
+  replace the worker's typed `orchestration.route.attempted[]` receipt.
 - Held-out judge-effect evidence now requires a declared sample size. The
   hidden 1,000-row default is removed. The harness run still writes 1,000 as
   this run's choice.
@@ -55,6 +85,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Release publication now builds the installable Python wheel at the exact
+  source commit and requires its SHA-256 manifest and signed release asset
+  verification alongside the existing SBOM. Two builds at the commit's fixed
+  source timestamp must have identical bytes. A resumed Draft must preserve
+  matching asset bytes; an incomplete published release fails closed.
+- Release notes longer than GitHub's 125,000-character Release body limit are
+  cut on a line boundary and link the complete CHANGELOG.md at the exact
+  release commit, so an oversized section cannot strand a pushed tag.
 - A canonical, immutable release mechanism: `.github/workflows/release.yml`
   (`workflow_dispatch` only, explicit `version` input, never triggered by
   push/schedule/merge), split into a read-only, credential-less `verify` job

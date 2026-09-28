@@ -60,11 +60,18 @@ class _FakeConnection:
     """Stands in for ``http.client.HTTPConnection`` in ``_open_provider``."""
 
     last: "_FakeConnection | None" = None
+    sock = None
 
     def __init__(self, response: _RecordingErrorResponse) -> None:
         self._response = response
         self.closed = False
+        # ``_open_provider`` now connects explicitly and then bounds the socket
+        # read timeout; a fake without a real socket leaves ``sock`` unset.
+        self.sock = None
         _FakeConnection.last = self
+
+    def connect(self) -> None:
+        """Mirror ``HTTPConnection.connect`` without opening a socket."""
 
     def request(self, *args: object, **kwargs: object) -> None:
         pass
