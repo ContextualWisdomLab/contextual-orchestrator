@@ -310,6 +310,237 @@ def test_ordinary_lock_lines_are_not_refused(tmp_path, line) -> None:
     assert external_source_findings(lock, lock.read_bytes()) == []
 
 
+def _native_archive(directory, ecosystem, name, version, license_text, *, identity=None,
+                    extra=None, declaration="MIT", license_filename="LICENSE", archive_prefix=None):
+    """Fabricate a registry archive with inert hooks and an exact locked digest."""
+    import base64
+    import io
+    import tarfile
+
+    from scripts.ci.dependency_inventory import _native_artifact_spec
+
+    prefix = archive_prefix or (f"{name}-{version}" if ecosystem == "cargo" else "package")
+    identity = identity or (name, version)
+    metadata = (
+        f'[package]\nname = "{identity[0]}"\nversion = "{identity[1]}"\nlicense = "{declaration}"\n'
+        if ecosystem == "cargo" else json.dumps({"name": identity[0], "version": identity[1],
+                                               "license": declaration,
+                                               "scripts": {"install": "exit 99"}})
+    )
+    if ecosystem == "cargo" and license_filename != "LICENSE":
+        metadata += f'license-file = "{license_filename}"\n'
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+        files = {f"{prefix}/{'Cargo.toml' if ecosystem == 'cargo' else 'package.json'}": metadata,
+                 f"{prefix}/install.sh": "exit 99"}
+        if license_text is not None:
+            files[f"{prefix}/{license_filename}"] = license_text
+        files.update(extra or {})
+        for path, text in files.items():
+            raw = text.encode()
+            member = tarfile.TarInfo(path)
+            member.size = len(raw)
+            archive.addfile(member, io.BytesIO(raw))
+    raw = stream.getvalue()
+    package = {"name": name, "version": version}
+    if ecosystem == "cargo":
+        package.update(source="registry+https://github.com/rust-lang/crates.io-index",
+                       checksum=hashlib.sha256(raw).hexdigest())
+    else:
+        package["integrity"] = "sha512-" + base64.b64encode(hashlib.sha512(raw).digest()).decode()
+    url, _, _ = _native_artifact_spec(ecosystem, package)
+    suffix = ".crate" if ecosystem == "cargo" else ".tgz"
+    path = directory / (hashlib.sha256(url.encode()).hexdigest() + suffix)
+    path.write_bytes(raw)
+    return package, path
+
+
+@pytest.mark.parametrize("ecosystem", ["cargo", "npm"])
+@pytest.mark.parametrize("failure", [None, "identity", "digest", "missing_text", "copyleft", "traversal"])
+def test_native_artifact_license_evidence_is_lock_bound_and_fails_closed(tmp_path, ecosystem, failure):
+    from scripts.ci.dependency_inventory import _native_license_terms
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    text = "MIT License. Permission is hereby granted, free of charge, to any person."
+    if failure == "missing_text":
+        text = None
+    if failure == "copyleft":
+        text += " This library is licensed under the GNU General Public License."
+    package, archive = _native_archive(
+        tmp_path, ecosystem, "example", "1.2.3", text,
+        identity=("another", "1.2.3") if failure == "identity" else None,
+        extra={"../LICENSE": text} if failure == "traversal" else None,
+    )
+    if failure == "digest":
+        archive.write_bytes(archive.read_bytes() + b"changed")
+    if failure in {"identity", "digest", "traversal"}:
+        with pytest.raises(InventoryError):
+            _native_license_terms(ecosystem, package, tmp_path, False)
+        return
+    terms, source, files = _native_license_terms(ecosystem, package, tmp_path, False)
+    package.update(licenses=terms, license_files=files, license_source=source)
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": ecosystem, "packages": [package]}]})
+    if failure:
+        assert not groups["permitted"]
+        assert groups["undecidable"] or groups["copyleft"]
+    else:
+        assert len(groups["permitted"]) == 1
+        assert files[0]["sha256"] == hashlib.sha256(text.encode()).hexdigest()
+        assert hashlib.new("sha256" if ecosystem == "cargo" else "sha512", archive.read_bytes()).hexdigest() in source
+
+
+def test_native_collection_covers_both_npm_locks_and_local_workspace(tmp_path):
+    """All native entries get evidence, including dev/optional and local members."""
+    from scripts.ci.release_license_gate import classify_inventory_licenses
+
+    root = _repository(tmp_path)
+    artifacts = root / "artifacts"
+    artifacts.mkdir()
+    text = "MIT License. Permission is hereby granted, free of charge, to any person."
+    crate, _ = _native_archive(artifacts, "cargo", "registry_crate", "1.2.3", text)
+    npm, _ = _native_archive(artifacts, "npm", "optional", "1.2.3", text)
+    pnpm, _ = _native_archive(artifacts, "npm", "@scope/dev", "1.2.3", text)
+    (root / "rust/Cargo.lock").write_text(
+        f'[[package]]\nname = "registry_crate"\nversion = "1.2.3"\nsource = "{crate["source"]}"\n'
+        f'checksum = "{crate["checksum"]}"\n\n[[package]]\nname = "local"\nversion = "1.0"\n')
+    (root / "rust/Cargo.toml").write_text('[workspace]\nmembers = ["local"]\n')
+    (root / "rust/local").mkdir()
+    (root / "rust/local/Cargo.toml").write_text(
+        '[package]\nname = "local"\nversion = "1.0"\nlicense = "MIT"\nlicense-file = "../../LICENSE"\n')
+    (root / "LICENSE").write_text(text)
+    (root / "package-lock.json").write_text(json.dumps({"packages": {"node_modules/optional": {
+        "version": "1.2.3", "integrity": npm["integrity"], "optional": True, "dev": True}}}))
+    (root / "pnpm-lock.yaml").write_text(
+        f"lockfileVersion: '9.0'\npackages:\n  '@scope/dev@1.2.3':\n    resolution: {{integrity: {pnpm['integrity']}}}\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "native evidence"], check=True)
+    inventory = build_inventory(root, resolve_licenses=True, artifact_dir=artifacts)
+    native = [entry for entry in inventory["ecosystems"] if entry["ecosystem"] != "python"]
+    assert sum(len(entry["packages"]) for entry in native) == 4
+    assert all(record["matches_commit"] for entry in native for record in entry["provenance"])
+    groups = classify_inventory_licenses({"ecosystems": native})
+    assert len(groups["permitted"]) == 4
+    assert not groups["undecidable"] and not groups["copyleft"]
+    (root / "LICENSE").write_text("uncommitted replacement")
+    changed = build_inventory(root, resolve_licenses=True, artifact_dir=artifacts)
+    cargo = next(entry for entry in changed["ecosystems"] if entry["ecosystem"] == "cargo")
+    assert any(not record["matches_commit"] for record in cargo["provenance"])
+
+
+def test_native_registry_source_cannot_redirect_or_execute_package_hooks(tmp_path, monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    from scripts.ci.dependency_inventory import _native_license_terms, _NoRegistryRedirect
+
+    package, archive = _native_archive(tmp_path, "npm", "example", "1.2.3", "MIT License")
+    raw = archive.read_bytes()
+    archive.unlink()
+    calls = []
+
+    class Registry:
+        def open(self, url, timeout):
+            calls.append(url)
+            return io.BytesIO(raw)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *args: Registry())
+    _native_license_terms("npm", package, tmp_path, True)
+    assert calls == ["https://registry.npmjs.org/example/-/example-1.2.3.tgz"]
+    assert archive.read_bytes() == raw
+    package["resolved"] = "https://untrusted.invalid/example.tgz"
+    with pytest.raises(InventoryError, match="canonical"):
+        _native_license_terms("npm", package, tmp_path, True)
+    assert len(calls) == 1
+    assert _NoRegistryRedirect().redirect_request(None, None, 302, "", {}, "https://untrusted.invalid") is None
+
+    error = urllib.error.HTTPError(calls[0], 302, "redirect", {}, io.BytesIO(b"private"))
+    class RedirectingRegistry:
+        def open(self, *args, **kwargs):
+            raise error
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *args: RedirectingRegistry())
+    archive.unlink()
+    package.pop("resolved")
+    with pytest.raises(InventoryError, match="HTTP 302"):
+        _native_license_terms("npm", package, tmp_path, True)
+    assert error.fp.closed
+
+
+def test_native_archive_refuses_links_duplicates_and_evidence_limits(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    import scripts.ci.dependency_inventory as inventory
+
+    package, path = _native_archive(tmp_path, "cargo", "example", "1.2.3", "MIT License")
+    original = path.read_bytes()
+    for failure in ("link", "duplicate"):
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(original), mode="r:gz") as source:
+            with tarfile.open(fileobj=stream, mode="w:gz") as target:
+                for member in source:
+                    target.addfile(member, source.extractfile(member))
+                extra = tarfile.TarInfo("example-1.2.3/LICENSE" if failure == "duplicate"
+                                        else "example-1.2.3/link")
+                if failure == "link":
+                    extra.type = tarfile.SYMTYPE
+                    extra.linkname = "../../LICENSE"
+                target.addfile(extra)
+        raw = stream.getvalue()
+        package["checksum"] = hashlib.sha256(raw).hexdigest()
+        path.write_bytes(raw)
+        with pytest.raises(InventoryError, match="link|duplicate"):
+            inventory._native_license_terms("cargo", package, tmp_path, False)
+    path.write_bytes(original)
+    package["checksum"] = hashlib.sha256(original).hexdigest()
+    monkeypatch.setattr(inventory, "_NATIVE_ARCHIVE_LIMIT", len(original) - 1)
+    with pytest.raises(InventoryError, match="evidence limit"):
+        inventory._native_license_terms("cargo", package, tmp_path, False)
+
+
+def test_dirty_locks_cannot_authorize_native_downloads(tmp_path, monkeypatch):
+    import scripts.ci.dependency_inventory as inventory
+
+    root = _repository(tmp_path)
+    (root / "rust/Cargo.lock").write_text('[[package]]\nname = "changed"\nversion = "1"\n')
+    monkeypatch.setattr(inventory, "_native_license_terms",
+                        lambda *args: pytest.fail("dirty locks reached artifact collection"))
+    with pytest.raises(InventoryError, match="uncommitted"):
+        build_inventory(root, True, tmp_path / "artifacts", download_native_artifacts=True)
+
+
+def test_conflicting_npm_lock_integrity_is_not_silently_deduplicated(tmp_path):
+    root = _repository(tmp_path, npm={"packages": {"node_modules/one": {
+        "version": "1.0.0", "integrity": "sha512-first"}}})
+    (root / "pnpm-lock.yaml").write_text(
+        "lockfileVersion: '9.0'\npackages:\n  one@1.0.0:\n    resolution: {integrity: sha512-second}\n")
+    with pytest.raises(InventoryError, match="disagree"):
+        build_inventory(root)
+
+
+def test_explicit_cargo_license_file_is_read_without_filename_guessing(tmp_path):
+    from scripts.ci.dependency_inventory import _native_license_terms
+
+    text = "MIT License. Permission is hereby granted, free of charge, to any person."
+    package, _ = _native_archive(tmp_path, "cargo", "example", "1.2.3", text,
+                                 license_filename="LEGAL")
+    terms, _, files = _native_license_terms("cargo", package, tmp_path, False)
+    assert terms == ["MIT"]
+    assert files == [{"name": "example-1.2.3/LEGAL", "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                      "text": text}]
+
+
+@pytest.mark.parametrize("archive_root", ["node", "node v24.13.3"])
+def test_npm_archive_root_name_is_not_package_identity(tmp_path, archive_root):
+    from scripts.ci.dependency_inventory import _native_license_terms
+
+    package, _ = _native_archive(tmp_path, "npm", "@types/node", "24.13.3", "MIT License",
+                                 archive_prefix=archive_root)
+    terms, _, files = _native_license_terms("npm", package, tmp_path, False)
+    assert terms == ["MIT"]
+    assert files[0]["name"] == f"{archive_root}/LICENSE"
+
 def test_wheel_version_prefix_is_not_exact_artifact_evidence(tmp_path):
     """A nearby version cannot supply the pinned package's license evidence."""
     _wheel(tmp_path, "library", "1.0.1", ["License-Expression: MIT"])
@@ -320,7 +551,10 @@ def test_wheel_version_prefix_is_not_exact_artifact_evidence(tmp_path):
 
 
 @pytest.mark.parametrize("linked", [False, True])
-def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkeypatch, linked):
+@pytest.mark.parametrize("staged_native", [False, True])
+def test_installed_license_bytes_reach_inventory_without_import(
+    tmp_path, monkeypatch, linked, staged_native
+):
     import importlib.metadata
     repository = _repository(tmp_path)
     site = tmp_path / "site"
@@ -338,10 +572,21 @@ def test_installed_license_bytes_reach_inventory_without_import(tmp_path, monkey
     (info / "RECORD").write_text("only_library-1.0.dist-info/LICENSE,,\n")
     distribution = importlib.metadata.Distribution.at(info)
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
-    inventory = build_inventory(repository, resolve_licenses=True)
+    inventory = build_inventory(
+        repository, resolve_licenses=True,
+        artifact_dir=tmp_path if staged_native else None,
+        installed_python_licenses=staged_native,
+    )
     package = next(e for e in inventory["ecosystems"] if e["ecosystem"] == "python")["packages"][0]
     if linked:
         assert package["license_files"] == []
     else:
         assert package["license_files"] == [{"name": "LICENSE", "sha256": hashlib.sha256(raw).hexdigest(),
                                             "text": raw.decode("utf-8")}]
+
+
+def test_release_uses_installed_python_and_staged_native_evidence_after_install():
+    workflow = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text()
+    preinstall, postinstall = workflow.split("Refuse to release a GPL-family or unknown-licence artifact")
+    assert "--artifact-dir license-artifacts --download-native-artifacts" in preinstall
+    assert "--artifact-dir license-artifacts --installed-python-licenses" in postinstall
