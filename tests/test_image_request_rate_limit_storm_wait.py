@@ -169,6 +169,7 @@ def test_image_storm_recovery_counts_provider_http_requests(monkeypatch) -> None
     hits: list[tuple[str, float, bool, bool]] = []
     rejected: set[str] = set()
     guard = threading.Lock()
+    image_url = "data:image/png;base64," + _PNG
 
     class Provider(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
@@ -176,7 +177,18 @@ def test_image_storm_recovery_counts_provider_http_requests(monkeypatch) -> None
             model = payload["model"]
             system = (payload.get("messages") or [{}])[0].get("content", "")
             triage = system == TaskOrchestrator.TRIAGE_SYSTEM_PROMPT
-            has_image = '"image_url"' in json.dumps(payload.get("messages", []))
+            has_image = any(
+                isinstance(message.get("content"), list)
+                and any(
+                    isinstance(part, dict)
+                    and part.get("type") == "image_url"
+                    and isinstance(part.get("image_url"), dict)
+                    and part["image_url"].get("url") == image_url
+                    for part in message["content"]
+                )
+                for message in payload.get("messages", [])
+                if isinstance(message, dict)
+            )
             with guard:
                 limited = not triage and model not in rejected
                 if limited:
@@ -229,7 +241,7 @@ def test_image_storm_recovery_counts_provider_http_requests(monkeypatch) -> None
                 "mode": "conduct",
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": "Review this change set in depth: plan, implement, verify."},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + _PNG}},
+                    {"type": "image_url", "image_url": {"url": image_url}},
                 ]}],
             }).encode(),
             headers={"content-type": "application/json", "authorization": f"Bearer {_TOKEN}"},
