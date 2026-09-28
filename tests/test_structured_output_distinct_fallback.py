@@ -1554,4 +1554,3 @@ def test_free_structured_429_recovery_is_bounded_and_requires_a_quota_storm(
     assert [
         entry["agent_id"] for entry in exc_info.value.extra_detail["route"]["attempted"]
     ] == calls
-

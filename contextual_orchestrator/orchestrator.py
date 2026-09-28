@@ -229,6 +229,10 @@ _PASSTHROUGH_REJECTED_STATUS = _PASSTHROUGH_UNAVAILABLE_STATUS | frozenset(
     {408, 409, 425, 429, 503}
 )
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
+# Longest provider-stated 503 Retry-After the last/only route candidate waits
+# inline before its bounded same-candidate retry; the same 30 s ceiling as the
+# jittered tool-retry backoff. A longer stated wait skips that retry.
+_SAME_AGENT_RETRY_AFTER_CEILING_SECONDS = 30.0
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
 )
@@ -11863,6 +11867,7 @@ class TaskOrchestrator:
                         )
                         break
                     every_failure_was_request_too_large = False
+                    retry_after_floor = 0.0
                     quota_rejection = (
                         isinstance(exc, ProviderUpstreamError)
                         and exc.provider_status == 429
@@ -11957,8 +11962,45 @@ class TaskOrchestrator:
                                 retry_safe=not active_cooldown,
                                 circuit_failure=False,
                             )
+                        elif exc.provider_status == 503 and agent is not candidates[-1]:
+                            # An explicit availability rejection with another
+                            # candidate still untried: replaying this one first
+                            # only spends the caller's deadline before the rest
+                            # of the list is reached. Advance at once; unlike a
+                            # 429, a 503 still feeds the health circuit. The
+                            # only/last candidate keeps the bounded retry below.
+                            # 529 (non-standard "overloaded") deliberately stays
+                            # on that bounded retry: like
+                            # _PASSTHROUGH_REJECTED_STATUS, only a standard 503
+                            # counts as an explicit rejection here.
+                            decision = ToolFailureDecision(
+                                kind=ToolFailureKind.TRANSPORT_ERROR,
+                                action=ToolFallbackAction.FAILOVER_AGENT,
+                                reason_code="tool_failure.transport_error.failover_agent",
+                                retry_safe=False,
+                                circuit_failure=True,
+                            )
                         else:
                             decision = classify_provider_transport_failure(exc.retryable)
+                            stated_retry_after = (
+                                exc.extra_detail.get("retry_after_seconds")
+                                if exc.provider_status == 503
+                                else None
+                            )
+                            if (
+                                isinstance(stated_retry_after, (int, float))
+                                and not isinstance(stated_retry_after, bool)
+                                and math.isfinite(stated_retry_after)
+                                and stated_retry_after > 0
+                            ):
+                                if stated_retry_after > _SAME_AGENT_RETRY_AFTER_CEILING_SECONDS:
+                                    # Waiting that long inline would hold the
+                                    # request thread past the bounded retry;
+                                    # leave the stated cooldown to the
+                                    # caller-level storm wait instead.
+                                    decision = downgrade_to_failover(decision)
+                                else:
+                                    retry_after_floor = float(stated_retry_after)
                     elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             # Default and auto routes have no allow-list, so
@@ -12021,6 +12063,7 @@ class TaskOrchestrator:
                                     "transport": "chat",
                                 }
                             )
+                        retry_delay = 0.0
                         if self.tool_retry_backoff_seconds:
                             retry_ceiling = min(
                                 self.tool_retry_backoff_seconds
@@ -12028,6 +12071,10 @@ class TaskOrchestrator:
                                 30.0,
                             )
                             retry_delay = self._tool_retry_jitter(0.0, retry_ceiling)
+                        # A provider-stated 503 Retry-After (bounded above) is
+                        # a floor: retrying sooner is a known-wasted attempt.
+                        retry_delay = max(retry_delay, retry_after_floor)
+                        if retry_delay:
                             self._tool_retry_sleep(retry_delay)
                         continue
                     if action is ToolFallbackAction.RETRY_SAME_AGENT:
