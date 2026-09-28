@@ -14,11 +14,13 @@ from pathlib import Path
 import socket
 import sys
 import threading
+import time
 import urllib.request
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     ProviderResponseError,
@@ -36,14 +38,17 @@ def _completion(content: str, usage: dict | None = None) -> dict:
 class _FakeProvider:
     """Serves a scripted sequence of (status, json_body) at POST /chat/completions."""
 
-    def __init__(self, responses: list[tuple[int, dict]]) -> None:
+    def __init__(self, responses: list[tuple[int, dict]], *, retry_after: str | None = None) -> None:
         self.request_count = 0
+        self.requests: list[dict] = []
+        self.request_times: list[float] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
-                self.rfile.read(length)
+                outer.requests.append(json.loads(self.rfile.read(length)))
+                outer.request_times.append(time.monotonic())
                 index = min(outer.request_count, len(responses) - 1)
                 outer.request_count += 1
                 status, body = responses[index]
@@ -51,6 +56,8 @@ class _FakeProvider:
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(raw)))
+                if status == 429 and retry_after is not None:
+                    self.send_header("Retry-After", retry_after)
                 self.end_headers()
                 self.wfile.write(raw)
 
@@ -168,6 +175,52 @@ def test_connection_error_is_transient_and_exhausts() -> None:
         assert exc.error_code == "provider_outcome_unknown"
         assert exc.retryable is False
     assert raised
+
+
+def test_structured_free_429_recovery_counts_provider_http_posts() -> None:
+    """A JSON-schema retry storm makes exactly three real provider POSTs."""
+    schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count", "strict": True,
+            "schema": {"type": "object", "properties": {"input_count": {"const": 10}},
+                       "required": ["input_count"], "additionalProperties": False},
+        },
+    }
+    refusal = {"error": {"message": "rate limited"}}
+    usage = {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+    with _FakeProvider([
+        (429, refusal), (429, refusal), (200, _completion('{"input_count":10}', usage)),
+    ], retry_after="1") as provider:
+        agents = [
+            ModelAgent(name, model, base_url=provider.base_url,
+                       tags=("cost:free",), priority=priority)
+            for name, model, priority in (("first_agent", "first-model", 10), ("second_agent", "second-model", 5))
+        ]
+        orchestrator = TaskOrchestrator(agents, rate_limit_wait_seconds=2.0)
+        with (
+            patch.object(orchestrator, "conduct", return_value={
+                "mode": "conduct", "answer": "evidence", "trace": [],
+                "verification": {}, "plan_source": "template",
+            }),
+            patch.object(ModelClient, "_validate_provider", lambda self, agent: None),
+        ):
+            result = orchestrator.proxy_completion({
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": schema,
+            }, single_agent=False)
+
+    assert provider.request_count == 3
+    assert [request["model"] for request in provider.requests] == [
+        "first-model", "second-model", "first-model",
+    ]
+    assert all(request["response_format"] == schema for request in provider.requests)
+    assert provider.request_times[2] - provider.request_times[0] >= 0.98
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    assert result["usage"] == usage
+    assert result["orchestration"]["route"]["stage"] == "structured_synthesis"
+    assert [row["provider_status"] for row in result["orchestration"]["route"]["attempted"][:2]] == [429, 429]
 
 
 if __name__ == "__main__":
