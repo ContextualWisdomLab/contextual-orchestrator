@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import logging
-import sys
 import io
 import json
+import logging
+import sys
 import threading
 import urllib.error
 import urllib.request
