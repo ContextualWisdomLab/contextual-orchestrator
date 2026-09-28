@@ -22,7 +22,7 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
-from contextual_orchestrator.server import RequestError, build_server
+from contextual_orchestrator.server import RequestError, SecurityConfig, build_server
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +180,24 @@ def test_build_review_orchestrator_admits_free_image_chat_model_for_figure_revie
     assert not orchestrator._is_general_free_agent(orchestrator.agents[0])
     assert orchestrator._is_free_agent(orchestrator.agents[0])
     assert orchestrator._agent_supports_image_input(orchestrator.agents[0])
+    server = build_server(
+        orchestrator, port=0,
+        security=SecurityConfig(admin_token="admin", inference_token="inference", review_only=True),
+    )
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/models",
+            headers={"authorization": "Bearer inference", "connection": "close"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert {item["id"] for item in json.load(response)["data"]} == {"orchestrator/free"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
 
 
 def test_build_review_orchestrator_unions_blind_free_and_image_chat_models(

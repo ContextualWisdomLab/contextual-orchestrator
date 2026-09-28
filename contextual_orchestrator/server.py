@@ -5926,10 +5926,16 @@ def build_server(
                     if path == "/v1/models":
                         models = orchestrator.list_openai_models()
                         if security.review_only:
-                            models["data"] = [
-                                row for row in models["data"]
-                                if row["id"] == TaskOrchestrator.FREE_MODEL
-                            ]
+                            free = next(
+                                (row for row in models["data"] if row["id"] == TaskOrchestrator.FREE_MODEL),
+                                None,
+                            )
+                            if free is None and any(
+                                not agent.disabled and orchestrator._is_free_agent(agent)
+                                for agent in orchestrator.agents
+                            ):
+                                free = {**models["data"][0], "id": TaskOrchestrator.FREE_MODEL}
+                            models["data"] = [free] if free is not None else []
                         self._send(models)
                         return
                     raw_model_id = path[len("/v1/models/") :]
