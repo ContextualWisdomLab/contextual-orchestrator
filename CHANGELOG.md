@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- The versioned chat API now describes the gateway failure body and streamed
+  terminal failures. Clients can keep provider or infrastructure failures
+  separate from completed review results; the runtime response format is
+  unchanged.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one
