@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, chat_completion_response, redact_text, redact_value  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import RequestError, SecurityConfig, build_server  # noqa: E402
 
 
 def build() -> TaskOrchestrator:
@@ -105,6 +105,36 @@ def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
         raise AssertionError("external verifier accepted the wrong scope")
     assert seen == [("keyverse-token", "inference"), ("keyverse-token", "admin")]
     assert security.readiness_profile()["auth_mode"] == "external_bearer_verifier"
+
+
+def test_empty_and_unicode_bearers_fail_closed() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def permissive_verifier(token: str, scope: str) -> bool:
+        seen.append((token, scope))
+        return True
+
+    external = SecurityConfig(bearer_verifier=permissive_verifier)
+    for authorize in (
+        lambda: external.authorize({"authorization": "Bearer "}, "inference", "127.0.0.1"),
+        lambda: external.establish_admin_session(""),
+        lambda: external.establish_admin_session(" "),
+    ):
+        try:
+            authorize()
+        except RequestError as exc:
+            assert exc.status == 401
+        else:  # pragma: no cover
+            raise AssertionError("empty bearer was authorized")
+    assert seen == []
+
+    static = SecurityConfig(admin_token="admin-token", inference_token="inference-token")
+    try:
+        static.authorize({"authorization": "Bearer tést"}, "inference", "127.0.0.1")
+    except RequestError as exc:
+        assert exc.status == 401
+    else:  # pragma: no cover
+        raise AssertionError("invalid Unicode bearer was authorized")
 
 
 def test_external_principal_resolver_survives_bearer_rotation() -> None:
