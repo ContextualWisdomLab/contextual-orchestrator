@@ -178,6 +178,19 @@ verified observed-task evidence and the protected release process.
 
 ## Evaluation methodology (NIM cost-quality benchmark)
 
+- Newcombe, R. G. (1998). Improved confidence intervals for the difference
+  between binomial proportions based on paired data. *Statistics in Medicine,
+  17*(22), 2635–2650.
+  https://doi.org/10.1002/%28SICI%291097-0258%2819981130%2917%3A22%3C2635%3A%3AAID-SIM954%3E3.0.CO%3B2-C
+  The publisher abstract identifies method 10 as a score-based interval for
+  paired binary outcomes. The [NCSS PASS manual](https://www.ncss.com/wp-content/themes/ncss/pdf/Procedures/PASS/Confidence_Intervals_for_the_Difference_Between_Two_Correlated_Proportions.pdf),
+  chapter 102, supplies its formula and a published 50-pair validation case.
+  Read scope: publisher metadata/abstract and manual pages 102-1 to 102-5 and
+  102-11. Both records were added to the local Zotero library on 2026-09-28;
+  neither copyrighted PDF is redistributed here. This supports a confidence
+  interval for a *declared, fully observed paired sample*. It does not prove
+  representative sampling, human adjudicator independence, or customer gain.
+
 - Feng, T., Yu, F., Zhang, H., Dai, Z., Yuan, L., Lei, Z., Zhang, W., Zhu, K.,
   Yue, H., Xuan, K., Liu, G., & You, J. (2026). *LLMRouter: Unified infrastructure
   for developing, evaluating, and deploying LLM routers* [Preprint]. arXiv.
