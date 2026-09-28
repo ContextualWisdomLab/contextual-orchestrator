@@ -139,6 +139,22 @@ owner tests and protected release. See [the evidence receipt](https://github.com
 These are failed deliveries in the accuracy denominator, not measured routing
 decision latencies. Their elapsed times include work beyond initial selection.
 
+### Structured synthesis 429 follow-up, 2026-09-25
+
+[Noema run 36024200990](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36024200990)
+reported a terminal 429 after 1288 seconds through the older sidecar source
+pin `767e67fbc6b881a452761f32abb69b9971b9b03b`. Its single caller attempt
+does not reveal internal candidate attempts. Source inspection separately found
+that Noema sends `orchestrator/free` with a JSON schema, and structured final
+synthesis exhausted retryable 429 candidates without the bounded cooldown
+recovery already used by conduct and passthrough. The focused regression was
+RED on parent `84736f4d` and GREEN after applying that shared wait contract to
+final synthesis and schema repair. Tests cover an all-429 storm, prior cooldown,
+budget expiry, mixed 429/502 and 429/413 outcomes, and a nonretryable 429.
+This is source-side evidence; a protected merged
+revision, immutable release, updated consumer pin, and a fresh hosted Noema
+run are still needed for delivery and acceptance.
+
 ## Stacked quality-trigger repair
 
 Lineage correction: existing PR #1066 at
@@ -676,3 +692,160 @@ on byte-identical fix files); #1105 head `b655fe1b`, still blocked on
 the same 3 pending-verdict CodeQL-compat failures with no self-healing
 rerun observed. Open-PR recount 88 (baseline 85). No merge, readiness
 change, or cross-branch push from this loop.
+
+## Structured synthesis zero-cooldown review repair, 2026-09-27
+
+After integrating protected main (including #1223) into #1251, review identified
+that a zero unknown cooldown admitted another synthesis send without waiting.
+A regression preparing success after the first 429 failed on the unchanged
+implementation because it sent again. The shared retry boundary now propagates
+the classified failure when no eligible candidate has an active cooldown; an
+already-expired wait deadline retains its storm classification. The preexisting
+cooldown regression also checks cooldown expiry at the actual send boundary.
+Local warnings-as-errors verification: 83 related tests passed in the broad
+run; its one new-test failure was an invalid exception-identity assertion
+(receipt attachment reconstructs the error), corrected to classified status,
+error code and one attempt. The corrected regression and cooldown boundary
+were verified separately. This is source evidence, not hosted approval or
+consumer release acceptance.
+
+## Main security runner admission, 2026-09-27
+
+After #1223, #1251 and #1253 merged, main Security run 36313956572 had
+four queued jobs with no runner while the general self-hosted pool had
+an idle runner. Group 3 already selected CO but admitted only central
+main workflow paths. Its existing restricted workflow policy and repository
+selection were retained; exactly CO security.yml@refs/heads/main was added
+and independently read back. Existing queued jobs still had no assignment.
+The four job selectors now explicitly request self-hosted Linux X64 cwlab
+only on push to main. PR, scheduled and manual jobs retain hosted Ubuntu.
+Dedicated CodeQL/OpenCode/control pools, security commands, permissions,
+concurrency and approval gates stay intact. Existing pool eligibility admits
+the general runners; no solver dependency or guessed duration weight is added.
+Actual runner assignment and terminal job results remain required proof.
+
+## Full-suite DIF fixture reconciliation, 2026-09-27
+
+Structure: #1266 carries the released fast-mlsirm 0.11.4 migration. The
+held-out diagnostic now requires the declared FDR, iteration, purification
+round and anchor controls explicitly; production callers already supply them.
+Two sample-size boundary tests still omitted those controls.
+
+RED at `ef7230193cd245ba496f4a8341c98989cc94f23a`: after locked dependency
+sync and the locked native receipt build, `uv run --no-sync python -m pytest
+-q -ra` exited 1 with 2 failed, 5,169 passed and 5 native-tokenizer skips
+(session 43349, 613.10 seconds). Both failures were argument binding errors in
+`tests/test_psychometric_benchmark_boundaries.py`, before the intended
+sample-size validation or diagnostic population construction.
+
+The repair passes the existing declared controls from the diagnostic module
+in those tests. It preserves the required function parameters and all three
+invalid sample-size cases; it does not add estimator defaults or change the
+synthetic evidence's authority. The complete affected file passes 38 tests
+(session 29288, exit 0, 6.46 seconds). This focused GREEN is not a new-head
+full-suite or hosted verdict.
+
+Loop ledger: `loop_id=co1016_dif_fixture_20260927`, `parent_id=co1016`,
+owner/scope=#1266 diagnostic fixtures, dependency=protected owner integration,
+status=LOCAL_REPAIR_VERIFIED, RED evidence SHA=`ef723019`, pass condition=
+current-head hosted full suite plus independent approval, retry condition=
+a source-backed new failure, `next_action=publish fixture repair and inspect
+current-head hosted checks`, `return_to=co1016_owner_delivery`.
+
+## Provider-owned 429 timing carryover — 2026-09-27
+
+Structure: #1266 owns the current integration source; #1231 and #1273 depend
+on it for #1016 causal receipts. #1249 at `8e9999ce` supplies unknown-timing
+admission semantics, not authority to replace newer routing, image, usage or
+cancellation implementations.
+
+Gap: no-header 429s invented cooldowns; ordinary chat immediately replayed
+quota rejection; passthrough and structured synthesis discarded timing already
+present in classified errors. Unknown timing also survived a fresh explicit
+provider success. No inference deadline is introduced by this repair.
+
+RED on the integration source: session `40970` reported five unknown-timing
+failures; fresh session `28860` reported seven failures, separating discarded
+classified timing from duplicate chat attempts. The explicit-success regression
+in session `46688` failed because admission remained unavailable after success.
+
+GREEN: session `50570`, strict warnings, 193 passed across taxonomy, admission,
+structured fallback, reliability and debug logging. Session `93548`: 123 passed
+across passthrough failover, HTTP tool controls and wrapped tool metadata. Commands:
+
+```sh
+.venv/bin/python -m pytest -c pyproject.toml tests/test_provider_error_taxonomy.py tests/test_rate_limit_aware_admission.py tests/test_structured_output_distinct_fallback.py tests/test_provider_reliability.py tests/test_orchestrator_debug_logging.py -q --tb=short -W error
+.venv/bin/python -m pytest -c pyproject.toml tests/test_passthrough_provider_failover.py tests/test_chat_tools_passthrough_controls_http_honesty.py tests/test_tool_fallback_wrapped_metadata.py -q --tb=short -W error
+```
+
+Unknown timing has no Retry-After, synthetic deadline or JSON Infinity; each
+eligible free candidate is visited once. Finite waits use provider evidence,
+including already-classified errors. Successful explicit execution clears quota
+admission evidence, without supplying judged answer-quality evidence. The legacy
+unknown-cooldown constructor field remains accepted but does not authorize a
+retry. Mocked conduct/synthesis and transport spies are not deployed Noema or
+wire-delivery evidence.
+
+CI allocation: central #2427 merged at `7dbd1e5a` under explicit user bypass
+permission, placing four metadata-only Noema jobs in the existing restricted
+control pool. Live runner group 6 contained runner 01 and 05, but 01 lacked
+`cwlab-control`; adding that label to runner id `1061765` preserved its existing
+labels and restored eligibility. Both control runners were online afterwards.
+Dedicated CodeQL/OpenCode pools and workflow trust restrictions were preserved.
+Current #1266 head `d6f2761d` still had queued required checks at verification;
+REST job inspection returned a shared API rate-limit error. No hosted success,
+independent approval, product merge or released contract is claimed.
+
+Loop ledger: `loop_id=co1016_provider_timing_20260927`, `parent_id=co1016`,
+`owner=#1266`, `depends_on=protected_main_and_current_head_review`,
+`status=LOCAL_VERIFIED`, `pass=finite_provider_timing_and_unknown_no_replay`,
+`retry=source_backed_failure`, `block=current_head_external_gate_only`,
+`evidence_sha=b6f6cede`,
+`next_action=integrate_current_main_and_restack_dependents`,
+`return_to=co1016_owner_delivery`.
+
+Todo: integrate protected main, restack #1231/#1273, obtain current-head hosted
+results and independent approval, then verify versioned owner publication.
+
+Integration follow-up: protected main `aaa4dfdd` adds mixed-pool recovery and
+immutable-release gates. Both independently added test sets are retained;
+finite recovery fixtures now carry explicit provider timing instead of the
+legacy guessed-cooldown parameter. Session `21508`: 113 passed with strict
+warnings for admission, structured fallback and exhausted-pool error ordering.
+Session `69680`: 203 passed and two HTTP recovery fixture failures; those two
+fixtures also lacked provider timing. After correcting only their timing
+evidence, session `7172` passed all 34 action-fallback tests. The 203 unchanged
+release/review cases were not repeated. These are local integration receipts,
+not hosted or published evidence.
+
+Mixed unknown-timing follow-up: the root integration test in session `97584`
+failed the existing mixed-failure taxonomy control after protected main added
+mixed-pool recovery. Session `84704` independently reproduced the structured
+counterpart: no-header 429 plus 502 became a storm 429 despite no authorized
+recovery time. Mixed-pool recovery now requires finite provider timing, while
+all-429 unknown-timing exhaustion remains an honest storm. The two mixed
+400/429 final-error fixtures retain the original classified 429, rather than
+claiming an all-provider storm or inventing a wait. Session `92108`: 176 passed
+with strict warnings across taxonomy, admission, structured fallback,
+exhausted-pool ordering and actual HTTP action fallback. No unknown-outcome
+candidate was granted replay authority.
+
+## Assumed 429 cooldown restored — 2026-09-27
+
+Review of #1266 head `1aa88da3` found that the provider-owned timing carryover
+above recorded a 429 without `Retry-After`/`x-ratelimit-reset*` as
+`_rate_limit_until = math.inf`. Only `_record_success` cleared it, and
+selection skips a rate-limited agent whenever an alternative exists, so such
+an agent was never selected again (still infinite after a simulated day,
+versus 5 s on `main`); `rate_limit_unknown_cooldown_seconds` had become dead
+code and `main`'s nine assumed-cooldown tests had been removed.
+
+The repair restores `main`'s finite assumed cooldown
+(`rate_limit_unknown_cooldown_seconds`, `cooldown_source: assumed`, "only
+extend forward"), the assumed-cooldown storm wait and its honest 429, and the
+nine `main` tests unchanged. It keeps the compatible parts of the carryover:
+classified provider timing is honored, an explicit quota rejection is not
+replayed on the same agent, and a fresh provider success clears the cooldown.
+The "unknown timing never retries" statements in the section above no longer
+describe the code. A new regression test shows the agent is skipped while its
+assumed cooldown runs and is selected again once it elapses.

@@ -106,6 +106,8 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
     indefinitely starving every later member of an uptime update. The fetch
     must stay bounded regardless of #971's inference-deadline policy.
     """
+    requested_sizes: list[int] = []
+
     class _Response:
         def __enter__(self):
             return self
@@ -113,7 +115,8 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def read(self) -> bytes:
+        def read(self, size: int = -1) -> bytes:
+            requested_sizes.append(size)
             return json.dumps({"data": {"endpoints": []}}).encode()
 
     collector, _, _, _ = _collectors(None)
@@ -127,6 +130,43 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
     timeout = opened.call_args.kwargs["timeout"]
     assert timeout is not None
     assert 0 < timeout <= 30
+    assert requested_sizes == [uptime_module._OPENROUTER_UPTIME_RESPONSE_MAX_BYTES + 1]
+
+
+def test_uptime_fetch_rejects_oversized_response_before_json_parse(monkeypatch) -> None:
+    """A telemetry response may not be read or parsed beyond its byte boundary."""
+    payload = json.dumps(
+        {
+            "data": {
+                "endpoints": [{"uptime_last_30m": 99.5}],
+                "padding": "x" * 256,
+            }
+        }
+    ).encode()
+    requested_sizes: list[int] = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            requested_sizes.append(size)
+            return payload if size < 0 else payload[:size]
+
+    monkeypatch.setattr(uptime_module, "_OPENROUTER_UPTIME_RESPONSE_MAX_BYTES", 64, raising=False)
+    monkeypatch.setattr(
+        uptime_module.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(),
+    )
+    collector, _, _, _ = _collectors(None)
+    del collector._fetch_uptime
+
+    assert collector._fetch_uptime("org/model-a") is None
+    assert requested_sizes == [65]
 
 
 def test_uptime_fetch_does_not_hang_forever_on_an_unresponsive_endpoint(monkeypatch) -> None:
@@ -382,6 +422,54 @@ def test_malformed_model_path_never_reaches_transport(monkeypatch, model_id):
     collector = OpenRouterUptimeCollector([], ModelGroupRouter())
 
     assert collector._fetch_uptime(model_id) is None
+
+
+def test_stop_winning_between_check_and_commit_leaves_no_late_write() -> None:
+    """No transport evidence is committed after ``stop()`` has returned.
+
+    CodeRabbit discussion_r4065984128: ``_poll_agent`` checked the stop flag
+    and then wrote ``_window_evidence``/``update_prior`` without a lock, so a
+    ``stop()`` landing between the check and the commit returned while a
+    write was still coming. The hook runs ``stop()`` on another thread at the
+    exact check; unfixed, ``stop()`` completes and the write lands after it.
+    """
+    collector, group_router, _, _ = _collectors(95.0)
+    stop_returned = threading.Event()
+    late_writes: list[str] = []
+
+    class StopAtCheck(threading.Event):
+        """Run a racing ``stop()`` the first time the poll checks the flag."""
+
+        fired = False
+
+        def is_set(self) -> bool:
+            """Let ``stop()`` race in between the flag check and the commit."""
+            observed = super().is_set()
+            if not StopAtCheck.fired:
+                StopAtCheck.fired = True
+                racer = threading.Thread(
+                    target=lambda: (collector.stop(), stop_returned.set())
+                )
+                racer.start()
+                racer.join(timeout=0.2)
+            return observed
+
+    collector._stop_event = StopAtCheck()
+    real_update = group_router.update_prior
+
+    def record_update(*args, **kwargs):
+        """Flag any commit that lands after ``stop()`` returned."""
+        if stop_returned.is_set():
+            late_writes.append(args[0])
+        return real_update(*args, **kwargs)
+
+    group_router.update_prior = record_update  # type: ignore[method-assign]
+    collector._poll_agent(_agents()[0])
+    assert stop_returned.wait(2.0)
+    assert late_writes == []
+    after = collector.window_evidence(_agents()[0].id)
+    collector._poll_agent(_agents()[0])
+    assert collector.window_evidence(_agents()[0].id) == after
 
 
 if __name__ == "__main__":
