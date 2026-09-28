@@ -1,0 +1,97 @@
+# Binary document diff review (document_diff_review.v1)
+
+Owner split, agreed with the `.github` lead on 2026-09-22:
+
+- `.github` (new sibling PR, not #2281): materialize base/head blobs, run the
+  runner-side safety checks (size, entry count, compression ratio, macros,
+  external relationships, traversal, participant and secret patterns), extract
+  objects, diff them, and emit the envelope. PDFs and images are blob-level
+  `page` objects with hashes.
+- Gateway (this repository): `contextual_orchestrator/document_diff_review.py`
+  plus the `POST /v1/document_diff_reviews` route. Contract: ADR 0136.
+
+## Reproduce
+
+```bash
+python -m pytest tests/test_document_diff_review.py -q -W error
+```
+
+RED on `origin/main` 5665b0ad: 12 failed (route absent). GREEN on this branch:
+12 passed. The fixture builds two DOCX binaries (body says 120 → 118
+participants, table cell and caption still say 120, figure image replaced). A
+test-side extractor derives the envelope. The response carries two located
+findings. One is a rule finding (figure changed, caption unchanged) and one is
+a model finding (body versus table), with quotes from the envelope. The
+captured provider payloads contain no DOCX bytes, no base64 of either DOCX, no
+ZIP signature, and no image bytes. Ten fail-closed cases return 4xx with no
+provider call.
+
+## Evidence boundaries
+
+- The model finding in the test comes from a mocked provider. The test proves
+  the boundary and validation, not model review quality.
+- Each free-route request also triggers the existing answer-judge verification
+  call. Both calls are covered by the binary-free assertion.
+- `base_blob`/`head_blob` identity is not verified by the gateway.
+- Participant checks are attestation, path segments, and a resident number
+  pattern. They are not proof that no participant material exists.
+- Inline-media screening covers data URIs with long headers and long standard
+  or URL-safe Base64 runs. This is a boundary heuristic, not proof that encoded
+  content is absent.
+- No figure pixels are sent in v1.
+- `zdr_only` defaults to `true`. The review leaf should send `false` only for
+  public repositories, mirroring its `require_zdr` visibility decision.
+- Every model finding must quote at least one envelope span; a hash-only
+  figure/page finding without a quote is rejected (`502 unsupported_evidence`).
+
+## Current-main integration, 2026-09-27
+
+The merge with main `8df067ac` preserves every main test definition and both
+branch quota regressions. The zero-wait case now checks the exhausted eligible
+quota result while retaining both provider statuses, exact attempt order, no
+replay, and independent circuit failure counts. Three tests that replace the
+client retain and close their own synthetic HTTP errors with `ExitStack`; they
+do not exercise or alter production transport response ownership.
+
+The document envelope, structured fallback, image quota, exhausted-pool error
+ordering, rate admission, HTTP response-format, and free multimodal regressions
+passed together: 208 passed with warnings as errors, process exit 0. The earlier
+`d9815f90` full default suite separately passed 5,115 tests with five native
+tokenizer skips and two deprecated-API warnings; it is predecessor evidence,
+not a full-suite result for this merged tree or hosted review approval.
+
+The current-tree full suite initially finished with 5,253 passes and one failure:
+`test_invoke_reraises_mixed_failure_without_waiting`. The same assertion failed
+on unmodified main `8df067ac`. Main's merged #1222 permits a budget-bounded retry
+of an explicitly rejected 429 candidate after another candidate fails. The old
+test prohibited that recovery and its fake sleep did not advance its fake clock.
+The replacement uses the neighboring advancing-clock pattern and explicit
+zero/positive wait budgets. Exact call order proves that the 500 candidate is
+never replayed, while the rejected candidate can recover only within budget.
+The complete taxonomy file passed 29 tests with warnings as errors. The CI
+benchmark contract passed 190 tests, 100% branch coverage and 100% public
+docstrings. These local results do not establish hosted checks or approval.
+
+After this repair, the full default native suite completed exit 0: 5,255 passed,
+five native tokenizer skips and two existing deprecated-API warnings. The
+seven-file routing/document regression set separately passed 208 tests with
+warnings as errors.
+
+## Boundary rejection coverage, 2026-09-27
+
+A standalone branch-coverage run at `637df4db` exposed 81% coverage in the
+new document review module despite 24 passing tests. Added cases exercise
+malformed references and objects, traversal, nullable added/removed sides,
+UTF-8 and aggregate text budgets, malformed or duplicate-key model JSON,
+invalid evidence locations, and rejection of an invalid second finding
+without returning partial results. The HTTP body cap can reject an oversized
+envelope before its text budget is reached; a separate public-validator test
+proves the aggregate text gate itself instead of accepting the same 413 from
+the earlier HTTP gate. The module now passes 65 tests with warnings as errors
+and 100% statement/branch coverage (205 statements, 98 branches). This is a
+local boundary receipt, not hosted review approval or coverage of the whole
+server.
+
+Before integrating later main changes, the full boundary-repair tree passed
+5,296 tests (five native tokenizer skips, two existing deprecated-API warnings),
+process exit 0. This result is scoped to that pre-integration tree.
