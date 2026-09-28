@@ -5,12 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
+import stat
+from contextlib import ExitStack, closing
 from pathlib import Path
 import sys
 from dataclasses import replace
 
 from .chat_capability import is_chat_compatible_model_id
-from .cost_ledger import PriceBook
+from .cost_ledger import CostLedger, PriceBook, SqlLedgerStore
 from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .debug_logging import configure_logging, parse_log_level_name
@@ -988,6 +991,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
+    parser.add_argument("--usage-ledger-db", default=None,
+                        help="Optional sqlite path to retain served usage records across restarts.")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
@@ -1135,6 +1140,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     _add_log_level_arguments(parser)
     args = parser.parse_args(arguments)
+    if args.usage_ledger_db is not None:
+        if not args.serve:
+            parser.error("--usage-ledger-db requires --serve")
+        if not args.usage_ledger_db.strip() or args.usage_ledger_db == ":memory:":
+            parser.error("--usage-ledger-db must name an on-disk SQLite file")
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -1248,39 +1258,60 @@ def main(argv: list[str] | None = None) -> None:
                 "--production/--allow-public-bind requires admin and inference tokens "
                 "to resolve to distinct credential values"
             )
-        serve(
-            orchestrator,
-            host=args.host,
-            port=args.port,
-            security=SecurityConfig(
-                auth_token=auth_token,
-                admin_token=admin_token,
-                inference_token=inference_token,
-                trace_token=trace_token,
-                max_body_bytes=args.max_body_bytes,
-                max_concurrent_runs=args.max_concurrent_runs,
-                allow_public_bind=args.allow_public_bind,
-                expose_trace_by_default=args.expose_trace_by_default,
-                admin_session_secure_cookie=not args.insecure_admin_session_cookie,
-                **(
-                    {}
-                    if args.rate_limit_requests is None
-                    else {"rate_limit_requests": args.rate_limit_requests}
-                ),
-                **(
-                    {}
-                    if args.rate_limit_window_seconds is None
-                    else {"rate_limit_window_seconds": args.rate_limit_window_seconds}
-                ),
-            ),
-            clearfolio_url=args.clearfolio_url,
-            coordinator=CostRoutingCoordinator(
+        with ExitStack() as resources:
+            config = _bootstrap_telemetry_config()
+            price_book = PriceBook(config)
+            ledger = None
+            if args.usage_ledger_db:
+                ledger_path = Path(args.usage_ledger_db)
+                try:
+                    descriptor = os.open(ledger_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                except FileExistsError:
+                    pass
+                else:
+                    os.close(descriptor)
+                ledger_stat = ledger_path.lstat()
+                if not stat.S_ISREG(ledger_stat.st_mode) or (
+                    os.name == "posix"
+                    and (ledger_stat.st_uid != os.geteuid() or stat.S_IMODE(ledger_stat.st_mode) & 0o077)
+                ):
+                    parser.error("--usage-ledger-db must be an owner-only regular file")
+                connection = resources.enter_context(closing(sqlite3.connect(
+                    ledger_path, check_same_thread=False,
+                )))
+                ledger = CostLedger(price_book, store=SqlLedgerStore(connection))
+            serve(
                 orchestrator,
-                config_store=_bootstrap_telemetry_config(),
-            ),
-            release_authority=release_authority,
-            decision_receipts=args.decision_receipts,
-        )
+                host=args.host,
+                port=args.port,
+                security=SecurityConfig(
+                    auth_token=auth_token,
+                    admin_token=admin_token,
+                    inference_token=inference_token,
+                    trace_token=trace_token,
+                    max_body_bytes=args.max_body_bytes,
+                    max_concurrent_runs=args.max_concurrent_runs,
+                    allow_public_bind=args.allow_public_bind,
+                    expose_trace_by_default=args.expose_trace_by_default,
+                    admin_session_secure_cookie=not args.insecure_admin_session_cookie,
+                    **(
+                        {}
+                        if args.rate_limit_requests is None
+                        else {"rate_limit_requests": args.rate_limit_requests}
+                    ),
+                    **(
+                        {}
+                        if args.rate_limit_window_seconds is None
+                        else {"rate_limit_window_seconds": args.rate_limit_window_seconds}
+                    ),
+                ),
+                clearfolio_url=args.clearfolio_url,
+                coordinator=CostRoutingCoordinator(
+                    orchestrator, config_store=config, price_book=price_book, ledger=ledger,
+                ),
+                release_authority=release_authority,
+                decision_receipts=args.decision_receipts,
+            )
         return
 
     if not args.prompt:

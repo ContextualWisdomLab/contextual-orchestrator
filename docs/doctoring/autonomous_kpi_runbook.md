@@ -1,5 +1,33 @@
 # Autonomous KPI experiment runbook
 
+## Durable serving usage evidence candidate, 2026-09-28
+
+The serving CLI's default cost ledger is in memory even when `--state-db`
+persists workflow and decision records. For a request-cost baseline that must
+survive restart, supply a separate SQLite path with `--usage-ledger-db` when
+starting `--serve`. The existing SQL ledger schema and its normalized usage
+rows are reused. Startup fails if that store cannot be opened or migrated;
+empty paths and SQLite's `:memory:` alias are refused. The CLI closes its
+connection after serving stops. On POSIX, a new file is created with
+owner-only permissions, and an existing symlink or broadly readable file is
+refused without changing it. This flag does not enable
+decision receipts, and a durable ledger alone cannot prove complete request
+cost or customer savings.
+
+The first CLI restart regression failed because the flag did not exist. After
+adding the opt-in store, the same regression showed a record retained after
+an actual HTTP request, an authenticated admin read after a second CLI start,
+and both ledger connections closed. A second RED exposed separate
+price-book objects for routing and billing; they now share one instance.
+The CLI/auth/logging/cost-review slice passed 80 tests with `-W error` using
+the locked project-local Python 3.14 environment. This is local fixture
+traffic, not customer usage.
+Reconcile persisted IDs with request outcome links only after the ledger has
+settled, and exclude missing, unavailable, or truncated observations. The
+admin usage endpoint still uses page-number paging without a frozen ledger
+snapshot, so a live multipage scrape is not a complete baseline. Hosted
+Linux, a protected release, and observed workload targets remain unverified.
+
 ## Title-only citation reconciliation, 2026-09-12
 
 At parent `14a6a943e99bd1dcf8b65a2780b0c80dbc70edcb`, the Fox and Glas
