@@ -234,6 +234,14 @@ jobs:
       - name: Verify every check reported for this commit is complete and green
         run: bash scripts/ci/release_checks_gate.sh
 
+      - name: Set up pinned Docker Compose
+        uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # docker/setup-compose-action@v2
+        with:
+          version: "v5.4.0"
+
+      - name: Verify Docker Compose CLI
+        run: docker compose version
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
         with:
@@ -270,6 +278,12 @@ jobs:
             --inventory dependency-inventory.json \
             --source-sha "${TARGET_SHA}" \
             --mode preinstall
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: "1.97.1" # Keep aligned with mise.toml.
+          components: rustfmt, clippy
 
       - name: Build locked native decision measurement for the full test suite
         run: |
