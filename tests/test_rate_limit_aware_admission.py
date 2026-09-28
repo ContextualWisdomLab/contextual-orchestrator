@@ -818,7 +818,6 @@ def test_route_once_preserves_attempts_across_judge_rejected_worker_rounds() -> 
     ]
     assert [attempt["outcome"] for attempt in result["route"]["attempted"]] == [
         "retryable_transport",
-        "retryable_transport",
         "served",
         "served",
     ]
@@ -1436,3 +1435,88 @@ def test_http_route_once_retries_cooling_candidate_after_mixed_exhaustion(other_
         "fallback_free_agent",
         "primary_free_agent",
     ]
+
+
+def test_free_tool_request_advances_after_explicit_429() -> None:
+    """An explicit quota rejection should not retry the same cooling candidate."""
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=2, rate_limit_wait_seconds=0.0
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [
+                _rate_limited_upstream_error(30.0),
+                "unexpected same-agent retry",
+            ],
+            "fallback_free_agent": ["served after failover"],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+    orchestrator._realtime_route_judge = lambda **_kwargs: {
+        "accepted": True,
+        "reason": "accepted",
+        "verifier_output": "",
+        "judge": "test",
+    }
+    token = "unit-token"  # noqa: S105
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        status, body, _response = _post_chat_completion(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "check this"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "inspect",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        orchestrator.close()
+
+    assert status == 200, body
+    assert body["choices"][0]["message"]["content"] == "served after failover"
+    assert chat_outcomes.calls == ["primary_free_agent", "fallback_free_agent"]
+    assert "primary_free_agent" not in orchestrator._circuit
+
+
+def test_expired_cooldown_does_not_retry_unrelated_provider_error() -> None:
+    orchestrator = TaskOrchestrator(
+        _single_free_agent(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    orchestrator._record_rate_limit("solo_free_agent", 30.0)
+    failure = ProviderUpstreamError(
+        agent_id="solo_free_agent", model="solo-free-model",
+        error_code="upstream_error", message="provider failed",
+        client_status=502, provider_status=500, retryable=False, transport="chat",
+    )
+    calls: list[str] = []
+
+    def fail_after_cooldown_expires(agent: ModelAgent, *_args: Any, **_kwargs: Any) -> str:
+        calls.append(agent.id)
+        orchestrator._rate_limit_until[agent.id] = time.monotonic() - 1
+        raise failure
+
+    orchestrator.client.chat = fail_after_cooldown_expires
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            orchestrator.route_once(
+                [{"role": "user", "content": "hello"}],
+                model_name=TaskOrchestrator.FREE_MODEL,
+            )
+        assert excinfo.value is failure
+        assert calls == ["solo_free_agent"]
+    finally:
+        orchestrator.close()

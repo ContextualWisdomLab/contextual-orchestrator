@@ -1088,9 +1088,17 @@ class ProviderEmbeddingBatchBackend:
 
     def close(self) -> None:
         """Release the bounded worker pool owned by this backend."""
-        self._closed.set()
         with self._executor_lock:
+            self._closed.set()
             executor, self._executor = self._executor, None
+        for job_id, event in list(self._terminal_events.items()):
+            if self._registry.durable:
+                # The next backend can reclaim persisted work after this worker exits.
+                event.set()
+            else:
+                self.cancel(
+                    BatchJob(job_id=job_id, backend=self.name), reason="backend closed"
+                )
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -1164,6 +1172,7 @@ class ProviderEmbeddingBatchBackend:
                     job_id,
                     lease_seconds=self._claim_lease_seconds,
                     renew_until_epoch=deadline_epoch,
+                    renew_while=lambda: not self._closed.is_set(),
                 ) as execution_claim:
                     self._run_claimed_job(job_id, execution_claim)
             except ClaimNotAcquired:
@@ -1255,6 +1264,8 @@ class ProviderEmbeddingBatchBackend:
         requests = list(self._requests[job_id])
         try:
             vectors, prompt_tokens = self._runner(requests)
+            if self._closed.is_set():
+                execution_claim.mark_lost()
             execution_claim.ensure_owned()
             if time.time() >= self._execution_deadline(job_id):
                 self._publish_terminal(
@@ -1295,6 +1306,9 @@ class ProviderEmbeddingBatchBackend:
         except ClaimNotAcquired:
             raise
         except Exception as exc:  # noqa: BLE001 - polling exposes bounded failure metadata
+            if self._closed.is_set():
+                execution_claim.mark_lost()
+            execution_claim.ensure_owned()
             error = {
                 "error_type": type(exc).__name__,
                 "http_status": getattr(
@@ -1320,32 +1334,36 @@ class ProviderEmbeddingBatchBackend:
         usage: Any = None,
         error: Any = None,
     ) -> None:
-        """Publish terminal state atomically for durable registries."""
-        if self._registry.durable:
-            self._registry.publish_provider_embedding_terminal(
-                execution_claim,
-                job_id,
-                status=status,
-                results=results,
-                usage=usage,
-                error=error,
-            )
-            return
-        with self._registry.lock(
-            "provider_embedding_job_states",
-            job_id,
-            lease_seconds=self._claim_lease_seconds,
-        ):
+        """Fence shutdown and publish one terminal outcome under the lifecycle lock."""
+        with self._executor_lock:
+            if self._closed.is_set():
+                execution_claim.mark_lost()
             execution_claim.ensure_owned()
-            if self._states.get(job_id) not in {"queued", "running"}:
-                raise ClaimNotAcquired("provider embedding job is already terminal")
-            if results is not None:
-                self._results[job_id] = results
-            if usage is not None:
-                self._usage[job_id] = usage
-            if error is not None:
-                self._errors[job_id] = error
-            self._states[job_id] = status
+            if self._registry.durable:
+                self._registry.publish_provider_embedding_terminal(
+                    execution_claim,
+                    job_id,
+                    status=status,
+                    results=results,
+                    usage=usage,
+                    error=error,
+                )
+                return
+            with self._registry.lock(
+                "provider_embedding_job_states",
+                job_id,
+                lease_seconds=self._claim_lease_seconds,
+            ):
+                execution_claim.ensure_owned()
+                if self._states.get(job_id) not in {"queued", "running"}:
+                    raise ClaimNotAcquired("provider embedding job is already terminal")
+                if results is not None:
+                    self._results[job_id] = results
+                if usage is not None:
+                    self._usage[job_id] = usage
+                if error is not None:
+                    self._errors[job_id] = error
+                self._states[job_id] = status
 
     def wait(self, job: BatchJob, *, timeout: float | None) -> Dict[str, Any]:
         """Wait within the caller's explicit deadline for a terminal state.
@@ -1354,10 +1372,18 @@ class ProviderEmbeddingBatchBackend:
         wall-clock deadline (contextual-orchestrator's no-implicit-deadline
         default). ``threading.Event.wait`` raises ``OverflowError`` for a
         non-finite timeout on CPython, so both forms are translated to ``None``
-        (block indefinitely) rather than passed through.
+        (block indefinitely) rather than passed through. Durable unbounded waits
+        observe shared terminal state at the backend's existing claim cadence;
+        another process cannot signal this process's local event.
         """
         event = self._terminal_events.get(job.job_id)
-        if event is not None:
+        if event is not None and self._registry.durable and (
+            timeout is None or not math.isfinite(timeout)
+        ):
+            while not self._closed.is_set() and not self.poll(job)["is_complete"]:
+                if event.wait(self.poll_after_ms / 1000):
+                    break
+        elif event is not None:
             event.wait(
                 timeout=(
                     timeout
