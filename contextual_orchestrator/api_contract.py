@@ -8,7 +8,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.3.1",
+        "version": "0.3.2",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -237,11 +237,12 @@ OPENAPI_SPEC = {
                             "request_too_large_exhausted",
                             "rate_limit_wait_budget_exhausted",
                             "rate_limited_storm",
+                            "pinned_candidate_failed",
+                            "stream_interrupted",
                         ],
                         "description": (
-                            "Why the route stopped. Quota terminal reasons retain the "
-                            "failure's separate provider timing evidence; they do not "
-                            "establish a retry instant or an inference deadline."
+                            "Why the route stopped. Quota terminal reasons retain separate "
+                            "provider timing evidence, not a retry instant or inference deadline."
                         ),
                     },
                 },

@@ -196,7 +196,7 @@ def test_http_route_stream_rejects_provider_eof_without_done() -> None:
     assert errors[0]["code"] == "provider_stream_incomplete"
     assert errors[0]["detail"]["request_id"] == request_id
     assert errors[0]["detail"]["retryable"] is False
-    assert errors[0]["detail"]["route"]["terminal_reason"] == "fail_closed"
+    assert errors[0]["detail"]["route"]["terminal_reason"] == "stream_interrupted"
     assert [attempt["outcome"] for attempt in errors[0]["detail"]["route"]["attempted"]] == ["fail_closed"]
     assert chunks[-1]["choices"][0]["finish_reason"] == "error"
     assert all(chunk.get("orchestration", {}).get("route", {}).get("terminal_reason") != "served"
@@ -739,6 +739,55 @@ def test_stream_exhaustion_retains_typed_attempts_without_provider_prose() -> No
         "primary_worker", "fallback_worker",
     ]
     assert all(row["outcome"] == "retryable_transport" for row in route["attempted"])
+    assert "private provider response" not in json.dumps(caught.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "emit_first", "terminal_reason"),
+    [
+        ("primary-model", False, "pinned_candidate_failed"),
+        (TaskOrchestrator.AUTO_MODEL, True, "stream_interrupted"),
+    ],
+)
+def test_stream_terminal_provider_error_keeps_route(
+    model_name: str, emit_first: bool, terminal_reason: str
+) -> None:
+    """A pinned or partially emitted stream retains typed failure provenance."""
+    class FailingStream:
+        def stream_chat(self, agent, messages, **kwargs):  # noqa: ANN001 - test double
+            del messages, kwargs
+            if emit_first:
+                yield "partial"
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="authentication_error",
+                message="private provider response",
+                client_status=401,
+                provider_status=401,
+                retryable=False,
+                transport="stream",
+            )
+
+    orchestrator = TaskOrchestrator(_stream_failover_agents(), client=FailingStream())
+    deltas: list[str] = []
+    with pytest.raises(ProviderUpstreamError) as caught:
+        for delta in orchestrator.stream_route(
+            [{"role": "user", "content": "continue"}], model_name=model_name
+        ):
+            deltas.append(delta)
+    assert deltas == (["partial"] if emit_first else [])
+    route = caught.value.detail["route"]
+    assert route["terminal_reason"] == terminal_reason
+    assert route["attempted"] == [{
+        "agent_id": "primary_worker",
+        "model": "primary-model",
+        "outcome": "fail_closed",
+        "error_code": "authentication_error",
+        "provider_status": 401,
+        "retryable": False,
+        "transport": "stream",
+    }]
     assert "private provider response" not in json.dumps(caught.value.detail)
 
 
