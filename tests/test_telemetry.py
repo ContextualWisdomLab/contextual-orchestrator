@@ -502,6 +502,55 @@ def test_terminal_http_log_has_typed_outcome_and_verified_build(caplog):
     assert "synthetic-secret" not in caplog.text
 
 
+@pytest.mark.parametrize("model", ("mock-planner", "orchestrator/auto"))
+def test_responses_terminal_log_identifies_served_model(caplog, model):
+    """A completed Responses call reports its final configured member."""
+    import http.client
+
+    orchestrator = orchestrator_module.TaskOrchestrator(
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=server_module.SecurityConfig(auth_token="local-test-token"),
+        build_sha="b" * 40,
+    )
+    server_thread = _start_test_server(server)
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+            try:
+                connection.request(
+                    "POST",
+                    "/v1/responses",
+                    json.dumps({"model": model, "input": "Say hello"}),
+                    {
+                        "content-type": "application/json",
+                        "authorization": "Bearer local-test-token",
+                    },
+                )
+                with connection.getresponse() as response:
+                    assert response.status == 200
+                    response.read()
+            finally:
+                connection.close()
+            _wait_for_caplog(caplog, lambda text: "http_request method=POST" in text)
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+        server.server_close()
+
+    summaries = [
+        record.getMessage() for record in caplog.records
+        if record.name == "contextual_orchestrator.server"
+        and record.getMessage().startswith("http_request method=POST path=/v1/responses ")
+    ]
+    assert len(summaries) == 1
+    assert "status=200" in summaries[0]
+    assert "served_model=mock-planner error_class=none" in summaries[0]
+
+
 def test_terminal_model_uses_final_successful_member_only():
     """Attempted candidates and virtual response names cannot become served models."""
     agents = [ModelAgent("first_agent", "provider/first"), ModelAgent("second_agent", "provider/second")]

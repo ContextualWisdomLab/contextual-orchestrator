@@ -134,6 +134,23 @@ def _terminal_model_from_response(result: Mapping[str, Any], orchestrator: TaskO
             return model
     return "unknown"
 
+
+def _terminal_model_from_proxy_completion(
+    result: Mapping[str, Any], orchestrator: TaskOrchestrator, *, tool_loop: bool
+) -> str:
+    """Use the completed proxy response or its persisted final workflow step."""
+    if tool_loop:
+        return _terminal_model_from_response(result, orchestrator)
+    lineage = result.get("orchestration")
+    workflow_id = lineage.get("workflow_run_id") if isinstance(lineage, dict) else None
+    if not isinstance(workflow_id, str):
+        return "unknown"
+    try:
+        workflow = orchestrator.get_workflow_run(workflow_id)
+    except Exception:  # Diagnostics never change a served response.
+        return "unknown"
+    return _terminal_model_from_trace(workflow, orchestrator)
+
 _SAFE_BINARY_CONTENT_TYPES = frozenset(
     {
         "application/octet-stream",
@@ -7367,22 +7384,9 @@ def build_server(
                             if tool_loop
                             else _response_payload(proxied, include_trace)
                         )
-                        if tool_loop:
-                            self._terminal_served_model = _terminal_model_from_response(
-                                proxied, orchestrator
-                            )
-                        else:
-                            lineage = proxied.get("orchestration")
-                            workflow_id = lineage.get("workflow_run_id") if isinstance(lineage, dict) else None
-                            if isinstance(workflow_id, str):
-                                try:
-                                    workflow = orchestrator.get_workflow_run(workflow_id)
-                                except Exception:  # Diagnostics never change a served response.
-                                    pass
-                                else:
-                                    self._terminal_served_model = _terminal_model_from_trace(
-                                        workflow, orchestrator
-                                    )
+                        self._terminal_served_model = _terminal_model_from_proxy_completion(
+                            proxied, orchestrator, tool_loop=tool_loop
+                        )
                         if stream:
                             self._send_sse(
                                 sse_stream_body(
@@ -8202,6 +8206,9 @@ def build_server(
                                 "response_streamed": False,
                             },
                         )
+                        self._terminal_served_model = _terminal_model_from_trace(
+                            result, orchestrator
+                        )
                         self._send(
                             _orchestrated_response(
                                 model_name,
@@ -8263,6 +8270,9 @@ def build_server(
                             "status_code": 200,
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
+                    )
+                    self._terminal_served_model = _terminal_model_from_proxy_completion(
+                        proxied, orchestrator, tool_loop=tool_loop
                     )
                     self._send(_response_payload(proxied, include_trace=False))
                     return
