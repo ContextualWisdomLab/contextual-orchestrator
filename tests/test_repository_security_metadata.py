@@ -57,16 +57,21 @@ def test_security_workflow_covers_core_repository_security_process():
         "wait-for-processing: false",
         "codeql github upload-results",
         "actions/setup-python@v6",
+        "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1",
+        "uv sync --locked --extra api --extra db --extra queue --group dev",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
-        "python -m pip install --require-hashes -r requirements.lock",
-        "python -m pip install --no-deps -e .",
-        "python -m pip_audit -r requirements.lock",
-        "cyclonedx-py environment",
+        "uv pip install --python .venv/bin/python --require-hashes -r requirements-opencode-review-ci.txt",
+        "uv pip install --python .venv/bin/python --require-hashes -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt",
+        "python -m pip_audit --require-hashes -r requirements.lock",
+        "python -m pip_audit --path .venv/lib/python3.12/site-packages",
+        "cyclonedx-py environment .venv/bin/python",
+        "uv build --wheel --no-build-isolation --python .venv/bin/python --out-dir dist",
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
     for expected_token in expected_tokens:
         assert expected_token in workflow_text
+    assert "prepare_runtime_lock_audit.py" not in workflow_text
 
     removed_duplicate_scanners = [
         "actions/dependency-review-action@",
@@ -90,7 +95,8 @@ def test_security_workflow_covers_core_repository_security_process():
 
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
-    assert workflow_text.count("runs-on: ubuntu-24.04") == 4
+    selector = '${{ github.event_name == \'push\' && github.ref == \'refs/heads/main\' && fromJSON(\'["self-hosted","linux","x64","cwlab"]\') || \'ubuntu-24.04\' }}'
+    assert workflow_text.count("runs-on: " + selector) == 4
     assert "runs-on: ubuntu-latest" not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
@@ -275,3 +281,52 @@ if __name__ == "__main__":  # pragma: no cover
     test_python_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
     print("ok")
+
+
+def test_native_workflows_bootstrap_the_repository_pinned_rust_toolchain():
+    """Fresh runners must install Rust before any native command."""
+    import tomllib
+
+    version = tomllib.loads(read_text("mise.toml"))["tools"]["rust"]
+    action = "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87"
+    for path, expected_count in ((".github/workflows/security.yml", 2),
+                                 (".github/workflows/release.yml", 1)):
+        text = read_text(path)
+        assert text.count(action) == expected_count
+        assert text.count(f'toolchain: "{version}"') == expected_count
+        assert "rustup toolchain install stable" not in text
+        for job in text.split("    steps:")[1:]:
+            if "rustup " in job or "cargo fmt " in job:
+                assert job.index(action) < min(
+                    job.index(token) for token in ("rustup ", "cargo fmt ")
+                    if token in job
+                )
+
+
+def test_rust_gate_selects_shared_python_for_pyo3_linking():
+    """Rust test binaries must link against the configured Python runtime."""
+    rust_job = (
+        read_text(".github/workflows/security.yml")
+        .split("  rust:\n", 1)[1]
+        .split("\n  security:\n", 1)[0]
+    )
+    assert "id: python" in rust_job
+    assert 'python-version: "3.12"' in rust_job
+    assert rust_job.index("actions/setup-python@") < rust_job.index("cargo clippy")
+    assert 'directory = Path(sys.base_prefix) / "lib"' in rust_job
+    assert 'if not library.is_file():' in rust_job
+    assert rust_job.index("Locate relocated Python shared library") < rust_job.index("cargo clippy")
+    for step in ("Clippy (deny warnings)", "Test workspace"):
+        block = rust_job.split(f"- name: {step}\n", 1)[1].split("      - name:", 1)[0]
+        assert "PYO3_PYTHON: ${{ steps.python.outputs.python-path }}" in block
+        assert "RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}" in block
+
+
+def test_full_suite_workflows_prepare_compose_before_render_checks():
+    """Full suites need Compose independently of the runner's plugin state."""
+    action = "docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a"
+    for path in (".github/workflows/security.yml", ".github/workflows/release.yml"):
+        text = read_text(path)
+        assert action in text
+        assert 'version: "v5.4.0"' in text
+        assert text.index(action) < text.index("docker compose version") < text.index("-m pytest")

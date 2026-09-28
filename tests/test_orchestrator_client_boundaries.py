@@ -509,8 +509,8 @@ def _streaming_agent() -> ModelAgent:
     )
 
 
-def test_stream_survives_noise_and_stream_without_done_marker() -> None:
-    """Non-JSON junk and a stream that ends without [DONE] still yield deltas."""
+def test_stream_yields_noise_filtered_deltas_then_rejects_missing_done_marker() -> None:
+    """Noise does not hide partial deltas or make an incomplete stream served."""
     agent = _streaming_agent()
     client = ModelClient()
     lines = [
@@ -522,8 +522,13 @@ def test_stream_survives_noise_and_stream_without_done_marker() -> None:
     with patch.object(
         client, "_open_provider", return_value=_StreamResponse(lines)
     ):
-        deltas = list(client._stream_send(agent, {}))
-    assert deltas == ["hel", "lo"]
+        stream = client._stream_send(agent, {})
+        assert next(stream) == "hel"
+        assert next(stream) == "lo"
+        with pytest.raises(ProviderUpstreamError) as caught:
+            next(stream)
+    assert caught.value.error_code == "provider_stream_incomplete"
+    assert caught.value.retryable is False
 
 
 def test_stream_send_clamps_known_provider_output_ceiling() -> None:
@@ -744,7 +749,10 @@ def _capture_binary_request_body(sink: dict) -> Any:
     def _fake_open_provider(request, *_args, **_kwargs):
         sink["body"] = json.loads(request.data.decode("utf-8"))
         response = _RegistryResponse({})
-        response.headers = types.SimpleNamespace(get_content_type=lambda: "audio/mpeg")
+        response.headers = types.SimpleNamespace(
+            get_content_type=lambda: "audio/mpeg",
+            get=lambda _name, default=None: default,
+        )
         return response
 
     return _fake_open_provider

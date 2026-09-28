@@ -120,10 +120,12 @@ OPENAPI_SPEC = {
                 "description": (
                     "One per-candidate attempt evidence entry, recorded before "
                     "(and, for the served candidate, alongside) a completion. "
-                    "Emitted by both the structured-synthesis candidate loop "
-                    "(_orchestrated_provider_completion) and the single-worker "
-                    "streaming fallback (stream_route) so callers see one fixed "
-                    "vocabulary regardless of path (issue #1016, rows 2 and 4)."
+                    "Emitted by the structured-synthesis candidate loop "
+                    "(_orchestrated_provider_completion), the single-worker "
+                    "streaming fallback (stream_route), and non-streaming "
+                    "route_once's shared _invoke failover loop so callers see "
+                    "one fixed vocabulary regardless of path (issue #1016, "
+                    "rows 2 and 4)."
                 ),
                 "required": ["agent_id", "model", "outcome"],
                 "properties": {
@@ -133,13 +135,16 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": [
                             "served",
+                            "completed",
                             "request_too_large",
                             "retryable_transport",
                             "deadline_exceeded",
                             "fail_closed",
                         ],
                         "description": (
-                            "served: this candidate returned the completion. "
+                            "served: this candidate supplied the final selected completion. "
+                            "completed: this candidate returned an answer that was not "
+                            "selected for the final response; this does not establish answer quality or provider health. "
                             "request_too_large: the payload exceeded a provider "
                             "limit (HTTP 413). retryable_transport: a transient "
                             "transport/provider failure (429/5xx/network) eligible "
@@ -177,11 +182,46 @@ OPENAPI_SPEC = {
                 "description": (
                     "Route evidence for one completion: every eligible agent, "
                     "every attempt made (including the served one), and why the "
-                    "route terminated. Stable across the structured-synthesis "
-                    "and single-worker streaming fallback paths. A successful "
-                    "stream places this object in the final completion chunk."
+                    "route terminated. Stable across the structured-synthesis, "
+                    "single-worker streaming fallback, and non-streaming "
+                    "route_once paths. A successful stream places this object "
+                    "in the final completion chunk."
                 ),
-                "required": ["eligible_agent_ids", "attempted"],
+                "required": ["eligible_agent_ids", "attempted", "terminal_reason"],
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {"terminal_reason": {"const": "served"}},
+                            "required": ["terminal_reason"],
+                        },
+                        "then": {
+                            "properties": {
+                                "attempted": {
+                                    "contains": {
+                                        "type": "object",
+                                        "required": ["outcome"],
+                                        "properties": {"outcome": {"const": "served"}},
+                                    },
+                                    "minContains": 1,
+                                    "maxContains": 1,
+                                }
+                            }
+                        },
+                        "else": {
+                            "properties": {
+                                "attempted": {
+                                    "not": {
+                                        "contains": {
+                                            "type": "object",
+                                            "required": ["outcome"],
+                                            "properties": {"outcome": {"const": "served"}},
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ],
                 "properties": {
                     "eligible_agent_ids": {"type": "array", "items": {"type": "string"}},
                     "attempted": {
@@ -190,10 +230,19 @@ OPENAPI_SPEC = {
                     },
                     "terminal_reason": {
                         "type": "string",
+                        "enum": [
+                            "served",
+                            "fail_closed",
+                            "eligible_set_exhausted",
+                            "request_too_large_exhausted",
+                            "rate_limit_wait_budget_exhausted",
+                            "rate_limited_storm",
+                            "pinned_candidate_failed",
+                            "stream_interrupted",
+                        ],
                         "description": (
-                            "Why the route stopped, e.g. served, fail_closed, "
-                            "eligible_set_exhausted, pinned_candidate_failed, "
-                            "or stream_interrupted."
+                            "Why the route stopped. Quota terminal reasons retain separate "
+                            "provider timing evidence, not a retry instant or inference deadline."
                         ),
                     },
                 },

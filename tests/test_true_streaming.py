@@ -8,6 +8,7 @@ wire (local server), and /v1/chat/completions route+stream pipes live deltas out
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -21,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator, default_role_effort_catalog  # noqa: E402
 from contextual_orchestrator import orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
@@ -149,6 +150,77 @@ def test_stream_send_parses_real_provider_sse() -> None:
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["Hello", " streamed", " world"]  # role delta skipped, [DONE] stops
     assert "".join(deltas) == "Hello streamed world"
+
+
+def test_http_route_stream_rejects_provider_eof_without_done() -> None:
+    """An interrupted provider stream must not become a served route receipt."""
+    frames = [
+        _delta("partial"),
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+    ]
+    token = "incomplete_stream_token"
+    with _FakeSSEProvider(frames) as provider:
+        orchestrator = TaskOrchestrator([
+            ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url.replace("http://", "local://"))
+        ])
+        server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                data=json.dumps({
+                    "model": "gpt-x", "mode": "route", "stream": True,
+                    "messages": [{"role": "user", "content": "answer"}],
+                }).encode(),
+                headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.status == 200
+                request_id = response.headers["x-request-id"]
+                body = response.read().decode()
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+            server.server_close()
+
+    chunks = [
+        json.loads(line[6:]) for line in body.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    assert any(chunk.get("choices", [{}])[0].get("delta", {}).get("content") == "partial"
+               for chunk in chunks)
+    errors = [chunk["error"] for chunk in chunks if "error" in chunk]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "provider_stream_incomplete"
+    assert errors[0]["detail"]["request_id"] == request_id
+    assert errors[0]["detail"]["retryable"] is False
+    assert errors[0]["detail"]["route"]["terminal_reason"] == "stream_interrupted"
+    assert [attempt["outcome"] for attempt in errors[0]["detail"]["route"]["attempted"]] == ["fail_closed"]
+    assert chunks[-1]["choices"][0]["finish_reason"] == "error"
+    assert all(chunk.get("orchestration", {}).get("route", {}).get("terminal_reason") != "served"
+               for chunk in chunks)
+
+
+def test_provider_eof_before_content_does_not_replay_unknown_outcome() -> None:
+    """An upstream send without a terminal marker cannot be tried on a sibling."""
+    with _FakeSSEProvider([]) as provider:
+        agents = [
+            ModelAgent(f"free_{index}", f"gpt-{index}",
+                       base_url=provider.base_url.replace("http://", "local://"),
+                       tags=("cost:free", "writing", "reasoning"))
+            for index in range(2)
+        ]
+        orchestrator = TaskOrchestrator(agents)
+        with pytest.raises(ProviderUpstreamError) as caught:
+            list(orchestrator.stream_route(
+                [{"role": "user", "content": "answer"}], model_name=TaskOrchestrator.FREE_MODEL,
+            ))
+    assert caught.value.error_code == "provider_stream_incomplete"
+    assert caught.value.retryable is False
+    assert caught.value.extra_detail["route"]["terminal_reason"] == "fail_closed"
+    assert len(provider.payloads) == 1
 
 
 def test_stream_send_rejects_response_body_above_configured_limit() -> None:
@@ -907,6 +979,47 @@ def test_responses_stream_preserves_classified_provider_error_payload() -> None:
     assert payload["response"]["error"]["code"] == "rate_limit_exceeded"
     assert payload["response"]["error"]["detail"]["provider_status"] == 429
     assert payload["response"]["error"]["detail"]["retryable"] is True
+
+
+@pytest.mark.parametrize("route", [True, False])
+def test_responses_preflight_and_execution_share_effort_revision(monkeypatch, route) -> None:
+    catalog = default_role_effort_catalog()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))],
+        role_effort_catalog=catalog,
+    )
+    starting_hash = orchestrator._effort_snapshot().snapshot_hash
+    seen_hashes = []
+
+    def triage(_text):
+        catalog["worker"] = replace(catalog["worker"], reasoning_effort="high")
+        return not route
+
+    def stream_route(*_args, **_kwargs):
+        seen_hashes.append(orchestrator._effort_snapshot().snapshot_hash)
+        yield "unit answer"
+
+    def conduct(*_args, **_kwargs):
+        seen_hashes.append(orchestrator._effort_snapshot().snapshot_hash)
+        return {"answer": "unit answer"}
+
+    monkeypatch.setattr(orchestrator, "_needs_workflow", triage)
+    monkeypatch.setattr(orchestrator, "stream_route", stream_route)
+    monkeypatch.setattr(orchestrator, "conduct", conduct)
+    server = build_server(orchestrator, port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler._begin_sse = lambda: True
+    handler._write_sse = lambda _frame: True
+    try:
+        assert handler._stream_orchestrated_response(
+            orchestrator, SecurityConfig(auth_token="stream-token"),
+            [{"role": "user", "content": "unit question"}],
+            orchestrator.GATEWAY_DEFAULT_MODEL,
+        ) is True
+        assert seen_hashes == [starting_hash]
+    finally:
+        server.server_close()
+        orchestrator.close()
 
 
 # -- Live route-stream shared-context output budget (issue #1157 follow-up) --

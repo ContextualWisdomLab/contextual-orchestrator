@@ -1,5 +1,308 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-26 protected-main test-signal recovery — Proposed
+
+Canonical owner PR [#1266](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1266)
+recovers the runtime and test authority lost by earlier restack merges. Its exact
+CI-equivalent baseline exposed 153 failures plus one collection error on
+protected `main@5665b0ad`; the first owner repair removes 77 OpenRouter
+availability/answer-quality violations and restores collection so remaining
+failures are visible rather than hidden.
+
+The existing RED
+`test_unbounded_synchronous_embedding_waits_for_provider_completion` proves
+that the application default `timeout=None` reached
+`ProviderEmbeddingBatchBackend.wait`, where `math.isfinite(None)` raised
+`TypeError` instead of waiting for provider completion. GREEN
+`343bf7f82fd4f483ca829295c735b4e75017e31c` accepts `None` and non-finite
+numeric deadlines as the same explicit unbounded contract; documentation
+successor `ea1ac223bd8eb8c137c490ef7871734a27558a69` records that boundary.
+This is source evidence only until fresh exact-head hosted tests execute.
+
+Hosted RED run [36147466940](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36147466940)
+selected the repository's pinned Rust 1.97.1 directory override, whose
+`profile = "minimal"` omitted `rustfmt` and `clippy`; the Rust gate therefore
+failed before formatting or linting. GREEN source
+`6e70a196d715fd3c9ba9b89bc8698f252ead04e5` declares both components in
+`rust-toolchain.toml`. This is configuration evidence only until its fresh
+exact-head hosted Rust gate completes.
+
+Follow-up source at `f882ee7b12e805bd5924a28d3a23999d7e76f160`
+integrates the previously dropped #1074 request-policy/effort snapshots,
+psychometric deployment identities and selection-design receipts; restores typed
+EgressWeave allowlist failures; repairs the planning ADR filename and paper
+inventory; and moves affected CI installs to the exact `uv.lock` environment.
+These source deltas supersede the earlier “not fixed” bucket descriptions; their
+hosted verification remains pending.
+
+Current-head review found the OpenRouter telemetry fetch still used unbounded
+`response.read()`. RED `e76d3b3954de37c293a98339aefadbdd016e0d90`
+read the full oversized payload (requested size `-1`) and returned a parsed
+99.5 value. GREEN `9cf335ab8021923cf4e301f951e4e37a5bae01fb`
+reads only the shared 8 MiB provider-response bound plus one byte and rejects an
+oversized payload before JSON parsing. Exact source/test AST parsing passed; the
+direct behavior probe rejected the oversized response with one 65-byte read
+under a test-injected 64-byte bound and preserved a valid 99.5 response.
+
+Status remains **Proposed**. Fresh exact-head hosted tests, independent approval,
+protected integration, an immutable fast-mlsirm release instead of VCS
+consumption, and consumer pins remain unverified.
+
+## 2026-09-19 free multimodal review routing — Proposed
+
+Canonical owner PR
+[#1203](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1203)
+with functional repair `7f30351ccb36bb676ad0b23fe71ea1cce9f98645`
+(tree `157468c88470e93dc2f3e19f03acbf34ff32219f`) repairs the
+`orchestrator/free` image-admission boundary used by the proposed
+`ContextualWisdomLab/.github` DOCX/HWPX review leaf #2281. Five RED
+regressions proved that Responses conversion selected a higher-priority
+text-only model, template planning and the model judge dropped
+`input:image`, mixed-case discovery evidence was unroutable, and the changed
+admission predicate was still published as readiness contract v1. Follow-up
+RED cases then proved that proxy failover and realtime judging could lose the
+image requirement, explicit image-only rows entered the mixed envelope, and
+the first fix also rejected documented legacy `vision` agents with no
+`input:*` evidence. A later endpoint regression proved that preflight and
+pool admission still rejected an endpoint-local image-capable free agent
+before request-aware selection.
+
+The owner now carries normalized image evidence through Responses, template
+roles, conducted invocation, proxy failover, realtime judging, and model
+judging; readiness contract v2 records the predicate change. Explicit
+`input:image` without `input:text` is rejected, while legacy `vision` with no
+`input:*` declaration remains eligible. Endpoint preflight, Chat Completions,
+and Responses now apply that same request-shaped pool boundary; endpoints
+without local eligible capacity still fail closed. Exact head
+`79fef32bda4dd599ea973e790b09e58ed02dd9b1` (tree
+`645b468916ddb3c4437a96151c6740ab08d9f646`) completed 127 related
+RED-to-GREEN tests; `compileall` and diff checks passed. Current source head
+`738ab3689d110685ca07f09b7c51031f11d3f07f` (tree
+`404b820ac844c0133cd18a32f6833d5082db7c6b`) additionally removes the two
+stale collection blockers, preserves null as an unbounded provider-batch wait,
+closes the remaining touched loopback listeners at their owning boundaries,
+and aligns image-bearing HTTP fixtures with explicit `input:image` capability.
+The expanded warnings-as-errors lane completed 117 tests; `compileall` and diff
+checks passed. Earlier
+head `f8783af9` completed 244 related tests with warnings treated as errors and
+Ruff. The full local collection is not claimed: a provider-key-free fail-fast
+run reached 1,156 passed / 1 skipped after the listener and capability-fixture
+repairs, then stopped because the borrowed verifier lacks the required Rust
+`_decision_receipt` extension. The borrowed verifier also lacks the configured
+asyncio plugin; neither missing environment dependency is bypassed in product
+code.
+
+HTTP-boundary RED `1527821a5b61d2e114e8d34e5f9bc5163a4b9b0a`
+proved that endpoint preflight consumed raw accepted false forms
+(`parallel_tool_calls: "false"` and `0`) before the serving path normalized
+them. With two tools, that falsely rejected the endpoint's only
+`tool_call:single` image-capable free agent as unavailable. GREEN
+`a7ed3364eb2c40b543ed0d0421d1aa14ea1ed985` normalizes the flag once at
+the shared Chat/Responses HTTP boundary before endpoint admission; invalid
+forms still fail closed. The focused endpoint plus multimodal suites completed
+46 tests with warnings treated as errors. This is local source evidence, not
+hosted or release evidence.
+
+Judge-failover RED `7f69bacb0d35f00e6902df8e440efeafbe08dbe3` proved that a selected free image judge could fail over to an ineligible text-only or paid sibling after the outer selector had already enforced capability and price. GREEN `37435b5e82e9fe53abc67b032c67df83425c0250` persists the exact outer free/image-qualified agent ID set into the adapter failover port, so an inner retry cannot escape that authority boundary. This evidence remains distinct from the later HTTP worker-preflight repair.
+
+Current-head P1 RED `2b5c290ca56526c26f390949aecd87d85c2462b6`
+proved that a free image candidate excluded from the `worker` role could still
+satisfy HTTP preflight and commit HTTP 200/SSE before routing rejected it. The
+same generation corrected two stale fixtures: the judge now represents an
+admitted text+image chat candidate with a valid two-criterion IRT result, and
+the Responses endpoint fake owns `proxy_send_once` instead of reaching a real
+transport. GREEN `1b31f8cd6a73cf98ac873e7f569caeddcd234257`
+(tree `5d45fc5395e4b5ccfa2e7f47ea30f74a13e75418`) makes request-aware
+free-pool preflight role-aware without changing ordinary internal pool
+selection. The three affected suites complete **91 tests** with warnings as
+errors; compileall and diff checks pass. Hosted exact-head protection remains
+required.
+
+A subsequent P0 review found that intermediate source commit `7ad13041c30d18e35694c2c071a577ae774d986a` embedded a tool-output truncation marker, deleted 4,042 lines from `orchestrator.py`, and failed `py_compile` before import. Ordinary-forward GREEN `b7440092d1cda47008271ed658fe372f536dd58f` (tree `e8dc294a853a54df6db794a42edb509b6b8b0e74`) restores canonical complete source blob `1dd97e36fe1579c434413317a5366f9f27d6e766`, reapplies only the verified role-aware preflight delta, and contains no truncation marker. Exact-tree `py_compile` passes and the same three affected suites complete **91 tests** with warnings as errors. This repair does not convert queued hosted checks or review transport into approval.
+
+A preservation regression at ordinary-forward RED `33e3998ac9f6b1373cdfda83a760f19214f2237c`
+proved that the branch snapshot had dropped 87 of 148 protected level-two
+sections, including PRD, TRD, Context Map, roadmap, delivery-gate, and incident
+authority. The repair restores the complete protected `main` baseline and
+keeps this Proposed owner section additive; it does not promote the lane to
+Accepted or claim hosted acceptance.
+
+Capability-precedence RED `8f8755dc2f43d6ae154f9528af9e244508084a31`
+proved that a legacy `vision` tag could still admit a row whose explicit
+`input:text` evidence denied image input. GREEN
+`efedb3f5ceecb28183ca2263eba47b1c182112e9` makes explicit `input:*`
+evidence authoritative and consults legacy `vision` only when no explicit
+input evidence exists. Exact remote behavior verification covers four
+boundaries: `vision` plus `input:text` rejects, explicit `input:image`
+admits, unqualified legacy `vision` admits, and text-only explicit evidence
+rejects. The extracted exact production method and RED contract compile;
+hosted exact-head acceptance remains pending.
+
+Durable-pool RED `a3b7fc3d` with predicate refinement `c250f4b7` proved that
+rows written before constructor normalization retained case-variant
+`input:Text` / `input:Image` tags. `_AgentPoolStore.load_all()` restored those
+bytes unchanged, while runtime admission compared lowercase literals, so a
+previously admitted free image model became unreachable after restart.
+Runtime input-modality evidence is now normalized once at the admission
+boundary; explicit-input precedence and the unqualified legacy `vision`
+fallback are unchanged. The persisted restart regression, multimodal routing,
+agent-pool, discovery, bootstrap, and review-gateway selection completed **265
+tests** with warnings as errors. This repairs compatibility with existing rows;
+it does not promote Proposed catalog evidence or hosted acceptance.
+
+
+Explicit-conduct RED `cf78470d892eb52e4e860cc30c67282fffc835eb`
+proved that Chat Completions preflight checked only the `worker` role. An
+image-capable `orchestrator/free` pool whose sole candidate excluded
+`thinker`, `verifier`, and `synthesizer` therefore passed admission, entered
+the four-stage plan, and returned `500 internal_error` at the first missing
+role. GREEN `5ebab72d952dcd50b30c065247edfd88d669f38a`
+validates the effective HTTP mode before admission and requires eligible free
+capacity for every template-conduct role. The same boundary covers structured
+chat responses, whose serving path is always conduct. Incomplete capacity now
+fails closed as typed HTTP 400 before provider I/O; route mode retains its
+worker-only admission. This is Proposed exact-source evidence, not hosted
+acceptance, release, or consumer completion.
+
+Responses-conduct RED `45323e12401590e17773718be53d133ea37f34c6`
+proves that non-stream image-bearing `orchestrator/free` Responses with a
+structured output contract were preflighted as worker-only route traffic, then
+entered the four-role conduct plan and surfaced a missing `thinker` as HTTP 500.
+GREEN `3a76ce9e35c66d92828608c92d1c1ab0ab694c57` derives the preflight mode
+from the same tools, response-format, and provider-path facts that select
+conduct execution. Missing conduct capacity now fails closed as typed HTTP 400;
+streamed route requests retain worker-only admission and their existing typed
+stream restrictions. This remains Proposed exact-source evidence pending hosted
+Checks, independent review, ordinary merge, immutable release, and consumer pin.
+
+Mode-alias RED `10f96453a6050ab47575e4975aa068cb4f899e23` proved that
+Chat Completions selected `orchestration`, `orchestration_mode`, and `mode`
+with truthiness chaining. Explicit `null`, blank strings, `false`, and `0`
+therefore collapsed into omitted-mode `auto` instead of reaching the typed
+`invalid_mode` boundary. GREEN
+`c3e4e94cf6566f6a0187c502d279dccc6989d4a1` selects the first present alias
+rather than the first truthy value. The exact extracted selection/validation
+probe covers 15 hostile alias/value pairs plus omitted-auto and normalized
+conduct (18 assertions total); full hosted acceptance remains pending.
+
+Inspection of the exact-head Security run on 2026-09-24 exposed stale HTTP regression fixtures:
+mixed text/image tests declared image-only or text-only agents, while two
+client-error tests expected the former error wording and one judge stub did
+not accept the now-required capability argument. The follow-up aligns those
+fixtures with the existing mixed-input contract; 388 focused tests pass with
+warnings treated as errors. The prior hosted failures and review verdict remain
+historical and do not establish acceptance for this follow-up head.
+
+Status remains **Proposed**. Protected exact-head Checks, independent review,
+ordinary merge, immutable owner release, and consumer pin are still required.
+Leaf #2281 now carries both DOCX and HWPX relationship/source-position repairs,
+but remains Draft/Proposed until exact-head hosted protection, independent
+review, this owner's ordinary merge and immutable release, and a consumer pin
+all complete. The owner fix does not bypass those gates.
+## 2026-09-25 mixed 429 recovery and review-sidecar adoption (proposed)
+
+Noema run 36024200990 on PR #1209 used the central review sidecar pinned to
+`767e67fbc6b881a452761f32abb69b9971b9b03b`, not this PR's HEAD. Its
+sanitized log shows several provider attempts, then two OpenRouter 429s and a
+terminal HTTP 429. It does not prove that the current source failed to route.
+The current source's virtual passthrough path did have a separate reproducible
+gap: after a mixed uncertain transport failure and explicit 429, cooldown
+recovery called the uncertain candidate again. A `FREE_MODEL` regression was
+RED before the fix and GREEN after it; recovery now revisits only candidates
+that explicitly returned a cooling 429/503 or were already cooling before any
+send. The earlier unknown outcome remains recorded and is never replayed.
+The focused rate-limit, passthrough, and provider-error suites pass locally
+(180 tests). This source result does not establish Noema approval or deployed
+review capacity. Central sidecar pin adoption, current-HEAD hosted gates and
+independent review remain separate acceptance steps.
+
+## 2026-09-20 route evidence ownership repair (proposed)
+
+Exact-head review at PR #1205 commit
+`e0d3827a3d24ae51a659845f82be1ef7d24f015c` found that a bounded route could
+record a retryable provider failure, then raise `ToolFallbackStoppedError` for
+a later unsafe tool outcome before recording or publishing either attempt.
+RED `46efcb2d9c52908472dde3fe932b311dc1b63471` reproduces the missing
+`ToolFallbackStoppedError.detail["route"]` and HTTP error detail. GREEN
+`c01a1dcd43160af948c1a4e9c6351cb1cacf3f71` records the terminal candidate
+once, attaches the accumulated typed receipt without retaining the raw cause,
+and exposes that receipt through the existing secret-free 409 serializer. The
+same GREEN removes the deprecated `jsonschema.RefResolver` test path without
+weakening schema validation. The focused regression and 148 adjacent
+tool-fallback, HTTP, and API-contract tests pass with warnings treated as
+errors; another 46 provider-reliability tests pass, while four pre-existing
+environment/owner-dependent cases remain separately excluded. Hosted
+exact-head gates and independent review remain required, so this evidence is
+Proposed rather than production authority.
+
+PR #1205 RED head `b5ebdb24cbacf6a859c397f60aceec43679e74cd`
+reproduces a worker failover receipt being erased when the realtime judge
+performs a nested `_invoke`: the returned route omitted
+`retryable_transport` and `served`. GREEN source
+`5c53ee5b3b502c105b82467ec0e859c931687ec4` snapshots and clears the
+worker-owned thread-local receipt immediately after worker invocation, before
+judge traffic can overwrite it. The exact focused regression passes; the
+four related route/API suites pass 94 tests. Local dependency installation did
+not include the repository's locked pytest-asyncio plugin and the predecessor
+API-contract file still imports deprecated `jsonschema.RefResolver`, so those
+three warnings are recorded rather than presented as warning-clean evidence.
+Fresh hosted exact-head Checks and independent review remain required; no
+immutable release or downstream consumer pin is claimed.
+
+The next exact-head review exposed three additional loss boundaries. RED head
+`bdcb80ff12d5fb2b5298df7e705ff79bffcc7c5c` proves that malformed-response
+exhaustion was reclassified as `ProviderUpstreamError`, all-413 exhaustion
+discarded its typed attempts, and a successful retry after a 429/503 storm
+discarded the entire first round. GREEN source
+`1432bb6d31364ce48e467d57ab9fc086de9035d3` attaches evidence to the existing
+exception objects, accumulates recovery rounds through the shared wrapper, and
+copies the final route receipt into the persisted workflow/API record. The API
+contract and rate-limit suites pass 35 tests; the two terminal taxonomy
+regressions also pass in focused execution. A broader local sweep reached 193
+passes but remains non-authoritative because the ad-hoc environment lacks the
+locked OpenAI SDK and retains pre-existing allowlist/selection-design failures.
+Hosted exact-head security, package, and model-behavior gates remain required.
+
+A later exact-head review found one remaining two-round loss path: after a
+fully rate-limited round was recovered, a second round ending in
+`ProviderResponseError` bypassed the upstream-error recovery handler and
+published only the second round's `fail_closed` attempts. RED source
+`6d0a115a4766a5c0a7dbb97a7b62cc6e63b9fac2` reproduces that omission while
+requiring the concrete malformed-response taxonomy. GREEN source
+`a45761cd9091914bea1736797ec85328e976304f` attaches the accumulated first
+round and current second round to the existing response error. The focused
+regression passes with warnings treated as errors. Exact-head hosted gates,
+independent review, protected merge, immutable release, and consumer adoption
+remain required; this evidence is Proposed rather than production authority.
+
+Fresh exact-head review then found two terminal-boundary gaps. A bounded pool
+mixing one 413 with one malformed response fell through to a generic
+`RuntimeError` in either candidate order, while the special HTTP 413 handler
+discarded the all-413 route receipt already attached by the orchestrator. RED
+`306a482895aacd5d2b8c3fec6e1da6b1ced66853` reproduces all three cases. GREEN
+`29dc62093b3224044907d5278556764e60f78921` counts bounded size failures when
+selecting the final concrete malformed-response taxonomy and passes
+`ProviderRequestTooLargeError.detail` through the dedicated HTTP handler. The
+three new regressions pass, and the rate-limit plus malformed-synthesis suites
+pass 38 tests. The local environment still lacks locked `pytest-asyncio`, so
+its inherited unknown-config warning is recorded rather than suppressed or
+reported warning-clean. Hosted exact-head gates and independent review remain
+required.
+
+Two later exact-head findings covered cross-round terminal loss. A
+judge-rejected worker answer left a valid route receipt, but the next worker
+round overwrote it (or replaced it with `None` after a direct success).
+Separately, `_await_rate_limit_recovery` raised a new 429/503 when its wait
+budget could not cover the cooldown, bypassing the already merged attempt
+receipt. RED `5aa46ccda58d0f2c6bb9f72028ef70c6ae7a694b` reproduces both boundaries.
+GREEN `2b54ca76258366c5f55aeabd973e399067ec11cb` accumulates worker receipts
+across realtime-judge rounds and attaches all recovered/current attempts to
+the wait-budget error. The three route/API suites pass 51 tests; the local
+environment's missing locked `pytest-asyncio` and inherited deprecated
+`jsonschema.RefResolver` warnings remain explicit. Hosted exact-head gates,
+independent review, protected merge, immutable release, and consumer adoption
+remain required.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
@@ -1847,6 +2150,18 @@ waiting is impossible. Two callers reach it:
   `_invoke` call instead of propagating the exhaustion. A mixed failure set
   re-raises exactly as `_invoke` would have, unchanged.
 
+2026-09-25 correction for PR #1203: the current-head Noema sidecar artifact
+from run 36025844713 records request `5aa9e46eb6a64aabbd13e4f6adeb0140`.
+The gateway advanced after the first OpenRouter 429, but the next candidate
+also returned 429. Earlier NIM candidates had failed with connection errors,
+so the mixed-failure guard above refused to wait for the known 429 cooldown.
+The chat path also counted both 429 responses as circuit failures. The repair
+waits within the existing request budget and retries only the explicitly
+rejected 429 candidate when failures are mixed; it leaves earlier failed calls
+and mixed 503 outcomes untouched and keeps 429 out of circuit and group-health
+observations. This local regression proves the
+gateway decision only. A hosted Noema approval and merge remain separate gates.
+
 `server.py` answers a raised `provider_rate_limited` error with `429` and a
 `Retry-After` header (or the equivalent field in the terminal SSE error frame
 when headers are already flushed) regardless of which of the two callers
@@ -1870,6 +2185,22 @@ separate implementation. Every conduct step (thinker/worker/verifier/
 synthesizer) shares the one `_invoke`/`_invoke_with_rate_limit_recovery` call
 site, so the worker step required by the owner's report gets the fix, and so
 do the other roles for free, without a second implementation.
+
+### 2026-09-25 structured review synthesis follow-up — proposed in #1220
+
+The coverage note above did not include `response_format` synthesis. Noema's
+structured review request can reach `_orchestrated_provider_completion`, whose
+provider-facing synthesis loop exhausted a free pool after 429 responses
+without calling the shared cooldown wait. A focused regression failed on the
+second 429 before the repair. Candidate #1220 records each quota cooldown,
+keeps quota failures out of the health circuit, and reuses
+`_await_rate_limit_recovery` for a bounded retry only when every eligible
+candidate is cooling. Mixed failures and exhausted wait budgets still return
+typed errors with route evidence. The HTTP, document-diff, structured synthesis,
+and rate-limit regressions pass locally (98 tests); current-head hosted checks,
+independent review, protected merge, and central sidecar adoption
+remain unverified. The central sidecar pin in `.github#2366` carries the
+earlier ordinary-routing repair, not this structured successor.
 
 ### Follow-up (same day): an omitted cooldown header must still count as cooling
 
@@ -1991,8 +2322,8 @@ parameter, threaded in by `route_once` and `conduct`, each of which computes
 `model_name in {GATEWAY_DEFAULT_MODEL, AUTO_MODEL, FREE_MODEL}` once from
 their own `model_name` parameter. `_invoke_with_rate_limit_recovery`'s own
 "not a genuine storm" guard changed from `len(candidates) < 2 or any(...)` to
-`not virtual_selector or any(...)`, preserving the untouched "some eligible
-candidate is not rate-limited -- a mixed, unrelated failure" branch.
+`not virtual_selector or any(...)` at that revision. The 2026-09-25 correction
+above replaces its mixed-failure stop with a retry limited to cooled candidates.
 
 Tests added to `tests/test_rate_limit_aware_admission.py`: a virtual selector
 (`FREE_MODEL`) with exactly ONE eligible candidate that answers 429 with
@@ -7159,3 +7490,322 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 `tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
+
+## 2026-09-27 PR #1269 executable-fixture carryover — Proposed
+
+Canonical successor PR #1266 already contains predecessor #1269's two
+production repairs: `ProviderEmbeddingBatchBackend.wait(timeout=None)` keeps
+the no-implicit-deadline contract, and EgressWeave allowlist misses remain typed,
+non-retryable `provider_connection_error` 502 responses. Existing successor
+tests cover direct unbounded completion, infinite waits, coordinator defaults,
+and allowlist classification/failover.
+
+The remaining distinct executable requirements are carried at
+`2eceb6474c2904ae308991e89595b1f44c852940`: a finite wait returns while the
+provider is blocked, and the real default `/v1/embeddings` HTTP route forwards
+`ModelClient.timeout=None` unchanged to the provider backend. The predecessor's
+exact `cd30956feda8452aedb751a30a7f0206c442e1b2` reported 8/8 focused GREEN;
+the successor's isolated finite-deadline case passes and its exact test blob
+`8db8c9ec80757d25cd715aa3acaf191c7f613640` compiles. Fresh exact-head hosted
+execution and independent approval remain required; status stays Proposed.
+
+## 2026-09-27 Same-agent selection receipt fidelity — Proposed
+
+PR #1266's deterministic selection receipt recorded each candidate once even
+when the research-backed retry decision made multiple real calls to the same
+Agent. That understated request execution and contradicted the existing
+endpoint-race invariant that `attempted_deployment_ids` reproduces actual call
+order and multiplicity. RED `f56e10d3` extends the ordinary free-pool retry
+fixture: five real provider calls produced only three receipt entries. GREEN
+`9188e232` appends the deployment identity inside the retry loop, preserving
+each call without changing retry admission, ordering, weights, or fallback.
+
+Publication commit `cad76d46` exposed a transfer-path defect: a locally
+captured large-file payload contained an output-truncation marker, corrupting
+`orchestrator.py`, and the same path truncated this baseline. Forward repair
+`bd3d83d9` restores the source from protected predecessor blob `5e7bf08b`
+plus the reviewed one-line change. This receipt restores the full baseline
+directly from exact `ca5efdc0` authority. No force push or history rewrite was
+used. Exact-head hosted execution, independent approval, protected-main
+integration, and immutable release remain required; status stays Proposed.
+
+## 2026-09-27 Streaming receipt stack authority repair — Proposed
+
+PR #1231 previously targeted protected `main@5665b0ad`; hosted Security and
+Quality run 36238352288 therefore reproduced three unrelated foundation
+failures whose canonical owner is PR #1266: the missing embedding lease
+constant, an unhashable VCS requirement under `--require-hashes`, and pinned
+Rust 1.97.1 without rustfmt. The dependent PR #1273 inherited that stale base.
+
+The stack is repaired without force. PR #1231 now targets
+`fix/test-drift-main-red`; exact successor
+`1d51487111992c14bbce5922968eb857f0399921` has #1266 exact
+`ea48d4ec13be241ae85850d3d83a48edb3d28bf6` as an ancestor and preserves only
+the five-path streaming-receipt delta (`+159/-2`, ahead 8/behind 0). PR #1273
+exact `6e012a62586f798809186e36201cbb7e2f5c9124` remains open, mergeable, and
+retains its sole `tests/test_decision_receipts.py` delta (`+72/-0`). Exact
+remote AST parsing passed for all five Python paths. Draft-triggered runs
+36274940061 and 36275008940 were SKIPPED and are not GREEN evidence. The stale
+#1231 CHANGES_REQUESTED review tied to `b267f897`/run 36086231637 was dismissed
+because it explicitly contained no source-backed finding; fresh non-skipped
+checks and independent approval remain required. Status stays Proposed.
+
+
+### Typed terminal-reason authority — Proposed
+
+Exact head `1d514871` published OpenAPI 0.3.1 documentation and production
+receipts that treated `terminal_reason` as the routing-termination authority,
+but the schema neither required the field nor constrained its value. A consumer
+could therefore validate a receipt with no termination semantics or an
+undocumented reason and would have to invent its own fallback interpretation.
+
+RED `7a0183d8` records both invalid cases. GREEN `f1af21d7` makes
+`terminal_reason` required and restricts it to the three production values:
+`served`, `fail_closed`, and `eligible_set_exhausted`. Focused route-schema
+tests pass 4/4; the wider API/stream/error suite and exact-head hosted checks
+remain required. This is PR-head evidence only; protected-main integration,
+independent approval, immutable release, and consumer bump remain outstanding.
+
+
+#### Cross-field terminal evidence authority — Proposed
+
+The 0.3.1 schema at exact `741f3602` constrained `terminal_reason` and
+`attempted[].outcome` separately but did not bind them. It therefore validated
+both a `served` termination with no served attempt and an
+`eligible_set_exhausted` termination containing a served attempt. Those
+receipts expose contradictory authorities to every consumer.
+
+RED `716311fb` records both contradictions through the real
+`jsonschema.validate` boundary; both failed because validation unexpectedly
+succeeded. GREEN `27496cb5` requires exactly one served attempt for a served
+termination and forbids served attempts for either non-served termination.
+Exact remote AST parsing passed for production and test files; two valid
+receipts passed and both contradictory receipts were rejected. Hosted exact-head
+checks, independent approval, protected-main integration, immutable release, and
+consumer bump remain required. Status stays Proposed.
+
+## 2026-09-27 PR #1266 review-boundary repair — Proposed
+
+Exact head `2a4bd5583f1dc03d563e013121d2d752e1d9fe46` retained three valid
+review findings. The OpenRouter uptime fake accepted no bounded-read size, so
+its `TypeError` was caught as availability failure and the assertion never
+proved the 8 MiB read ceiling. The finite embedding-wait worker used its own
+two-second escape, making completion race the assertion. Most importantly,
+`_observe_contextual_quality` held the psychometric persistence lock while
+`_embed_cached` could perform a provider-backed call under the product's
+`timeout=null` contract, serializing unrelated observation persistence and
+Agent-pool edits behind an intentionally unbounded wait.
+
+The repair makes the uptime fake record the exact requested size, keeps the
+embedding worker blocked until deterministic fixture cleanup, and splits the
+psychometric critical section around embedding. Deployment identity is checked
+before the call and revalidated under the same lock before mutation and
+persistence, so stale observations remain fail-closed without holding a shared
+lock across network I/O. The concurrent retirement regression test was RED on
+the reviewed head and GREEN after the change; the three affected test modules
+then reported `121 passed`. The released fast-mlsirm consumer update below
+replaces the deprecated DIF call with `detect_dif_logistic_purified` and removes
+the stale pytest-asyncio option that emitted an unknown-configuration warning
+without the plugin. Hosted
+exact-head checks and independent approval remain required; status stays
+Proposed. All three reviewed threads are resolved and the PR is Ready; queued
+hosted checks are still non-terminal and do not establish merge authority.
+
+## 2026-09-27 PR #1266 lockfile-audit restoration — Proposed
+
+Codex review of successor head `24dd16188ca679a06caba1a4682feabe973ffa86`
+found that the Python supply-chain job audited only the environment installed
+from `uv.lock`, although repository governance defines `requirements.lock` as
+the audit authority. The two locks could diverge while the gate remained GREEN.
+The previous `requirements.lock` audit had been replaced because its
+commit-pinned fast-mlsirm VCS requirement could not participate in pip's hash
+checking mode.
+
+The canonical owner has since published immutable
+[fast-mlsirm v0.11.4](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
+from commit `e44b52d851596910dc7a8fa3f174f2aff03872fa`, 399 commits after the
+consumer's old `09f762ded35786dd1078222a4577ff09d649816f` pin. This repair bumps
+the consumer to exact `fast-mlsirm==0.11.4`, regenerates `uv.lock` and the
+hash-complete `requirements.lock`, and restores
+`pip_audit --require-hashes -r requirements.lock`. The CycloneDX artifact still
+describes the installed `.venv`, so lockfile vulnerability admission and
+runtime SBOM evidence remain separate. RED showed both the weakened workflow
+and VCS dependency contract. The first restored full audit then found
+`anyio==4.14.1` vulnerable to CVE-2026-63374, CVE-2026-64847, and
+CVE-2026-63349; regenerating the audit lock upgraded the package to the fixed
+`anyio==4.14.2`. GREEN resolved and hash-validated all 46 locked packages and
+reported no known vulnerabilities; `uv lock --check` passed and the synced
+environment reports `fast-mlsirm 0.11.4`. The constrained Atheris and property
+fuzz locks were regenerated with the runtime lock so their common
+`typing-extensions==4.16.0` pin remains jointly installable. The held-out DIF
+benchmark uses the release's non-deprecated `detect_dif_logistic_purified`
+entry point, records that exact method identity and its explicit compatibility
+configuration, and emits neither predecessor warning. Fresh exact-head hosted Security,
+CodeQL, Semgrep, and review results remain required; status stays Proposed.
+
+
+## 2026-09-20 Protected-main CI regression RCA
+
+PR #995 exact head `d4f7e135719b16a0f0d72377d1bbe9b3614a8600`
+reproduced three independent protected-main defects in Security and Quality run
+`35447727309`. Rust job `105909460320` installed components for mutable
+`stable`, but repository `rust-toolchain.toml` selected pinned Rust 1.97.1
+with the minimal profile; `cargo fmt` therefore failed before source
+validation because that active toolchain lacked `rustfmt`. The owner repair
+declares `rustfmt` and `clippy` beside the pinned toolchain.
+
+Security job `105909460342` failed closed because `requirements.lock`
+retained anyio 4.14.1, affected by CVE-2026-63374, CVE-2026-64847, and
+CVE-2026-63349, while `uv.lock` already selected 4.14.2. The owner repair
+aligns the hash-locked pip surface to anyio 4.14.2; the audit remains the gate
+and no advisory is ignored.
+
+Test job `105909460394` stopped during collection because
+`tests/test_provider_embedding_batch_backend.py` imported the removed
+`_DEFAULT_EMBEDDING_CLAIM_LEASE_SECONDS` name even though production and the
+test's intended assertion use the semantic
+`_DEFAULT_PROVIDER_EMBEDDING_CLAIM_LEASE_SECONDS` owner. The repair updates
+the stale test contract without adding a compatibility alias to production.
+
+The repair is isolated on `fix/protected-main-ci-regressions-20260920`.
+PRs #995, #1203, and #1205 remain open and preserve their product deltas.
+Queued, skipped, cancelled, or predecessor Checks are not acceptance evidence;
+each dependent exact head must be ordinarily restacked on the protected repair
+after it merges, then reacquire terminal Checks and independent review.
+
+
+After collection was restored, the focused provider-embedding suite exposed two
+additional protected-main contract regressions. A stale assertion still expected
+the removed implicit seven-day execution timeout even though the application,
+Agent, and Gateway default is null. The synchronous completion path then passed
+that null through `ProviderEmbeddingBatchBackend.wait`, whose annotation and
+`math.isfinite` call accepted only numeric values. This raised `TypeError`
+instead of waiting for terminal provider completion. The owner repair keeps the
+execution timeout null, accepts `float | None` at the wait boundary, and maps
+both null and non-finite values to `threading.Event.wait(timeout=None)`; finite
+caller deadlines retain their existing cancellation behavior.
+
+Strict-warning revalidation also attributed an unclosed listener to
+`test_server_shutdown_closes_embedding_workers`: `shutdown()` stopped the
+serving loop and closed the injected embedding backend but did not release the
+test-owned listening socket. The fixture now calls `server_close()` in
+`finally` after the serving thread joins. This changes no production server
+lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## Proposed: exhausted and multi-round provider outcome schema — 2026-09-27
+
+Structure: #1231 owns the proposed OpenAPI 0.3.1 route contract on top of
+#1266; #1273 adds request-bound stream cancellation evidence. Protected merge,
+independent approval and immutable publication remain separate acceptance gates.
+
+Gap: the schema admitted only three terminal reasons, but actual free-route
+quota and size exhaustion emitted three additional reasons. A judge-rejected
+completed answer followed by a selected answer produced two final `served`
+claims. If the later round instead ended with a provider error, invalid response
+or tool safety stop, route_once discarded the earlier call history.
+
+RED at source base `bb72303a`: session `99076` generated real route_once 429,
+structured 429 and route_once 413 failures; all three receipts were rejected by
+the advertised schema. The real judge-rejected-round reproduction failed the
+schema's one-served invariant. Session `10618` reproduced lost prior history for
+response/tool stops; its provider variant first exposed an additional eligible
+candidate retry, so the fixture now explicitly exercises the existing circuit
+threshold to isolate the later provider stop. A constructor-keyword experiment
+was rejected because this policy is an instance attribute, not a constructor
+option; no production option was added.
+
+Repair: admit the three existing exhaustion reasons without changing routing,
+wait budgets or provider classifications. The shared receipt projection marks
+returned but unselected answers `completed`, and keeps only the final selected
+answer `served`. This does not judge answer quality, establish provider health,
+claim wire delivery, or mutate the original attempt dictionaries. Later typed
+failures retain both earlier completed calls and current failures in execution
+order, preserving their original exception subtype and other error detail.
+
+GREEN: session `61339`, 193 passed with strict warnings across API conformance,
+admission, streaming, taxonomy and structured fallback. Session `41291`, 43
+passed across HTTP action fallback, tool controls and wrapped tool metadata.
+
+```sh
+.venv/bin/python -m pytest -c pyproject.toml tests/test_api_contract.py tests/test_rate_limit_aware_admission.py tests/test_true_streaming.py tests/test_provider_error_taxonomy.py tests/test_structured_output_distinct_fallback.py -q --tb=short -W error
+.venv/bin/python -m pytest -c pyproject.toml tests/test_actions_model_fallback.py tests/test_chat_tools_passthrough_controls_http_honesty.py tests/test_tool_fallback_wrapped_metadata.py -q --tb=short -W error
+```
+
+Ruff 0.16.9 baseline comparison found no new F/E9 finding: the source already
+has five findings on `bb72303a` (one unused import, two unused variables, two
+closure-related undefined-name reports). The full lint baseline remains
+nonclean; focused test success is not a lint, full-suite or hosted success claim.
+
+Publication audit: #1083 is closed and #1229 is merged, but the current GitHub
+Releases API is empty and the package declaration remains 0.2.0. #1257 is a
+draft evidence-schema step, explicitly not a version decision. No tag, package
+version decision, protected contract delivery or consumer migration is inferred
+from those issue/PR states.
+
+Loop ledger: `loop_id=co1016_terminal_schema_20260927`, `parent_id=co1016`,
+`owner=#1231`, `depends_on=#1266_then_current_head_review_then_owner_release`,
+`status=LOCAL_VERIFIED`, `pass=real_failure_schema_and_complete_ordered_history`,
+`retry=source_backed_conformance_failure`, `evidence_base=bb72303a`,
+`next_action=publish_batched_contract_repair_and_restack_1273`,
+`return_to=co1016_protected_versioned_owner_delivery`.
+
+Todo: current-head independent review and required CI; protected integration;
+reviewed package version and immutable owner publication; leaf migration proof
+remains owned by OriginWeave#276.
+
+Package preparation at `a22ca68de3843b983413749a4b72b4f6ffef38a7`:
+`SOURCE_DATE_EPOCH` was fixed to that commit's timestamp and
+`uv build --offline --wheel --python 3.12` succeeded (session `79513`). The
+candidate wheel remains `contextual_orchestrator-0.2.0-py3-none-any.whl`, SHA-256
+`ac410cf98d3b43a432f7d4d89c3ee862b1c3ceca4a13436cecb91f176e56ad1b`.
+Its API and orchestrator modules are byte-identical to the tested source; its
+OpenAPI 0.3.1 advertises all six actual terminal reasons and `completed` among
+six attempt outcomes. This is one local candidate build, not an installed
+runtime test, reproducibility proof, SBOM/attestation verification, SemVer
+authorization or published artifact. The proof explicitly marks it unprotected
+and unpublished. #1273's merge of this source passed the 59 API/streaming tests
+with strict warnings (session `5175`); its unchanged native cancellation source
+and separate native dependency still require their hosted gate.
+
+## 2026-09-27 protected-main refresh for #1266 — Proposed
+
+Ordinary merge `3a114546` preserves protected main `6ef802bf`, including
+#1291 fresh-runner pinned Rust bootstrap and #1220 document review. Initial
+strict verification failed three inherited recovery assertions (session
+`14510`): they assumed a retry deadline for headerless 429. Recovery fixtures
+now use provider-owned integer Retry-After; the mixed 429/500 matrix also
+retains absent-timing no-replay cases for both zero and positive wait budgets.
+Intermediate fixture errors (nonexistent exception attribute, fractional
+Retry-After) were corrected before acceptance; no production policy changed.
+
+Six affected suites passed **245 tests**, warnings as errors, process exit 0
+(session `58118`); actionlint and diff check passed. This is local integration
+evidence, not hosted checks or independent approval.
+
+Ledger: loop `1016-main-refresh`, parent `1016`, owner #1266 integration,
+status locally verified; next_action push once and restack descendants, then
+verify current-head CI/review; return_to #1016 protected/versioned contract.
+
+## 2026-09-27 full-suite contract drift repair — Proposed
+
+At #1231 `4bfe89a9`, the CI full-test command with Python 3.12 and the
+locked decision extension ended **4 failed, 5344 passed, 5 skipped**, exit 1
+(session `54149`, 286.58s; log `/private/tmp/co-1231-full-suite-4bfe89a9.log`).
+The skips concern the separate tokenizer extension. This is not full-suite
+success or strict-warning acceptance.
+
+The two text/image tests expected synthetic recovery for headerless 429;
+their unavailable-timing rows now assert 429 and one call per candidate while
+provider-timed recovery remains tested. The subprocess shutdown test assumed
+a memory-only job remained running after close; it now asserts cancellation
+and terminal visibility while the provider runner remains genuinely stalled,
+preserving the normal-process-exit proof. These parent-owned corrections passed
+24 strict tests across image storms, process exit, HTTP wait and batch routing
+(session `48689`). No production policy or provider timeout changed.
+
+The separate #1231 stream assertion expected silent success without DONE;
+its focused successor retains both partial deltas, then asserts typed
+provider_stream_incomplete and retryable false. Client-boundary and streaming
+suites passed 88 strict tests (session `31181`). Current-head hosted full
+tests and independent review remain required; prior whole-suite counts are
+historical evidence, never transferred into a green claim.
