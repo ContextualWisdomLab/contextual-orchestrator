@@ -1,4 +1,4 @@
-"""Per-call cost evidence that decides whether a route is servable free *now*.
+"""Record and classify per-call free-serving cost evidence (fail closed).
 
 A zero catalog price says a model *can* be free; it does not say the next call
 will be. Experiential Labs is the motivating case: its promotional free tiers
@@ -7,15 +7,34 @@ paid (or opted into "credits overflow") calls past the allowance are billed
 at list price instead of refused. The catalog cannot tell the two states apart,
 so a static provider exclusion was the only safe rule so far.
 
-This module replaces that rule with evidence from real responses:
+Scope: this module records and classifies free-serving evidence; it does
+**not** replace that rule. Classification fails closed: a response is
+``FREE`` only when ``usage.cost`` is the JSON number 0 together with an
+explicit ``is_byok: false``; any cost evidence that is neither that nor a
+positive ``PAID`` cost is ``UNKNOWN``. Experiential Labs admission is unchanged:
+:func:`free_serving_admitted` never admits a provider in
+:data:`COST_EVIDENCE_REQUIRED_PROVIDERS` as free, whatever the catalog,
+promotion, or cost evidence says. Adopting discovery-based admission ("discovery
+decides whether a model is free right now") is follow-up work that needs an
+authoritative pre-send entitlement signal; it is not implemented here.
+
+Not wired into production yet: no production code consumes a ``FREE``
+verdict (:meth:`FreeServingLedger.free_now` has no production caller, and
+admission only reads the demoting ``PAID``/``EXHAUSTED`` verdicts);
+:meth:`FreeServingLedger.probe_due`, :meth:`FreeServingLedger.claim_probe`,
+and :func:`probe_free_candidates` have no production caller and always
+decline; and the promotion lookup's result cannot admit anything, because the
+only rows it marks belong to evidence-required providers that
+:func:`free_serving_admitted` keeps closed.
 
 * **Nomination.** A route becomes a free *candidate* from catalog evidence:
   a zero token price, or (Experiential Labs) a ``free: true`` entry in the
   public keyless ``GET /api/models`` ``promotions[]`` catalog
   (:func:`free_promotion_slugs`). A failed catalog fetch nominates nothing.
+  Nomination is not admission (see **Admission** below).
 * **Evidence.** Every provider response the
-  :class:`~contextual_orchestrator.orchestrator.ModelClient` reads (probe,
-  preflight, served call) is classified from its provider-reported per-call
+  :class:`~contextual_orchestrator.orchestrator.ModelClient` reads is
+  classified from its provider-reported per-call
   cost (:func:`classify_reported_cost`): a JSON-number ``cost == 0`` with an
   explicit ``is_byok: false`` is ``FREE``; ``cost > 0`` is ``PAID``; anything
   missing, malformed (including numeric *strings*), negative, non-finite, or
@@ -35,7 +54,9 @@ This module replaces that rule with evidence from real responses:
   the route out of every free selector immediately. A provider calendar is
   not pre-send entitlement evidence, so the demotion persists until an
   explicit process-level reset; later ``UNKNOWN`` or ``FREE`` observations
-  cannot clear it.
+  cannot clear it. The ledger is in memory only: nothing is persisted, and no
+  production code calls :meth:`FreeServingLedger.reset`, so a demotion lasts
+  until the process restarts and is lost on restart.
 * **Admission.** :func:`free_serving_admitted` is the one predicate
   discovery-time selection (``model_discovery.general_free_serving_candidates``)
   and serving-time selection (``TaskOrchestrator._is_free_agent``) share, so
