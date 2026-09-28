@@ -27,12 +27,20 @@ jobs:
     if: >-
       github.event_name != 'schedule' &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Set up pinned Docker Compose
+        uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # docker/setup-compose-action@v2
+        with:
+          version: "v5.4.0"
+
+      - name: Verify Docker Compose CLI
+        run: docker compose version
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
@@ -43,6 +51,12 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: "1.97.1" # Keep aligned with mise.toml.
+          components: rustfmt, clippy
 
       - name: Build locked native decision measurement
         run: |
@@ -97,7 +111,7 @@ jobs:
     if: >-
       (github.event_name != 'schedule' || github.event.schedule == '41 4 * * 2') &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -150,7 +164,7 @@ jobs:
     if: >-
       github.event_name != 'schedule' &&
       (github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: rust
@@ -160,21 +174,47 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        run: |
-          set -euo pipefail
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
-          rustc --version
-          cargo --version
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: "1.97.1" # Keep aligned with mise.toml.
+          components: rustfmt, clippy
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Locate relocated Python shared library
+        id: python-library
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          import sysconfig
+          directory = Path(sys.base_prefix) / "lib"
+          library = directory / sysconfig.get_config_var("LDLIBRARY")
+          if not library.is_file():
+              raise SystemExit(f"Python shared library missing: {library}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"directory={directory}\n")
+          PY
+
       - name: Clippy (deny warnings)
+        env:
+          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
+          RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test workspace
+        env:
+          PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
+          RUSTFLAGS: -L native=${{ steps.python-library.outputs.directory }}
         run: cargo test --workspace --locked
 
       - name: Install cargo-audit
@@ -186,10 +226,12 @@ jobs:
             "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${audit_version}/${archive}" \
             -o "${RUNNER_TEMP}/${archive}"
           tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          mkdir -p "${RUNNER_TEMP}/cargo-audit-bin"
           install -m 0755 \
             "${RUNNER_TEMP}/cargo-audit-x86_64-unknown-linux-gnu-v${audit_version}/cargo-audit" \
-            /usr/local/bin/cargo-audit
-          cargo audit --version
+            "${RUNNER_TEMP}/cargo-audit-bin/cargo-audit"
+          echo "${RUNNER_TEMP}/cargo-audit-bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/cargo-audit-bin/cargo-audit" --version
 
       - name: Audit Cargo.lock advisories
         run: cargo audit --file Cargo.lock
@@ -202,7 +244,7 @@ jobs:
         (github.event.action != 'closed' &&
          github.event.pull_request.draft == false &&
          github.event.pull_request.head.repo.full_name == github.repository))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","linux","x64","cwlab"]') || 'ubuntu-24.04' }}
     permissions:
       actions: read
       contents: read

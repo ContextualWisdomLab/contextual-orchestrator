@@ -17,6 +17,7 @@ import tomllib
 from pathlib import Path
 
 _HEADING_PATTERN = re.compile(r"(?m)^## \[(?P<version>[^\]]+)\][^\n]*$")
+GITHUB_RELEASE_BODY_LIMIT = 125_000
 
 
 def read_declared_version(pyproject_text: str) -> str:
@@ -70,11 +71,27 @@ def extract_changelog_section(changelog_text: str, version: str) -> str:
 
 
 def render_release_notes(*, version: str, section_body: str, repository: str, commit_sha: str) -> str:
-    """Compose the final GitHub Release body from provenance and the section."""
-    return (
-        f"Release `v{version}` of `{repository}`, built from commit "
-        f"`{commit_sha}`.\n\n{section_body}\n"
+    """Compose the final GitHub Release body from provenance and the section.
+
+    GitHub rejects a Release body over ``GITHUB_RELEASE_BODY_LIMIT``
+    characters, and the workflow pushes the tag before creating the Release,
+    so an oversized body would strand a tag-only publication. An oversized
+    section is therefore cut on a line boundary and ends with a link to the
+    complete CHANGELOG.md at the exact release commit.
+    """
+    header = f"Release `v{version}` of `{repository}`, built from commit `{commit_sha}`.\n\n"
+    body = f"{header}{section_body}\n"
+    if len(body) <= GITHUB_RELEASE_BODY_LIMIT:
+        return body
+    footer = (
+        f"\n\n_The v{version} notes exceed GitHub's Release body limit and are "
+        f"truncated here. The complete section is in "
+        f"https://github.com/{repository}/blob/{commit_sha}/CHANGELOG.md._\n"
     )
+    budget = GITHUB_RELEASE_BODY_LIMIT - len(header) - len(footer)
+    kept = section_body[:budget]
+    kept = kept[: kept.rfind("\n")] if "\n" in kept else kept
+    return f"{header}{kept.rstrip()}{footer}"
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
