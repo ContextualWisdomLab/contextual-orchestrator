@@ -119,8 +119,9 @@ def test_rate_limit_rejection_closes_connection_with_unread_body() -> None:
         try:
             urllib.request.urlopen(request, timeout=2)
         except urllib.error.HTTPError as exc:
-            assert exc.code == 400
-            exc.read()
+            with exc:
+                assert exc.code == 400
+                exc.read()
         response = _pipeline(
             port,
             _post_headers(

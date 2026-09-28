@@ -73,16 +73,17 @@ def test_naruon_structured_dom_decomposition_payload(test_server: tuple[HTTPServ
             body = json.loads(response.read().decode("utf-8"))
             assert "choices" in body
     except urllib.error.HTTPError as e:
-        body = json.loads(e.read().decode("utf-8"))
-        # The single mock agent is chat-compatible, so the orchestrator accepts
-        # and routes this payload. A pool with no provider that can satisfy the
-        # schema fails closed with an invalid-model (400) or provider-side
-        # schema (502/503) error; a successful 200 proves the request parsed
-        # and routed before the provider call.
-        assert e.code in (400, 502, 503)
-        message = body["error"]["message"]
-        assert (
-            "schema" in message.lower()
-            or "provider execution failed" in message.lower()
-            or "no enabled" in message.lower()
-        )
+        with e:
+            body = json.loads(e.read().decode("utf-8"))
+            # The single mock agent is chat-compatible, so the orchestrator accepts
+            # and routes this payload. A pool with no provider that can satisfy the
+            # schema fails closed with an invalid-model (400) or provider-side
+            # schema (502/503) error; a successful 200 proves the request parsed
+            # and routed before the provider call.
+            assert e.code in (400, 502, 503)
+            message = body["error"]["message"]
+            assert (
+                "schema" in message.lower()
+                or "provider execution failed" in message.lower()
+                or "no enabled" in message.lower()
+            )
