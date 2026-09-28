@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 import pytest
@@ -227,11 +228,18 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     discovered = [
         _discovered("openrouter", "review-model", "OPENROUTER_API_KEY")
     ]
-    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+    def fake_discover():
+        assert "OPENROUTER_API_KEY" not in os.environ
+        assert review_gateway.REVIEW_AUTH_CREDENTIAL_NAME not in os.environ
+        return discovered, []
+
+    monkeypatch.setattr(review_gateway, "discover_all_models", fake_discover)
     captured: dict[str, object] = {}
 
     def fake_serve(orchestrator, **kwargs):
         """Capture server startup without binding a test port."""
+        assert "OPENROUTER_API_KEY" not in os.environ
+        assert review_gateway.REVIEW_AUTH_CREDENTIAL_NAME not in os.environ
         captured["orchestrator"] = orchestrator
         captured.update(kwargs)
 
@@ -296,6 +304,9 @@ def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch)
 
     def fake_serve(orchestrator, **kwargs):
         """Capture the CLI-selected serving pool without binding a port."""
+        assert "BYTEZ_API_KEY" not in os.environ
+        assert "OPENROUTER_API_KEY" not in os.environ
+        assert review_gateway.REVIEW_AUTH_CREDENTIAL_NAME not in os.environ
         captured["orchestrator"] = orchestrator
         captured.update(kwargs)
 
