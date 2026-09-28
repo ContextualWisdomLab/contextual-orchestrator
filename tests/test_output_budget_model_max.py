@@ -912,6 +912,8 @@ class _CapturingSSEProvider:
     def __exit__(self, *exc: object) -> None:
         del exc
         self._server.shutdown()
+        self._thread.join(timeout=5)
+        self._server.server_close()
 
     @property
     def base_url(self) -> str:
@@ -983,6 +985,7 @@ def test_streaming_passthrough_final_chunk_surfaces_clamp_evidence_when_clamped(
         finally:
             server.shutdown()
             thread.join(timeout=5)
+            server.server_close()
 
     final_frame = _final_stream_frame(body)
     assert final_frame["orchestration"]["requested_output_tokens"] == 256
@@ -1013,6 +1016,7 @@ def test_streaming_passthrough_final_chunk_reports_unclamped_when_not_clamped() 
         finally:
             server.shutdown()
             thread.join(timeout=5)
+            server.server_close()
 
     final_frame = _final_stream_frame(body)
     assert final_frame["orchestration"]["requested_output_tokens"] == 64

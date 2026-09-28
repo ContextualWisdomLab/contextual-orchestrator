@@ -2289,6 +2289,13 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         is_general_chat_agent_model_id(discovered.model_id)
     ):
         raise ValueError("model is not eligible for a general chat agent")
+    capabilities = tuple(value.strip().casefold() for value in discovered.capabilities)
+    input_modalities = tuple(
+        value.strip().casefold() for value in discovered.input_modalities
+    )
+    output_modalities = tuple(
+        value.strip().casefold() for value in discovered.output_modalities
+    )
     return ModelAgent(
         id=agent_id_for(discovered),
         model=discovered.model_id,
@@ -2303,10 +2310,10 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(("spend:blocked",) if not discovered.spend_admitted else ()),
             *privacy_tags_for_discovered(discovered),
             *discovery_tool_call_tags(discovered),
-            *discovered.capabilities,
-            *(f"capability:{value}" for value in discovered.capabilities),
-            *(f"input:{value}" for value in discovered.input_modalities),
-            *(f"output:{value}" for value in discovered.output_modalities),
+            *capabilities,
+            *(f"capability:{value}" for value in capabilities),
+            *(f"input:{value}" for value in input_modalities),
+            *(f"output:{value}" for value in output_modalities),
         ),
         priority=priority,
         disabled=True,
@@ -2475,6 +2482,44 @@ def general_free_serving_candidates(
         and not _requires_non_text_input(model)
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
+    return candidates
+
+
+def free_image_chat_serving_candidates(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Return free chat models with explicit image-input evidence.
+
+    This selector is not for blind ``orchestrator/free`` text serving: a
+    vision-input deployment must not absorb tool-calling or text-only traffic
+    (see :func:`general_free_serving_candidates` and .github#1198). It admits
+    zero-cost, routable chat rows whose catalog evidence already declares
+    ``image`` among input modalities so a request that *already carries*
+    ``image_url`` parts (DOCX/HWPX figure review) can fail over among those
+    models instead of a text-only free agent that would ignore pixels.
+
+    Output must remain text-producing chat (the review answer is text). Audio-
+    or video-only input rows stay excluded because this contract covers still
+    figure review, not arbitrary media.
+    """
+    candidates: list[DiscoveredModel] = []
+    for model in free_discovered_models(discovered):
+        if model.provider_name == "experiential_labs":
+            continue
+        if not is_routable_discovered_model(model):
+            continue
+        inputs = {
+            modality.strip().casefold()
+            for modality in model.input_modalities
+            if isinstance(modality, str) and modality.strip()
+        }
+        if "image" not in inputs:
+            continue
+        # Reject image-only deployments that cannot accept the accompanying
+        # paper text the leaf always sends with figures.
+        if "text" not in inputs:
+            continue
+        candidates.append(model)
     return candidates
 
 
