@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Mapping
 
@@ -13,13 +12,14 @@ JWKS_URL = f"{ISSUER}/.well-known/jwks"
 
 
 class GitHubReviewOIDC:
-    """Map verified Actions job identity to a review workload and target repo."""
+    """Map a verified central Actions job identity to a review workload."""
 
     def __init__(
         self,
         *,
         audience: str,
         owner_id: str,
+        repository_id: str,
         workflows: Mapping[str, str],
         key_client: jwt.PyJWKClient | None = None,
     ) -> None:
@@ -28,9 +28,14 @@ class GitHubReviewOIDC:
             or not isinstance(owner_id, str)
             or not owner_id.isascii()
             or not owner_id.isdecimal()
+            or not isinstance(repository_id, str)
+            or not repository_id.isascii()
+            or not repository_id.isdecimal()
             or not workflows
         ):
-            raise ValueError("OIDC audience, owner ID, and workflows are required")
+            raise ValueError(
+                "OIDC audience, owner ID, central repository ID, and workflows are required"
+            )
         if set(workflows) - {"opencode", "noema", "strix"} or len(
             set(workflows.values())
         ) != len(workflows):
@@ -44,13 +49,14 @@ class GitHubReviewOIDC:
             raise ValueError("OIDC workflows must be central main-branch workflows")
         self.audience = audience
         self.owner_id = owner_id
+        self.repository_id = repository_id
         self.workflows = dict(workflows)
         self._keys = key_client or jwt.PyJWKClient(
             JWKS_URL, cache_jwk_set=True, lifespan=300, timeout=5, cooldown_duration=300
         )
 
     def identity(self, token: str) -> str | None:
-        """Return workload:repo_id only for a signed, scoped, unexpired job token."""
+        """Return workload only for a signed central job token."""
         try:
             if not isinstance(token, str) or len(token) > 16384:
                 return None
@@ -106,17 +112,11 @@ class GitHubReviewOIDC:
                 and now < expiry <= issued + 600
             ):
                 return None
-            repository = claims["repository"]
-            repository_id = claims["repository_id"]
             if (
                 claims["repository_owner_id"] != self.owner_id
                 or claims["repository_owner"] != "ContextualWisdomLab"
-                or not isinstance(repository, str)
-                or re.fullmatch(r"ContextualWisdomLab/[A-Za-z0-9._-]+", repository)
-                is None
-                or not isinstance(repository_id, str)
-                or not repository_id.isascii()
-                or not repository_id.isdecimal()
+                or claims["repository"] != "ContextualWisdomLab/.github"
+                or claims["repository_id"] != self.repository_id
                 or not isinstance(claims["sub"], str)
                 or not claims["sub"]
                 or not isinstance(claims["run_id"], str)
@@ -131,7 +131,7 @@ class GitHubReviewOIDC:
                 ),
                 None,
             )
-            return f"{workload}:{repository_id}" if workload else None
+            return workload
         except (
             jwt.PyJWTError,
             ValueError,

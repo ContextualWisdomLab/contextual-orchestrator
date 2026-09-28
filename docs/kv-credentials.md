@@ -438,15 +438,17 @@ remain in that KV. Configure the exact central workflow refs:
 python -m contextual_orchestrator.review_gateway --preseeded-kv --production \
   --github-oidc-audience contextual-orchestrator/review \
   --github-oidc-owner-id 295022177 \
+  --github-oidc-repository-id 1274066402 \
   --github-oidc-workflow opencode=ContextualWisdomLab/.github/.github/workflows/opencode-review-dispatch.yml@refs/heads/main
 ```
 
 Repeat `--github-oidc-workflow` for Noema and Strix after their exact hosted
 workflow identities are checked. This mode rejects static inference-token
 mappings. It validates GitHub's signing key, issuer, exact audience, immutable
-organization ID, signed target-repository ID/name, allowed central main-branch
-workflow ref, run ID, and token lifetime. Persisted owner identity is scoped
-to the workload and target-repository ID;
+organization ID, signed central `.github` repository ID/name, allowed central
+main-branch workflow ref, run ID, and token lifetime. Persisted owner identity
+is scoped to the workload. The target PR repository is not an OIDC repository
+claim of the central job and requires a separate trusted binding;
 unknown signing keys and unavailable key retrieval fail closed. Signing keys
 are cached for at most five minutes, so rotation can deny new keys for that
 interval. The broker must mint a token for each gateway operation while keeping

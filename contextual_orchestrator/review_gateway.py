@@ -339,6 +339,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--production", action="store_true")
     parser.add_argument("--github-oidc-audience")
     parser.add_argument("--github-oidc-owner-id")
+    parser.add_argument("--github-oidc-repository-id")
     parser.add_argument(
         "--github-oidc-workflow", action="append", default=[], metavar="NAME=WORKFLOW_REF",
         help="Permit one central main-branch workflow to authenticate as a review workload.",
@@ -379,12 +380,19 @@ def main() -> None:
         parser.error("--workload-token-key cannot be combined with --inference-token-key")
     oidc_mode = bool(args.github_oidc_workflow)
     if oidc_mode:
-        if not args.production or not args.github_oidc_audience or not args.github_oidc_owner_id:
-            parser.error("--github-oidc-workflow requires production, audience, and owner ID")
+        if not (
+            args.production
+            and args.github_oidc_audience
+            and args.github_oidc_owner_id
+            and args.github_oidc_repository_id
+        ):
+            parser.error(
+                "--github-oidc-workflow requires production, audience, owner ID, and central repository ID"
+            )
         if args.workload_token_key or args.inference_token_key:
             parser.error("GitHub OIDC inference cannot be combined with static inference credentials")
-    elif args.github_oidc_audience or args.github_oidc_owner_id:
-        parser.error("GitHub OIDC audience and owner ID require --github-oidc-workflow")
+    elif args.github_oidc_audience or args.github_oidc_owner_id or args.github_oidc_repository_id:
+        parser.error("GitHub OIDC identity options require --github-oidc-workflow")
     if args.inference_token_key is not None and not args.inference_token_key.strip():
         parser.error("--inference-token-key requires a KV key name")
     workload_keys = {}
@@ -408,6 +416,7 @@ def main() -> None:
         oidc_verifier = GitHubReviewOIDC(
             audience=args.github_oidc_audience,
             owner_id=args.github_oidc_owner_id,
+            repository_id=args.github_oidc_repository_id,
             workflows=oidc_workflows,
         ) if oidc_mode else None
     except ValueError as exc:

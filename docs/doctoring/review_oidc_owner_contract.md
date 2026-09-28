@@ -4,7 +4,10 @@ The review gateway owns authentication and request admission. GitHub Actions
 owns job identity. A future central broker owns token minting and keeps the
 minting capability outside the model process. The gateway accepts only signed
 GitHub tokens for its configured audience, org owner ID, and exact central
-workflow refs; it binds persisted run ownership to workload plus target repo ID.
+workflow refs and the immutable central `.github` repository ID. It binds
+persisted run ownership to the workload. GitHub's signed `repository_id` names
+the repository running the job, which is `.github` for these central dispatch
+workflows; it does not identify the reviewed pull request's repository.
 The existing `orchestrator/free` review-only request restrictions still apply.
 PyJWT handles JWT/JWK parsing and signature checks through the existing
 external-verifier seam; the gateway checks its own workload claims afterward.
@@ -12,15 +15,14 @@ external-verifier seam; the gateway checks its own workload claims afterward.
 ## RED → GREEN
 
 - `tests/test_review_oidc.py` first failed to import the missing verifier; it
-  now checks signature, issuer, audience, org/target identity, workflow,
+  now checks signature, issuer, audience, central repo identity, workflow,
   timestamps, unknown keys, and invalid tokens.
 - A separate startup test first failed because the OIDC CLI mode was absent;
   it now checks admin/inference separation, admin KV revocation, and refusal
   of mixed static/OIDC inference credentials.
-- Corrected the first design after reading central workflow triggers: the
-  workflow can run under a target repository, so its token cannot be pinned to
-  `.github`'s repository ID. The configured trust anchor is the immutable org
-  owner ID plus the central workflow ref; the signed target ID scopes ownership.
+- Corrected the first design against GitHub's OIDC claim definition and the
+  central workflow trigger: `repository_id` names `.github`, so a different
+  org repository is rejected even if its token names an allowed workflow ref.
 
 ## Limits and next gate
 
@@ -28,6 +30,9 @@ This is owner-side source evidence. A hosted token from each actual review
 workflow, exact deployed release, isolated broker, TLS ingress, and rollback
 have not been verified. Unknown GitHub signing keys are denied until the
 five-minute cache refresh; key retrieval failure denies authentication.
+Target-repository ownership needs a separate trusted exchange or request
+binding with independently verified PR metadata; this OIDC claim cannot supply
+it.
 
 The claim set follows [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc).
 Signature/issuer/audience separation and fixed key retrieval follow

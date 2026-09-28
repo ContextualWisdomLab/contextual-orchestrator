@@ -74,6 +74,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
     verifier = GitHubReviewOIDC(
         audience="contextual-orchestrator/review",
         owner_id="295022177",
+        repository_id="1274066402",
         workflows={
             "opencode": "ContextualWisdomLab/.github/.github/workflows/opencode-review-dispatch.yml@refs/heads/main"
         },
@@ -83,9 +84,9 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
     claims = {
         "iss": "https://token.actions.githubusercontent.com",
         "aud": "contextual-orchestrator/review",
-        "sub": "repo:ContextualWisdomLab/contextual-orchestrator:ref:refs/heads/main",
-        "repository": "ContextualWisdomLab/contextual-orchestrator",
-        "repository_id": "1277018702",
+        "sub": "repo:ContextualWisdomLab/.github:ref:refs/heads/main",
+        "repository": "ContextualWisdomLab/.github",
+        "repository_id": "1274066402",
         "repository_owner": "ContextualWisdomLab",
         "repository_owner_id": "295022177",
         "ref": "refs/heads/main",
@@ -96,18 +97,18 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
         "exp": now + 240,
     }
     valid = _token(private_key, claims)
-    assert verifier.identity(valid) == "opencode:1277018702"
+    assert verifier.identity(valid) == "opencode"
     assert (
         verifier.identity(
             _token(
                 private_key,
                 claims
                 | {
-                    "sub": "repo:ContextualWisdomLab@295022177/contextual-orchestrator@1277018702:ref:refs/heads/main"
+                    "sub": "repo:ContextualWisdomLab@295022177/.github@1274066402:ref:refs/heads/main"
                 },
             )
         )
-        == "opencode:1277018702"
+        == "opencode"
     )
     assert (
         verifier.identity(
@@ -122,7 +123,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
                 },
             )
         )
-        == "opencode:12345"
+        is None
     )
     assert (
         verifier.identity(
@@ -135,6 +136,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
         {"aud": "other"},
         {"aud": ["contextual-orchestrator/review"]},
         {"repository_id": "not-an-id"},
+        {"repository_id": "12345"},
         {"repository": "attacker/.github"},
         {"repository_owner_id": "7"},
         {"repository_owner": "attacker"},
@@ -172,6 +174,7 @@ def test_review_oidc_rejects_ambiguous_workflow_configuration():
         GitHubReviewOIDC(
             audience="a",
             owner_id="1",
+            repository_id="1274066402",
             workflows={"opencode": "same", "strix": "same"},
             key_client=object(),
         )
@@ -197,7 +200,7 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
                 (),
                 {
                     "identity": lambda self, token: (
-                        "opencode:1277018702" if token == "signed-job" else None
+                        "opencode" if token == "signed-job" else None
                     )
                 },
             )(),
@@ -214,6 +217,8 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
             "contextual-orchestrator/review",
             "--github-oidc-owner-id",
             "295022177",
+            "--github-oidc-repository-id",
+            "1274066402",
             "--github-oidc-workflow",
             f"opencode={workflow}",
         ],
@@ -244,9 +249,10 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
     "extra,expected",
     [
         (["--github-oidc-audience", "a"], "require --github-oidc-workflow"),
+        (["--github-oidc-repository-id", "1274066402"], "require --github-oidc-workflow"),
         (
             ["--github-oidc-workflow", "opencode=bad"],
-            "requires production, audience, and owner ID",
+            "requires production, audience, owner ID, and central repository ID",
         ),
         (
             [
@@ -256,6 +262,19 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
                 "a",
                 "--github-oidc-owner-id",
                 "295022177",
+            ],
+            "requires production, audience, owner ID, and central repository ID",
+        ),
+        (
+            [
+                "--github-oidc-workflow",
+                "opencode=bad",
+                "--github-oidc-audience",
+                "a",
+                "--github-oidc-owner-id",
+                "295022177",
+                "--github-oidc-repository-id",
+                "1274066402",
                 "--inference-token-key",
                 "TOKEN",
             ],
@@ -269,6 +288,8 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
                 "a",
                 "--github-oidc-owner-id",
                 "295022177",
+                "--github-oidc-repository-id",
+                "1274066402",
             ],
             "central main-branch workflows",
         ),
