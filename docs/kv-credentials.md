@@ -447,11 +447,12 @@ workflow identities are checked. This mode rejects static inference-token
 mappings. It validates GitHub's signing key, issuer, exact audience, immutable
 organization ID, signed central `.github` repository ID/name, allowed central
 main-branch workflow ref, run ID, and token lifetime. Persisted owner identity
-is scoped to the workload. The target PR repository is not an OIDC repository
-claim of the central job and requires a separate trusted binding;
-unknown signing keys and unavailable key retrieval fail closed. Signing keys
-are cached for at most five minutes, so rotation can deny new keys for that
-interval. The broker must mint a token for each gateway operation while keeping
+is scoped to the workload and signed workflow run ID. The target PR repository
+is not an OIDC repository claim of the central job and requires a separate
+trusted binding. Unknown signing keys and unavailable key retrieval fail
+closed. Signing keys are cached for at most five minutes, so rotation can deny
+new keys for that interval. The broker must mint a token for each gateway
+operation while keeping
 the Actions token-request capability outside the model-controlled process.
 This owner adapter does not create that broker, a TLS ingress, or hosted
 cutover evidence. Claim definitions: [GitHub Actions OIDC reference](https://docs.github.com/en/actions/reference/security/oidc);

@@ -87,8 +87,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Production review deployments can authenticate eligible GitHub Actions jobs
   with short-lived signed identity from the exact central workflow and
-  repository, scoped to the review workload. Target-repository binding,
-  consumer isolation, and hosted adoption remain separate work.
+  repository, scoped to the review workload and workflow run. Target-repository
+  binding, consumer isolation, and hosted adoption remain separate work.
 - Release publication now builds the installable Python wheel at the exact
   source commit and requires its SHA-256 manifest and signed release asset
   verification alongside the existing SBOM. Two builds at the commit's fixed

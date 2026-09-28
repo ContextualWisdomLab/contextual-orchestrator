@@ -5,9 +5,10 @@ owns job identity. A future central broker owns token minting and keeps the
 minting capability outside the model process. The gateway accepts only signed
 GitHub tokens for its configured audience, org owner ID, and exact central
 workflow refs and the immutable central `.github` repository ID. It binds
-persisted run ownership to the workload. GitHub's signed `repository_id` names
-the repository running the job, which is `.github` for these central dispatch
-workflows; it does not identify the reviewed pull request's repository.
+persisted run ownership to the workload and signed workflow run ID. GitHub's
+signed `repository_id` names the repository running the job, which is `.github`
+for these central dispatch workflows; it does not identify the reviewed pull
+request's repository.
 The existing `orchestrator/free` review-only request restrictions still apply.
 PyJWT handles JWT/JWK parsing and signature checks through the existing
 external-verifier seam; the gateway checks its own workload claims afterward.
@@ -32,7 +33,8 @@ have not been verified. Unknown GitHub signing keys are denied until the
 five-minute cache refresh; key retrieval failure denies authentication.
 Target-repository ownership needs a separate trusted exchange or request
 binding with independently verified PR metadata; this OIDC claim cannot supply
-it.
+it. Per-run ownership prevents one review execution from reading another's
+persisted gateway resources, including runs for a different target repository.
 
 The claim set follows [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc).
 Signature/issuer/audience separation and fixed key retrieval follow

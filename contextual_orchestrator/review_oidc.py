@@ -56,7 +56,7 @@ class GitHubReviewOIDC:
         )
 
     def identity(self, token: str) -> str | None:
-        """Return workload only for a signed central job token."""
+        """Return workload and run ID for a signed central job token."""
         try:
             if not isinstance(token, str) or len(token) > 16384:
                 return None
@@ -120,6 +120,7 @@ class GitHubReviewOIDC:
                 or not isinstance(claims["sub"], str)
                 or not claims["sub"]
                 or not isinstance(claims["run_id"], str)
+                or not claims["run_id"].isascii()
                 or not claims["run_id"].isdecimal()
             ):
                 return None
@@ -131,7 +132,7 @@ class GitHubReviewOIDC:
                 ),
                 None,
             )
-            return workload
+            return f"{workload}:{claims['run_id']}" if workload else None
         except (
             jwt.PyJWTError,
             ValueError,

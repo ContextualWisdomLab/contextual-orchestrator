@@ -97,7 +97,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
         "exp": now + 240,
     }
     valid = _token(private_key, claims)
-    assert verifier.identity(valid) == "opencode"
+    assert verifier.identity(valid) == "opencode:123456"
     assert (
         verifier.identity(
             _token(
@@ -108,7 +108,11 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
                 },
             )
         )
-        == "opencode"
+        == "opencode:123456"
+    )
+    assert (
+        verifier.identity(_token(private_key, claims | {"run_id": "654321"}))
+        == "opencode:654321"
     )
     assert (
         verifier.identity(
@@ -148,6 +152,7 @@ def test_signed_review_oidc_claims_and_signature_fail_closed():
         {"nbf": now + 60},
         {"exp": now + 3600},
         {"run_id": ""},
+        {"run_id": "١٢٣٤٥٦"},
         {"sub": ""},
     ):
         assert verifier.identity(_token(private_key, claims | changed)) is None
@@ -199,9 +204,10 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
                 "Verifier",
                 (),
                 {
-                    "identity": lambda self, token: (
-                        "opencode" if token == "signed-job" else None
-                    )
+                    "identity": lambda self, token: {
+                        "signed-job": "opencode:123456",
+                        "other-signed-job": "opencode:654321",
+                    }.get(token)
                 },
             )(),
         ),
@@ -230,6 +236,9 @@ def test_production_oidc_mode_uses_only_admin_kv_and_scoped_job_identity(monkeyp
     assert security.principal_id(headers) != security.principal_id(
         {"authorization": "Bearer admin-secret"}
     )
+    other_headers = {"authorization": "Bearer other-signed-job"}
+    assert security.authorize(other_headers, "inference", "127.0.0.1") == "message_delivery"
+    assert security.principal_id(headers) != security.principal_id(other_headers)
     for token, scope in (
         ("signed-job", "admin"),
         ("admin-secret", "inference"),
