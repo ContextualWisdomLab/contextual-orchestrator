@@ -301,10 +301,14 @@ def test_free_passthrough_raw_timeout_does_not_replay() -> None:
 
 
 @pytest.mark.parametrize("status", [503])
-def test_free_passthrough_status_does_not_authorize_cross_provider_replay(status: int) -> None:
+def test_free_passthrough_status_does_not_authorize_cross_provider_replay(
+    status: int, request: pytest.FixtureRequest
+) -> None:
+    failure = _http_error(status)
+    request.addfinalizer(failure.close)
     client = SequencedProxyClient(
         {
-            "primary_agent": _http_error(status),
+            "primary_agent": failure,
             "fallback_agent": {"model": "fallback-model", "choices": []},
         }
     )
@@ -324,10 +328,12 @@ def test_free_passthrough_status_does_not_authorize_cross_provider_replay(status
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
-def test_free_review_passthrough_explicit_429_advances() -> None:
+def test_free_review_passthrough_explicit_429_advances(request: pytest.FixtureRequest) -> None:
+    failure = _http_error(429)
+    request.addfinalizer(failure.close)
     client = SequencedProxyClient(
         {
-            "primary_agent": _http_error(429),
+            "primary_agent": failure,
             "fallback_agent": {"model": "fallback-model", "choices": []},
         }
     )
@@ -346,9 +352,13 @@ def test_free_review_passthrough_explicit_429_advances() -> None:
     assert "primary_agent" not in orchestrator._circuit
 
 
-def test_free_review_passthrough_wrapped_429_does_not_replay() -> None:
+def test_free_review_passthrough_wrapped_429_does_not_replay(
+    request: pytest.FixtureRequest,
+) -> None:
     wrapped = RuntimeError("transport outcome unknown")
-    wrapped.__cause__ = _http_error(429)
+    failure = _http_error(429)
+    request.addfinalizer(failure.close)
+    wrapped.__cause__ = failure
     client = SequencedProxyClient(
         {
             "primary_agent": wrapped,
@@ -370,10 +380,14 @@ def test_free_review_passthrough_wrapped_429_does_not_replay() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
-def test_free_review_explicit_model_rejection_can_advance() -> None:
+def test_free_review_explicit_model_rejection_can_advance(
+    request: pytest.FixtureRequest,
+) -> None:
+    failure = _http_error(404, {"error": {"code": "model_not_found"}})
+    request.addfinalizer(failure.close)
     client = SequencedProxyClient(
         {
-            "primary_agent": _http_error(404, {"error": {"code": "model_not_found"}}),
+            "primary_agent": failure,
             "fallback_agent": {"model": "fallback-model", "choices": []},
         }
     )
@@ -391,9 +405,13 @@ def test_free_review_explicit_model_rejection_can_advance() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
 
 
-def test_free_review_bodyless_404_cannot_authorize_replay() -> None:
+def test_free_review_bodyless_404_cannot_authorize_replay(
+    request: pytest.FixtureRequest,
+) -> None:
+    failure = _http_error(404)
+    request.addfinalizer(failure.close)
     client = SequencedProxyClient({
-        "primary_agent": _http_error(404),
+        "primary_agent": failure,
         "fallback_agent": {"model": "fallback-model"},
     })
     orchestrator = _build(client)
@@ -621,12 +639,14 @@ def test_orchestrated_structured_synthesis_advances_on_413(model: str) -> None:
 
 @pytest.mark.parametrize("status", [429, 503])
 def test_review_free_structured_synthesis_advances_only_after_429(
-    status: int,
+    status: int, request: pytest.FixtureRequest,
 ) -> None:
     """Quota rejection can advance; an ambiguous 503 stays on its candidate."""
+    failure = _http_error(status)
+    request.addfinalizer(failure.close)
     client = SequencedProxyClient(
         {
-            "primary_agent": _http_error(status),
+            "primary_agent": failure,
             "fallback_agent": {
                 "model": "fallback-model",
                 "choices": [{"message": {"content": "{}"}}],
