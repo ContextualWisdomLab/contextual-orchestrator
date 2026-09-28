@@ -556,6 +556,47 @@ def test_one_unmet_condition_holds_the_entry(package, expected) -> None:
     assert [row["name"] for row in groups[expected]] == [f"python:{package['name']}"]
 
 
+@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0"])
+def test_complete_canonical_license_instrument_is_not_rejected_by_keyword_mentions(expression):
+    """An entire known instrument evidences its declaration, including compatibility clauses."""
+    text = (Path(__file__).parent / "fixtures/license_text" / f"{expression.replace(' ', '_')}.txt").read_text()
+    package = {"name": "example", "version": "1", "licenses": [expression],
+               "license_files": [{"name": "LICENSE", "text": text}]}
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "cargo", "packages": [package]}]})
+    assert len(groups["permitted"]) == 1
+    assert not groups["undecidable"] and not groups["copyleft"]
+
+
+@pytest.mark.parametrize("expression", ["Apache-2.0 WITH LLVM-exception", "MPL-2.0", "BlueOak-1.0.0"])
+@pytest.mark.parametrize("change", ["append", "truncate", "second_file", "second_unknown_file", "wrong_declaration"])
+def test_canonical_text_matching_cannot_hide_changed_or_additional_terms(expression, change):
+    text = (Path(__file__).parent / "fixtures/license_text" / f"{expression.replace(' ', '_')}.txt").read_text()
+    files = [{"name": "LICENSE", "text": text}]
+    if change == "append":
+        files[0]["text"] += "\nAn additional unreviewed condition applies."
+    elif change == "truncate":
+        files[0]["text"] = text[:len(text) // 2]
+    elif change == "second_file":
+        files.append({"name": "COPYING", "text": "GNU Lesser General Public License, version 3"})
+    elif change == "second_unknown_file":
+        files.append({"name": "NOTICE", "text": "An additional unreviewed condition applies."})
+    elif change == "wrong_declaration":
+        expression = "GPL-3.0-only"
+    package = {"name": "example", "version": "1", "licenses": [expression], "license_files": files}
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "cargo", "packages": [package]}]})
+    assert not groups["permitted"]
+    assert groups["undecidable"] or groups["copyleft"]
+
+
+def test_verified_llvm_archive_title_and_whitespace_variants_preserve_complete_matching():
+    text = (Path(__file__).parent / "fixtures/license_text/Apache-2.0_WITH_LLVM-exception.txt").read_text()
+    text = text.replace("---- LLVM Exceptions", "--- LLVM Exceptions", 1)
+    text = " \n".join(text.split())
+    package = {"name": "example", "version": "1", "licenses": ["Apache-2.0 WITH LLVM-exception"],
+               "license_files": [{"name": "LICENSE", "text": text}]}
+    groups = classify_inventory_licenses({"ecosystems": [{"ecosystem": "cargo", "packages": [package]}]})
+    assert len(groups["permitted"]) == 1
+
 @pytest.mark.parametrize("mode, expected", [("preinstall", 0), ("release", 1)])
 def test_release_requires_sbom_even_with_valid_inventory(tmp_path, mode, expected):
     """Only the preinstall gate may operate without a built-environment SBOM."""
