@@ -43,6 +43,7 @@ def test_sbom_lookup_ignores_successful_scheduled_run_on_same_commit(tmp_path: P
         "      - name: Fetch the required CycloneDX SBOM for this commit\n", 1
     )[1].split("\n      - name:", 1)[0]
     script = textwrap.dedent(block.split("        run: |\n", 1)[1])
+    script = script.split("python scripts/ci/verify_runtime_sbom.py", 1)[0]
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
