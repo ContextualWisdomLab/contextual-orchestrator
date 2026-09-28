@@ -6,7 +6,6 @@ import base64
 import hashlib
 import importlib.util
 import json
-import marshal
 import py_compile
 import threading
 import urllib.error
@@ -72,15 +71,10 @@ def test_runtime_identity_verifies_installed_bytes_and_rejects_mutation(tmp_path
 
     cache = Path(importlib.util.cache_from_source(str(package / "worker.py")))
     py_compile.compile(str(package / "worker.py"), doraise=True)
-    assert runtime_identity.verified_runtime_identity()["source_sha"] == "a" * 40
-    original_cache = cache.read_bytes()
-    cache.write_bytes(
-        original_cache[:16]
-        + marshal.dumps(compile("VALUE = 'modified'\n", str(package / "worker.py"), "exec"))
-    )
     with pytest.raises(runtime_identity.RuntimeIdentityUnavailable):
         runtime_identity.verified_runtime_identity()
-    cache.write_bytes(original_cache)
+    cache.unlink()
+    assert runtime_identity.verified_runtime_identity()["source_sha"] == "a" * 40
 
     (package / "worker.py").write_bytes(b"altered installed module\n")
     with pytest.raises(runtime_identity.RuntimeIdentityUnavailable):

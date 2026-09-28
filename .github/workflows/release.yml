@@ -335,7 +335,7 @@ jobs:
           assert distributions[0].version == os.environ["RELEASE_VERSION"]
           assert (site / "contextual_orchestrator/__init__.py").is_file()
           PY
-          (cd "${release_site}" && PYTHONPATH="${release_site}" "${GITHUB_WORKSPACE}/.venv/bin/python" -c 'import os; from contextual_orchestrator.runtime_identity import verified_runtime_identity; receipt = verified_runtime_identity(); assert receipt["source_sha"] == os.environ["TARGET_SHA"]; assert receipt["version"] == os.environ["RELEASE_VERSION"]')
+          (cd "${release_site}" && PYTHONPATH="${release_site}" "${GITHUB_WORKSPACE}/.venv/bin/python" -B -c 'import os; from contextual_orchestrator.runtime_identity import verified_runtime_identity; receipt = verified_runtime_identity(); assert receipt["source_sha"] == os.environ["TARGET_SHA"]; assert receipt["version"] == os.environ["RELEASE_VERSION"]')
 
       - name: Upload rendered notes and SBOM for the publish job
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5

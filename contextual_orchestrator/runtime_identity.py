@@ -5,12 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib.metadata
-import importlib.util
 import json
-import marshal
 import re
 from pathlib import Path
-from types import CodeType
 
 from .api_contract import OPENAPI_SPEC
 
@@ -70,35 +67,11 @@ def verified_runtime_identity() -> dict[str, str]:
                 raise RuntimeIdentityUnavailable()
             if path.is_file():
                 relative = path.relative_to(package)
-                if "__pycache__" in relative.parts and path.suffix == ".pyc":
-                    try:
-                        source = Path(importlib.util.source_from_cache(str(path))).relative_to(package)
-                    except ValueError as exc:
-                        raise RuntimeIdentityUnavailable() from exc
-                    if f"contextual_orchestrator/{source.as_posix()}" in names:
-                        # Python can execute cached code while the recorded source stays intact.
-                        cached = path.read_bytes()
-                        if cached[:4] != importlib.util.MAGIC_NUMBER or len(cached) < 16:
-                            raise RuntimeIdentityUnavailable()
-                        code = marshal.loads(cached[16:])
-                        if not isinstance(code, CodeType):
-                            raise RuntimeIdentityUnavailable()
-                        for optimization in (0, 1, 2):
-                            expected_path = importlib.util.cache_from_source(
-                                str(package / source),
-                                optimization=str(optimization) if optimization else "",
-                            )
-                            if path == Path(expected_path):
-                                expected = compile(
-                                    (package / source).read_bytes(), code.co_filename, "exec",
-                                    dont_inherit=True, optimize=optimization,
-                                )
-                                if code == expected:
-                                    break
-                        else:
-                            raise RuntimeIdentityUnavailable()
-                        continue
-                if f"contextual_orchestrator/{relative.as_posix()}" not in names:
+                # A cache can execute different code while its recorded source stays intact.
+                if (
+                    path.suffix == ".pyc"
+                    or f"contextual_orchestrator/{relative.as_posix()}" not in names
+                ):
                     raise RuntimeIdentityUnavailable()
 
         manifest = json.loads(dict(verified)[manifest_name].decode("utf-8"))
@@ -122,5 +95,5 @@ def verified_runtime_identity() -> dict[str, str]:
         }
     except RuntimeIdentityUnavailable:
         raise
-    except (OSError, UnicodeError, ValueError, TypeError, EOFError, SyntaxError, RecursionError, KeyError, AttributeError, importlib.metadata.PackageNotFoundError) as exc:
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, AttributeError, importlib.metadata.PackageNotFoundError) as exc:
         raise RuntimeIdentityUnavailable() from exc
