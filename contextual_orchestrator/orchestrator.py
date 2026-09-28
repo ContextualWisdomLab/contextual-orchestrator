@@ -6,7 +6,7 @@ from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
-from .decision_receipts import observe_auxiliary_dispatch, record_answer_cache_hit, record_initial_selection
+from .decision_receipts import observe_auxiliary_dispatch, record_answer_cache_hit, record_effective_orchestration_mode, record_initial_selection
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import errno
@@ -5346,6 +5346,7 @@ class _StateStore:
                                     "capability_race", "capability_proxy", "text_race",
                                     "embedding_submission", "unclassified"}
                      | {"invocation_" + role for role in ("thinker", "worker", "verifier", "judge", "synthesizer")}),
+                    ("effective_orchestration_mode", {"route", "conduct"}),
                 ):
                     field_value = measurement.get(field_name)
                     row[field_name] = field_value if isinstance(field_value, str) and field_value in allowed_values else None
@@ -8104,6 +8105,8 @@ class TaskOrchestrator:
         ):
             result = copy.deepcopy(dict(cached))
             result["cache_status"] = "hit"
+            if result["mode"] in {"route", "conduct"}:
+                record_effective_orchestration_mode(result["mode"])
             record_answer_cache_hit()
             return result
         route_decision = self._resolved_route_decision(messages, mode, model_name, cheap_decision)
@@ -8125,6 +8128,7 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         if route_decision is None:
             route_decision = self.would_route(messages, mode, model_name)
+        record_effective_orchestration_mode("route" if route_decision else "conduct")
         if route_decision:
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
@@ -8190,6 +8194,7 @@ class TaskOrchestrator:
         Bytes already sent cannot be recalled, so a mid-stream failure
         surfaces to the caller.
         """
+        record_effective_orchestration_mode("route")
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL

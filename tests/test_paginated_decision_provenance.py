@@ -7,9 +7,9 @@ import pytest
 def test_export_keeps_bounded_cohort_identity_without_provider_text(tmp_path):
     store = _StateStore(str(tmp_path / "cohort.db"))
     try:
-        for request_id, endpoint, mode in (
-            ("route", "/v1/chat/completions", "invocation_worker"),
-            ("invalid", "private endpoint text", "private provider text"),
+        for request_id, endpoint, mode, effective_mode in (
+            ("route", "/v1/chat/completions", "invocation_worker", "route"),
+            ("invalid", "private endpoint text", "private provider text", "private mode text"),
         ):
             store.save("accepted_request", request_id, {
                 "request_id": request_id, "endpoint_path": endpoint, "route_mode": mode,
@@ -22,11 +22,14 @@ def test_export_keeps_bounded_cohort_identity_without_provider_text(tmp_path):
                 "request_id": request_id, "status": "acknowledged",
                 "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
                 "endpoint_path": endpoint, "route_mode": mode,
+                "effective_orchestration_mode": effective_mode,
             }, durable=True)
         valid, invalid = store.export_request_outcomes()["observations"]
         assert (valid["endpoint_path"], valid["route_mode"]) == (
             "/v1/chat/completions", "invocation_worker")
         assert (invalid["endpoint_path"], invalid["route_mode"]) == (None, None)
+        assert valid["effective_orchestration_mode"] == "route"
+        assert invalid["effective_orchestration_mode"] is None
     finally:
         store.close()
 

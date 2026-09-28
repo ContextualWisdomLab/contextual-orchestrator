@@ -11,6 +11,33 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
+@pytest.mark.parametrize("route_decision, expected_mode", [(True, "route"), (False, "conduct")])
+def test_effective_orchestration_mode_follows_dispatch_not_selection_hook(
+    tmp_path, monkeypatch, route_decision, expected_mode,
+):
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement, record_initial_selection
+
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
+                                    state_db=tmp_path / "state.db")
+    def selected(*args, **kwargs):
+        record_initial_selection(["worker_one"], "invocation_worker")
+        return {"mode": expected_mode}
+    monkeypatch.setattr(orchestrator, "route_once", selected)
+    monkeypatch.setattr(orchestrator, "conduct", selected)
+    try:
+        measurement = DecisionMeasurement(orchestrator._store, request_id="observed_request")
+        try:
+            orchestrator._dispatch([{"role": "user", "content": "question"}], "auto",
+                                   route_decision=route_decision)
+        finally:
+            measurement.close()
+        observation, = orchestrator._store.export_request_outcomes()["observations"]
+        assert observation["route_mode"] == "invocation_worker"
+        assert observation["effective_orchestration_mode"] == expected_mode
+    finally:
+        orchestrator.close()
+
+
 @pytest.mark.parametrize("scenario", ["saturated", "success", "conduct_success", "classifier_error", "trace_rejection"])
 @pytest.mark.parametrize("measurement_enabled", [False, True])
 def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatch, scenario, measurement_enabled):
@@ -122,6 +149,7 @@ def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_fi
             observation, = export_decision_receipts(orchestrator._store)["observations"]
             assert observation["status"] == "selection_failed"
             assert observation["durable_ack_elapsed_ns"] is None
+            assert observation["effective_orchestration_mode"] is None
             assert snapshots[0]["request_id"] == observation["request_id"]
             return
         if expected_status != 200:
@@ -132,6 +160,8 @@ def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_fi
         observation, = export_decision_receipts(orchestrator._store)["observations"]
         assert observation["first_provider_phase"] == "structured_triage"
         assert observation["durable_ack_elapsed_ns"] is not None
+        assert snapshots[0]["effective_orchestration_mode"] is None
+        assert observation["effective_orchestration_mode"] == "route"
         assert snapshots[0]["request_id"] == observation["request_id"]
     finally:
         connection.close()
