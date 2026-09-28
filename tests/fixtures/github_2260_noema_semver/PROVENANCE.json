@@ -1,0 +1,15 @@
+{
+  "description": "Byte-identical copies of ContextualWisdomLab/.github PR #2260 fixtures (ADR-0033), used to prove the v1 evidence schema accepts the owner's evidence-pack shape and the v1 observation schema rejects its non-production verdict shape, and a gateway-unavailable status is not representable as an observation or envelope. Do not edit: refresh only by re-copying from the pinned commit.",
+  "source_repository": "ContextualWisdomLab/.github",
+  "source_pull_request": 2260,
+  "source_commit": "dccacc77cd7be310d443b126ea98aec19216c816",
+  "files": {
+    "evidence_breaking.json": {"upstream_path": "tests/fixtures/noema_semver/evidence_breaking.json", "git_blob_sha1": "907bebb91fc49b5da78c2f64b1331ec7bf5d0c44", "role": "evidence_pack"},
+    "evidence_minor.json": {"upstream_path": "tests/fixtures/noema_semver/evidence_minor.json", "git_blob_sha1": "2c57aecc0f02515ee6240274186244e372cbcb88", "role": "evidence_pack"},
+    "recorded_low_confidence.json": {"upstream_path": "tests/fixtures/noema_semver/recorded_low_confidence.json", "git_blob_sha1": "309d46ef306aee23bde1ce7e206bca4d03a580b3", "role": "recorded_verdict"},
+    "recorded_major_ok.json": {"upstream_path": "tests/fixtures/noema_semver/recorded_major_ok.json", "git_blob_sha1": "6d7a7d8efe03b6e3a58cc426628dc9e64a0cc23a", "role": "recorded_verdict"},
+    "recorded_minor_ok.json": {"upstream_path": "tests/fixtures/noema_semver/recorded_minor_ok.json", "git_blob_sha1": "9d68d3b58805462079993cacfb1a6e701f28f848", "role": "recorded_verdict"},
+    "recorded_patch_conflicts_breaking.json": {"upstream_path": "tests/fixtures/noema_semver/recorded_patch_conflicts_breaking.json", "git_blob_sha1": "a29f12a3b9b1cba62c9e6aebbc2853dfbfc2a43a", "role": "recorded_verdict"},
+    "recorded_unavailable.json": {"upstream_path": "tests/fixtures/noema_semver/recorded_unavailable.json", "git_blob_sha1": "f6004bde58b065ed6372b8801bd2d8a255c9f1f8", "role": "recorded_unavailable"}
+  }
+}

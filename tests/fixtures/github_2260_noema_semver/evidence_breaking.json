@@ -1,0 +1,17 @@
+{
+  "previous_version": "0.11.2",
+  "changelog_fragments": [
+    "breaking: remove public helper"
+  ],
+  "removed_public_symbols": [
+    "fast_mlsirm.old_helper"
+  ],
+  "renamed_public_symbols": [],
+  "required_arg_promotions": [],
+  "deprecated_alias_only": [],
+  "commit_titles": [
+    "breaking: drop old_helper"
+  ],
+  "pr_titles": [],
+  "api_surface_inspected": true
+}

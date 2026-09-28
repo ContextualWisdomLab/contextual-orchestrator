@@ -1,0 +1,8 @@
+{
+  "verdict": {
+    "bump": "major",
+    "reason": "Public symbol removed; semver major required.",
+    "evidence_refs": ["api:removed:fast_mlsirm.old_helper"],
+    "confidence": 0.95
+  }
+}

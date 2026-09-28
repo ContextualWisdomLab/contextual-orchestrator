@@ -1,0 +1,11 @@
+{
+  "verdict": {
+    "bump": "minor",
+    "reason": "Deprecated-alias-only surface plus a new additive API.",
+    "evidence_refs": [
+      "changelog:feat: add moderated slopes API",
+      "api:deprecated-alias:fast_mlsirm.dif.mantel_haenszel"
+    ],
+    "confidence": 0.91
+  }
+}

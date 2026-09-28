@@ -1,0 +1,8 @@
+{
+  "verdict": {
+    "bump": "patch",
+    "reason": "Looks like a small cleanup.",
+    "evidence_refs": ["changelog:breaking: remove public helper"],
+    "confidence": 0.88
+  }
+}
