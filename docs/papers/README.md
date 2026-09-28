@@ -406,12 +406,15 @@ standards rather than papers. Existing citation discussions remain authoritative
 this register prevents DOI-only sources from escaping the discovery inventory.
 Case and sentence-final punctuation are normalized by the inventory test.
 
+- [David and Nagaraja (2003), *Order statistics*](https://doi.org/10.1002/0471722162) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md) and [library research](../library_research.md).
 - [DOI 10.1007/s11336-006-1478-z](https://doi.org/10.1007/s11336-006-1478-z)
 - [Bolsinova and Tijmstra (2019)](https://doi.org/10.1007/s11336-019-09682-5) — [bounded abstract review and outcome-leakage constraint](../doctoring/irt_router_measurement_review.md#conditional-dependence-follow-up).
 - [Bolsinova and Molenaar (2018)](https://doi.org/10.3389/fpsyg.2018.01525) — [bounded nonlinear-dependence intake and proposed leakage-safe evaluation](../doctoring/lart_measurement_review.md#nonlinear-dependence-external-psychometrics-intake); no LLM transfer or replication claim.
 - [DOI 10.1007/s11336-021-09762-5](https://doi.org/10.1007/s11336-021-09762-5)
 - [DOI 10.1017/psy.2025.5](https://doi.org/10.1017/psy.2025.5)
 - [DOI 10.1037/0003-066X.50.9.741](https://doi.org/10.1037/0003-066X.50.9.741)
+- [Hyndman and Fan (1996), sample quantiles](https://doi.org/10.1080/00031305.1996.10473566) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
+- [Kaplan and Meier (1958), nonparametric estimation from incomplete observations](https://doi.org/10.1080/01621459.1958.10501452) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [DOI 10.1093/biomet/39.3-4.324](https://doi.org/10.1093/biomet/39.3-4.324)
 - [DOI 10.1097/01.yco.0000170421.57227.9b](https://doi.org/10.1097/01.yco.0000170421.57227.9b)
 - [DOI 10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29)
@@ -429,6 +432,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [RFC 9110](https://doi.org/10.17487/RFC9110)
 - [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
 - [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)
+- [Brookmeyer and Crowley (1982), median survival time confidence interval](https://doi.org/10.2307/2530286) — cited by the [timeout allocator ADR](../planning/adrs/0127-evidence-based-per-model-timeout-allocator.md).
 - [arXiv 2211.09110 DOI](https://doi.org/10.48550/arXiv.2211.09110)
 - [arXiv 2305.05176 DOI](https://doi.org/10.48550/arXiv.2305.05176)
 - [arXiv 2403.04132 DOI](https://doi.org/10.48550/arXiv.2403.04132)
@@ -440,6 +444,8 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [arXiv 2606.21228 DOI](https://doi.org/10.48550/arXiv.2606.21228)
 - [arXiv 2608.06867 DOI](https://doi.org/10.48550/arXiv.2608.06867)
 - [DOI 10.1214/aos/1176344552](https://doi.org/10.1214/aos/1176344552)
+- [DOI 10.1007/BF01840446](https://doi.org/10.1007/BF01840446) — Myers (1986), An O(ND) difference algorithm and its variations, *Algorithmica* 1, 251–266; cited by ADR 0136 for object-sequence diffing (not redistributed).
+- [DOI 10.1145/3394486.3403172](https://doi.org/10.1145/3394486.3403172) — Xu et al. (2020), LayoutLM: Pre-training of text and layout for document image understanding, KDD '20; cited by ADR 0136 for page/object document representation (not redistributed).
 - [DOI 10.1525/collabra.33267](https://doi.org/10.1525/collabra.33267)
 - [DOI 10.18653/v1/2026.findings-acl.1881](https://doi.org/10.18653/v1/2026.findings-acl.1881)
 - [NIST AI 100-1](https://doi.org/10.6028/NIST.AI.100-1)
