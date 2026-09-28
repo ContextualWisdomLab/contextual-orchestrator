@@ -832,7 +832,7 @@ def test_route_once_preserves_attempts_across_judge_rejected_worker_rounds() -> 
     ]
     assert [attempt["outcome"] for attempt in result["route"]["attempted"]] == [
         "retryable_transport",
-        "served",
+        "completed",
         "served",
     ]
     assert result["route"]["terminal_reason"] == "served"

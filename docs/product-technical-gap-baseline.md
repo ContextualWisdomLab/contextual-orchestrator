@@ -7529,6 +7529,61 @@ directly from exact `ca5efdc0` authority. No force push or history rewrite was
 used. Exact-head hosted execution, independent approval, protected-main
 integration, and immutable release remain required; status stays Proposed.
 
+## 2026-09-27 Streaming receipt stack authority repair — Proposed
+
+PR #1231 previously targeted protected `main@5665b0ad`; hosted Security and
+Quality run 36238352288 therefore reproduced three unrelated foundation
+failures whose canonical owner is PR #1266: the missing embedding lease
+constant, an unhashable VCS requirement under `--require-hashes`, and pinned
+Rust 1.97.1 without rustfmt. The dependent PR #1273 inherited that stale base.
+
+The stack is repaired without force. PR #1231 now targets
+`fix/test-drift-main-red`; exact successor
+`1d51487111992c14bbce5922968eb857f0399921` has #1266 exact
+`ea48d4ec13be241ae85850d3d83a48edb3d28bf6` as an ancestor and preserves only
+the five-path streaming-receipt delta (`+159/-2`, ahead 8/behind 0). PR #1273
+exact `6e012a62586f798809186e36201cbb7e2f5c9124` remains open, mergeable, and
+retains its sole `tests/test_decision_receipts.py` delta (`+72/-0`). Exact
+remote AST parsing passed for all five Python paths. Draft-triggered runs
+36274940061 and 36275008940 were SKIPPED and are not GREEN evidence. The stale
+#1231 CHANGES_REQUESTED review tied to `b267f897`/run 36086231637 was dismissed
+because it explicitly contained no source-backed finding; fresh non-skipped
+checks and independent approval remain required. Status stays Proposed.
+
+
+### Typed terminal-reason authority — Proposed
+
+Exact head `1d514871` published OpenAPI 0.3.1 documentation and production
+receipts that treated `terminal_reason` as the routing-termination authority,
+but the schema neither required the field nor constrained its value. A consumer
+could therefore validate a receipt with no termination semantics or an
+undocumented reason and would have to invent its own fallback interpretation.
+
+RED `7a0183d8` records both invalid cases. GREEN `f1af21d7` makes
+`terminal_reason` required and restricts it to the three production values:
+`served`, `fail_closed`, and `eligible_set_exhausted`. Focused route-schema
+tests pass 4/4; the wider API/stream/error suite and exact-head hosted checks
+remain required. This is PR-head evidence only; protected-main integration,
+independent approval, immutable release, and consumer bump remain outstanding.
+
+
+#### Cross-field terminal evidence authority — Proposed
+
+The 0.3.1 schema at exact `741f3602` constrained `terminal_reason` and
+`attempted[].outcome` separately but did not bind them. It therefore validated
+both a `served` termination with no served attempt and an
+`eligible_set_exhausted` termination containing a served attempt. Those
+receipts expose contradictory authorities to every consumer.
+
+RED `716311fb` records both contradictions through the real
+`jsonschema.validate` boundary; both failed because validation unexpectedly
+succeeded. GREEN `27496cb5` requires exactly one served attempt for a served
+termination and forbids served attempts for either non-served termination.
+Exact remote AST parsing passed for production and test files; two valid
+receipts passed and both contradictory receipts were rejected. Hosted exact-head
+checks, independent approval, protected-main integration, immutable release, and
+consumer bump remain required. Status stays Proposed.
+
 ## 2026-09-27 PR #1266 review-boundary repair — Proposed
 
 Exact head `2a4bd5583f1dc03d563e013121d2d752e1d9fe46` retained three valid
@@ -7636,6 +7691,81 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## Proposed: exhausted and multi-round provider outcome schema — 2026-09-27
+
+Structure: #1231 owns the proposed OpenAPI 0.3.1 route contract on top of
+#1266; #1273 adds request-bound stream cancellation evidence. Protected merge,
+independent approval and immutable publication remain separate acceptance gates.
+
+Gap: the schema admitted only three terminal reasons, but actual free-route
+quota and size exhaustion emitted three additional reasons. A judge-rejected
+completed answer followed by a selected answer produced two final `served`
+claims. If the later round instead ended with a provider error, invalid response
+or tool safety stop, route_once discarded the earlier call history.
+
+RED at source base `bb72303a`: session `99076` generated real route_once 429,
+structured 429 and route_once 413 failures; all three receipts were rejected by
+the advertised schema. The real judge-rejected-round reproduction failed the
+schema's one-served invariant. Session `10618` reproduced lost prior history for
+response/tool stops; its provider variant first exposed an additional eligible
+candidate retry, so the fixture now explicitly exercises the existing circuit
+threshold to isolate the later provider stop. A constructor-keyword experiment
+was rejected because this policy is an instance attribute, not a constructor
+option; no production option was added.
+
+Repair: admit the three existing exhaustion reasons without changing routing,
+wait budgets or provider classifications. The shared receipt projection marks
+returned but unselected answers `completed`, and keeps only the final selected
+answer `served`. This does not judge answer quality, establish provider health,
+claim wire delivery, or mutate the original attempt dictionaries. Later typed
+failures retain both earlier completed calls and current failures in execution
+order, preserving their original exception subtype and other error detail.
+
+GREEN: session `61339`, 193 passed with strict warnings across API conformance,
+admission, streaming, taxonomy and structured fallback. Session `41291`, 43
+passed across HTTP action fallback, tool controls and wrapped tool metadata.
+
+```sh
+.venv/bin/python -m pytest -c pyproject.toml tests/test_api_contract.py tests/test_rate_limit_aware_admission.py tests/test_true_streaming.py tests/test_provider_error_taxonomy.py tests/test_structured_output_distinct_fallback.py -q --tb=short -W error
+.venv/bin/python -m pytest -c pyproject.toml tests/test_actions_model_fallback.py tests/test_chat_tools_passthrough_controls_http_honesty.py tests/test_tool_fallback_wrapped_metadata.py -q --tb=short -W error
+```
+
+Ruff 0.16.9 baseline comparison found no new F/E9 finding: the source already
+has five findings on `bb72303a` (one unused import, two unused variables, two
+closure-related undefined-name reports). The full lint baseline remains
+nonclean; focused test success is not a lint, full-suite or hosted success claim.
+
+Publication audit: #1083 is closed and #1229 is merged, but the current GitHub
+Releases API is empty and the package declaration remains 0.2.0. #1257 is a
+draft evidence-schema step, explicitly not a version decision. No tag, package
+version decision, protected contract delivery or consumer migration is inferred
+from those issue/PR states.
+
+Loop ledger: `loop_id=co1016_terminal_schema_20260927`, `parent_id=co1016`,
+`owner=#1231`, `depends_on=#1266_then_current_head_review_then_owner_release`,
+`status=LOCAL_VERIFIED`, `pass=real_failure_schema_and_complete_ordered_history`,
+`retry=source_backed_conformance_failure`, `evidence_base=bb72303a`,
+`next_action=publish_batched_contract_repair_and_restack_1273`,
+`return_to=co1016_protected_versioned_owner_delivery`.
+
+Todo: current-head independent review and required CI; protected integration;
+reviewed package version and immutable owner publication; leaf migration proof
+remains owned by OriginWeave#276.
+
+Package preparation at `a22ca68de3843b983413749a4b72b4f6ffef38a7`:
+`SOURCE_DATE_EPOCH` was fixed to that commit's timestamp and
+`uv build --offline --wheel --python 3.12` succeeded (session `79513`). The
+candidate wheel remains `contextual_orchestrator-0.2.0-py3-none-any.whl`, SHA-256
+`ac410cf98d3b43a432f7d4d89c3ee862b1c3ceca4a13436cecb91f176e56ad1b`.
+Its API and orchestrator modules are byte-identical to the tested source; its
+OpenAPI 0.3.1 advertises all six actual terminal reasons and `completed` among
+six attempt outcomes. This is one local candidate build, not an installed
+runtime test, reproducibility proof, SBOM/attestation verification, SemVer
+authorization or published artifact. The proof explicitly marks it unprotected
+and unpublished. #1273's merge of this source passed the 59 API/streaming tests
+with strict warnings (session `5175`); its unchanged native cancellation source
+and separate native dependency still require their hosted gate.
 
 ## 2026-09-27 protected-main refresh for #1266 — Proposed
 

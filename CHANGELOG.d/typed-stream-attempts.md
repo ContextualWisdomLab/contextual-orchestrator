@@ -13,3 +13,17 @@ internal and undocumented; `api_contract.py` now carries it as a versioned
 (`0.3.0`) `OrchestrationRoute`/`OrchestrationRouteAttempt` schema, and
 `test_api_contract.py` validates a real structured-synthesis failover and a real
 streaming failover against it.
+
+The 0.3.1 route contract now requires `terminal_reason` and constrains it to
+`served`, `fail_closed`, or `eligible_set_exhausted`. Receipts that omit the
+termination authority or invent an undocumented value fail schema validation
+instead of forcing a consumer-defined fallback interpretation.
+
+The route contract now also binds that terminal reason to the attempt evidence:
+`served` requires exactly one `served` attempt, while non-served termination
+reasons reject every `served` attempt. A self-contradictory receipt therefore
+fails schema validation instead of presenting two competing authorities.
+
+A provider stream that closes without its completion marker now reports a typed
+failure with the attempted candidate and stops without retrying an unknown
+upstream outcome or claiming a served completion.

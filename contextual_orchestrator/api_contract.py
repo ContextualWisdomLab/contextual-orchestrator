@@ -8,7 +8,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -135,13 +135,16 @@ OPENAPI_SPEC = {
                         "type": "string",
                         "enum": [
                             "served",
+                            "completed",
                             "request_too_large",
                             "retryable_transport",
                             "deadline_exceeded",
                             "fail_closed",
                         ],
                         "description": (
-                            "served: this candidate returned the completion. "
+                            "served: this candidate supplied the final selected completion. "
+                            "completed: this candidate returned an answer that was not "
+                            "selected for the final response; this does not establish answer quality or provider health. "
                             "request_too_large: the payload exceeded a provider "
                             "limit (HTTP 413). retryable_transport: a transient "
                             "transport/provider failure (429/5xx/network) eligible "
@@ -181,9 +184,44 @@ OPENAPI_SPEC = {
                     "every attempt made (including the served one), and why the "
                     "route terminated. Stable across the structured-synthesis, "
                     "single-worker streaming fallback, and non-streaming "
-                    "route_once paths."
+                    "route_once paths. A successful stream places this object "
+                    "in the final completion chunk."
                 ),
-                "required": ["eligible_agent_ids", "attempted"],
+                "required": ["eligible_agent_ids", "attempted", "terminal_reason"],
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {"terminal_reason": {"const": "served"}},
+                            "required": ["terminal_reason"],
+                        },
+                        "then": {
+                            "properties": {
+                                "attempted": {
+                                    "contains": {
+                                        "type": "object",
+                                        "required": ["outcome"],
+                                        "properties": {"outcome": {"const": "served"}},
+                                    },
+                                    "minContains": 1,
+                                    "maxContains": 1,
+                                }
+                            }
+                        },
+                        "else": {
+                            "properties": {
+                                "attempted": {
+                                    "not": {
+                                        "contains": {
+                                            "type": "object",
+                                            "required": ["outcome"],
+                                            "properties": {"outcome": {"const": "served"}},
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ],
                 "properties": {
                     "eligible_agent_ids": {"type": "array", "items": {"type": "string"}},
                     "attempted": {
@@ -192,7 +230,19 @@ OPENAPI_SPEC = {
                     },
                     "terminal_reason": {
                         "type": "string",
-                        "description": "Why the route stopped, e.g. served, fail_closed, eligible_set_exhausted.",
+                        "enum": [
+                            "served",
+                            "fail_closed",
+                            "eligible_set_exhausted",
+                            "request_too_large_exhausted",
+                            "rate_limit_wait_budget_exhausted",
+                            "rate_limited_storm",
+                        ],
+                        "description": (
+                            "Why the route stopped. Quota terminal reasons retain the "
+                            "failure's separate provider timing evidence; they do not "
+                            "establish a retry instant or an inference deadline."
+                        ),
                     },
                 },
             },

@@ -1568,10 +1568,14 @@ def _route_evidence_payload(
     terminal_reason: str,
     stage: str | None = None,
 ) -> dict[str, Any]:
-    """Build the shared ``orchestration.route`` evidence object."""
+    """Build shared route evidence with at most one final served candidate."""
+    attempts = [dict(row) for row in attempted]
+    served = [row for row in attempts if row.get("outcome") == "served"]
+    for row in (served[:-1] if terminal_reason == "served" else served):
+        row["outcome"] = "completed"
     evidence = {
         "eligible_agent_ids": eligible_agent_ids,
-        "attempted": list(attempted),
+        "attempted": attempts,
         "terminal_reason": terminal_reason,
     }
     if stage is not None:
@@ -3515,6 +3519,7 @@ class ModelClient:
         stream_model: str | None = None
         stream_choices: list[dict[str, str]] = []
         response_bytes = 0
+        saw_done = False
         try:
             with self._open_model_provider(
                 request,
@@ -3544,6 +3549,7 @@ class ModelClient:
                         continue
                     data = line[len("data:") :].strip()
                     if data == "[DONE]":
+                        saw_done = True
                         break
                     try:
                         chunk = json.loads(data)
@@ -3572,6 +3578,16 @@ class ModelClient:
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
+            if not saw_done:
+                raise ProviderUpstreamError(
+                    agent_id=agent.id,
+                    model=agent.model,
+                    error_code="provider_stream_incomplete",
+                    message="provider stream ended before terminal marker",
+                    client_status=502,
+                    retryable=False,
+                    transport="stream",
+                )
             _record_provider_response_telemetry(
                 {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
                 started,
@@ -8187,6 +8203,7 @@ class TaskOrchestrator:
         usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
         shared_context_budget_callback: Callable[[dict[str, Any] | None], None] | None = None,
         output_budget_callback: Callable[[dict[str, Any] | None], None] | None = None,
+        route_evidence_callback: Callable[[dict[str, Any]], None] | None = None,
     ):
         """Stream Fugu-route content deltas, then persist the run.
 
@@ -8243,6 +8260,15 @@ class TaskOrchestrator:
         agent = primary
         parts: list[str] = []
         failed_trace_steps: list[dict[str, Any]] = []
+        route_attempts: list[dict[str, Any]] = []
+
+        def route_evidence(terminal_reason: str) -> dict[str, Any]:
+            return {
+                "eligible_agent_ids": [candidate.id for candidate in candidates],
+                "attempted": list(route_attempts),
+                "terminal_reason": terminal_reason,
+            }
+
         started_at = time.perf_counter()
         for agent in candidates:
             parts = []
@@ -8259,6 +8285,10 @@ class TaskOrchestrator:
                 request_too_large = _is_request_too_large_error(exc)
                 if (agent.group_name or free_only) and not request_too_large:
                     self._group_router.observe_failure(agent.id)
+                if isinstance(exc, ProviderUpstreamError) and exc.error_code == "provider_stream_incomplete":
+                    route_attempts.append(_typed_attempt_entry(agent.id, agent.model, exc))
+                    exc.extra_detail["route"] = route_evidence("fail_closed")
+                    raise
                 if emitted or pinned is not None:
                     raise
                 if isinstance(exc, ToolFallbackStoppedError):
@@ -8275,11 +8305,15 @@ class TaskOrchestrator:
                 )
                 if not isinstance(upstream, ProviderUpstreamError):
                     raise
+                route_attempts.append(_typed_attempt_entry(
+                    agent.id, agent.model, upstream, request_too_large=request_too_large
+                ))
                 last_error = upstream
                 decision = classify_provider_transport_failure(upstream.retryable)
                 if decision.circuit_failure:
                     self._record_failure(agent.id)
                 if decision.action is ToolFallbackAction.FAIL_CLOSED:
+                    upstream.extra_detail["route"] = route_evidence("fail_closed")
                     raise upstream from None
                 if not request_too_large:
                     failed_usage = (
@@ -8320,6 +8354,8 @@ class TaskOrchestrator:
             break
         else:
             if last_error is not None:
+                if isinstance(last_error, ProviderUpstreamError):
+                    last_error.extra_detail["route"] = route_evidence("eligible_set_exhausted")
                 raise last_error
             raise RuntimeError("stream route has no eligible worker")
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
@@ -8347,6 +8383,9 @@ class TaskOrchestrator:
         )
         if output_budget_callback is not None:
             output_budget_callback(output_budget)
+        if route_evidence_callback is not None:
+            route_attempts.append({"agent_id": agent.id, "model": agent.model, "outcome": "served"})
+            route_evidence_callback(route_evidence("served"))
         if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
@@ -9679,18 +9718,36 @@ class TaskOrchestrator:
             start = time.perf_counter()
             selection_design: list[dict[str, Any]] = []
             selection_start = len(_REQUEST_SELECTION_ATTEMPTS.get() or ())
-            attempt_answer, attempt_served_id, attempt_served_model, attempt_usage = (
-                self._invoke_with_rate_limit_recovery(
-                    candidate,
-                    messages,
-                    text=text,
-                    role="worker",
-                    allowed_agent_ids=allowed_agent_ids,
-                    virtual_selector=virtual_selector,
-                    prompt_token_lower_bound=prompt_bound,
-                    selection_design_sink=selection_design.append,
+            try:
+                attempt_answer, attempt_served_id, attempt_served_model, attempt_usage = (
+                    self._invoke_with_rate_limit_recovery(
+                        candidate,
+                        messages,
+                        text=text,
+                        role="worker",
+                        allowed_agent_ids=allowed_agent_ids,
+                        virtual_selector=virtual_selector,
+                        prompt_token_lower_bound=prompt_bound,
+                        selection_design_sink=selection_design.append,
+                    )
                 )
-            )
+            except (ProviderUpstreamError, ProviderResponseError, ToolFallbackStoppedError) as exc:
+                if isinstance(route_evidence, dict):
+                    detail = exc.extra_detail if isinstance(exc, ProviderUpstreamError) else exc.detail
+                    current_route = detail.get("route")
+                    if isinstance(current_route, dict):
+                        detail["route"] = _route_evidence_payload(
+                            eligible_agent_ids=list(dict.fromkeys([
+                                *route_evidence.get("eligible_agent_ids", ()),
+                                *current_route.get("eligible_agent_ids", ()),
+                            ])),
+                            attempted=[
+                                *route_evidence.get("attempted", ()),
+                                *current_route.get("attempted", ()),
+                            ],
+                            terminal_reason=str(current_route.get("terminal_reason") or "fail_closed"),
+                        )
+                raise
             if not selection_design:
                 selection_design.append(self._selection_design_receipt(
                     ranked_pool, [candidate], self._agent(attempt_served_id)
