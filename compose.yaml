@@ -41,7 +41,8 @@ services:
       - contextual_orchestrator
       - --serve
       - --agents
-      - /app/examples/agents.mock.json
+      - /app/examples/agents.empty.json
+      - --auto-discover-model-agents
       - --state-db
       - /var/lib/contextual-orchestrator/state.db
       - --agents-db
