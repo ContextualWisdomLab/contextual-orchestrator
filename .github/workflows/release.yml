@@ -319,22 +319,42 @@ jobs:
             echo "::error::The exact-commit wheel changed between isolated builds." >&2
             exit 1
           fi
+          uv run --no-sync maturin build --locked --release --features pyo3/extension-module \
+            --manifest-path rust/decision_receipt/Cargo.toml --out dist
+          native_wheels=(dist/contextual_decision_receipt-*.whl)
+          if [ "${#native_wheels[@]}" -ne 1 ] || [ ! -s "${native_wheels[0]}" ]; then
+            echo "::error::Expected exactly one non-empty native decision measurement wheel." >&2
+            exit 1
+          fi
+          native_wheel="${native_wheels[0]}"
+          uv run --no-sync maturin build --locked --release --features pyo3/extension-module \
+            --manifest-path rust/decision_receipt/Cargo.toml --out "${RUNNER_TEMP}/release-rebuild"
+          cmp "${native_wheel}" "${RUNNER_TEMP}/release-rebuild/${native_wheel##*/}"
           test -s requirements.lock
           cp requirements.lock dist/requirements.lock
-          (cd dist && sha256sum "${wheel##*/}" requirements.lock > SHA256SUMS)
+          (cd dist && sha256sum "${wheel##*/}" "${native_wheel##*/}" requirements.lock > SHA256SUMS)
           release_site="${RUNNER_TEMP}/release-package"
-          uv pip install --no-deps --python 3.12 --target "${release_site}" "${wheel}"
-          RELEASE_SITE="${release_site}" python - <<'PY'
+          uv pip install --no-deps --python 3.12 --target "${release_site}" "${wheel}" "${native_wheel}"
+          RELEASE_SITE="${release_site}" python -I - <<'PY'
           import importlib.metadata
           import os
+          import sys
           from pathlib import Path
 
           site = Path(os.environ["RELEASE_SITE"])
           distributions = list(importlib.metadata.distributions(path=[str(site)]))
-          assert len(distributions) == 1
-          assert distributions[0].metadata["Name"] == "contextual-orchestrator"
-          assert distributions[0].version == os.environ["RELEASE_VERSION"]
+          assert {distribution.metadata["Name"] for distribution in distributions} == {
+              "contextual-orchestrator", "contextual-decision-receipt"
+          }
+          gateway = next(distribution for distribution in distributions if distribution.metadata["Name"] == "contextual-orchestrator")
+          native = next(distribution for distribution in distributions if distribution.metadata["Name"] == "contextual-decision-receipt")
+          assert gateway.version == os.environ["RELEASE_VERSION"]
+          assert native.metadata["License-Expression"] == "MIT"
+          assert any(str(path).endswith("licenses/LICENSE") and native.locate_file(path).is_file() for path in native.files or ())
           assert (site / "contextual_orchestrator/__init__.py").is_file()
+          sys.path.insert(0, str(site))
+          from contextual_orchestrator._decision_receipt import DecisionReceipt
+          assert DecisionReceipt().status == "accepted"
           PY
 
       - name: Upload rendered notes and SBOM for the publish job
@@ -401,11 +421,13 @@ jobs:
           test -s release-notes.md
           test -s sbom-download/cyclonedx-sbom.json
           test -s "dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
+          native_wheels=(dist/contextual_decision_receipt-*.whl)
+          test "${#native_wheels[@]}" -eq 1 && test -s "${native_wheels[0]}"
           test -s dist/requirements.lock
           test -s dist/SHA256SUMS
-          expected_manifest="$(cd dist && sha256sum "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" requirements.lock)"
+          expected_manifest="$(cd dist && sha256sum "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" "${native_wheels[0]##*/}" requirements.lock)"
           if [ "$(cat dist/SHA256SUMS)" != "${expected_manifest}" ]; then
-            echo "::error::Release manifest must contain exactly the verified wheel and dependency lock." >&2
+            echo "::error::Release manifest must contain exactly both verified wheels and the dependency lock." >&2
             exit 1
           fi
 
@@ -437,13 +459,17 @@ jobs:
         if: env.RELEASE_RESUME == 'true'
         run: |
           set -euo pipefail
+          native_wheels=(dist/contextual_decision_receipt-*.whl)
+          test "${#native_wheels[@]}" -eq 1 && test -s "${native_wheels[0]}"
+          native_wheel="${native_wheels[0]##*/}"
           release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${RELEASE_VERSION}")"
-          if ! jq -e --arg tag "v${RELEASE_VERSION}" --arg wheel "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" '
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" --arg wheel "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" --arg native "${native_wheel}" '
             .tag_name == $tag and .prerelease == false and
             ((.draft == true and .immutable == false) or
              (.draft == false and .immutable == true and
               ([.assets[] | select(.name == "cyclonedx-sbom.json" and (.size | type) == "number" and .size > 0)] | length) == 1 and
               ([.assets[] | select(.name == $wheel and (.size | type) == "number" and .size > 0)] | length) == 1 and
+              ([.assets[] | select(.name == $native and (.size | type) == "number" and .size > 0)] | length) == 1 and
               ([.assets[] | select(.name == "requirements.lock" and (.size | type) == "number" and .size > 0)] | length) == 1 and
               ([.assets[] | select(.name == "SHA256SUMS" and (.size | type) == "number" and .size > 0)] | length) == 1))
           ' <<<"${release}" >/dev/null; then
@@ -496,8 +522,11 @@ jobs:
         run: |
           set -euo pipefail
           wheel="contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl"
+          native_wheels=(dist/contextual_decision_receipt-*.whl)
+          test "${#native_wheels[@]}" -eq 1 && test -s "${native_wheels[0]}"
+          native_wheel="${native_wheels[0]##*/}"
           (cd dist && sha256sum -c SHA256SUMS)
-          for asset in "${wheel}" requirements.lock SHA256SUMS; do
+          for asset in "${wheel}" "${native_wheel}" requirements.lock SHA256SUMS; do
             attached="$(gh release view "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
             if ! printf '%s\n' "${attached}" | grep -qxF "${asset}"; then
               gh release upload "v${RELEASE_VERSION}" "dist/${asset}" --repo "${GITHUB_REPOSITORY}"
@@ -511,11 +540,15 @@ jobs:
         run: |
           set -euo pipefail
           release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/v${RELEASE_VERSION}"
+          native_wheels=(dist/contextual_decision_receipt-*.whl)
+          test "${#native_wheels[@]}" -eq 1 && test -s "${native_wheels[0]}"
+          native_wheel="${native_wheels[0]##*/}"
           release="$(gh api "${release_endpoint}")"
-          if ! jq -e --arg tag "v${RELEASE_VERSION}" --arg wheel "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" '
+          if ! jq -e --arg tag "v${RELEASE_VERSION}" --arg wheel "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" --arg native "${native_wheel}" '
             .tag_name == $tag and .prerelease == false and
             ([.assets[] | select(.name == "cyclonedx-sbom.json" and (.size | type) == "number" and .size > 0)] | length) == 1 and
             ([.assets[] | select(.name == $wheel and (.size | type) == "number" and .size > 0)] | length) == 1 and
+            ([.assets[] | select(.name == $native and (.size | type) == "number" and .size > 0)] | length) == 1 and
             ([.assets[] | select(.name == "requirements.lock" and (.size | type) == "number" and .size > 0)] | length) == 1 and
             ([.assets[] | select(.name == "SHA256SUMS" and (.size | type) == "number" and .size > 0)] | length) == 1 and
             ((.draft == true and .immutable == false) or
@@ -539,6 +572,8 @@ jobs:
           gh release verify-asset "v${RELEASE_VERSION}" sbom-download/cyclonedx-sbom.json \
             --repo "${GITHUB_REPOSITORY}"
           gh release verify-asset "v${RELEASE_VERSION}" "dist/contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" \
+            --repo "${GITHUB_REPOSITORY}"
+          gh release verify-asset "v${RELEASE_VERSION}" "dist/${native_wheel}" \
             --repo "${GITHUB_REPOSITORY}"
           gh release verify-asset "v${RELEASE_VERSION}" dist/requirements.lock \
             --repo "${GITHUB_REPOSITORY}"

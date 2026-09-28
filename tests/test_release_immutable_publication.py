@@ -20,9 +20,11 @@ _ROOT = Path(__file__).resolve().parents[1]
 _TAG = "v0.2.0"
 _SBOM = '{"bomFormat":"CycloneDX","version":1}\n'
 _WHEEL = "contextual_orchestrator-0.2.0-py3-none-any.whl"
+_NATIVE = "contextual_decision_receipt-0.1.0-cp310-abi3-manylinux_2_17_x86_64.whl"
 _LOCK = "alpha==1.0 --hash=sha256:" + "a" * 64 + "\n"
 _SUMS = (
     f"{hashlib.sha256(b'wheel').hexdigest()}  {_WHEEL}\n"
+    f"{hashlib.sha256(b'native').hexdigest()}  {_NATIVE}\n"
     f"{hashlib.sha256(_LOCK.encode()).hexdigest()}  requirements.lock\n"
 )
 _START = "Create the GitHub Release"
@@ -138,6 +140,7 @@ def _existing(*, draft: bool, immutable: bool, asset: str | None = _SBOM) -> dic
     assets = [] if asset is None else [{"name": "cyclonedx-sbom.json", "size": len(asset)}]
     assets.extend([
         {"name": _WHEEL, "size": 5},
+        {"name": _NATIVE, "size": 6},
         {"name": "requirements.lock", "size": len(_LOCK)},
         {"name": "SHA256SUMS", "size": len(_SUMS)},
     ])
@@ -165,11 +168,13 @@ def _run(tmp_path: Path, **changes: object) -> tuple[subprocess.CompletedProcess
     (tmp_path / "sbom-download/cyclonedx-sbom.json").write_text(_SBOM)
     (tmp_path / "dist").mkdir()
     (tmp_path / "dist" / _WHEEL).write_text("wheel")
+    (tmp_path / "dist" / _NATIVE).write_text("native")
     (tmp_path / "dist/requirements.lock").write_text(_LOCK)
     (tmp_path / "dist/SHA256SUMS").write_text(_SUMS)
     state["asset_bytes"] = {
         "cyclonedx-sbom.json": _SBOM,
         _WHEEL: "wheel",
+        _NATIVE: "native",
         "requirements.lock": _LOCK,
         "SHA256SUMS": _SUMS,
     }
@@ -323,3 +328,22 @@ def test_public_release_without_wheel_is_rejected(tmp_path: Path) -> None:
     result, state = _run(tmp_path, release=release)
     assert result.returncode != 0
     assert not any(_calls(state, name) for name in ("create", "upload", "edit"))
+
+
+def test_public_release_without_native_measurement_wheel_is_rejected(tmp_path: Path) -> None:
+    """A published release cannot claim complete request measurement without its binary."""
+    release = _existing(draft=False, immutable=True)
+    release["assets"] = [asset for asset in release["assets"] if asset["name"] != _NATIVE]
+    result, state = _run(tmp_path, release=release)
+    assert result.returncode != 0
+    assert not any(_calls(state, name) for name in ("create", "upload", "edit"))
+
+
+def test_existing_native_wheel_bytes_must_match_before_publication(tmp_path: Path) -> None:
+    """A matching native wheel name cannot substitute another binary."""
+    result, state = _run(
+        tmp_path, release=_existing(draft=True, immutable=False),
+        asset_bytes={_NATIVE: "different"},
+    )
+    assert result.returncode != 0
+    assert not _calls(state, "edit")

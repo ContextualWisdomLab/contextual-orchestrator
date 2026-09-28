@@ -8,7 +8,8 @@ for the full design and its explicit non-goals.
 ## What a release is, and is not
 
 A canonical release is an annotated git tag `vX.Y.Z`, a published GitHub
-Release with `immutable: true`, its verified Python wheel, hash-locked runtime
+Release with `immutable: true`, its verified Python and Linux x86-64 native
+measurement wheels, hash-locked runtime
 requirements, SHA-256 manifest, and mandatory SBOM. A versioned
 URL alone is not evidence that GitHub has locked the tag and assets.
 
@@ -66,15 +67,15 @@ check those contracts separately before replacing a source pin.
 5. A successful `security.yml` run for that exact commit exposes a non-empty
    `cyclonedx-sbom/cyclonedx-sbom.json` artifact. Lookup, download, upload,
    empty-file or content-verification failure is fatal, not best effort.
-   The read-only release job builds the Python wheel from that same checkout,
-   installs it into an isolated directory to verify its declared version and
-   package contents, compares two builds at the source commit's fixed timestamp,
-   records the wheel and `requirements.lock` SHA-256 digests, and passes both
-   files to publication.
+   The read-only release job builds both wheels from that same checkout,
+   installs them into an isolated directory to verify the gateway version and
+   native measurement runtime, compares two builds of each wheel at the source
+   commit's fixed timestamp, records both wheels and `requirements.lock` SHA-256
+   digests, and passes all three files to publication.
    The build and isolated install use `uv` with Python 3.12 so they do not rely
-   on runner-global `setuptools` or `pip`. This wheel
-   is the installable Python package; the separately built Rust decision
-   measurement wheel remains a distinct dependency and is not bundled here.
+   on runner-global `setuptools` or `pip`. The native wheel remains a separate
+   distribution and supports the release runner's Linux x86-64 platform.
+   Other platforms need a verified native build before enabling measurement.
 6. A repository administrator has enabled GitHub release immutability before
    publication. The normal workflow token has no Administration permission;
    do not add an administrative secret or expand the publisher's authority
@@ -106,13 +107,13 @@ check those contracts separately before replacing a source pin.
    - renders notes from the exact commit's CHANGELOG section, cutting a
      section over GitHub's 125,000-character body limit on a line boundary
      and linking the complete CHANGELOG.md at that commit;
-   - downloads the exact-commit mandatory CycloneDX SBOM, builds the Python
-     wheel, copies the exact-commit dependency lock, records both SHA-256
+   - downloads the exact-commit mandatory CycloneDX SBOM, builds both wheels,
+     copies the exact-commit dependency lock, records all three SHA-256
      digests, and passes these with the notes to the
      publisher through an Actions artifact.
 5. The write-scoped `publish` job, only after verification succeeds:
    - rechecks fresh-main identity and exact-target checks before mutation;
-   - requires non-empty notes, SBOM, wheel and dependency-lock inputs, then checks both
+   - requires non-empty notes, SBOM, both wheels and dependency-lock inputs, then checks all three
      against the SHA-256 manifest;
    - creates and pushes an annotated tag only for a fresh publication;
    - verifies the exact remote tag object and its peeled target, so GitHub
@@ -120,7 +121,7 @@ check those contracts separately before replacing a source pin.
    - admits an existing release only as a typed, matching-tag, non-prerelease
      Draft, or a complete already-published immutable release;
    - creates a new release with `--verify-tag --draft`;
-   - attaches any missing SBOM, wheel, dependency lock and manifest **only while the release is
+   - attaches any missing SBOM, wheels, dependency lock and manifest **only while the release is
      a Draft**, then downloads each and compares its bytes with the verified
      input;
    - publishes the verified Draft. An already-public immutable release is
@@ -129,15 +130,16 @@ check those contracts separately before replacing a source pin.
      matching-tag and `immutable: true`, then runs `gh release verify` and
      `gh release verify-asset` for each asset.
 6. Confirm the version-specific release, successful publication run, exact
-   tag/commit, immutable state, wheel and lock digests, SBOM and signed asset attestations. Do not admit
+   tag/commit, immutable state, both wheel and lock digests, SBOM and signed asset attestations. Do not admit
    a release merely because it appears in the GitHub Releases list.
 
-Install the downloaded wheel with the matching release's `requirements.lock`:
+Install the downloaded wheels with the matching release's `requirements.lock`
+on Linux x86-64:
 
 ```bash
 sha256sum -c SHA256SUMS
 uv pip install --require-hashes -r requirements.lock
-uv pip install --no-deps contextual_orchestrator-X.Y.Z-py3-none-any.whl
+uv pip install --no-deps contextual_orchestrator-X.Y.Z-py3-none-any.whl contextual_decision_receipt-*.whl
 ```
 
 Use an isolated Python 3.12 environment. The lock covers the gateway's
