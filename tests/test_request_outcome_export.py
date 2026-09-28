@@ -6,6 +6,9 @@ import pytest
 
 from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
 from contextual_orchestrator.batch_routing import PgLlmBatchBackend
+from contextual_orchestrator.cost_ledger import CostLedger, PriceBook
+from contextual_orchestrator.decision_receipts import DecisionMeasurement
+from contextual_orchestrator.kv_config import InMemoryConfigStore
 from contextual_orchestrator.server import SecurityConfig, build_server
 from test_batch_routing import _FakeBatchApiClient
 from test_cost_review_server import _request
@@ -99,13 +102,19 @@ def test_export_freezes_late_link_and_rejects_projection_commit_failure(export_s
     store._conn.execute("DROP TRIGGER reject_link")
     store.save("workflow_run", "workflow_one", record)
     store.save("workflow_run", "workflow_one", record)
+    store.save("usage_link", "request_one", {"request_id": "request_one",
+                                             "usage_record_id": "usage_late_one",
+                                             "ledger_state": "append_accepted",
+                                             "measurement_status": "unavailable"}, durable=True)
     assert len(store.load("workflow_request_link")) == 1
     status, frozen = _request("GET", export_url + f"?high_water_sequence={initial['high_water_sequence']}", "admin-token")
     assert status == 200
     assert frozen["observations"] == initial["observations"]
+    assert frozen["observations"][0]["usage_links"] == []
     status, current = _request("GET", export_url, "admin-token")
     assert current["observations"][0]["workflow_outcomes"][0]["cache_status"] == "hit"
     assert len(current["observations"][0]["workflow_outcomes"]) == 1
+    assert current["observations"][0]["usage_links"][0]["usage_record_id"] == "usage_late_one"
 
 
 def test_projection_rejects_origin_reassignment(export_server):
@@ -137,6 +146,10 @@ def test_http_export_retains_fixed_cohort_links_after_restart(tmp_path):
             "messages": [{"role": "user", "content": "private-prompt-marker"}],
         })
         assert status == 200
+        first_usage_ids = {
+            row["usage_record_id"] for row in coordinator.ledger.store.query(None, None)
+        }
+        assert first_usage_ids
         status, submitted = _request("POST", base_url + "/api/v1/batch_routing_jobs", "inference-token", {
             "requests": [{"custom_id": "item_one", "model": "mock/worker",
                           "messages": [{"role": "user", "content": "private-batch-marker"}]}],
@@ -177,6 +190,8 @@ def test_http_export_retains_fixed_cohort_links_after_restart(tmp_path):
         assert first_row["decision_latency_ms"] == first_row["durable_ack_elapsed_ns"] / 1_000_000
         assert len(first_row["workflow_outcomes"]) == 1
         assert first_row["batch_associations"] == []
+        assert {link["usage_record_id"] for link in first_row["usage_links"]} == first_usage_ids
+        assert all(link["ledger_state"] == "append_accepted" for link in first_row["usage_links"])
         prior_run = restored._store.load("workflow_run")[0]
         restored._store.save("workflow_run", prior_run["workflow_run_id"], prior_run)
         replay_status, replay = _request(
@@ -218,11 +233,108 @@ def test_export_rejects_malformed_private_association(export_server):
     store.save("accepted_request", "request_one", {"request_id": "request_one"}, durable=True)
     store.save("batch_request_link", "batch_one", {"request_id": "request_one", "batch_job_id": "batch_one",
                                                  "custom_ids": [{"private_payload": "do not disclose"}]}, durable=True)
+    store.save("usage_link", "request_one", {"request_id": "request_one",
+                                             "usage_record_id": {"private_payload": "do not disclose"},
+                                             "ledger_state": "append_accepted",
+                                             "measurement_status": "measured"}, durable=True)
     status, result = _request("GET", export_url, "admin-token")
     assert status == 200
     assert result["observations"][0]["batch_associations"] == []
+    assert result["observations"][0]["usage_links"] == []
+    assert result["observations"][0]["invalid_association_count"] == 2
+    assert "do not disclose" not in str(result)
+
+
+@pytest.mark.parametrize("field", ["ledger_state", "measurement_status"])
+def test_export_rejects_unhashable_usage_link_state(export_server, field):
+    orchestrator, export_url = export_server
+    store = orchestrator._store
+    store.save("accepted_request", "request_one", {"request_id": "request_one"}, durable=True)
+    link = {"request_id": "request_one", "usage_record_id": "usage_valid_one",
+            "ledger_state": "append_accepted", "measurement_status": "measured"}
+    link[field] = {"private_payload": "do not disclose"}
+    store.save("usage_link", "request_one", link, durable=True)
+
+    status, result = _request("GET", export_url, "admin-token")
+    assert status == 200
+    assert result["observations"][0]["usage_links"] == []
     assert result["observations"][0]["invalid_association_count"] == 1
     assert "do not disclose" not in str(result)
+
+
+@pytest.mark.parametrize("append_mode", ["rejected", "failed"])
+def test_usage_link_keeps_failed_ledger_append_explicit(tmp_path, append_mode):
+    """A billed attempt cannot turn a rejected usage write into measured cost."""
+    class RejectingLedgerStore:
+        def append(self, _record):
+            if append_mode == "failed":
+                raise RuntimeError("ledger unavailable")
+            return False
+
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db")
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()), store=RejectingLedgerStore())
+    measurement = DecisionMeasurement(orchestrator._store, request_id="request_one")
+    try:
+        record = ledger.record_usage(provider="provider", model="model", prompt_tokens=0,
+                                     completion_tokens=0, measurement_status="unavailable")
+    finally:
+        measurement.close()
+    try:
+        row, = orchestrator._store.export_request_outcomes()["observations"]
+        assert row["usage_links"] == [{"usage_record_id": record.usage_record_id,
+                                       "ledger_state": f"append_{append_mode}",
+                                       "measurement_status": "unavailable"}]
+        assert row["usage_link_write_failures"] == 0
+    finally:
+        orchestrator.close()
+
+
+def test_usage_link_write_failure_preserves_completion_and_marks_gap(tmp_path, monkeypatch):
+    """A failed diagnostic write cannot replace the completed ledger result."""
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db")
+    store = orchestrator._store
+    original_save = store.save
+
+    def save(kind, key, payload, *, durable=False):
+        if kind == "usage_link":
+            raise RuntimeError("diagnostic unavailable")
+        return original_save(kind, key, payload, durable=durable)
+
+    monkeypatch.setattr(store, "save", save)
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()))
+    measurement = DecisionMeasurement(store, request_id="request_one")
+    try:
+        record = ledger.record_usage(provider="provider", model="model", prompt_tokens=0,
+                                     completion_tokens=0, measurement_status="unavailable")
+    finally:
+        measurement.close()
+    try:
+        assert record.usage_record_id
+        row, = store.export_request_outcomes()["observations"]
+        assert row["usage_links"] == []
+        assert row["usage_link_write_failures"] == 1
+    finally:
+        orchestrator.close()
+
+
+def test_usage_link_rejects_content_shaped_identifier(tmp_path):
+    """Caller-supplied ledger IDs cannot smuggle prompt text into an export."""
+    orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")], state_db=tmp_path / "state.db")
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()))
+    measurement = DecisionMeasurement(orchestrator._store, request_id="request_one")
+    try:
+        ledger.record_usage(provider="provider", model="model", prompt_tokens=0,
+                            completion_tokens=0, measurement_status="unavailable",
+                            usage_record_id="usage_private prompt")
+    finally:
+        measurement.close()
+    try:
+        row, = orchestrator._store.export_request_outcomes()["observations"]
+        assert row["usage_links"] == []
+        assert row["usage_link_write_failures"] == 1
+        assert "private prompt" not in str(row)
+    finally:
+        orchestrator.close()
 
 
 def test_export_rejects_admission_key_mismatch(export_server):
