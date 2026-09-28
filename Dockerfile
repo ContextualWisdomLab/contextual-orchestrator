@@ -1,6 +1,8 @@
 # Contextual Orchestrator OpenAI-compatible server with the Postgres KV driver.
 #
 # Build:  docker build -t contextual-orchestrator .
+# Reproducible OCI: pass --build-arg SOURCE_DATE_EPOCH=<source commit Unix time>
+# and --output type=oci,dest=<archive>,rewrite-timestamp=true to docker buildx build.
 # Run  :  seed CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN,
 #        CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN, and provider credentials into the KV
 #        registry first, then use:
@@ -22,10 +24,13 @@ COPY rust/Cargo.toml rust/Cargo.lock /build/rust/
 COPY rust/token_counter/ /build/rust/token_counter/
 COPY rust/decision_receipt/ /build/rust/decision_receipt/
 COPY contextual_orchestrator/ /build/contextual_orchestrator/
+# uv records installation time for a local wheel; omit that runtime-irrelevant metadata.
 RUN uv python install 3.12 \
     && uv pip install --python 3.12 --require-hashes -r /build/requirements.lock --target /build/deps \
     && maturin build --locked --release --manifest-path /build/rust/token_counter/Cargo.toml --out /build/wheels \
-    && uv pip install --python 3.12 /build/wheels/*.whl --target /build/deps
+    && uv pip install --python 3.12 /build/wheels/*.whl --target /build/deps \
+    && sed -i '/\/uv_cache\.json,/d' /build/deps/contextual_token_packer-0.1.0.dist-info/RECORD \
+    && rm /build/deps/contextual_token_packer-0.1.0.dist-info/uv_cache.json
 
 # python:3.12-slim
 FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
