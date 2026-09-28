@@ -7,6 +7,7 @@ propagation, uploads and byte comparison execute without publication authority.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -18,6 +19,7 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[1]
 _TAG = "v0.2.0"
 _SBOM = '{"bomFormat":"CycloneDX","version":1}\n'
+_WHEEL = "contextual_orchestrator-0.2.0-py3-none-any.whl"
 _START = "Create the GitHub Release"
 _RESUME = "Validate the existing release lifecycle"
 
@@ -72,15 +74,17 @@ elif args[:2] == ["release", "upload"]:
         fail("Cannot upload assets to an immutable release")
     if state.get("upload_failure"):
         fail("upload interrupted")
+    asset = Path(args[3]).name
     data = Path(args[3]).read_text()
-    state["asset_bytes"] = data
-    release["assets"] = [{"name": "cyclonedx-sbom.json", "size": len(data)}]
+    state["asset_bytes"][asset] = data
+    release["assets"].append({"name": asset, "size": len(data)})
 elif args[:2] == ["release", "download"]:
     if state.get("download_failure"):
         fail("download interrupted")
     directory = Path(args[args.index("--dir") + 1])
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "cyclonedx-sbom.json").write_text(state["asset_bytes"])
+    asset = args[args.index("--pattern") + 1]
+    (directory / asset).write_text(state["asset_bytes"][asset])
 elif args[:2] == ["release", "edit"]:
     if not state["release"]["draft"]:
         fail("unexpected edit of published release")
@@ -93,7 +97,7 @@ elif args[:2] in (["release", "verify"], ["release", "verify-asset"]):
         fail("invalid release attestation")
     if not state["release"]["immutable"]:
         fail("release not immutable")
-    if args[1] == "verify-asset" and Path(args[3]).read_text() != state["asset_bytes"]:
+    if args[1] == "verify-asset" and Path(args[3]).read_text() != state["asset_bytes"][Path(args[3]).name]:
         fail("attestation asset mismatch")
 elif args and args[0] == "api":
     if state.get("metadata_failure"):
@@ -126,23 +130,23 @@ def _steps() -> list[tuple[str, str, str]]:
 
 def _existing(*, draft: bool, immutable: bool, asset: str | None = _SBOM) -> dict:
     """Construct a remote lifecycle state, not a successful mock verdict."""
+    assets = [] if asset is None else [{"name": "cyclonedx-sbom.json", "size": len(asset)}]
+    assets.extend([{"name": _WHEEL, "size": 5}, {"name": "SHA256SUMS", "size": 90}])
     return {
         "tag_name": _TAG,
         "draft": draft,
         "prerelease": False,
         "immutable": immutable,
-        "assets": [] if asset is None else [
-            {"name": "cyclonedx-sbom.json", "size": len(asset)}
-        ],
+        "assets": assets,
     }
 
 
 def _run(tmp_path: Path, **changes: object) -> tuple[subprocess.CompletedProcess, dict]:
     """Run publication shell steps in order and retain all remote effects."""
-    state = {"release": None, "locking": True, "asset_bytes": _SBOM, "calls": []}
+    existing_bytes = changes.pop("asset_bytes", None)
+    state = {"release": None, "locking": True, "asset_bytes": {}, "calls": []}
     state.update(changes)
     state_path = tmp_path / "state.json"
-    state_path.write_text(json.dumps(state))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
@@ -150,6 +154,18 @@ def _run(tmp_path: Path, **changes: object) -> tuple[subprocess.CompletedProcess
     gh.chmod(0o700)
     (tmp_path / "sbom-download").mkdir()
     (tmp_path / "sbom-download/cyclonedx-sbom.json").write_text(_SBOM)
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / _WHEEL).write_text("wheel")
+    digest = hashlib.sha256(b"wheel").hexdigest()
+    sums = f"{digest}  {_WHEEL}\n"
+    (tmp_path / "dist/SHA256SUMS").write_text(sums)
+    state["asset_bytes"] = {"cyclonedx-sbom.json": _SBOM, _WHEEL: "wheel", "SHA256SUMS": sums}
+    if existing_bytes is not None:
+        if isinstance(existing_bytes, dict):
+            state["asset_bytes"].update(existing_bytes)
+        else:
+            state["asset_bytes"]["cyclonedx-sbom.json"] = existing_bytes
+    state_path.write_text(json.dumps(state))
     (tmp_path / "release-notes.md").write_text("Release 0.2.0\n")
     env = {
         **os.environ,
@@ -273,5 +289,24 @@ def test_bad_attestation_cannot_report_success(tmp_path: Path) -> None:
     result, state = _run(
         tmp_path, release=_existing(draft=False, immutable=True), attestation_failure=True,
     )
+    assert result.returncode != 0
+    assert not any(_calls(state, name) for name in ("create", "upload", "edit"))
+
+
+def test_existing_wheel_bytes_must_match_before_publication(tmp_path: Path) -> None:
+    """A matching filename cannot substitute a different installable package."""
+    result, state = _run(
+        tmp_path, release=_existing(draft=True, immutable=False),
+        asset_bytes={_WHEEL: "different"},
+    )
+    assert result.returncode != 0
+    assert not _calls(state, "edit")
+
+
+def test_public_release_without_wheel_is_rejected(tmp_path: Path) -> None:
+    """An immutable SBOM alone is not a consumable package release."""
+    release = _existing(draft=False, immutable=True)
+    release["assets"] = [asset for asset in release["assets"] if asset["name"] != _WHEEL]
+    result, state = _run(tmp_path, release=release)
     assert result.returncode != 0
     assert not any(_calls(state, name) for name in ("create", "upload", "edit"))

@@ -41,7 +41,8 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 def test_http_max_tokens_applies_and_restores() -> None:
@@ -63,6 +64,7 @@ def test_http_max_tokens_applies_and_restores() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 def test_http_rejects_non_positive_max_tokens() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
@@ -79,6 +81,7 @@ def test_http_rejects_non_positive_max_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 def test_http_without_max_tokens_ok() -> None:
@@ -92,6 +95,7 @@ def test_http_without_max_tokens_ok() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
@@ -115,3 +119,4 @@ def test_http_rejects_bool_max_tokens() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
