@@ -42,7 +42,6 @@ def _collectors(uptime: float | None):
     collector = OpenRouterUptimeCollector(
         _agents(),
         group_router,
-        quality_router,
         interval_seconds=0.05,
         startup_delay_seconds=0.05,
     )
@@ -53,9 +52,8 @@ def _collectors(uptime: float | None):
 def test_start_without_openrouter_agents_is_inert() -> None:
     """No openrouter members means no thread and no evidence writes."""
     group_router = ModelGroupRouter()
-    quality_router = ModelGroupRouter()
     plain = [ModelAgent("general_agent", "mock-planner", tags=("reasoning",))]
-    collector = OpenRouterUptimeCollector(plain, group_router, quality_router)
+    collector = OpenRouterUptimeCollector(plain, group_router)
     collector.start()
     assert collector.window_evidence("general_agent") == (0.0, 0.0)
     collector.stop()
@@ -284,15 +282,14 @@ def test_availability_poll_cannot_change_answer_quality(uptime, judged):
     assert group_router.member_observation_count(member_id) == 0
 
 
-def test_availability_does_not_change_judged_quality_evidence(monkeypatch):
-    """Opposite uptime histories cannot alter judged-answer evidence or its report order."""
+def test_availability_does_not_reverse_judged_member_order(monkeypatch):
+    """Fixed judged outcomes retain their order despite opposite uptime histories."""
     monkeypatch.setattr(OpenRouterUptimeCollector, "start", lambda _self: None)
     agents = [
         ModelAgent("judged_strong", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
         ModelAgent("judged_weak", "mock", group_name="quality_fixture_group", provider_name="openrouter"),
     ]
     gateway = TaskOrchestrator(agents)
-    member_ids = [agent.id for agent in agents]
     try:
         for agent, accepted in zip(agents, (8, 2), strict=True):
             for _ in range(accepted):
@@ -300,12 +297,12 @@ def test_availability_does_not_change_judged_quality_evidence(monkeypatch):
             for _ in range(10 - accepted):
                 gateway._quality_router.observe_failure(agent.id)
         before = gateway._quality_router.snapshot()
-        assert gateway._quality_router.ranked_member_ids(member_ids) == member_ids
+        assert gateway._refine_partition(agents, "worker") == agents
         for agent, uptime in zip(agents, (0.0, 100.0), strict=True):
             monkeypatch.setattr(gateway._openrouter_collector, "_fetch_uptime", lambda _model, value=uptime: value)
             for _ in range(50):
                 gateway._openrouter_collector._poll_agent(agent)
-        assert gateway._quality_router.ranked_member_ids(member_ids) == member_ids
+        assert gateway._refine_partition(agents, "worker") == agents
         assert gateway._quality_router.snapshot() == before
     finally:
         gateway.close()
@@ -319,8 +316,7 @@ def test_transport_refresh_does_not_import_answer_benchmark_prior(monkeypatch):
     for router in (group_router, reference):
         router.observe_success(agent.id, 1.0)
         router.observe_failure(agent.id)
-    quality_router = ModelGroupRouter()
-    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
+    collector = OpenRouterUptimeCollector([agent], group_router)
     collector._fetch_uptime = lambda _model: 100.0
     collector._poll_agent(agent)
     reference.update_prior(agent.id, 2.0, 1.0)
@@ -343,12 +339,11 @@ def test_invalid_endpoint_percentage_cannot_update_evidence(monkeypatch, raw_val
     http_response = BytesIO(response_body)
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
     group_router = ModelGroupRouter()
-    quality_router = ModelGroupRouter()
     agent = _agents()[0]
     group_router.observe_success(agent.id, 0.2)
     group_router.observe_failure(agent.id)
     report_before = group_router.snapshot()
-    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
+    collector = OpenRouterUptimeCollector([agent], group_router)
 
     collector._poll_agent(agent)
 
@@ -371,9 +366,8 @@ def test_endpoint_percentage_parsing_preserves_valid_and_absent_values(monkeypat
     http_response = BytesIO(('{"data":{"endpoints":' + raw_endpoints + '}}').encode())
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", lambda *_args, **_kwargs: http_response)
     group_router = ModelGroupRouter()
-    quality_router = ModelGroupRouter()
     agent = _agents()[0]
-    collector = OpenRouterUptimeCollector([agent], group_router, quality_router)
+    collector = OpenRouterUptimeCollector([agent], group_router)
 
     collector._poll_agent(agent)
 
@@ -402,9 +396,7 @@ def test_endpoint_request_preserves_author_slug_boundary(monkeypatch, model_id, 
         return http_response
 
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", checked_open)
-    collector = OpenRouterUptimeCollector(
-        [], ModelGroupRouter(), ModelGroupRouter()
-    )
+    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
 
     assert collector._fetch_uptime(model_id) == 99.5
     assert http_response.closed
@@ -421,11 +413,57 @@ def test_malformed_model_path_never_reaches_transport(monkeypatch, model_id):
         pytest.fail("malformed model ID reached transport")
 
     monkeypatch.setattr(uptime_module.urllib.request, "urlopen", reject_open)
-    collector = OpenRouterUptimeCollector(
-        [], ModelGroupRouter(), ModelGroupRouter()
-    )
+    collector = OpenRouterUptimeCollector([], ModelGroupRouter())
 
     assert collector._fetch_uptime(model_id) is None
+
+
+def test_stop_winning_between_check_and_commit_leaves_no_late_write() -> None:
+    """No transport evidence is committed after ``stop()`` has returned.
+
+    CodeRabbit discussion_r4065984128: ``_poll_agent`` checked the stop flag
+    and then wrote ``_window_evidence``/``update_prior`` without a lock, so a
+    ``stop()`` landing between the check and the commit returned while a
+    write was still coming. The hook runs ``stop()`` on another thread at the
+    exact check; unfixed, ``stop()`` completes and the write lands after it.
+    """
+    collector, group_router, _, _ = _collectors(95.0)
+    stop_returned = threading.Event()
+    late_writes: list[str] = []
+
+    class StopAtCheck(threading.Event):
+        """Run a racing ``stop()`` the first time the poll checks the flag."""
+
+        fired = False
+
+        def is_set(self) -> bool:
+            """Let ``stop()`` race in between the flag check and the commit."""
+            observed = super().is_set()
+            if not StopAtCheck.fired:
+                StopAtCheck.fired = True
+                racer = threading.Thread(
+                    target=lambda: (collector.stop(), stop_returned.set())
+                )
+                racer.start()
+                racer.join(timeout=0.2)
+            return observed
+
+    collector._stop_event = StopAtCheck()
+    real_update = group_router.update_prior
+
+    def record_update(*args, **kwargs):
+        """Flag any commit that lands after ``stop()`` returned."""
+        if stop_returned.is_set():
+            late_writes.append(args[0])
+        return real_update(*args, **kwargs)
+
+    group_router.update_prior = record_update  # type: ignore[method-assign]
+    collector._poll_agent(_agents()[0])
+    assert stop_returned.wait(2.0)
+    assert late_writes == []
+    after = collector.window_evidence(_agents()[0].id)
+    collector._poll_agent(_agents()[0])
+    assert collector.window_evidence(_agents()[0].id) == after
 
 
 if __name__ == "__main__":
