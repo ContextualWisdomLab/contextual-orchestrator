@@ -121,6 +121,33 @@ def test_acknowledged_receipt_requires_matching_initial_decision(tmp_path, initi
         store.close()
 
 
+@pytest.mark.parametrize("record_order", ["before_admission", "receipt_before_initial"])
+def test_acknowledgement_cannot_precede_its_admission_or_selection(tmp_path, record_order):
+    store = _StateStore(str(tmp_path / "reordered.db"))
+    request_id = "request_one"
+    admission = ("accepted_request", {"request_id": request_id})
+    initial = ("initial_decision", {
+        "request_id": request_id, "status": "selected",
+        "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": None,
+    })
+    receipt = ("decision_receipt", {
+        "request_id": request_id, "status": "acknowledged",
+        "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
+    })
+    try:
+        records = ((initial, receipt, admission) if record_order == "before_admission"
+                   else (admission, receipt, initial))
+        for kind, payload in records:
+            store.save(kind, request_id, payload, durable=True)
+        observation = store.export_request_outcomes()["observations"][0]
+        assert observation["durable_ack_elapsed_ns"] is None
+        assert observation["decision_latency_ms"] is None
+        if record_order == "before_admission":
+            assert observation["decision_status"] == "unfinished"
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("field_name,bad_value", [
     ("selection_elapsed_ns", -1), ("durable_ack_elapsed_ns", True),
     ("first_provider_elapsed_ns", 2**64),

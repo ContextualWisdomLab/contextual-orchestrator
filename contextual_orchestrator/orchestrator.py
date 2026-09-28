@@ -5268,10 +5268,12 @@ class _StateStore:
                                          "links_truncated": False, "invalid_association_count": 0})
                     continue
                 initial_records = self._conn.execute(
-                    "SELECT payload FROM orchestration_records WHERE kind = 'initial_decision' "
-                    "AND key = ? AND seq <= ? ORDER BY seq DESC LIMIT 1", (request_id, cutoff),
+                    "SELECT seq, payload FROM orchestration_records WHERE kind = 'initial_decision' "
+                    "AND key = ? AND seq > ? AND seq <= ? ORDER BY seq DESC LIMIT 1",
+                    (request_id, admission_sequence, cutoff),
                 ).fetchall()
-                initial_phase = self._export_record(initial_records[0][0]) if initial_records else {}
+                initial_sequence = initial_records[0][0] if initial_records else None
+                initial_phase = self._export_record(initial_records[0][1]) if initial_records else {}
                 initial_selection = initial_phase.get("selection_elapsed_ns")
                 valid_initial = (
                     bool(initial_records) and initial_phase.get("request_id") == request_id
@@ -5280,10 +5282,12 @@ class _StateStore:
                     and initial_phase.get("durable_ack_elapsed_ns") is None
                 )
                 phases = self._conn.execute(
-                    "SELECT payload FROM orchestration_records WHERE kind = 'decision_receipt' "
-                    "AND key = ? AND seq <= ? ORDER BY seq DESC LIMIT 1", (request_id, cutoff),
+                    "SELECT seq, payload FROM orchestration_records WHERE kind = 'decision_receipt' "
+                    "AND key = ? AND seq > ? AND seq <= ? ORDER BY seq DESC LIMIT 1",
+                    (request_id, admission_sequence, cutoff),
                 ).fetchall()
-                phase = self._export_record(phases[0][0]) if phases else {}
+                phase_sequence = phases[0][0] if phases else None
+                phase = self._export_record(phases[0][1]) if phases else {}
                 invalid_phase = bool(phases) and (
                     phase.get("request_id") != request_id or not isinstance(phase.get("status"), str))
                 status = phase.get("status") if phases and not invalid_phase else "unfinished"
@@ -5322,6 +5326,7 @@ class _StateStore:
                 selection = row["selection_elapsed_ns"]
                 if acknowledgement is not None and (
                     status != "acknowledged" or not valid_initial
+                    or phase_sequence <= initial_sequence
                     or selection != initial_selection or acknowledgement < selection
                 ):
                     row["durable_ack_elapsed_ns"] = None
