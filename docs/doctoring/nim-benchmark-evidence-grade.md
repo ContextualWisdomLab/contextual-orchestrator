@@ -263,7 +263,7 @@ defaults. Hindsight identity remains a measurement field; comparing against it
 requires an explicit pair.
 
 Efron (1979) grounds resampling observed task units. Efron and Tibshirani
-(1993) ground the percentile interval and treat *B* as Monte Carlo precision.
+(1994) ground the percentile interval and treat *B* as Monte Carlo precision.
 This slice does not add a statistical dependency or change production
 route/conduct defaults. Token and workflow-depth budgets are the successor
 slice recorded below.
@@ -805,8 +805,8 @@ Chen, L., Zaharia, M., & Zou, J. (2023). FrugalGPT: How to use large language
 models while reducing cost and improving performance. *arXiv*.
 https://doi.org/10.48550/arXiv.2305.05176
 
-Efron, B., & Tibshirani, R. J. (1993). *An introduction to the bootstrap*.
-Chapman & Hall. https://doi.org/10.1201/9780429246593
+Efron, B., & Tibshirani, R. J. (1994). *An introduction to the bootstrap*.
+Chapman and Hall/CRC. https://doi.org/10.1201/9780429246593
 
 Efron, B. (1979). Bootstrap methods: Another look at the jackknife.
 *The Annals of Statistics, 7*(1), 1–26.

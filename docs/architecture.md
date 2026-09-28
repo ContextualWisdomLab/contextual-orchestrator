@@ -20,7 +20,7 @@ so race traffic does not create a hot write partition in these relations.
 APA 7th citations (titles retained for paper-contract search):
 
 - Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
-- Sakana AI. (2026). *Sakana Fugu Technical Report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+- Sakana AI. (2026). *Sakana Fugu Technical Report*. https://github.com/SakanaAI/fugu/blob/1397abb416e4b774003a09b689ea120e0da02262/Fugu_technical_report.pdf
 - Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://arxiv.org/abs/2512.04695
 - Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.). ERIC Clearinghouse on Assessment and Evaluation. https://eric.ed.gov/?id=ED458219
@@ -42,9 +42,9 @@ The useful split is quality-latency, not separate products:
 - Low-latency routing: select one worker for the current query or turn.
 - Deep orchestration: create a multi-step workflow when the task needs decomposition, independent attempts, verification, or synthesis.
 
-TRINITY contributes the compact coordinator idea: a small model representation plus a lightweight head can choose agent and role over multiple turns. Its Thinker, Worker, and Verifier contracts are practical enough to implement directly.
+TRINITY is the inspiration for the role vocabulary, not an implemented method here. Its trained coordinator (a small model's hidden state plus a lightweight head) chooses both the agent and one of exactly three roles (Thinker, Worker, Verifier) on every turn and stops when the Verifier accepts. This repository borrows the role names and contracts only: `conduct` runs a fixed thinker → worker → verifier → synthesizer template with deterministic capability-hint worker choice, so there is no learned per-turn agent/role selection.
 
-Conductor contributes the workflow representation: each step is a natural-language subtask, an assigned worker, and an access list of prior step outputs. This is the key piece for preventing every worker from being dragged into the same transcript while still allowing deliberate collaboration.
+Conductor contributes the workflow representation: each step is a natural-language subtask, an assigned worker, and an access list of prior step outputs. This is the key piece for preventing every worker from being dragged into the same transcript while still allowing deliberate collaboration. The representation is implemented (`WorkflowStep.access`), so this part is partial rather than name-only. The paper's workflows come from a 7B model trained with reinforcement learning; here the default is the fixed 4-step template (`OrchestrationPolicy.workflow_planning = "template"`), and the optional `"generated"` mode asks an untrained planner model for a plan. That mode corresponds to the paper's training-free ablation with prompted frontier models (Appendix B.7, Table 11), not to the trained Conductor.
 
 The generated-plan step bound (`OrchestrationPolicy.max_workflow_steps`, default 6) is a product decision recorded in the policy source: the fixed template needs four steps, and six leaves a generated plan one extra worker plus one repair/verify step. It is not the Fugu-Ultra report's "up to 5 steps" training setting (arXiv:2606.21228 S3.2.3), which is not copied into any other layer here, and it is separate from the effort catalog's per-profile `max_workflow_steps`. The planner prompt and the plan parser read the same policy value (`tests/test_paper_contracts.py::test_generated_plan_bound_comes_from_policy`).
 
@@ -93,7 +93,7 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 
 - `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
 - `TaskOrchestrator.route_once`: the low-latency routing path (Fugu).
-- `TaskOrchestrator.conduct`: the workflow path with TRINITY thinker/worker/verifier roles and Conductor steps plus access lists.
+- `TaskOrchestrator.conduct`: the workflow path: a fixed thinker/worker/verifier/synthesizer template (TRINITY role names, not its learned coordinator) with Conductor-format steps and access lists (template or untrained prompted plan, not the RL-trained Conductor).
 - Virtual selectors (`orchestrator/free`, `orchestrator/auto`, `contextual-orchestrator`) keep every inference surface on that control plane: `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/videos`, `/v1/audio/*`, and `/v1/rerank`. Tools, `stream=true`, or a non-text modality do not eject a virtual request into a sticky single-agent pin; a concrete model id remains a debug pin. Chat Completions and media endpoints cannot emit Responses `reasoning_text` events, so paper-role process output stays internal and only the modality result is returned.
 - `TaskOrchestrator._invoke`: the shared route/Conduct invocation path. A
   request-time failure of the primary provider call — 5xx, 429, network, a
