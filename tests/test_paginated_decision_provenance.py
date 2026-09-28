@@ -34,6 +34,50 @@ def test_export_keeps_bounded_cohort_identity_without_provider_text(tmp_path):
         store.close()
 
 
+def test_later_receipts_cannot_supply_or_rewrite_admission_cohort(tmp_path):
+    store = _StateStore(str(tmp_path / "admission_identity.db"))
+    try:
+        admitted = {
+            "request_id": "admitted", "policy_snapshot_hash": "a" * 64,
+            "measurement_unit": "http_request",
+            "metric_scope": "initial_task_route_decision",
+            "admission_boundary": "validated_endpoint",
+            "endpoint_path": "/v1/chat/completions",
+        }
+        for request_id, admission in (
+            ("admitted", admitted), ("missing", {"request_id": "missing"}),
+        ):
+            store.save("accepted_request", request_id, admission, durable=True)
+            store.save("initial_decision", request_id, {
+                "request_id": request_id, "status": "selected", "selection_elapsed_ns": 10,
+                "durable_ack_elapsed_ns": None, "route_mode": "text_race",
+            }, durable=True)
+            store.save("decision_receipt", request_id, {
+                "request_id": request_id, "status": "acknowledged",
+                "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
+                "policy_snapshot_hash": "b" * 64,
+                "measurement_unit": "explicit_scope",
+                "metric_scope": "initial_task_route_decision",
+                "admission_boundary": "first_execution_slot",
+                "endpoint_path": "/v1/embeddings",
+                "route_mode": "invocation_worker",
+                "effective_orchestration_mode": "route",
+            }, durable=True)
+        rows = store.export_request_outcomes()["observations"]
+        admission_fields = (
+            "policy_snapshot_hash", "measurement_unit", "metric_scope",
+            "admission_boundary", "endpoint_path",
+        )
+        assert {field: rows[0][field] for field in admission_fields} == {
+            field: admitted[field] for field in admission_fields
+        }
+        assert all(rows[1][field] is None for field in admission_fields)
+        assert all(row["route_mode"] == "text_race" for row in rows)
+        assert all(row["effective_orchestration_mode"] == "route" for row in rows)
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("receipt_fields", [{}, {"durable_ack_elapsed_ns": 20}])
 def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path, receipt_fields):
     """Admission values cannot supply missing selection or acknowledgement evidence."""

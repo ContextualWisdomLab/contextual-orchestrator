@@ -5258,10 +5258,8 @@ class _StateStore:
             more_available = len(admissions) > page_size
             observations = []
             for admission_sequence, request_id, admission_payload in admissions[:page_size]:
-                try:
-                    admitted_identity = json.loads(admission_payload).get("request_id")
-                except (ValueError, AttributeError):
-                    admitted_identity = None
+                admission_measurement = self._export_record(admission_payload)
+                admitted_identity = admission_measurement.get("request_id")
                 if not self._export_identifier(request_id) or request_id != admitted_identity:
                     observations.append({"admission_sequence": admission_sequence,
                                          "request_id": None, "link_status": "identity_unavailable",
@@ -5301,11 +5299,13 @@ class _StateStore:
                        "batch_associations": [], "links_truncated": False,
                        "invalid_association_count": int(invalid_phase) + int(bool(initial_records) and not valid_initial)}
                 # Project only canonical measurement fields, never arbitrary stored text.
-                measurement = self._export_record(admission_payload)
+                measurement = dict(admission_measurement)
                 if valid_initial:
                     measurement.update(initial_phase)
                 if phases and not invalid_phase:
                     measurement.update(phase)
+                if valid_initial and "route_mode" in initial_phase:
+                    measurement["route_mode"] = initial_phase["route_mode"]
                 measurement["selection_elapsed_ns"] = phase.get(
                     "selection_elapsed_ns",
                     initial_phase.get("selection_elapsed_ns") if valid_initial else None,
@@ -5331,7 +5331,7 @@ class _StateStore:
                     validated_acknowledgement / 1_000_000
                     if validated_acknowledgement is not None else None
                 )
-                policy_hash = measurement.get("policy_snapshot_hash")
+                policy_hash = admission_measurement.get("policy_snapshot_hash")
                 row["policy_snapshot_hash"] = policy_hash if (
                     isinstance(policy_hash, str) and len(policy_hash) == 64
                     and all(character in "0123456789abcdef" for character in policy_hash)
@@ -5348,7 +5348,11 @@ class _StateStore:
                      | {"invocation_" + role for role in ("thinker", "worker", "verifier", "judge", "synthesizer")}),
                     ("effective_orchestration_mode", {"route", "conduct", "mixed"}),
                 ):
-                    field_value = measurement.get(field_name)
+                    field_value = (
+                        admission_measurement if field_name in {
+                            "measurement_unit", "metric_scope", "admission_boundary", "endpoint_path"
+                        } else measurement
+                    ).get(field_name)
                     row[field_name] = field_value if isinstance(field_value, str) and field_value in allowed_values else None
                 for record_kind, output_field in (("workflow_request_link", "workflow_outcomes"),
                                                   ("batch_request_link", "batch_associations")):

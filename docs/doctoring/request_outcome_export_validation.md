@@ -18,6 +18,14 @@ effective mode; no mode is inferred from endpoint or a requested `auto` value.
 The export remains local and incomplete until ingress reconciliation and real
 outcome adjudication are available.
 
+Admission cohort fields (`endpoint_path`, policy hash, measurement unit, scope,
+and admission boundary) now come only from the accepted-request record. A later
+decision receipt cannot fill a missing admission label or rewrite one with a
+different but otherwise allowlisted value. A valid initial-decision record
+also owns the first selection kind; a later receipt cannot rewrite it. The
+contradictory-record regression failed before each repair and passed after it.
+The effective mode still comes from the final execution receipt.
+
 The successor projection test first failed with
 `KeyError: 'effective_orchestration_mode'`. The native module was rebuilt in
 the isolated worktree; the strict receipt, cohort, and cache aggregation tests
