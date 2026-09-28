@@ -199,6 +199,18 @@ def test_release_workflow_file_exists() -> None:
     assert _WORKFLOW_PATH.exists()
 
 
+def test_release_builds_and_attests_native_measurement_companion() -> None:
+    """A published gateway must include its optional request-measurement runtime."""
+    workflow = _workflow_text()
+    verify = _job_block(workflow, "verify")
+    publish = _job_block(workflow, "publish")
+    assert "maturin build --locked --release" in verify
+    assert "contextual_decision_receipt-*.whl" in verify
+    assert 'native.metadata["License-Expression"] == "MIT"' in verify
+    assert "contextual_decision_receipt-*.whl" in publish
+    assert 'gh release verify-asset "v${RELEASE_VERSION}" "dist/${native_wheel}"' in publish
+
+
 def test_release_is_triggered_only_by_deliberate_manual_dispatch() -> None:
     """Releases are never an automatic side effect of push, PR, or schedule."""
     workflow = _workflow_text()
@@ -329,11 +341,11 @@ def test_exact_commit_dependency_lock_is_verified_as_a_release_asset() -> None:
     publish = _job_block(workflow, "publish")
 
     assert "cp requirements.lock dist/requirements.lock" in verify
-    assert 'sha256sum "${wheel##*/}" requirements.lock > SHA256SUMS' in verify
+    assert 'sha256sum "${wheel##*/}" "${native_wheel##*/}" requirements.lock > SHA256SUMS' in verify
     assert "test -s dist/requirements.lock" in publish
-    assert 'sha256sum "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" requirements.lock' in publish
+    assert 'sha256sum "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" "${native_wheels[0]##*/}" requirements.lock' in publish
     assert '"$(cat dist/SHA256SUMS)" != "${expected_manifest}"' in publish
-    assert 'for asset in "${wheel}" requirements.lock SHA256SUMS' in publish
+    assert 'for asset in "${wheel}" "${native_wheel}" requirements.lock SHA256SUMS' in publish
     assert publish.count('.name == "requirements.lock"') == 2
     assert "gh release verify-asset \"v${RELEASE_VERSION}\" dist/requirements.lock" in publish
 
