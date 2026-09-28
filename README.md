@@ -30,8 +30,20 @@ docker compose up --build --wait
 curl http://127.0.0.1:8000/healthz
 ```
 
-Register provider keys separately with `register-credential`; do not put them
-in `compose.yaml` or the gateway runtime environment.
+The gateway starts with an empty model pool. Its health endpoint proves that
+the process is running, not that a provider is available. Register provider
+keys in the KV using a one-shot command, then restart to discover the pool:
+
+```bash
+docker compose exec -T gateway python -m contextual_orchestrator \
+  register-credential --name OPENROUTER_API_KEY --value-stdin < .secrets/openrouter-key
+docker compose restart gateway
+```
+
+Keep provider keys out of `compose.yaml` and the gateway runtime environment.
+Check `/v1/models` and an authenticated `orchestrator/free` request before
+using this deployment. The Compose image is built from the local source tree;
+it does not establish an immutable released runtime identity.
 
 For orchestration with OpenAI Responses-native reasoning summaries, select
 `orchestrator/auto` or the fail-closed zero-cost pool `orchestrator/free`.

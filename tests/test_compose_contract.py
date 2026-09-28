@@ -14,6 +14,9 @@ def test_compose_uses_postgres_kv_and_secret_bootstrap() -> None:
     assert "--name CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN --value-stdin < /run/secrets/admin_token" in compose
     assert "--name CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN --value-stdin < /run/secrets/inference_token" in compose
     assert "--production" in compose
+    assert "/app/examples/agents.empty.json" in compose
+    assert "--auto-discover-model-agents" in compose
+    assert "agents.mock.json" not in compose
     assert "--auth-token-key" not in compose
     assert "server_token" not in compose
     assert "OPENAI_API_KEY" not in compose
@@ -27,6 +30,8 @@ def test_gateway_image_installs_postgres_driver_and_ignores_secrets() -> None:
     assert "COPY --from=dependency-builder /build/deps/" in dockerfile
     assert "maturin build --locked --release" in dockerfile
     assert "--production" in dockerfile
+    assert "AGENTS_FILE=/app/examples/agents.empty.json" in dockerfile
+    assert "--auto-discover-model-agents" in dockerfile
     assert "--admin-token-key CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN" in dockerfile
     assert "--inference-token-key CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN" in dockerfile
     assert "--auth-token-key" not in dockerfile

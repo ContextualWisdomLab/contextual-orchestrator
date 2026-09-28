@@ -7,7 +7,7 @@
 #        docker run --rm -p 8000:8000 contextual-orchestrator
 # Runtime secrets are never passed through the container environment or argv;
 # see docs/kv-credentials.md for the bootstrap flow.
-# Agents: defaults to the bundled mock pool; mount your own and set AGENTS_FILE:
+# Agents: defaults to an empty pool; seed provider credentials in the KV first.
 #           -v ./agents.json:/app/agents.json -e AGENTS_FILE=/app/agents.json
 ARG MATURIN_BUILDER_IMAGE=ghcr.io/pyo3/maturin@sha256:b6c8b59a0170b77eb31a35b56034abd39972483ad0ebfff344deaa42a85f3bd3
 FROM ${MATURIN_BUILDER_IMAGE} AS maturin-tools
@@ -35,7 +35,7 @@ COPY --from=dependency-builder /build/deps/ /usr/local/lib/python3.12/site-packa
 COPY contextual_orchestrator/ /usr/local/lib/python3.12/site-packages/contextual_orchestrator/
 COPY examples/ examples/
 
-ENV AGENTS_FILE=/app/examples/agents.mock.json \
+ENV AGENTS_FILE=/app/examples/agents.empty.json \
     PORT=8000
 
 RUN useradd --uid 10001 --create-home orchestrator \
@@ -48,4 +48,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD ["python", "-c", "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/healthz', timeout=2)"]
 
 # --allow-public-bind: 컨테이너 내부 0.0.0.0 바인딩 필요(외부 노출은 호스트 포트 매핑이 결정)
-CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_FILE\" --host 0.0.0.0 --port \"$PORT\" --allow-public-bind --production --admin-token-key CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN --inference-token-key CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"]
+CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_FILE\" --auto-discover-model-agents --host 0.0.0.0 --port \"$PORT\" --allow-public-bind --production --admin-token-key CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN --inference-token-key CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"]

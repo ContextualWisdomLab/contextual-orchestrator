@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.__main__ import _resolve_auth_token, main
+from contextual_orchestrator.orchestrator import TaskOrchestrator
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     set_backend,
@@ -83,6 +84,65 @@ def test_key_only_split_tokens_select_split_mode() -> None:
         assert security.inference_token == expected_value
     finally:
         set_backend(None)
+
+
+def test_production_refuses_enabled_mock_agents() -> None:
+    stderr = StringIO()
+    with (
+        patch.object(sys, "stderr", stderr),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        with pytest.raises(SystemExit) as error:
+            main([
+                "--serve", "--production", "--agents", "examples/agents.mock.json",
+                "--admin-token", "admin", "--inference-token", "inference",
+            ])
+    assert error.value.code == 2
+    assert "cannot serve enabled mock agents" in stderr.getvalue()
+    serve.assert_not_called()
+
+
+def test_production_discovery_can_start_with_empty_pool() -> None:
+    with (
+        patch("contextual_orchestrator.__main__._auto_discover_runtime_agents") as discover,
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main([
+            "--serve", "--production", "--agents", "examples/agents.empty.json",
+            "--auto-discover-model-agents",
+            "--admin-token", "admin", "--inference-token", "inference",
+        ])
+    discover.assert_called_once()
+    assert serve.call_args.args[0].agents == []
+    serve.call_args.args[0].close()
+
+
+def test_production_refuses_mock_restored_from_agent_db(tmp_path: Path) -> None:
+    agent_db = tmp_path / "agents.db"
+    saved = TaskOrchestrator([], agents_db=str(agent_db), allow_empty_agents=True)
+    try:
+        saved.add_agent(
+            "default",
+            {"id": "old_mock", "model": "mock-model", "base_url": "mock://old"},
+        )
+    finally:
+        saved.close()
+
+    stderr = StringIO()
+    with (
+        patch.object(sys, "stderr", stderr),
+        patch("contextual_orchestrator.__main__._auto_discover_runtime_agents"),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        with pytest.raises(SystemExit) as error:
+            main([
+                "--serve", "--production", "--agents", "examples/agents.empty.json",
+                "--agents-db", str(agent_db), "--auto-discover-model-agents",
+                "--admin-token", "admin", "--inference-token", "inference",
+            ])
+    assert error.value.code == 2
+    assert "cannot serve enabled mock agents" in stderr.getvalue()
+    serve.assert_not_called()
 
 
 @pytest.mark.parametrize("guard", ["--production", "--allow-public-bind"])
