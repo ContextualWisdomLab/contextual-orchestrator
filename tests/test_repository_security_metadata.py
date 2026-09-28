@@ -161,6 +161,20 @@ def test_cryptography_pin_matches_every_install_path():
     assert lock_versions == [runtime_version] * len(lock_versions)
 
 
+def test_review_ci_compiles_coverage_7_16_0():
+    """OpenCode review CI must install coverage 7.16.0, not the 7.15.4 pin."""
+    requirements_in = read_text("requirements-opencode-review-ci.in")
+    compiled = read_text("requirements-opencode-review-ci.txt")
+
+    assert "coverage>=7.16.0" in requirements_in
+    match = re.search(r"(?m)^coverage(?:\[toml\])?==(\d+\.\d+\.\d+) \\$", compiled)
+    assert match is not None
+    compiled_version = tuple(int(part) for part in match.group(1).split("."))
+    assert compiled_version >= (7, 16, 0)
+    assert "coverage==7.15.4" not in compiled
+    assert "coverage>=7.15.4" not in requirements_in
+
+
 def test_review_adr_requires_enforced_exact_head_merge_controls():
     adr_text = read_text("docs/planning/adrs/0004-pr-review-merge-loop.md")
     normalized_adr_text = " ".join(adr_text.split())
