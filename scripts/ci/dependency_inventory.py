@@ -198,6 +198,8 @@ def _artifact_license_terms(
         # sdists are excluded on purpose: reading one usefully means running its
         # build backend, and an unreviewed package must not execute here.
         return [], f"no wheel for {name}=={version} in {artifact_dir}", []
+    if len(candidates) != 1:
+        raise InventoryError(f"multiple wheels for {name}=={version}; artifact identity is ambiguous")
     artifact = candidates[0]
     # One read: hashing the path and then reopening it would bind a digest to
     # bytes that need not be the bytes parsed.
@@ -206,18 +208,27 @@ def _artifact_license_terms(
     terms: list[str] = []
     license_files: list[Any] = []
     with zipfile.ZipFile(io.BytesIO(raw_artifact)) as archive:
+        metadata_members = [member for member in archive.namelist() if member.endswith(".dist-info/METADATA")]
+        if len(metadata_members) != 1:
+            raise InventoryError("wheel must contain exactly one distribution metadata record")
+        metadata_path = metadata_members[0]
+        metadata = email.message_from_string(archive.read(metadata_path).decode("utf-8", "replace"))
+        if any(len(metadata.get_all(field, [])) != 1 for field in ("Name", "Version")):
+            raise InventoryError("wheel has missing or duplicate identity fields")
+        metadata_name = _NAME_SEPARATORS.sub("_", str(metadata.get("Name") or "").strip().lower())
+        if metadata_name != normalized or str(metadata.get("Version") or "") != version:
+            raise InventoryError(f"wheel metadata identity differs from {name}=={version}")
+        terms = _metadata_license_terms(metadata)
+        distribution_root = metadata_path.removesuffix("METADATA")
         for member in archive.namelist():
-            if member.endswith(".dist-info/METADATA") and not terms:
-                metadata = email.message_from_string(archive.read(member).decode("utf-8", "replace"))
-                terms = _metadata_license_terms(metadata)
-            elif ".dist-info/" in member and Path(member).name.upper().startswith(
+            if ".dist-info/" in member and Path(member).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE")
             ):
+                if not member.startswith(distribution_root):
+                    raise InventoryError("wheel license text belongs to a different distribution")
                 raw = archive.read(member)
                 license_files.append({
                     "name": Path(member).name,
-                    # Hash the bytes as shipped: decoding and re-encoding would
-                    # hash a normalised copy, not the instrument itself.
                     "sha256": hashlib.sha256(raw).hexdigest(),
                     "text": raw.decode("utf-8", "replace"),
                 })
