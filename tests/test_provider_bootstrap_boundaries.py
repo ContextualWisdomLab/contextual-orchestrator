@@ -91,24 +91,25 @@ def test_register_rejects_non_string_value() -> None:
 class _FakeCursor:
     def __init__(self, log: list[tuple[str, tuple[Any, ...]]]) -> None:
         self._log = log
+        self.closed = False
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> None:
         self._log.append((sql.split()[0], params))
 
-    def __enter__(self) -> "_FakeCursor":
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakeConnection:
     def __init__(self) -> None:
         self.log: list[tuple[str, tuple[Any, ...]]] = []
         self.commits = 0
+        self.cursors: list[_FakeCursor] = []
 
     def cursor(self) -> _FakeCursor:
-        return _FakeCursor(self.log)
+        cursor = _FakeCursor(self.log)
+        self.cursors.append(cursor)
+        return cursor
 
     def commit(self) -> None:
         self.commits += 1
@@ -150,6 +151,8 @@ def test_register_postgres_backend_upserts_every_credential_in_one_transaction()
         # Values are line-ending-normalized before encryption transport.
         assert first_params[:2] == ("NVIDIA_NIM_API_KEY_SUB", "second")
         assert first_params[2] == "phrase"
+        assert backend.connection.cursors
+        assert all(cursor.closed for cursor in backend.connection.cursors)
     finally:
         set_backend(None)
 

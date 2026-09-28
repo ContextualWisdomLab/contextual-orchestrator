@@ -23,12 +23,10 @@ from contextual_orchestrator.postgres_connection import PostgresDriverUnavailabl
 class _Cursor:
     def __init__(self, connection: _Connection) -> None:
         self._connection = connection
+        self.closed = False
 
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
+    def close(self) -> None:
+        self.closed = True
 
     def execute(self, statement: str, params: tuple[str, ...] = ()) -> None:
         self._connection.executions.append((statement, params))
@@ -224,3 +222,27 @@ def test_postgres_set_encrypts_and_upserts_without_plaintext_columns() -> None:
         ("provider_api_key", "synthetic-value-two", "passphrase"),
     ]
     assert connection.commit_count == 3
+
+
+@pytest.mark.parametrize("fail_query", [False, True])
+def test_postgres_closes_dbapi_cursor_without_context_protocol(fail_query) -> None:
+    """pg8000 cursors expose close, not the context manager protocol."""
+    connection = _Connection(rows=[("fixture-value",)])
+    cursor = _Cursor(connection)
+    connection.cursor = lambda: cursor
+    error = RuntimeError("fixture query failure")
+    if fail_query:
+        def fail(*_args):
+            raise error
+
+        cursor.execute = fail
+    backend = PostgresCredentialBackend("fixture-dsn", "fixture-passphrase")
+    backend._ensured = True
+    backend._connect = lambda: connection
+    if fail_query:
+        with pytest.raises(RuntimeError) as caught:
+            backend.get("fixture")
+        assert caught.value is error
+    else:
+        assert backend.get("fixture") == "fixture-value"
+    assert cursor.closed

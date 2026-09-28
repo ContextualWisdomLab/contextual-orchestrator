@@ -13,6 +13,7 @@ import math
 import re
 import threading
 import uuid
+from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -710,7 +711,7 @@ class PostgresProviderCatalogStore:
         with self._schema_lock:
             if self._schema_ready:
                 return
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 cursor.execute(PROVIDER_CATALOG_SCHEMA_SQL)
                 cursor.execute(
                     "ALTER TABLE provider_model "
@@ -794,7 +795,7 @@ class PostgresProviderCatalogStore:
         eligible = set(normalized).intersection(eligible_model_ids)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 account_id = self._upsert_account(cursor, source)
                 cursor.execute(
                     "UPDATE provider_model SET enabled_flag = false "
@@ -935,7 +936,7 @@ class PostgresProviderCatalogStore:
         stable_code = _normalize_error_code(error_code)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 account_id = self._upsert_account(cursor, source)
                 finished_at = _now()
                 cursor.execute(
@@ -977,7 +978,7 @@ class PostgresProviderCatalogStore:
         account_id = provider_account_id(source)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 cursor.execute(
                     "SELECT pm.model_name, pa.chat_base_url, pa.auth_scheme, "
                     "pm.max_output_tokens, pm.context_window, "
@@ -1056,7 +1057,7 @@ class PostgresProviderCatalogStore:
         normalized = _normalize_privacy_assessments(source, assessments)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 account_id = provider_account_id(source)
                 cursor.execute(
                     "SELECT model_name FROM provider_model WHERE provider_account_id = %s",
@@ -1106,7 +1107,7 @@ class PostgresProviderCatalogStore:
         account_id = provider_account_id(source)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 cursor.execute(
                     "SELECT pm.model_name, mpa.policy_source_url, "
                     "mpa.zero_data_retention_available, mpa.supports_no_training, "
