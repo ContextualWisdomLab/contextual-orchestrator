@@ -20,6 +20,11 @@ _ROOT = Path(__file__).resolve().parents[1]
 _TAG = "v0.2.0"
 _SBOM = '{"bomFormat":"CycloneDX","version":1}\n'
 _WHEEL = "contextual_orchestrator-0.2.0-py3-none-any.whl"
+_LOCK = "alpha==1.0 --hash=sha256:" + "a" * 64 + "\n"
+_SUMS = (
+    f"{hashlib.sha256(b'wheel').hexdigest()}  {_WHEEL}\n"
+    f"{hashlib.sha256(_LOCK.encode()).hexdigest()}  requirements.lock\n"
+)
 _START = "Create the GitHub Release"
 _RESUME = "Validate the existing release lifecycle"
 
@@ -131,7 +136,11 @@ def _steps() -> list[tuple[str, str, str]]:
 def _existing(*, draft: bool, immutable: bool, asset: str | None = _SBOM) -> dict:
     """Construct a remote lifecycle state, not a successful mock verdict."""
     assets = [] if asset is None else [{"name": "cyclonedx-sbom.json", "size": len(asset)}]
-    assets.extend([{"name": _WHEEL, "size": 5}, {"name": "SHA256SUMS", "size": 90}])
+    assets.extend([
+        {"name": _WHEEL, "size": 5},
+        {"name": "requirements.lock", "size": len(_LOCK)},
+        {"name": "SHA256SUMS", "size": len(_SUMS)},
+    ])
     return {
         "tag_name": _TAG,
         "draft": draft,
@@ -156,10 +165,14 @@ def _run(tmp_path: Path, **changes: object) -> tuple[subprocess.CompletedProcess
     (tmp_path / "sbom-download/cyclonedx-sbom.json").write_text(_SBOM)
     (tmp_path / "dist").mkdir()
     (tmp_path / "dist" / _WHEEL).write_text("wheel")
-    digest = hashlib.sha256(b"wheel").hexdigest()
-    sums = f"{digest}  {_WHEEL}\n"
-    (tmp_path / "dist/SHA256SUMS").write_text(sums)
-    state["asset_bytes"] = {"cyclonedx-sbom.json": _SBOM, _WHEEL: "wheel", "SHA256SUMS": sums}
+    (tmp_path / "dist/requirements.lock").write_text(_LOCK)
+    (tmp_path / "dist/SHA256SUMS").write_text(_SUMS)
+    state["asset_bytes"] = {
+        "cyclonedx-sbom.json": _SBOM,
+        _WHEEL: "wheel",
+        "requirements.lock": _LOCK,
+        "SHA256SUMS": _SUMS,
+    }
     if existing_bytes is not None:
         if isinstance(existing_bytes, dict):
             state["asset_bytes"].update(existing_bytes)

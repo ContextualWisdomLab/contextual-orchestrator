@@ -322,6 +322,22 @@ def test_sbom_is_mandatory_before_release_publication() -> None:
     assert sbom_block.count("exit 1") >= 3
 
 
+def test_exact_commit_dependency_lock_is_verified_as_a_release_asset() -> None:
+    """A wheel consumer must be able to install the attested dependency closure."""
+    workflow = _workflow_text()
+    verify = _job_block(workflow, "verify")
+    publish = _job_block(workflow, "publish")
+
+    assert "cp requirements.lock dist/requirements.lock" in verify
+    assert 'sha256sum "${wheel##*/}" requirements.lock > SHA256SUMS' in verify
+    assert "test -s dist/requirements.lock" in publish
+    assert 'sha256sum "contextual_orchestrator-${RELEASE_VERSION}-py3-none-any.whl" requirements.lock' in publish
+    assert '"$(cat dist/SHA256SUMS)" != "${expected_manifest}"' in publish
+    assert 'for asset in "${wheel}" requirements.lock SHA256SUMS' in publish
+    assert publish.count('.name == "requirements.lock"') == 2
+    assert "gh release verify-asset \"v${RELEASE_VERSION}\" dist/requirements.lock" in publish
+
+
 def test_concurrency_group_serializes_release_runs() -> None:
     """Two dispatched releases must never race the same tag push."""
     workflow = _workflow_text()
