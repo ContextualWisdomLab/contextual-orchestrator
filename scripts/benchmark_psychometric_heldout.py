@@ -38,6 +38,13 @@ ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
 DECLARED_DIF_SAMPLE_SIZE = 4_000
 DIF_SEED = 260_906
+# Preserve the released fast-mlsirm 0.11.4 alias contract exactly while
+# migrating to its non-deprecated API; recording these experiment controls in
+# the report prevents the compatibility configuration from becoming hidden.
+DECLARED_DIF_FDR_Q = 0.05
+DECLARED_DIF_MAX_ITER = 50
+DECLARED_DIF_MAX_ROUNDS = 3
+DECLARED_DIF_MIN_ANCHOR_ITEMS = 4
 DECLARED_JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
 DECLARED_ITEM_COVARIATE_SAMPLE_SIZE = 1_200
@@ -1205,6 +1212,10 @@ def _validate_selection_utility() -> dict[str, object]:
 def _validate_candidate_group_dif(
     *,
     sample_size: int | None = None,
+    fdr_q: float,
+    max_iter: int,
+    max_rounds: int,
+    min_anchor_items: int,
 ) -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification.
 
@@ -1227,13 +1238,24 @@ def _validate_candidate_group_dif(
     responses = (
         generator.random((declared_sample_size, item_count)) < probabilities
     ).astype(np.int8)
-    result = fast_mlsirm.logistic_dif_purified(responses, group)
+    result = fast_mlsirm.detect_dif_logistic_purified(
+        responses,
+        group,
+        fdr_q=fdr_q,
+        max_iter=max_iter,
+        max_rounds=max_rounds,
+        min_anchor_items=min_anchor_items,
+    )
     flagged_items = np.flatnonzero(result["flagged_bh"]).tolist()
     expected_items = [0]
     return {
-        "method": "logistic_dif_purified",
+        "method": "detect_dif_logistic_purified",
         "sample_size": declared_sample_size,
         "seed": DIF_SEED,
+        "fdr_q": fdr_q,
+        "max_iter": max_iter,
+        "max_rounds": max_rounds,
+        "min_anchor_items": min_anchor_items,
         "expected_dif_items": expected_items,
         "flagged_items": flagged_items,
         "known_dif_recall": len(set(flagged_items) & set(expected_items))
@@ -1953,7 +1975,11 @@ def run_benchmark(
     classification_decision = _validate_classification_decision()
     selection_utility = _validate_selection_utility()
     candidate_group_dif = _validate_candidate_group_dif(
-        sample_size=DECLARED_DIF_SAMPLE_SIZE
+        sample_size=DECLARED_DIF_SAMPLE_SIZE,
+        fdr_q=DECLARED_DIF_FDR_Q,
+        max_iter=DECLARED_DIF_MAX_ITER,
+        max_rounds=DECLARED_DIF_MAX_ROUNDS,
+        min_anchor_items=DECLARED_DIF_MIN_ANCHOR_ITEMS,
     )
     judge_effects = _validate_judge_effects(
         sample_size=DECLARED_JUDGE_SAMPLE_SIZE

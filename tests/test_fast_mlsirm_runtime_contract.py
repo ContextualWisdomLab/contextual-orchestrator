@@ -16,6 +16,4 @@ def test_supported_python_floor_matches_fast_mlsirm_runtime() -> None:
         for dependency in project_data["dependencies"]
         if dependency.startswith("fast-mlsirm")
     ]
-    assert fast_mlsirm_dependencies == [
-        "fast-mlsirm==0.11.4"
-    ]
+    assert fast_mlsirm_dependencies == ["fast-mlsirm==0.11.4"]

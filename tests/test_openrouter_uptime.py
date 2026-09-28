@@ -106,6 +106,8 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
     indefinitely starving every later member of an uptime update. The fetch
     must stay bounded regardless of #971's inference-deadline policy.
     """
+    requested_sizes: list[int] = []
+
     class _Response:
         def __enter__(self):
             return self
@@ -113,7 +115,8 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def read(self) -> bytes:
+        def read(self, size: int = -1) -> bytes:
+            requested_sizes.append(size)
             return json.dumps({"data": {"endpoints": []}}).encode()
 
     collector, _, _, _ = _collectors(None)
@@ -127,6 +130,43 @@ def test_uptime_fetch_keeps_a_fixed_network_deadline_independent_of_inference() 
     timeout = opened.call_args.kwargs["timeout"]
     assert timeout is not None
     assert 0 < timeout <= 30
+    assert requested_sizes == [uptime_module._OPENROUTER_UPTIME_RESPONSE_MAX_BYTES + 1]
+
+
+def test_uptime_fetch_rejects_oversized_response_before_json_parse(monkeypatch) -> None:
+    """A telemetry response may not be read or parsed beyond its byte boundary."""
+    payload = json.dumps(
+        {
+            "data": {
+                "endpoints": [{"uptime_last_30m": 99.5}],
+                "padding": "x" * 256,
+            }
+        }
+    ).encode()
+    requested_sizes: list[int] = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            requested_sizes.append(size)
+            return payload if size < 0 else payload[:size]
+
+    monkeypatch.setattr(uptime_module, "_OPENROUTER_UPTIME_RESPONSE_MAX_BYTES", 64, raising=False)
+    monkeypatch.setattr(
+        uptime_module.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(),
+    )
+    collector, _, _, _ = _collectors(None)
+    del collector._fetch_uptime
+
+    assert collector._fetch_uptime("org/model-a") is None
+    assert requested_sizes == [65]
 
 
 def test_uptime_fetch_does_not_hang_forever_on_an_unresponsive_endpoint(monkeypatch) -> None:

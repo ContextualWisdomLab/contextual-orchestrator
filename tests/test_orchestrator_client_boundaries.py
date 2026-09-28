@@ -743,23 +743,12 @@ def _capture_request_body(sink: dict) -> Any:
 def _capture_binary_request_body(sink: dict) -> Any:
     def _fake_open_provider(request, *_args, **_kwargs):
         sink["body"] = json.loads(request.data.decode("utf-8"))
-
-        class _CapturedResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_exc):
-                return False
-
-            def read(self, _size: int = -1) -> bytes:
-                return b""
-
-            headers = types.SimpleNamespace(
-                get_content_type=lambda: "audio/mpeg",
-                get=lambda *_header, **_kwargs: None,
-            )
-
-        return _CapturedResponse()
+        response = _RegistryResponse({})
+        response.headers = types.SimpleNamespace(
+            get_content_type=lambda: "audio/mpeg",
+            get=lambda _name, default=None: default,
+        )
+        return response
 
     return _fake_open_provider
 

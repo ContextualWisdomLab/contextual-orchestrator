@@ -60,6 +60,7 @@ class _FakeConnection:
     """Stands in for ``http.client.HTTPConnection`` in ``_open_provider``."""
 
     last: "_FakeConnection | None" = None
+    sock = None
 
     def __init__(self, response: _RecordingErrorResponse) -> None:
         self._response = response
