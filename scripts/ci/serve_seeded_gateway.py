@@ -1,10 +1,12 @@
 """Bootstrap-transport gateway launcher for CI agent loops.
 
-Seeds the five provider keys from GitHub-secrets-provided environment
+Seeds provider keys from GitHub-secrets-provided environment
 variables into the process-local KV credential registry (env is used ONLY as
 bootstrap transport into the KV, never read again at request time), then runs
 the normal ``--serve`` entrypoint in this same process so discovery and
 routing resolve keys through ``get_credential()`` exactly like production.
+The OpenCode Zen key seeds both the Zen and optional Go catalogs; Go needs no
+second secret.
 
 Usage:
     python scripts/ci/serve_seeded_gateway.py [extra server args...]
