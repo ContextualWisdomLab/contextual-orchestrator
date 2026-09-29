@@ -536,6 +536,9 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     default=None,
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
+# Set while an ``orchestrator/free`` request is triaged, so the triage call
+# itself never falls back to a non-free agent.
+_REQUEST_TRIAGE_FREE_ONLY: ContextVar[bool] = ContextVar("request_triage_free_only", default=False)
 
 
 def _resolved_openrouter_provider(agent: ModelAgent) -> str:
@@ -8128,14 +8131,16 @@ class TaskOrchestrator:
 
         Mirrors ``would_route()``'s short-circuiting exactly, stopping one step
         short of the only branch that calls ``_needs_workflow()`` (a real model
-        request): ``mode="auto"`` against the gateway default or ``AUTO_MODEL``.
+        request): ``mode="auto"`` against the gateway default, ``AUTO_MODEL`` or
+        ``FREE_MODEL``. The free pool triages like the others; its route and
+        conduct paths both stay free-only.
         Returns ``None`` there so a caller can defer that live call until it is
         known to be necessary (e.g. after a response-cache lookup misses).
         """
         if mode == "route":
             return True
         if mode == "auto":
-            if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
+            if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}:
                 return True
             return None
         return False
@@ -8161,7 +8166,11 @@ class TaskOrchestrator:
         if cheap_decision is not None:
             return cheap_decision
         text = self._latest_user_text(messages)
-        return not self._needs_workflow(text)
+        token = _REQUEST_TRIAGE_FREE_ONLY.set(model_name == self.FREE_MODEL)
+        try:
+            return not self._needs_workflow(text)
+        finally:
+            _REQUEST_TRIAGE_FREE_ONLY.reset(token)
 
     @_request_execution_scoped
     def stream_route(
@@ -11125,6 +11134,7 @@ class TaskOrchestrator:
                 + "\x1f"
                 + text
                 + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")
+                + ("\x00free_only" if _REQUEST_TRIAGE_FREE_ONLY.get() else "")
             ).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
@@ -11141,7 +11151,7 @@ class TaskOrchestrator:
             candidates = self._ranked_agents(text, "worker", free_only=True)
         except RuntimeError:
             candidates = []
-        if not candidates and not _REQUEST_ZDR_ONLY.get():
+        if not candidates and not _REQUEST_ZDR_ONLY.get() and not _REQUEST_TRIAGE_FREE_ONLY.get():
             candidates = [
                 agent for agent in self.agents if _agent_matches_request_endpoint(agent)
             ]

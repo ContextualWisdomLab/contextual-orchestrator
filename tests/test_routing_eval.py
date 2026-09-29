@@ -80,20 +80,26 @@ def test_auto_route_follows_structured_triage_verdict() -> None:
     assert not orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
 
 
-def test_orchestrator_free_auto_stays_on_route_even_when_triage_wants_conduct() -> None:
+def test_orchestrator_free_auto_follows_triage_like_gateway_default() -> None:
     orchestrator = _orch()
-    orchestrator._triage_fn = lambda text: True
-    prompt = "review this diff and verify the regression" * 100
-    assert orchestrator.would_route(
-        [{"role": "user", "content": prompt}],
-        mode="auto",
-        model_name=TaskOrchestrator.FREE_MODEL,
-    )
-    assert not orchestrator.would_route(
-        [{"role": "user", "content": prompt}],
-        mode="auto",
-        model_name=TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
-    )
+    prompt = [{"role": "user", "content": "review this diff and verify the regression" * 100}]
+    for verdict in (True, False):
+        orchestrator._triage_fn = lambda text, verdict=verdict: verdict
+        for model_name in (TaskOrchestrator.FREE_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL):
+            assert orchestrator.would_route(prompt, mode="auto", model_name=model_name) is not verdict
+
+
+def test_orchestrator_free_triage_never_falls_back_to_a_paid_agent() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("paid_agent", "paid-model", tags=("reasoning",))])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("free triage called a paid agent")
+
+    orchestrator.client.chat = forbidden
+    prompt = [{"role": "user", "content": "review this diff"}]
+    # No free triage agent: route directly instead of asking the paid one
+    # (a call would raise, and triage fails closed to conduct).
+    assert orchestrator.would_route(prompt, mode="auto", model_name=TaskOrchestrator.FREE_MODEL)
 
 
 if __name__ == "__main__":
