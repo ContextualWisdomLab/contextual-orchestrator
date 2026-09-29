@@ -2,10 +2,10 @@
 
 ## Status
 
-Partially accepted. The web-search tool (Decision §1) is implemented in this
-change. The MCP gateway, A2A gateway, and Camoufox-browsing pieces (Decision
-§2-4) are design-only: recorded here so the bounded contexts, their
-boundaries, and their sequencing are reconstructable, not implemented yet.
+Partially accepted. The web-search tool (Decision §1) is implemented. The MCP
+server role now exposes that tool and an advisory-claim check (Decision §2,
+server half only). The MCP client/proxy role, the A2A gateway, and
+Camoufox browsing (Decision §2-4) stay design-only.
 
 ## Context
 
@@ -150,8 +150,15 @@ eventually needs **both**, sequenced by actual need:
   real consumer; building it against zero live consumers would be
   speculative plumbing (see Aggregate/Domain Service note below).
 
-Not built this iteration. Sequencing: server role first, once a Strix or
-Noema caller is ready to consume `web_search()` through it.
+The server role is the slice that ships with issue #1347:
+`python -m contextual_orchestrator.web_search_mcp` binds Streamable HTTP to
+loopback and registers `web_search` plus `assess_vulnerability_claim`. The
+claim tool returns `supported` only when the package is in the caller's
+manifest and an official CVE, NVD, or GitHub Advisory URL names that package.
+A missing or failed SearXNG call is `unverified`, never a finding. Strix and
+Noema workflow files in `ContextualWisdomLab/.github` still have to point at
+this server; that wiring is outside this repository. The general MCP
+client/proxy role stays unbuilt.
 
 ### 3. A2A Gateway — design only, not built
 
@@ -345,8 +352,8 @@ Not built this iteration, in either form.
 
 ## What remains (explicitly out of scope here)
 
-1. Wire `web_search()` into an MCP server surface once a Strix or Noema
-   caller is ready to consume it (Decision §2).
+1. Point Strix and Noema at the loopback MCP server (Decision §2). The server
+   and the claim check exist; the central workflow files do not call them yet.
 2. Design and build the A2A Gateway once a concrete two-agent delegation
    caller exists (Decision §3).
 3. Build Camoufox browsing as a general capability, reusing the existing

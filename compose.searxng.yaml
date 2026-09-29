@@ -1,0 +1,39 @@
+# Loopback SearXNG for web_search(). Plaintext HTTP is accepted only for an
+# explicit loopback URL, so this port is not published on any other address.
+# Cap-drop and a read-only root follow the Camoufox/Wardnet isolation habit.
+# To pin DNS through Wardnet, merge compose.camoufox-wardnet.yaml and add
+# `dns: [172.30.0.2]` plus the `camoufox_egress` network on this service.
+# Do not point SEARXNG_URL at the Docker service name: that name is not loopback
+# and the SSRF check rejects it.
+
+services:
+  searxng:
+    image: docker.io/searxng/searxng@sha256:3284e8900e9b3e5df284ae8c48a26851ae2eff6f99b4b0b18ec3da5a4d9095c3
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set the SearXNG secret}
+    ports:
+      - "127.0.0.1:${SEARXNG_HOST_PORT:-8088}:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /etc/searxng:mode=1777
+      - /var/cache/searxng:mode=1777
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -eu
+        cat > /etc/searxng/settings.yml << EOF
+        use_default_settings: true
+        server:
+          secret_key: "$${SEARXNG_SECRET}"
+          bind_address: "0.0.0.0"
+          limiter: false
+          image_proxy: false
+        search:
+          formats:
+            - html
+            - json
+        EOF
+        exec /usr/local/searxng/entrypoint.sh
+    restart: unless-stopped

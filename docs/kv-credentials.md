@@ -126,9 +126,18 @@ printf '%s' "$SEARXNG_TOKEN" | python -m contextual_orchestrator \
   register-credential --name SEARXNG_TOKEN --value-stdin
 ```
 
-This module does not deploy SearXNG itself — point it at any SearXNG instance
-you already run (the project's own Docker Compose deployment is documented at
-[docs.searxng.org](https://docs.searxng.org/admin/installation-docker.html)).
+`compose.searxng.yaml` runs that instance and publishes it on
+`127.0.0.1` only. Register the matching loopback origin, then start the MCP
+server (mcp SDK 2.x plus the `api` extra for uvicorn) on the same host:
+
+```bash
+printf '%s' 'http://127.0.0.1:8088' | python -m contextual_orchestrator \
+  register-credential --name SEARXNG_URL --value-stdin
+python -m contextual_orchestrator.web_search_mcp
+```
+
+`assess_vulnerability_claim` is the tool a reviewer calls before reporting a
+CVE or GHSA. `supported` is the only status that may become a finding.
 Camoufox-rendered browsing (for JS-heavy fact-check targets, not search) and
 its `quarantine-sandbox-runtime` session isolation remain a documented
 follow-up; see the ADR.
