@@ -33,9 +33,13 @@ Scheduled runs and PR code cannot run it. Runtime credentials come from the KV;
 the organization secret `EXPERIENTAL_LABS_API_KEY` is environment transport only
 for in-process bootstrap. No credential extraction is needed or permitted.
 
-The request uses a fixed synthetic prompt, at most 16 output tokens, and a
-30-second transport timeout. It has no inference retry, fallback, redirect, or
-policy mutation. An exclusive evidence reservation is flushed before discovery;
+The request uses a fixed synthetic prompt plus the documented attribution field.
+It sends no sampling or output-token parameter: the provider's integration
+contract specifies a minimal verification call as model plus messages, and no
+released experiment authorizes a local output cap. The gateway timeout remains
+`null`, so the upstream ends communication; the workflow does not impose a
+separate elapsed-time decision. The request has no inference retry, fallback,
+redirect, or policy mutation. An exclusive evidence reservation is flushed before discovery;
 the pending marker and directory entry are flushed again before the only POST.
 An existing reservation is never reclaimed, including after failure or an
 ambiguous timeout. Actions reruns skip the probe even on a fresh runner.
@@ -46,7 +50,7 @@ can fail after an inference; lack of an artifact is not proof that no request wa
 sent. Inspect the original run and provider receipts instead. A workflow rerun is
 not a billing retry mechanism.
 
-The artifact `experiential-billing-<run_id>` retains only bounded provenance,
+The artifact `experiential-billing-<run_id>` retains only validated provenance,
 identities, status, token counts and costs for seven days. It contains no prompt,
 completion, credential, raw catalog/account data, exception text, or error body.
 Publication must be verified on the hosted run; local tests are not publication
@@ -62,18 +66,26 @@ unknown without discarding independently correlated settled charged credits.
 This extra acceptance check is not a claim that the provider guarantees an echo.
 A unique persisted `safety_identifier` is sent with the request and must match the settled
 row's `attribution_label`. A usage-row ID is not assumed equal to the completion
-request ID. Export pagination passes all three documented cursor fields back;
-more than three pages or a repeated cursor remains unknown. At most three
-GET-only receipt polling rounds are performed. No undocumented status enum is
-used: the documented settled export is the source, with `pricing_known=true`.
+request ID. Export pagination passes all three documented cursor fields back
+until `next_cursor=null`; a malformed or repeated cursor remains unknown. The
+provider documents pull/poll but publishes no settlement-ready signal, cadence,
+or research-backed stopping policy, so the probe performs one immediate
+generation read and one complete settled-export observation. Missing receipts
+stay unknown rather than being admitted by an arbitrary polling interval or
+round count. No undocumented status enum is used: the documented settled export
+is the source, with `pricing_known=true`.
 
 Selection requires an exact authenticated callable ID in the active, text-capable
 public catalog and the literal free promotion. The probe preserves that exact
 ID. Undocumented `canonical_slug` mappings and provider-prefix stripping are not
 used; unresolved identity or multiple eligible promotion identities prevent
-inference rather than invoking an undocumented lexical tie-break. Catalog discovery follows bounded
-`limit=100`/`offset` pages, requires complete consistent coverage, and refuses more
-than 1,600 rows. Promotions are metadata observations, not guarantees about
+inference rather than invoking an undocumented lexical tie-break. Provider model,
+promotion, request, and receipt identities are syntax-validated and secret-filtered
+without a local length-admission threshold; numeric Actions run identities likewise
+have no undocumented digit ceiling. Catalog discovery follows
+pagination reported by the provider's first page (`total`, `limit`, `offset`),
+requires exact consistent coverage, and does not invent a local page or row
+ceiling. Promotions are metadata observations, not guarantees about
 account eligibility, caps, provider waterfall, or a later request's price.
 
 ## Local verification and current acceptance
@@ -104,8 +116,24 @@ run passed **93 tests** with
 warnings treated as errors (process exit 0). The generation-identity follow-up
 then reproduced one failure and three passing identity variants before the fix;
 the focused suite passed **97 tests** under the same strict warnings setting.
-Those fixtures do not establish a hosted receipt or charge. Actionlint on the
-unchanged workflow and `git diff --check` also passed. A timeout can collect a charge by its persisted attribution label
+The no-heuristics bounds follow-up reproduced eight independent failures: the
+16-token/minimal-body mismatch, the 1,600-row catalog ceiling, the three-page
+settled-export ceiling, three five-second receipt rounds, the 30-second transport
+timeout, the 15-minute job timeout, the 200-character provider-identifier ceiling,
+and the 30-digit run-identity ceiling. The repaired focused file passes **42
+tests** and the documented adjacent verification command passes **103 tests**
+with warnings treated as errors. Provider-declared catalog pages and all
+unique settled-export cursors now define completeness; receipts are observed
+once, and the request uses the null-timeout minimal-body contract.
+Those fixtures do not establish a hosted receipt or charge. The repository
+workflow-contract test, `compileall`, and `git diff --check` passed; `actionlint`
+is unavailable in this isolated environment, so hosted workflow parsing remains
+required. The full repository run completed **5,257 passed, 6 skipped, 54 failed,
+30 errors** and is not claimed GREEN; the dominant error cluster could not import
+the optional `contextual_orchestrator._decision_receipt` native module, while
+additional unrelated suites failed. A protected predecessor rerun was not used
+as a workaround because the test process could contact an external provider.
+An ambiguous send can collect a charge by its persisted attribution label
 without replaying inference; send ambiguity is still recorded separately.
 Authenticated inference count remains **zero** and measured charge remains **unknown** until the hosted
 probe is protected, dispatched once, and its correlated receipts are inspected.

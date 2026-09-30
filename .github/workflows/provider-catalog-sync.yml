@@ -26,7 +26,6 @@ jobs:
       inputs.measure_experiential_billing && github.run_attempt == 1
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 15
     steps:
       - name: Checkout protected default branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7

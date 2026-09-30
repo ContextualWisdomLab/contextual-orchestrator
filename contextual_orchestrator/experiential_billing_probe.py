@@ -20,12 +20,11 @@ from .orchestrator import ModelAgent, ModelClient
 
 API_ORIGIN = "https://api.experientiallabs.ai"
 CREDENTIAL_NAME = "EXPERIENTAL_LABS_API_KEY"
-MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}")
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]*")
 
 
 def _identifier(value: Any, secret: str = "") -> str | None:
-    """Retain bounded identifiers, never credential echoes or arbitrary prose."""
+    """Retain provider identifiers, never credential echoes or arbitrary prose."""
     if isinstance(value, str) and _IDENTIFIER.fullmatch(value) and not (secret and secret in value):
         return value
     return None
@@ -68,13 +67,13 @@ def select_promotion(callable_models: dict, catalog: dict) -> tuple[str, str]:
 
 
 def _request(method: str, route: str, payload: dict | None = None) -> tuple[int, dict, dict]:
-    """One bounded DNS-pinned TLS operation; no redirects, retries or fallback."""
+    """One DNS-pinned TLS operation; no redirects, retries or fallback."""
     if method not in {"GET", "POST"} or not route.startswith("/") or route.startswith("//"):
         raise ValueError("unsupported probe operation")
     secret = get_credential(CREDENTIAL_NAME)
     if not secret:
         raise ValueError("probe credential is unavailable")
-    client = ModelClient(timeout=30, max_retries=0)
+    client = ModelClient(timeout=None, max_retries=0)
     agent = ModelAgent("billing_probe", "billing-probe", base_url=API_ORIGIN, credential_key=CREDENTIAL_NAME)
     destination = client._validate_provider(agent)
     headers = {"accept": "application/json", "content-type": "application/json"}
@@ -84,10 +83,10 @@ def _request(method: str, route: str, payload: dict | None = None) -> tuple[int,
     request = urllib.request.Request(API_ORIGIN + route, method=method, headers=headers,
         data=json.dumps(payload).encode("utf-8") if payload is not None else None)
     try:
-        with client._open_provider(request, destination, timeout=30) as response:
+        with client._open_provider(request, destination, timeout=None) as response:
             status = response.status
             response_headers = {"x-request-id": response.getheader("x-request-id")}
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            raw = response.read()
     except urllib.error.HTTPError as error:
         status = error.code
         response_headers = {"x-request-id": error.headers.get("x-request-id")}
@@ -96,8 +95,6 @@ def _request(method: str, route: str, payload: dict | None = None) -> tuple[int,
         except (OSError, RuntimeError):
             pass
         return status, response_headers, {}
-    if len(raw) > MAX_RESPONSE_BYTES:
-        raise ValueError("probe response exceeds the size limit")
     body = json.loads(raw)
     if not isinstance(body, dict):
         raise ValueError("probe response is not an object")
@@ -140,24 +137,26 @@ def _get(request: Callable, route: str) -> dict:
 
 
 def _catalog(request: Callable) -> dict:
-    """Bound public catalog pagination; partial coverage cannot select a model."""
-    models = []
-    total = None
-    for page in range(16):
-        offset = page * 100
-        body = _get(request, "/api/models?" + urlencode({"limit": 100, "offset": offset}))
-        if type(body.get("total")) is not int or not 0 <= body["total"] <= 1600:
-            raise ValueError("catalog pagination is unavailable")
-        if total is None:
-            total = body["total"]
+    """Follow the provider-declared catalog pages; reject incomplete coverage."""
+    body = _get(request, "/api/models")
+    total, limit, offset = body.get("total"), body.get("limit"), body.get("offset")
+    rows = body.get("models")
+    if (type(total) is not int or total < 0 or type(limit) is not int or limit <= 0
+            or offset != 0 or not isinstance(rows, list)
+            or len(rows) != min(limit, total)):
+        raise ValueError("catalog pagination is unavailable")
+    models = list(rows)
+    promotions = body.get("promotions")
+    while len(models) < total:
+        offset = len(models)
+        body = _get(request, "/api/models?" + urlencode({"limit": limit, "offset": offset}))
         rows = body.get("models")
-        if (body["total"] != total or body.get("limit") != 100 or body.get("offset") != offset
-                or not isinstance(rows, list) or len(rows) != min(100, max(0, total - offset))):
+        if (body.get("total") != total or body.get("limit") != limit
+                or body.get("offset") != offset or not isinstance(rows, list)
+                or len(rows) != min(limit, total - offset)):
             raise ValueError("catalog pagination is incomplete")
         models.extend(rows)
-        if len(models) == total:
-            return {"models": models, "promotions": body.get("promotions")}
-    raise ValueError("catalog exceeds the bounded discovery limit")
+    return {"models": models, "promotions": promotions}
 
 
 def _settled_charge(request: Callable, label: str, secret: str) -> float | None:
@@ -165,7 +164,7 @@ def _settled_charge(request: Callable, label: str, secret: str) -> float | None:
     query = {"limit": 1000, "attribution_label": label}
     matches = []
     seen_cursors = set()
-    for _ in range(3):
+    while True:
         body = _get(request, "/api/v1/usage?" + urlencode(query))
         rows = body.get("data")
         if not isinstance(rows, list) or len(rows) > 1000 or "next_cursor" not in body:
@@ -182,28 +181,27 @@ def _settled_charge(request: Callable, label: str, secret: str) -> float | None:
             return _money(matches[0].get("cost_usd"))
         if not isinstance(cursor, dict) or set(cursor) != {"cursor_ts", "cursor_id", "cursor_after"}:
             return None
-        if any(not isinstance(value, (str, int, bool)) or len(str(value)) > 256 for value in cursor.values()):
+        if any(not isinstance(value, (str, int, bool)) for value in cursor.values()):
             return None
         encoded = urlencode(cursor)
         if encoded in seen_cursors:
             return None
         seen_cursors.add(encoded)
         query.update(cursor)
-    return None
 
 
 def run_probe(
     path: Path, *, source_sha: str, run_id: str, run_attempt: str,
-    request: Callable = _request, pause: Callable = time.sleep,
+    request: Callable = _request,
 ) -> dict[str, Any]:
     """Reserve one attempt, send one synthetic request, then read correlated costs.
 
     A reservation is never expired, removed or reclaimed here. Ambiguous outcomes
-    and Actions reruns cannot replay an inference. Receipt polling is GET-only.
+    and Actions reruns cannot replay an inference. Receipts are observed once.
     """
     if run_attempt != "1":
         raise ValueError("billing probe runs only on the first attempt")
-    if not re.fullmatch(r"[0-9a-f]{40}", source_sha) or not re.fullmatch(r"[0-9]{1,30}", run_id):
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha) or not re.fullmatch(r"[0-9]+", run_id):
         raise ValueError("probe provenance is invalid")
     secret = get_credential(CREDENTIAL_NAME)
     if not secret:
@@ -212,7 +210,7 @@ def run_probe(
     evidence = {"schema_version": 1, "provider": "experiential_labs", "source_sha": source_sha,
         "run_id": run_id, "run_attempt": run_attempt, "started_at": int(time.time()),
         "attribution_label": "co-billing-" + run_id + "-" + uuid.uuid4().hex,
-        "request_count": 0, "max_output_tokens": 16, "outcome": "preflight_pending",
+        "request_count": 0, "outcome": "preflight_pending",
         "response_cost_usd": None, "generation_total_cost_usd": None, "ledger_charge_usd": None,
         "cost_comparison": "unknown", "currency": "USD"}
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,7 +234,7 @@ def run_probe(
     evidence.update(model_id=model_id, promotion_id=promotion_id, request_count=1, outcome="attempt_pending")
     _persist(path, evidence)
     payload = {"model": model_id, "messages": [{"role": "user", "content": "Reply OK."}],
-        "max_tokens": 16, "stream": False, "safety_identifier": evidence["attribution_label"]}
+        "safety_identifier": evidence["attribution_label"]}
     try:
         status, headers, body = request("POST", "/v1/chat/completions", payload)
         evidence["send_outcome"] = "http_response"
@@ -255,24 +253,18 @@ def run_probe(
             if type(usage.get(key)) is int and 0 <= usage[key] <= 2**53}
     evidence["outcome"] = "ambiguous" if evidence["send_outcome"] == "ambiguous" else "charge_unknown"
     _persist(path, evidence)
-    for attempt in range(3):
-        request_id = evidence["request_id"]
-        if request_id and evidence["generation_total_cost_usd"] is None:
-            try:
-                generation = _get(request, "/api/v1/generation?" + urlencode({"id": request_id})).get("data")
-                if isinstance(generation, dict) and generation.get("id") in {request_id, "gen-" + request_id}:
-                    evidence["generation_total_cost_usd"] = _money(generation.get("total_cost"))
-            except Exception:
-                pass
-        if evidence["ledger_charge_usd"] is None:
-            try:
-                evidence["ledger_charge_usd"] = _settled_charge(request, evidence["attribution_label"], secret)
-            except Exception:
-                pass
-        if evidence["ledger_charge_usd"] is not None and (not request_id or evidence["generation_total_cost_usd"] is not None):
-            break
-        if attempt < 2:
-            pause(5)
+    request_id = evidence["request_id"]
+    if request_id:
+        try:
+            generation = _get(request, "/api/v1/generation?" + urlencode({"id": request_id})).get("data")
+            if isinstance(generation, dict) and generation.get("id") in {request_id, "gen-" + request_id}:
+                evidence["generation_total_cost_usd"] = _money(generation.get("total_cost"))
+        except Exception:
+            pass
+    try:
+        evidence["ledger_charge_usd"] = _settled_charge(request, evidence["attribution_label"], secret)
+    except Exception:
+        pass
     costs = [evidence[key] for key in ("response_cost_usd", "generation_total_cost_usd", "ledger_charge_usd")]
     if all(cost is not None for cost in costs):
         evidence["cost_comparison"] = "match" if len(set(costs)) == 1 else "mismatch"

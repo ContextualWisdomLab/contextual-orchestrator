@@ -6,6 +6,7 @@ import io
 import json
 import urllib.error
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -59,7 +60,6 @@ class FixtureTransport:
             marker = json.loads(self.path.read_text())
             assert marker["outcome"] == "attempt_pending"
             assert marker["request_count"] == 1
-            assert payload["max_tokens"] == 16 and payload["stream"] is False
             assert payload["messages"] == [{"role": "user", "content": "Reply OK."}]
             self.label = payload["safety_identifier"]
             assert marker["attribution_label"] == self.label
@@ -82,7 +82,7 @@ class FixtureTransport:
 
 def _run(path, request, **kwargs):
     return probe.run_probe(path, source_sha="a" * 40, run_id="123", run_attempt="1",
-                           request=request, pause=lambda _: None, **kwargs)
+                           request=request, **kwargs)
 
 
 def test_one_call_is_marked_before_send_and_costs_are_separate(tmp_path):
@@ -101,6 +101,15 @@ def test_one_call_is_marked_before_send_and_costs_are_separate(tmp_path):
     with pytest.raises(ValueError, match="already exists"):
         _run(path, transport)
     assert transport.posts == 1
+
+
+def test_inference_uses_provider_documented_minimal_body(tmp_path):
+    """The measurement must not invent a sampling or output-token policy."""
+    transport = FixtureTransport(tmp_path / "evidence.json")
+    result = _run(transport.path, transport)
+    payload = next(payload for method, _, payload in transport.calls if method == "POST")
+    assert set(payload) == {"model", "messages", "safety_identifier"}
+    assert "max_output_tokens" not in result
 
 
 @pytest.mark.parametrize("receipt_id", [None, "gen-other", "req-1", "gen-req-1"])
@@ -129,6 +138,15 @@ def test_free_promotion_with_nonzero_base_tariff_preserves_callable_id():
     assert probe.select_promotion({"data": [{"id": model}]}, _catalog(model)) == (model, "promo-1")
     with pytest.raises(ValueError):
         probe.select_promotion({"data": [{"id": model, "canonical_slug": "jev-latest"}]}, _catalog())
+
+
+def test_provider_identifiers_have_no_local_length_admission_threshold():
+    """Provider identity syntax, not an undocumented local length cap, controls admission."""
+    model = "provider/" + "m" * 256
+    promotion = "promotion-" + "p" * 256
+    catalog = _catalog(model)
+    catalog["promotions"][0]["id"] = promotion
+    assert probe.select_promotion({"data": [{"id": model}]}, catalog) == (model, promotion)
 
 
 def test_multiple_eligible_promotions_fail_closed_without_a_tie_break():
@@ -215,6 +233,29 @@ def test_usage_cursor_is_followed_before_accepting_charge(tmp_path):
                for _, route, _ in transport.calls)
 
 
+def test_usage_follows_all_unique_provider_cursors(tmp_path):
+    """A settled row after three pages must not be hidden by a local page cap."""
+    page_count = 0
+
+    def request(method, route, payload=None):
+        nonlocal page_count
+        assert method == "GET" and route.startswith("/api/v1/usage?")
+        page_count += 1
+        if page_count < 4:
+            return 200, {}, {"data": [], "next_cursor": {
+                "cursor_ts": f"timestamp-{page_count}",
+                "cursor_id": f"row-{page_count}",
+                "cursor_after": f"opaque-{page_count}",
+            }}
+        return 200, {}, {"data": [{
+            "id": "settled-row-91", "attribution_label": "target",
+            "cost_usd": 0.5, "pricing_known": True,
+        }], "next_cursor": None}
+
+    assert probe._settled_charge(request, "target", "fixture-secret") == 0.5
+    assert page_count == 4
+
+
 def test_catalog_pagination_does_not_treat_first_page_as_complete(tmp_path):
     transport = FixtureTransport(tmp_path / "evidence.json")
     def request(method, route, payload=None):
@@ -227,6 +268,48 @@ def test_catalog_pagination_does_not_treat_first_page_as_complete(tmp_path):
         return transport(method, route, payload)
     assert _run(transport.path, request)["ledger_charge_usd"] == 0.5
     assert transport.posts == 1
+
+
+def test_catalog_follows_provider_declared_total_beyond_old_ceiling():
+    """Consistent provider pagination, not a local row threshold, defines completeness."""
+    total = 1701
+    requested_offsets = []
+
+    def request(method, route, payload=None):
+        assert method == "GET"
+        query = parse_qs(urlsplit(route).query)
+        offset = int(query.get("offset", [0])[0])
+        limit = int(query.get("limit", [100])[0])
+        requested_offsets.append(offset)
+        rows = [{"model": {"slug": f"model-{index}"}}
+                for index in range(offset, min(offset + limit, total))]
+        return 200, {}, {"models": rows, "promotions": [], "total": total,
+                         "limit": limit, "offset": offset}
+
+    catalog = probe._catalog(request)
+    assert len(catalog["models"]) == total
+    assert requested_offsets == list(range(0, total, 100))
+
+
+def test_missing_receipts_are_observed_once_without_polling_policy(tmp_path):
+    """No undocumented interval or round count may decide receipt availability."""
+    transport = FixtureTransport(tmp_path / "evidence.json")
+    reads = {"generation": 0, "usage": 0}
+
+    def request(method, route, payload=None):
+        status, headers, body = transport(method, route, payload)
+        if route.startswith("/api/v1/generation"):
+            reads["generation"] += 1
+            body["data"].pop("id")
+        elif route.startswith("/api/v1/usage"):
+            reads["usage"] += 1
+            body["data"][0]["attribution_label"] = "other"
+        return status, headers, body
+
+    result = _run(transport.path, request)
+    assert result["generation_total_cost_usd"] is None
+    assert result["ledger_charge_usd"] is None
+    assert reads == {"generation": 1, "usage": 1}
 
 
 def test_ambiguous_send_is_durable_and_never_replayed(tmp_path):
@@ -303,6 +386,19 @@ def test_missing_key_and_rerun_fail_before_network(tmp_path):
         _run(tmp_path / "missing.json", request)
 
 
+def test_numeric_run_identity_has_no_undocumented_digit_threshold(tmp_path):
+    """A numeric workflow identity remains valid without an arbitrary digit ceiling."""
+    transport = FixtureTransport(tmp_path / "evidence.json")
+    result = probe.run_probe(
+        transport.path,
+        source_sha="a" * 40,
+        run_id="1" * 31,
+        run_attempt="1",
+        request=transport,
+    )
+    assert result["outcome"] == "charge_observed"
+
+
 def test_transport_bounds_and_closes_response(monkeypatch):
     class Response:
         status = 200
@@ -314,13 +410,13 @@ def test_transport_bounds_and_closes_response(monkeypatch):
         def getheader(self, name):
             assert name == "x-request-id"
             return "req-1"
-        def read(self, size):
-            assert size == probe.MAX_RESPONSE_BYTES + 1
+        def read(self, size=None):
+            assert size is None
             return b'{"data":[]}'
     response = Response()
     monkeypatch.setattr(probe.ModelClient, "_validate_provider", lambda *_: "pinned")
     def open_response(self, request, destination, *, timeout):
-        assert destination == "pinned" and timeout == 30
+        assert destination == "pinned" and timeout is None
         assert request.get_header("Authorization") == "Bearer fixture-secret"
         assert request.full_url == "https://api.experientiallabs.ai/v1/models"
         return response
@@ -362,6 +458,7 @@ def test_workflow_is_opt_in_protected_and_never_replays():
     assert "github.ref == 'refs/heads/main'" in billing
     assert "inputs.measure_experiential_billing && github.run_attempt == 1" in billing
     assert "environment: production" in billing and "needs:" not in billing
+    assert "timeout-minutes:" not in billing
     assert "pull_request_target" not in workflow and "continue-on-error" not in workflow
     assert "cancel-in-progress: false" in workflow and "contents: read" in workflow
     assert "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTAL_LABS_API_KEY }}" in billing
@@ -387,7 +484,7 @@ def test_workflow_bootstrap_normalizes_secret_and_runtime_uses_kv(tmp_path, monk
     def offline(path, **kwargs):
         assert "EXPERIENTAL_LABS_API_KEY" not in probe.os.environ
         assert get_credential("EXPERIENTAL_LABS_API_KEY") == "fixture-secret"
-        return run_probe(path, **kwargs, request=transport, pause=lambda _: None)
+        return run_probe(path, **kwargs, request=transport)
     monkeypatch.setattr(probe, "run_probe", offline)
     exec(compile(script, "billing-bootstrap", "exec"), {})
     assert transport.posts == 1
