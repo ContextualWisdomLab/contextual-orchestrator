@@ -103,6 +103,26 @@ def test_one_call_is_marked_before_send_and_costs_are_separate(tmp_path):
     assert transport.posts == 1
 
 
+@pytest.mark.parametrize("receipt_id", [None, "gen-other", "req-1", "gen-req-1"])
+def test_generation_cost_requires_returned_request_identity(tmp_path, receipt_id):
+    """An omitted identity must not be manufactured from the lookup parameter."""
+    transport = FixtureTransport(tmp_path / "evidence.json")
+    def request(method, route, payload=None):
+        status, headers, body = transport(method, route, payload)
+        if route.startswith("/api/v1/generation"):
+            if receipt_id is None:
+                body["data"].pop("id")
+            else:
+                body["data"]["id"] = receipt_id
+        return status, headers, body
+    result = _run(transport.path, request)
+    matched = receipt_id in {"req-1", "gen-req-1"}
+    assert result["generation_total_cost_usd"] == (0.25 if matched else None)
+    assert result["cost_comparison"] == ("mismatch" if matched else "unknown")
+    assert result["ledger_charge_usd"] == 0.5
+    assert transport.posts == 1
+
+
 def test_free_promotion_with_nonzero_base_tariff_preserves_callable_id():
     """Only exact shared identity is verified; canonical_slug is not a documented join."""
     model = "typesafe/jev-latest"

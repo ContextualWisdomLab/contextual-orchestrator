@@ -260,7 +260,7 @@ def run_probe(
         if request_id and evidence["generation_total_cost_usd"] is None:
             try:
                 generation = _get(request, "/api/v1/generation?" + urlencode({"id": request_id})).get("data")
-                if isinstance(generation, dict) and generation.get("id", request_id) in {request_id, "gen-" + request_id}:
+                if isinstance(generation, dict) and generation.get("id") in {request_id, "gen-" + request_id}:
                     evidence["generation_total_cost_usd"] = _money(generation.get("total_cost"))
             except Exception:
                 pass

@@ -54,8 +54,13 @@ or billing proof.
 
 ## Correlation and discovery
 
-The completion's `x-request-id` selects `/api/v1/generation?id=<id>`. A unique
-persisted `safety_identifier` is sent with the request and must match the settled
+The completion's `x-request-id` selects `/api/v1/generation?id=<id>`. The probe
+conservatively accepts its cost only when the returned record explicitly echoes
+that ID or `gen-<id>`; an omitted ID is not manufactured from the request parameter.
+An absent or mismatched echo leaves generation cost and three-way comparison
+unknown without discarding independently correlated settled charged credits.
+This extra acceptance check is not a claim that the provider guarantees an echo.
+A unique persisted `safety_identifier` is sent with the request and must match the settled
 row's `attribution_label`. A usage-row ID is not assumed equal to the completion
 request ID. Export pagination passes all three documented cursor fields back;
 more than three pages or a repeated cursor remains unknown. At most three
@@ -96,8 +101,11 @@ On 2026-09-30, the inherited implementation baseline was one failed test (missin
 that two eligible promotions were selected lexically instead of failing closed.
 The repaired focused billing, bootstrap, release-allowlist and repository-security
 run passed **93 tests** with
-warnings treated as errors (process exit 0). Actionlint and `git diff --check`
-also passed. A timeout can collect a charge by its persisted attribution label
+warnings treated as errors (process exit 0). The generation-identity follow-up
+then reproduced one failure and three passing identity variants before the fix;
+the focused suite passed **97 tests** under the same strict warnings setting.
+Those fixtures do not establish a hosted receipt or charge. Actionlint on the
+unchanged workflow and `git diff --check` also passed. A timeout can collect a charge by its persisted attribution label
 without replaying inference; send ambiguity is still recorded separately.
 Authenticated inference count remains **zero** and measured charge remains **unknown** until the hosted
 probe is protected, dispatched once, and its correlated receipts are inspected.
