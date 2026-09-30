@@ -8264,7 +8264,17 @@ class TaskOrchestrator:
                     raise
                 last_error = upstream
                 decision = classify_provider_transport_failure(upstream.retryable)
-                if decision.circuit_failure:
+                rate_limit_signal = self._rate_limited_provider_signal(upstream)
+                if rate_limit_signal is not None:
+                    signal_status, signal_http_error = rate_limit_signal
+                    self._record_rate_limit(
+                        agent.id,
+                        resolve_retry_after_seconds(signal_http_error)
+                        if signal_http_error is not None
+                        else upstream.extra_detail.get("retry_after_seconds"),
+                        status=signal_status,
+                    )
+                if decision.circuit_failure and self._charges_breaker(upstream):
                     self._record_failure(agent.id)
                 if decision.action is ToolFallbackAction.FAIL_CLOSED:
                     raise upstream from None
@@ -11926,7 +11936,7 @@ class TaskOrchestrator:
                     ):
                         retry_attempt += 1
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
-                        if decision.circuit_failure and not quota_rejection:
+                        if decision.circuit_failure and self._charges_breaker(exc):
                             self._record_failure(agent.id)
                         if isinstance(exc, ProviderUpstreamError):
                             _append_typed_route_failure(
@@ -11958,7 +11968,7 @@ class TaskOrchestrator:
                         decision = downgrade_to_failover(decision)
                         action = decision.action
                     self._record_tool_fallback(agent.id, decision, retry_attempt)
-                    if decision.circuit_failure and not quota_rejection:
+                    if decision.circuit_failure and self._charges_breaker(exc):
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         _append_tool_stop_route_attempt(
@@ -13000,6 +13010,11 @@ class TaskOrchestrator:
             else:
                 current = current.__context__
         return None
+
+    def _charges_breaker(self, exc: BaseException) -> bool:
+        """Return false when provider quota, rather than member health, failed."""
+        signal = self._rate_limited_provider_signal(exc)
+        return signal is None or signal[0] != 429
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:

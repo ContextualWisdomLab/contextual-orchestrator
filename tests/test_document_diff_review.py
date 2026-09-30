@@ -30,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.document_diff_review import (  # noqa: E402
-    _contains_data_uri,
     DocumentDiffReviewError,
+    _contains_data_uri,
     _scan_for_leaks,
     validate_document_diff_envelope,
     validate_document_diff_findings,
