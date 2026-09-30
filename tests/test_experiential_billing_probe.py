@@ -111,6 +111,19 @@ def test_free_promotion_with_nonzero_base_tariff_preserves_callable_id():
         probe.select_promotion({"data": [{"id": model, "canonical_slug": "jev-latest"}]}, _catalog())
 
 
+def test_multiple_eligible_promotions_fail_closed_without_a_tie_break():
+    """Do not choose a billed request target by lexical model or promotion identity."""
+    catalog = _catalog("model-a")
+    catalog["models"].append({"model": {"slug": "model-b", "status": "active",
+        "input_modalities": ["text"], "output_modalities": ["text"]}})
+    catalog["promotions"].append({"id": "promo-2", "free": True,
+        "display_only": False, "slugs": ["model-b"]})
+    callable_models = {"data": [{"id": "model-a"}, {"id": "model-b"}]}
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        probe.select_promotion(callable_models, catalog)
+
+
 @pytest.mark.parametrize("change", ["free", "display_only", "status", "modalities"])
 def test_ineligible_or_malformed_catalog_never_selects(change):
     catalog = _catalog()

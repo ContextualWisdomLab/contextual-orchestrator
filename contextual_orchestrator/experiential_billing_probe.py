@@ -62,7 +62,9 @@ def select_promotion(callable_models: dict, catalog: dict) -> tuple[str, str]:
                           if _identifier(slug) is not None and slug in callable_ids and slug in active_ids)
     if not candidates:
         raise ValueError("no callable active free promotion with verified identity")
-    return min(candidates)
+    if len(candidates) != 1:
+        raise ValueError("callable active free promotion identity is ambiguous")
+    return candidates[0]
 
 
 def _request(method: str, route: str, payload: dict | None = None) -> tuple[int, dict, dict]:

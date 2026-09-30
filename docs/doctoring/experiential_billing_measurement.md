@@ -65,7 +65,8 @@ used: the documented settled export is the source, with `pricing_known=true`.
 Selection requires an exact authenticated callable ID in the active, text-capable
 public catalog and the literal free promotion. The probe preserves that exact
 ID. Undocumented `canonical_slug` mappings and provider-prefix stripping are not
-used; unresolved identity prevents inference. Catalog discovery follows bounded
+used; unresolved identity or multiple eligible promotion identities prevent
+inference rather than invoking an undocumented lexical tie-break. Catalog discovery follows bounded
 `limit=100`/`offset` pages, requires complete consistent coverage, and refuses more
 than 1,600 rows. Promotions are metadata observations, not guarantees about
 account eligibility, caps, provider waterfall, or a later request's price.
@@ -91,8 +92,10 @@ connection closure; inherited ModelClient lifecycle ownership remains #1140.
 
 On 2026-09-30, the inherited implementation baseline was one failed test (missing
 `run_probe`) and one passed selector test. The first implementation check passed
-26 offline contracts with warnings treated as errors. The final focused billing,
-bootstrap, release-allowlist and repository-security run passed **92 tests** with
+26 offline contracts with warnings treated as errors. A later RED contract proved
+that two eligible promotions were selected lexically instead of failing closed.
+The repaired focused billing, bootstrap, release-allowlist and repository-security
+run passed **93 tests** with
 warnings treated as errors (process exit 0). Actionlint and `git diff --check`
 also passed. A timeout can collect a charge by its persisted attribution label
 without replaying inference; send ambiguity is still recorded separately.

@@ -7491,3 +7491,23 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-30 Experiential billing probe promotion-identity ambiguity
+
+PR #1350 exact predecessor `a1098c269b8253b099dfc8fbdcd594d087c2fddc`
+collected every callable, active, text-capable free-promotion pair and returned
+`min(candidates)`. With more than one eligible pair, lexical model and promotion
+identifiers therefore decided which provider request incurred the measurement.
+No statistical model, provider contract, experiment, or administrator decision
+authorized that tie-break, so it violated the no-heuristics routing and
+admission boundary even though every candidate individually passed discovery.
+
+The owner repair adds a RED multi-candidate contract and requires exactly one
+eligible `(model_id, promotion_id)` pair. Zero or multiple pairs now fail closed
+before inference. The focused billing, credential-bootstrap, release-allowlist,
+and repository-security suite passes **93 tests** with warnings treated as
+errors; the broader related suite passes **98 tests**. `compileall` and
+`git diff --check` pass. This is source evidence only: authenticated inference
+count remains zero, measured charge remains unknown, and protected exact-head
+Checks, independent approval, ordinary merge, and a reviewed one-time dispatch
+remain outstanding.
