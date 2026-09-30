@@ -89,14 +89,7 @@ _FINDING_FIELDS = frozenset(
 _REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 _BLOB = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _OBJECT_HASH = re.compile(r"sha256:[0-9a-f]{64}")
-# The data-URI header (media type and parameters before the comma) is bounded to
-# 256 characters. An unbounded ``[^,\s]*`` rescans to the end of the text from
-# every ``data:`` occurrence under ``search()``, which is quadratic on
-# ``"data:" * n`` without a comma (CodeQL py/polynomial-redos). With the bound each
-# start position does at most 256 steps, so the scan is linear in the input length.
-# Real media-type headers are far shorter; a header longer than 256 characters is
-# not treated as a data URI by this check.
-_DATA_URI = re.compile(r"data:[^,\s]{0,256},", re.IGNORECASE)
+_DATA_URI_TOKEN = re.compile(r"data:|[,\s]", re.IGNORECASE)
 _BASE64_RUN = re.compile(r"[A-Za-z0-9+/_-]{200,}={0,2}")
 _RESIDENT_REGISTRATION_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 # ZIP (DOCX/HWPX), PDF, PNG, JPEG, GIF, and OLE (HWP) signatures as decoded text.
@@ -118,6 +111,21 @@ def _reject(code: str, message: str, status: int = 400) -> DocumentDiffReviewErr
     return DocumentDiffReviewError(code, message, status)
 
 
+def _contains_data_uri(value: str) -> bool:
+    """Recognize a data URI in one token scan without a header-length cutoff."""
+    header_open = False
+    for match in _DATA_URI_TOKEN.finditer(value):
+        token = match.group()
+        if token.casefold() == "data:":
+            header_open = True
+        elif token == ",":
+            if header_open:
+                return True
+        else:
+            header_open = False
+    return False
+
+
 def _exact_object(value: Any, allowed: frozenset[str], field: str, *, required: frozenset[str]) -> dict[str, Any]:
     """Require a JSON object whose keys are known and whose required keys exist."""
     if type(value) is not dict:
@@ -133,7 +141,7 @@ def _exact_object(value: Any, allowed: frozenset[str], field: str, *, required: 
 
 def _scan_for_leaks(value: str, field: str) -> None:
     """Reject inline binary/media, credentials, and resident identifiers."""
-    if any(signature in value for signature in _BINARY_SIGNATURES) or _DATA_URI.search(value) or _BASE64_RUN.search(value):
+    if any(signature in value for signature in _BINARY_SIGNATURES) or _contains_data_uri(value) or _BASE64_RUN.search(value):
         raise _reject("inline_binary_content", f"{field} must not carry inline binary or media data", 422)
     if any(pattern.search(value) for pattern in SECRET_PATTERNS):
         raise _reject("secret_detected", f"{field} matches a credential pattern", 422)
