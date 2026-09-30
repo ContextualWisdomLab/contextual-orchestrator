@@ -8060,6 +8060,11 @@ class TaskOrchestrator:
         # call, so it stays undetermined (None) until a cache miss confirms one
         # is actually needed; a warm cache entry must never pay for it.
         cheap_decision = self._would_route_without_triage(mode, model_name)
+        if cheap_decision is None and model_name == self.FREE_MODEL:
+            # Free-pool route and conduct entries cannot share one unresolved
+            # key: a cached answer must not bypass the free-only verdict that
+            # authorizes the lower-assurance single-worker path.
+            cheap_decision = self.would_route(messages, mode, model_name)
         cache = self._cache_provider if self._cache_provider is not None else self._cache
         zdr_only = _REQUEST_ZDR_ONLY.get()
         if cache is None or bypass_cache or zdr_only:
@@ -11124,9 +11129,9 @@ class TaskOrchestrator:
 
         Evidence policy: the decision is made by a model under an exact output
         schema, never by keyword matching. Any failure of the triage call or
-        parse fails closed toward the orchestrated path, which carries verifier
-        assurance; an absent triage agent degrades to the direct path because
-        no evidence source exists at all. Verdicts are cached by content hash.
+        parse or missing eligible triage agent fails closed toward the
+        orchestrated path, which carries verifier assurance. Verdicts are
+        cached by content hash.
         """
         digest = hashlib.sha256(
             (
@@ -11156,7 +11161,7 @@ class TaskOrchestrator:
                 agent for agent in self.agents if _agent_matches_request_endpoint(agent)
             ]
         if not candidates:
-            return False
+            return True
         triage_agent = candidates[0]
         messages: list[ChatMessage] = [
             {"role": "system", "content": self.TRIAGE_SYSTEM_PROMPT},

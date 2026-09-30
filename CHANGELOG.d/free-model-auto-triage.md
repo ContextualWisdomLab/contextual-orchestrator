@@ -5,6 +5,8 @@ pinned the free pool to route, so consumers such as the OpenCode review and
 Strix got one worker with failover and never the thinker, worker, verifier
 and synthesizer workflow. Both paths stay free-only. `conduct()` and
 `route_once()` already select free candidates for this model, and the triage
-call is now free-only too. When no free triage agent ranks, it goes straight
-to route instead of falling back to a paid agent. The triage cache key
+call is now free-only too. When no free triage agent ranks, it fails closed to
+the verified conduct path instead of authorizing route or falling back to a
+paid agent. Free auto requests resolve triage before response-cache lookup so
+route and conduct answers cannot share an unresolved key. The triage cache key
 separates free-only verdicts. An explicit `mode="route"` still forces route.

@@ -7491,3 +7491,26 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-30 Free-pool triage evidence and cache isolation
+
+PR [#1346](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1346)
+at reviewed head `fc363850492f14ab7696b00c9724a7753bf6007c` restores automatic
+route-versus-conduct triage for `orchestrator/free`, but review reproduced two
+owner-boundary gaps. A free auto request could return a legacy unresolved
+`conduct` cache entry without executing the free-only triage verdict, and an
+empty eligible triage pool returned the lower-assurance `route` decision. The
+latter contradicted the fail-closed missing-capability contract even though it
+correctly avoided a paid-agent fallback.
+
+The proposed owner repair resolves free auto triage before response-cache
+lookup, partitions the cache key by the resulting route/conduct mode, and maps
+missing eligible triage evidence to conduct. The gateway therefore either uses
+a free-only structured verdict or retains the verified path; it never invents
+a direct-route authorization. Two focused regressions were observed RED on the
+reviewed head and GREEN after the repair. Protected exact-head Checks,
+independent approval, ordinary merge, immutable release, and consumer update
+remain required, so this evidence is **Proposed**, not an accepted production
+claim. Issue [#1345](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1345)
+remains open for shared capability evidence, cross-model execution policy,
+tool-bearing streaming, and serving-agent visibility beyond this bounded fix.

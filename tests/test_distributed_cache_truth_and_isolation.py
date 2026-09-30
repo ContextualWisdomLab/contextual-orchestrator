@@ -286,6 +286,62 @@ def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() 
     assert records[1]["cost_amount"] == 0.0
 
 
+def test_orchestrator_free_auto_triages_before_reusing_an_unresolved_cache_entry() -> None:
+    """A free auto verdict must separate route and conduct cache entries."""
+    client = _CountingModelClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "mock_free_worker",
+                "mock-free-model",
+                base_url="mock://worker",
+                provider_name="mock",
+                tags=("reasoning", "writing", "cost:free"),
+            )
+        ],
+        client=client,
+        cache_provider=_MemoryCache(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    triage_calls = 0
+
+    def _route_verdict(_text: str) -> bool:
+        nonlocal triage_calls
+        triage_calls += 1
+        return False
+
+    orchestrator._triage_fn = _route_verdict
+    messages = [{"role": "user", "content": "free auto cache partition request"}]
+    legacy_key = orchestrator._cache_key(
+        messages,
+        "auto",
+        TaskOrchestrator.FREE_MODEL,
+        None,
+        resolved_mode=None,
+    )
+    assert isinstance(orchestrator._cache_provider, _MemoryCache)
+    orchestrator._cache_provider.put(
+        legacy_key,
+        {
+            "mode": "conduct",
+            "answer": "stale conduct answer",
+            "trace": [{"role": "thinker"}],
+        },
+    )
+
+    result = orchestrator.complete(
+        messages,
+        mode="auto",
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert triage_calls == 1
+    assert client.calls == 1
+    assert result["cache_status"] == "miss"
+    assert result["mode"] == "route"
+    assert result["answer"] != "stale conduct answer"
+
+
 def test_auto_default_model_cache_hit_never_invokes_live_triage() -> None:
     """A warm cache entry for the default/auto path must not pay for triage.
 

@@ -89,7 +89,7 @@ def test_orchestrator_free_auto_follows_triage_like_gateway_default() -> None:
             assert orchestrator.would_route(prompt, mode="auto", model_name=model_name) is not verdict
 
 
-def test_orchestrator_free_triage_never_falls_back_to_a_paid_agent() -> None:
+def test_orchestrator_free_triage_without_an_eligible_agent_fails_to_conduct() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("paid_agent", "paid-model", tags=("reasoning",))])
 
     def forbidden(*args, **kwargs):
@@ -97,9 +97,9 @@ def test_orchestrator_free_triage_never_falls_back_to_a_paid_agent() -> None:
 
     orchestrator.client.chat = forbidden
     prompt = [{"role": "user", "content": "review this diff"}]
-    # No free triage agent: route directly instead of asking the paid one
-    # (a call would raise, and triage fails closed to conduct).
-    assert orchestrator.would_route(prompt, mode="auto", model_name=TaskOrchestrator.FREE_MODEL)
+    # No free triage agent: do not ask the paid one and do not authorize the
+    # lower-assurance single-worker path without a triage verdict.
+    assert not orchestrator.would_route(prompt, mode="auto", model_name=TaskOrchestrator.FREE_MODEL)
 
 
 if __name__ == "__main__":
