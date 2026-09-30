@@ -7491,3 +7491,56 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-30 Experiential billing probe promotion-identity ambiguity
+
+PR #1350 exact predecessor `a1098c269b8253b099dfc8fbdcd594d087c2fddc`
+collected every callable, active, text-capable free-promotion pair and returned
+`min(candidates)`. With more than one eligible pair, lexical model and promotion
+identifiers therefore decided which provider request incurred the measurement.
+No statistical model, provider contract, experiment, or administrator decision
+authorized that tie-break, so it violated the no-heuristics routing and
+admission boundary even though every candidate individually passed discovery.
+
+The owner repair adds a RED multi-candidate contract and requires exactly one
+eligible `(model_id, promotion_id)` pair. Zero or multiple pairs now fail closed
+before inference. The focused billing, credential-bootstrap, release-allowlist,
+and repository-security suite passes **93 tests** with warnings treated as
+errors; the broader related suite passes **98 tests**. `compileall` and
+`git diff --check` pass. This is source evidence only: authenticated inference
+count remains zero, measured charge remains unknown, and protected exact-head
+Checks, independent approval, ordinary merge, and a reviewed one-time dispatch
+remain outstanding.
+
+## 2026-09-30 PR #1350 measurement-bound authority repair
+
+PR #1350 exact predecessor `cd3797c5314b06fef0aa069bf33f2793b22e2025`
+still allowed undocumented local constants to determine whether billing evidence
+was collected or rejected: 16 catalog pages/1,600 rows, three settled-export
+pages, three receipt rounds separated by five seconds, a 16-token completion
+cap, a 30-second transport timeout, a 15-minute Actions timeout, a 200-character
+provider-identifier ceiling, a 30-digit run-identity ceiling, and a <=2^53
+token-evidence ceiling. None came
+from a released measurement model, experiment, or provider settlement contract.
+
+The owner repair follows the provider's returned catalog `total`/`limit`/`offset`
+until exact completion and its documented settled-export cursor until
+`next_cursor=null`; inconsistent, malformed, non-progressing, or repeated
+evidence still fails closed. Because the provider documents pull/poll but no
+settlement-ready signal or cadence, the probe performs one immediate receipt
+observation and leaves absent evidence unknown. The inference uses the provider's
+documented minimal verification body plus `safety_identifier`, the gateway model
+timeout remains `null`, and the job adds no elapsed-time cutoff. Provider identities
+remain syntax-validated and secret-filtered without a local length threshold;
+numeric Actions run identities have no undocumented digit ceiling. RED reproduced
+nine failures; non-negative integral token evidence likewise has no undocumented
+numeric ceiling. The focused strict-warning suite passes **43 tests** and the
+adjacent billing/bootstrap/release/security command passes **104 tests**.
+`compileall` and `git diff --check` pass; local `actionlint` is unavailable.
+The full repository run is explicitly non-GREEN at **5,257 passed, 6 skipped,
+54 failed, 30 errors**; its dominant error cluster lacks the optional native
+`contextual_orchestrator._decision_receipt` module, and unrelated suites also
+fail. A predecessor rerun was not used to bypass the execution safety boundary
+around possible external-provider contact. Protected
+exact-head Checks, independent approval, ordinary merge, artifact publication,
+and the one-time authenticated observation remain outstanding.
