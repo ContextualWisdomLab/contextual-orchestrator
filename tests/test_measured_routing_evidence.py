@@ -246,10 +246,11 @@ def test_triage_verdicts_are_cached_by_content_hash(monkeypatch: pytest.MonkeyPa
     assert calls == ["same text"]  # second decision served from the verdict cache
 
 
-def test_triage_with_no_agents_degrades_to_direct_route() -> None:
+def test_triage_with_no_agents_fails_closed_to_conduct() -> None:
+    """Missing decision evidence must not authorize the cheaper route path."""
     orchestrator = _orch(ModelAgent("general_agent", "mock"))
     orchestrator.agents = []
-    assert orchestrator._compute_triage_verdict("text") is False
+    assert orchestrator._compute_triage_verdict("text") is True
 
 
 # --- real-time judge on route paths -----------------------------------------

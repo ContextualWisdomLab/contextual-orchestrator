@@ -7514,3 +7514,16 @@ remain required, so this evidence is **Proposed**, not an accepted production
 claim. Issue [#1345](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1345)
 remains open for shared capability evidence, cross-model execution policy,
 tool-bearing streaming, and serving-agent visibility beyond this bounded fix.
+
+Hosted `Security and Quality` run
+[`36667298196`](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36667298196),
+job `109734589699`, then exposed one stale repository contract on exact
+predecessor `3199c298f5eff612c1104288c2306ba752dd8ee9`: production correctly
+returned `workflow_required=True` when no eligible triage agent existed, while
+`test_triage_with_no_agents_degrades_to_direct_route` still required the former
+lower-assurance route result. The source invariant and neighboring transport
+failure contract already required fail-closed conduct, so the owner repair
+renames that test and asserts conduct without changing production. The isolated
+RED reproduced locally; the corrected measured-routing file passes 37 tests and
+the related routing/cache/HTTP/stream set passes **174 tests** with warnings as
+errors. The hosted full suite and all exact-head gates must rerun on the repair.
