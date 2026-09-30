@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from urllib.parse import quote
@@ -51,8 +52,8 @@ def write_searxng_settings(path: Path) -> None:
     directory supplies the host-side confidentiality boundary.
     """
     destination = path.expanduser().resolve(strict=False)
-    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(destination.parent, 0o700)
+    destination.parent.mkdir(mode=stat.S_IRWXU, parents=True, exist_ok=True)
+    os.chmod(destination.parent, stat.S_IRWXU)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=destination.parent,
         prefix=f".{destination.name}.",
