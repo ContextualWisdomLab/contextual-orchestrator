@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove undocumented catalog, receipt-pagination, polling, output-token, timeout, and identifier-length decisions from the opt-in Experiential billing probe while preserving its single-send and fail-closed evidence contract.
+**Goal:** Remove undocumented catalog, receipt-pagination, polling, output-token, timeout, identifier-length, and token-evidence decisions from the opt-in Experiential billing probe while preserving its single-send and fail-closed evidence contract.
 
 **Architecture:** Follow the provider's returned catalog pagination contract and documented settled-export cursor until completion, rejecting inconsistent or repeated evidence instead of imposing local page counts. Perform one immediate receipt read after the single inference because the provider publishes no settlement-ready signal or research-backed polling policy. Use the gateway's null timeout and the provider's documented minimal chat body.
 
@@ -36,7 +36,7 @@
 
 - [x] **Step 1: Write failing contract tests**
 
-Add behavioral tests proving that catalog discovery follows a consistent provider-declared page sequence beyond the former 16-page ceiling, settled usage follows more than three unique documented cursors, missing receipts cause exactly one GET observation without elapsed-time polling, transport passes `timeout=None`, the inference body omits undocumented `max_tokens` and `stream` fields, and valid provider/Actions identities are not rejected by local length ceilings.
+Add behavioral tests proving that catalog discovery follows a consistent provider-declared page sequence beyond the former 16-page ceiling, settled usage follows more than three unique documented cursors, missing receipts cause exactly one GET observation without elapsed-time polling, transport passes `timeout=None`, the inference body omits undocumented `max_tokens` and `stream` fields, and valid provider/Actions/token evidence is not rejected by local numeric ceilings.
 
 - [x] **Step 2: Run RED tests**
 
@@ -46,7 +46,7 @@ Run:
 ../../.venv/bin/python -W error -m pytest tests/test_experiential_billing_probe.py -q
 ```
 
-Expected: failures identify the old 16/1,600 catalog ceiling, three-page usage ceiling, three-round/five-second polling policy, 30-second transport timeout, 16-token request cap, 200-character provider-identity ceiling, and 30-digit run-identity ceiling.
+Expected: failures identify the old 16/1,600 catalog ceiling, three-page usage ceiling, three-round/five-second polling policy, 30-second transport timeout, 16-token request cap, 200-character provider-identity ceiling, 30-digit run-identity ceiling, and 2^53 token-evidence ceiling.
 
 - [x] **Step 3: Implement the minimal repair**
 

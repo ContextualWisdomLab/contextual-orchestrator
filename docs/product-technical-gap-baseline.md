@@ -7519,7 +7519,8 @@ still allowed undocumented local constants to determine whether billing evidence
 was collected or rejected: 16 catalog pages/1,600 rows, three settled-export
 pages, three receipt rounds separated by five seconds, a 16-token completion
 cap, a 30-second transport timeout, a 15-minute Actions timeout, a 200-character
-provider-identifier ceiling, and a 30-digit run-identity ceiling. None came
+provider-identifier ceiling, a 30-digit run-identity ceiling, and a <=2^53
+token-evidence ceiling. None came
 from a released measurement model, experiment, or provider settlement contract.
 
 The owner repair follows the provider's returned catalog `total`/`limit`/`offset`
@@ -7532,8 +7533,9 @@ documented minimal verification body plus `safety_identifier`, the gateway model
 timeout remains `null`, and the job adds no elapsed-time cutoff. Provider identities
 remain syntax-validated and secret-filtered without a local length threshold;
 numeric Actions run identities have no undocumented digit ceiling. RED reproduced
-eight failures; the focused strict-warning suite passes **42 tests** and the
-adjacent billing/bootstrap/release/security command passes **103 tests**.
+nine failures; non-negative integral token evidence likewise has no undocumented
+numeric ceiling. The focused strict-warning suite passes **43 tests** and the
+adjacent billing/bootstrap/release/security command passes **104 tests**.
 `compileall` and `git diff --check` pass; local `actionlint` is unavailable.
 The full repository run is explicitly non-GREEN at **5,257 passed, 6 skipped,
 54 failed, 30 errors**; its dominant error cluster lacks the optional native

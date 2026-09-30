@@ -250,7 +250,7 @@ def run_probe(
     if isinstance(usage, dict):
         evidence["response_cost_usd"] = _money(usage.get("cost"))
         evidence["response_tokens"] = {key: usage[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            if type(usage.get(key)) is int and 0 <= usage[key] <= 2**53}
+            if type(usage.get(key)) is int and usage[key] >= 0}
     evidence["outcome"] = "ambiguous" if evidence["send_outcome"] == "ambiguous" else "charge_unknown"
     _persist(path, evidence)
     request_id = evidence["request_id"]

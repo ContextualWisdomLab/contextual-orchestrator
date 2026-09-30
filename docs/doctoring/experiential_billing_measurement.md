@@ -116,12 +116,13 @@ run passed **93 tests** with
 warnings treated as errors (process exit 0). The generation-identity follow-up
 then reproduced one failure and three passing identity variants before the fix;
 the focused suite passed **97 tests** under the same strict warnings setting.
-The no-heuristics bounds follow-up reproduced eight independent failures: the
+The no-heuristics bounds follow-up reproduced nine independent failures: the
 16-token/minimal-body mismatch, the 1,600-row catalog ceiling, the three-page
 settled-export ceiling, three five-second receipt rounds, the 30-second transport
 timeout, the 15-minute job timeout, the 200-character provider-identifier ceiling,
-and the 30-digit run-identity ceiling. The repaired focused file passes **42
-tests** and the documented adjacent verification command passes **103 tests**
+the 30-digit run-identity ceiling, and the <=2^53 token-evidence ceiling. The
+repaired focused file passes **43 tests** and the documented adjacent verification
+command passes **104 tests**
 with warnings treated as errors. Provider-declared catalog pages and all
 unique settled-export cursors now define completeness; receipts are observed
 once, and the request uses the null-timeout minimal-body contract.

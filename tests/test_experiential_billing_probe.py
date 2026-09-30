@@ -112,6 +112,21 @@ def test_inference_uses_provider_documented_minimal_body(tmp_path):
     assert "max_output_tokens" not in result
 
 
+def test_response_token_evidence_has_no_local_numeric_ceiling(tmp_path):
+    """Non-negative provider token counts are retained without an invented cap."""
+    transport = FixtureTransport(tmp_path / "evidence.json")
+    original = transport.__call__
+
+    def request(method, route, payload=None):
+        status, headers, body = original(method, route, payload)
+        if method == "POST":
+            body["usage"]["prompt_tokens"] = 2**53 + 1
+        return status, headers, body
+
+    result = _run(transport.path, request)
+    assert result["response_tokens"]["prompt_tokens"] == 2**53 + 1
+
+
 @pytest.mark.parametrize("receipt_id", [None, "gen-other", "req-1", "gen-req-1"])
 def test_generation_cost_requires_returned_request_identity(tmp_path, receipt_id):
     """An omitted identity must not be manufactured from the lookup parameter."""
