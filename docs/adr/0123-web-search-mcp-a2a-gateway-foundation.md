@@ -129,7 +129,7 @@ metasearch client"):
 `SUPPORTED_ENGINES` is a one-tuple today; adding a second engine is a new
 entry plus a request-building function, not a redesign.
 
-### 2. MCP Gateway — design only, not built
+### 2. MCP Gateway — bounded server implemented; general client/proxy deferred
 
 An MCP role is two separable things, and the honest answer is contextual-orchestrator
 eventually needs **both**, sequenced by actual need:
@@ -150,12 +150,24 @@ eventually needs **both**, sequenced by actual need:
   real consumer; building it against zero live consumers would be
   speculative plumbing (see Aggregate/Domain Service note below).
 
-The server role is the slice that ships with issue #1347:
+The bounded server role is a partial implementation of issue #1347:
 `python -m contextual_orchestrator.web_search_mcp` binds Streamable HTTP to
 loopback and registers `web_search` plus `assess_vulnerability_claim`. The
-claim tool returns `supported` only when the package is in the caller's
-manifest and an official CVE, NVD, or GitHub Advisory URL names that package.
-A missing or failed SearXNG call is `unverified`, never a finding. Strix and
+claim tool accepts an identifier, package name and ecosystem, not a caller
+package list or filesystem path. The operator registers a read-only repository
+snapshot in the KV. Bounded root `pyproject.toml`, `package.json`,
+`package-lock.json`, `Cargo.toml` and `Cargo.lock` readers establish positive
+package presence; absence, unsupported formats and workspaces remain unknown.
+Search results discover exact official record URLs, but snippets never judge
+the claim. Generated MITRE CVE and GitHub Advisory JSON endpoints are fetched
+through the existing bounded, DNS-pinned, no-redirect HTTP transport; exact
+record identity and ecosystem-qualified affected package names are compared.
+Generic product prose is insufficient. Python distribution names use Python
+normalization, not a cross-ecosystem substring match. A structured package
+mismatch can reject that identity claim; a match stays `unverified` because
+installed versions and affected ranges are not checked. `finding_allowed` and
+`versions_checked` remain false. Missing search, snapshot or record evidence is
+`unverified`, never a clean-repository verdict or a finding. Strix and
 Noema workflow files in `ContextualWisdomLab/.github` still have to point at
 this server; that wiring is outside this repository. The general MCP
 client/proxy role stays unbuilt.
@@ -281,8 +293,8 @@ Not built this iteration, in either form.
   returning bounded `WebSearchResult` rows. Never means rendering/browsing a
   specific URL (that is Camoufox Browsing Context's job).
 - **grounding** — using a `WebSearchResult`'s `url`/`content` as citable
-  evidence for a claim. This ADR ships retrieval only; deciding whether
-  evidence supports or refutes a claim is a separate, unbuilt judge/verifier
+  evidence for a claim. This ADR ships retrieval and bounded package-identity checks only; deciding
+  whether installed versions are vulnerable is a separate, unbuilt judge/verifier
   concern, not conflated here.
 - **engine** — one metasearch backend implementation (`searxng` today, `yacy`
   documented as next). Never a model provider — `ModelAgent`/`model_group`
@@ -381,3 +393,21 @@ Not built this iteration, in either form.
 - daijro. (n.d.). *Camoufox: Anti-detect browser built for web scraping &
   AI agents* [Software repository]. GitHub. Retrieved 2026-09-02, from
   https://github.com/daijro/camoufox
+
+### Slice-2 repair evidence (2026-09-30)
+
+The earlier snippet-negation check returned `supported`; the regression was
+RED before removing that trust. Focused manifest/record identity, MCP schema
+and compose contracts pass locally. The project Python 3.13 environment does
+not include the optional MCP SDK; a separate already-installed SDK 2.0
+interpreter passes the real tool registration/schema tests without dependency
+installation. Compose configuration merges successfully without starting any
+container. The pinned image metadata and exact entrypoint revision
+`4e2c1ea7f468c9d1b16206e9d4079999a2eb0627` show UID/GID 977, root-only
+ownership/certificate writes and Granian startup; the overlay runs nonroot
+with matching tmpfs ownership and an authenticated Wardnet CONNECT proxy on
+an internal-only network. These are source/static checks, not container
+startup, working search, hosted acceptance or deployed Strix/Noema evidence.
+Central workflow wiring, independent manifest enforcement in its gate,
+version-range evaluation and the original end-to-end false-positive
+reproduction remain open under #1347. Security gates are unchanged.

@@ -1,32 +1,45 @@
-# Loopback SearXNG for web_search(). Plaintext HTTP is accepted only for an
-# explicit loopback URL, so this port is not published on any other address.
-# Cap-drop and a read-only root follow the Camoufox/Wardnet isolation habit.
-# To pin DNS through Wardnet, merge compose.camoufox-wardnet.yaml and add
-# `dns: [172.30.0.2]` plus the `camoufox_egress` network on this service.
-# Do not point SEARXNG_URL at the Docker service name: that name is not loopback
-# and the SSRF check rejects it.
-
+# Merge with compose.camoufox-wardnet.yaml: SearXNG has no direct Internet route.
+# Wardnet DNS plus authenticated CONNECT is required, not optional DNS-only setup.
+# Pinned image revision 4e2c1ea7f uses uid/gid 977 and Granian; nonroot avoids
+# entrypoint chown and root-only update-ca-certificates on a read-only root.
 services:
   searxng:
     image: docker.io/searxng/searxng@sha256:3284e8900e9b3e5df284ae8c48a26851ae2eff6f99b4b0b18ec3da5a4d9095c3
+    user: "977:977"
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?set the SearXNG secret}
+      WARDNET_EGRESS_PROXY_TOKEN: ${WARDNET_EGRESS_PROXY_TOKEN:?set the dedicated Wardnet egress token}
+      GRANIAN_HOST: "0.0.0.0"
+      PYTHONDONTWRITEBYTECODE: "1"
     ports:
       - "127.0.0.1:${SEARXNG_HOST_PORT:-8088}:8080"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
-      - /etc/searxng:mode=1777
-      - /var/cache/searxng:mode=1777
+      - /etc/searxng:uid=977,gid=977,mode=0700
+      - /var/cache/searxng:uid=977,gid=977,mode=0700
+      - /tmp:uid=977,gid=977,mode=0700
+    dns: [172.30.0.2]
+    depends_on:
+      wardnet:
+        condition: service_healthy
+    networks:
+      camoufox_egress: {}
     entrypoint: ["sh", "-c"]
     command:
       - |
         set -eu
-        cat > /etc/searxng/settings.yml << EOF
-        use_default_settings: true
+        /usr/local/searxng/.venv/bin/python - <<'PY'
+        import json, os
+        from urllib.parse import quote
+        secret = json.dumps(os.environ["SEARXNG_SECRET"])
+        token = quote(os.environ["WARDNET_EGRESS_PROXY_TOKEN"], safe="")
+        proxy = json.dumps("http://wardnet:" + token + "@172.30.0.2:8080")
+        with open("/etc/searxng/settings.yml", "w") as settings:
+            settings.write(f"""use_default_settings: true
         server:
-          secret_key: "$${SEARXNG_SECRET}"
+          secret_key: {secret}
           bind_address: "0.0.0.0"
           limiter: false
           image_proxy: false
@@ -34,6 +47,17 @@ services:
           formats:
             - html
             - json
-        EOF
+        outgoing:
+          proxies:
+            all://: [{proxy}]
+        """)
+        PY
         exec /usr/local/searxng/entrypoint.sh
     restart: unless-stopped
+
+networks:
+  camoufox_egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

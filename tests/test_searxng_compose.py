@@ -17,3 +17,11 @@ def test_searxng_is_loopback_only_and_enables_json() -> None:
     assert "- json" in text
     assert "ultrasecretkey" not in text
     assert "SEARXNG_SECRET" in text
+    assert 'user: "977:977"' in text
+    assert "uid=977,gid=977" in text
+    assert "internal: true" in text
+    assert "dns: [172.30.0.2]" in text
+    assert 'http://wardnet:' in text
+    assert "WARDNET_EGRESS_PROXY_TOKEN" in text
+    assert "compose.camoufox-wardnet.yaml" in text
+    assert "camoufox_egress: {}" in text

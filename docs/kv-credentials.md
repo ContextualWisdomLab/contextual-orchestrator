@@ -126,18 +126,43 @@ printf '%s' "$SEARXNG_TOKEN" | python -m contextual_orchestrator \
   register-credential --name SEARXNG_TOKEN --value-stdin
 ```
 
-`compose.searxng.yaml` runs that instance and publishes it on
-`127.0.0.1` only. Register the matching loopback origin, then start the MCP
-server (mcp SDK 2.x plus the `api` extra for uvicorn) on the same host:
+`compose.searxng.yaml` is an overlay for the existing Wardnet deployment, not
+an independent Internet-connected search service. SearXNG runs nonroot on an
+internal-only network with Wardnet DNS and authenticated HTTPS CONNECT. The
+pinned image's entrypoint skips root-only chown/certificate writes; writable
+config, cache and temporary directories belong to UID/GID 977. Static compose
+validation is not proof of container startup or successful search.
+
+Configure the existing Wardnet credentials/database and Camoufox prerequisites
+above. Generate a dedicated search secret without printing it, then start the
+search service and its Wardnet dependency before the MCP server:
 
 ```bash
+export SEARXNG_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose -f compose.camoufox-wardnet.yaml -f compose.searxng.yaml up -d searxng
 printf '%s' 'http://127.0.0.1:8088' | python -m contextual_orchestrator \
   register-credential --name SEARXNG_URL --value-stdin
+printf '%s' '/srv/review-snapshot' | python -m contextual_orchestrator \
+  register-credential --name VULNERABILITY_REPOSITORY_SNAPSHOT --value-stdin
 python -m contextual_orchestrator.web_search_mcp
 ```
 
-`assess_vulnerability_claim` is the tool a reviewer calls before reporting a
-CVE or GHSA. `supported` is the only status that may become a finding.
+Use the persistent KV backend described above for separate registration/server
+processes; the default in-memory registry does not survive the CLI process.
+The operator must provision `/srv/review-snapshot` from the intended repository
+and exact reviewed revision, mount it read-only, and run a dedicated MCP server
+for that snapshot. Neither the model nor the MCP caller can choose a path or
+submit package evidence. Do not reuse one server across unrelated snapshots.
+The MCP server requires the deployment-provided `mcp` SDK 2.x and `api` extra.
+
+`assess_vulnerability_claim` takes `identifier`, `package_name` and `ecosystem`
+(`PyPI`, `npm`, `crates.io`). It reads supported root manifests from that
+snapshot and compares structured official affected-package identities. Missing
+or unsupported manifests, unknown workspace coverage, search failure and
+insufficient records remain `unverified`, not clean. A package match is also
+`unverified`: versions/ranges are not checked, and `finding_allowed=false`.
+Search snippets cannot authorize or reject a vulnerability finding. Central
+Strix/Noema wiring and real end-to-end proof remain open under #1347.
 Camoufox-rendered browsing (for JS-heavy fact-check targets, not search) and
 its `quarantine-sandbox-runtime` session isolation remain a documented
 follow-up; see the ADR.

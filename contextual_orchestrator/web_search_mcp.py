@@ -8,7 +8,6 @@ of the gateway keeps running where that package is absent.
 from __future__ import annotations
 
 import importlib.metadata
-from collections.abc import Sequence
 from typing import Any
 
 from .vulnerability_claim import assess_vulnerability_claim
@@ -23,10 +22,10 @@ def web_search_tool_payload(query: str) -> list[dict[str, Any]]:
 def vulnerability_claim_tool_payload(
     identifier: str,
     package_name: str,
-    manifest_packages: Sequence[str],
-) -> dict[str, str | None]:
-    """Return a claim verdict. Callers must not report ``rejected`` or ``unverified``."""
-    return assess_vulnerability_claim(identifier, package_name, manifest_packages).as_dict()
+    ecosystem: str,
+) -> dict[str, Any]:
+    """Return identity evidence; unchecked versions cannot authorize a finding."""
+    return assess_vulnerability_claim(identifier, package_name, ecosystem).as_dict()
 
 
 def build_web_search_mcp_server() -> Any:
@@ -46,8 +45,9 @@ def build_web_search_mcp_server() -> Any:
         name="web_search_gateway",
         instructions=(
             "Before reporting a CVE or GHSA, call assess_vulnerability_claim "
-            "with the identifier, the package name, and the repository manifest "
-            "package names. Report a finding only when status is supported."
+            "with the identifier, package name and ecosystem (PyPI, npm, crates.io). "
+            "Repository evidence comes from an operator-selected snapshot. "
+            "This identity check does not check versions or authorize a finding."
         ),
     )
 
@@ -58,16 +58,16 @@ def build_web_search_mcp_server() -> Any:
     @server.tool(
         name="assess_vulnerability_claim",
         description=(
-            "Check a CVE or GHSA against the dependency manifest and an official "
-            "record. status is supported, rejected, or unverified."
+            "Check package identity against trusted repository manifests and an "
+            "official record. Versions are not checked; no finding is authorized."
         ),
     )
     def assess_vulnerability_claim_tool(
         identifier: str,
         package_name: str,
-        manifest_packages: list[str],
-    ) -> dict[str, str | None]:
-        return vulnerability_claim_tool_payload(identifier, package_name, manifest_packages)
+        ecosystem: str,
+    ) -> dict[str, Any]:
+        return vulnerability_claim_tool_payload(identifier, package_name, ecosystem)
 
     return server
 
