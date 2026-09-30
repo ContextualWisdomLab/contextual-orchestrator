@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.document_diff_review import (  # noqa: E402
     DocumentDiffReviewError,
+    _contains_inline_data_uri,
     validate_document_diff_envelope,
     validate_document_diff_findings,
 )
@@ -254,6 +255,25 @@ def _mutated(**changes) -> dict:
             target = target[int(key)] if key.isdigit() else target[key]
         target[leaf] = value
     return envelope
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("caption data:image/png;base64,AAAA", True),
+        ("DATA:text/plain,review", True),
+        ("data:not-a-uri because-whitespace,", False),
+        (("data:" * 1600) + "suffix", False),
+        (("data:" * 1600) + ",", True),
+        ("data:broken header\nthen DATA:image/png;base64,AAAA", True),
+    ],
+)
+def test_inline_data_uri_detection_is_linear_and_preserves_fail_closed_boundary(
+    value: str,
+    expected: bool,
+) -> None:
+    """Repeated attacker-controlled prefixes must not trigger regex backtracking."""
+    assert _contains_inline_data_uri(value) is expected
 
 
 @pytest.mark.parametrize(

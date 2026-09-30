@@ -89,7 +89,6 @@ _FINDING_FIELDS = frozenset(
 _REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 _BLOB = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _OBJECT_HASH = re.compile(r"sha256:[0-9a-f]{64}")
-_DATA_URI = re.compile(r"data:[^,\s]*,", re.IGNORECASE)
 _BASE64_RUN = re.compile(r"[A-Za-z0-9+/_-]{200,}={0,2}")
 _RESIDENT_REGISTRATION_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 # ZIP (DOCX/HWPX), PDF, PNG, JPEG, GIF, and OLE (HWP) signatures as decoded text.
@@ -111,6 +110,27 @@ def _reject(code: str, message: str, status: int = 400) -> DocumentDiffReviewErr
     return DocumentDiffReviewError(code, message, status)
 
 
+def _contains_inline_data_uri(value: str) -> bool:
+    """Detect a data URI in one linear scan without attacker-driven regex work."""
+    normalized_value = value.casefold()
+    search_start = 0
+    while True:
+        prefix_start = normalized_value.find("data:", search_start)
+        if prefix_start < 0:
+            return False
+        header_index = prefix_start + len("data:")
+        while header_index < len(normalized_value):
+            character = normalized_value[header_index]
+            if character == ",":
+                return True
+            if character.isspace():
+                break
+            header_index += 1
+        if header_index == len(normalized_value):
+            return False
+        search_start = header_index + 1
+
+
 def _exact_object(value: Any, allowed: frozenset[str], field: str, *, required: frozenset[str]) -> dict[str, Any]:
     """Require a JSON object whose keys are known and whose required keys exist."""
     if type(value) is not dict:
@@ -126,7 +146,11 @@ def _exact_object(value: Any, allowed: frozenset[str], field: str, *, required: 
 
 def _scan_for_leaks(value: str, field: str) -> None:
     """Reject inline binary/media, credentials, and resident identifiers."""
-    if any(signature in value for signature in _BINARY_SIGNATURES) or _DATA_URI.search(value) or _BASE64_RUN.search(value):
+    if (
+        any(signature in value for signature in _BINARY_SIGNATURES)
+        or _contains_inline_data_uri(value)
+        or _BASE64_RUN.search(value)
+    ):
         raise _reject("inline_binary_content", f"{field} must not carry inline binary or media data", 422)
     if any(pattern.search(value) for pattern in SECRET_PATTERNS):
         raise _reject("secret_detected", f"{field} matches a credential pattern", 422)

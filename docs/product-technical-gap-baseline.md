@@ -1,5 +1,11 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-30 document diff data-URI scan — Proposed
+
+| Gap ID | Status | Exact-head evidence | Repair / next gate |
+|---|---|---|---|
+| CO-DOCUMENT-DIFF-REDOS-01 | **Proposed — source repaired; hosted acceptance pending** | `contextual-orchestrator#1221@4dcf9e32b057cde83bca67bfd45975fc6deda458`; central CodeQL run `36447487525`, Python job `109084173022`, rule `py/polynomial-redos`, security severity 7.5, `contextual_orchestrator/document_diff_review.py:129`; SARIF artifact `11026927998`, digest `sha256:0145d9b03e8c0064c2a57be79bc3f8168bcd45dc93b488aa4a4b1f81c23898a5`. | Replace the unanchored data-URI regular expression with a disjoint-segment linear scanner while preserving fail-closed inline-media rejection. RED imports the absent scanner; GREEN covers ordinary, case-insensitive, whitespace-terminated, later-valid, and 1,600-prefix adversarial inputs. Re-run exact-head CodeQL only after this cause change; protected Checks and independent review remain required. |
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
