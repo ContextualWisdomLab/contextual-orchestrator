@@ -21,16 +21,17 @@ did not make polynomial work an acceptable security boundary.
 
 ## Repair and invariant
 
-The replacement scans disjoint text segments. It finds a case-insensitive
-`data:` prefix, advances once until comma, whitespace, or end, and resumes only
-after the terminating whitespace. A comma before whitespace remains a data URI
-and is rejected. Broken headers remain ordinary text, and a later valid header
-is still found. Binary signatures, long base64 runs, credentials, resident
-registration numbers, byte budgets, and provider-call admission are unchanged.
+PR #1349 is the canonical owner repair. Its fixed-token scan recognizes
+case-insensitive `data:`, comma, and whitespace in one pass, preserving the
+original `data:[^,\s]*,` language without a header-length cutoff. Binary
+signatures, long base64 runs, credentials, resident registration numbers, byte
+budgets, and provider-call admission are unchanged.
 
-RED imported the absent linear scanner and failed collection. GREEN covers
-ordinary and upper-case data URIs, whitespace termination, a later valid URI,
-and 1,600 repeated attacker-controlled prefixes with and without a terminal
-comma. Hosted CodeQL on the repaired exact head remains the authoritative
-acceptance gate; this record does not convert queued, skipped, or stale results
-into success.
+The #1221 ancestor retains the original CodeQL and SARIF identity above. The
+stacked merge replaces its parallel scanner and duplicate regression with
+#1349's broader contract: ordinary and mixed-case data URIs, repeated prefixes,
+headers beyond the rejected 256-character workaround, whitespace termination,
+and deterministic varied-text equivalence against the original language.
+Hosted CodeQL on the unchanged merged head remains the authoritative acceptance
+gate; this record does not convert queued, skipped, or stale results into
+success.

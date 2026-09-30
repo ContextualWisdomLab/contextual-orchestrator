@@ -7518,3 +7518,22 @@ contracts must be GREEN on the exact successor before review. A future health
 policy requires immutable owner identity, executable calibration provenance,
 validated sampling/failure denominators, and a versioned released contract;
 until then activation fails closed.
+
+## 2026-09-30 Data-URI leak scan without a heuristic cutoff
+
+PR [#1340](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1340)
+at reviewed head `240ce0845e126d11843e70ecd09ca913b7b7800d` removed CodeQL
+`py/polynomial-redos` by limiting the data-URI header to 256 characters. That
+made runtime linear but introduced an undocumented security decision: a valid
+data URI with a longer header was treated as ordinary text and could cross the
+document-review boundary. The existing test explicitly approved that false
+negative.
+
+The proposed owner repair replaces the bounded expression with a single scan
+over fixed `data:`, comma, and whitespace tokens. It recognizes the original
+`data:[^,\s]*,` language without rescanning suffixes and without a header-length
+threshold. A header beyond the former cutoff was observed RED before the
+repair; the focused long-header, repeated-prefix, whitespace, and varied-input
+contracts are GREEN afterward. Protected exact-head CodeQL/Security Checks,
+independent approval, and ordinary merge remain required, so this record is
+**Proposed** rather than released evidence.

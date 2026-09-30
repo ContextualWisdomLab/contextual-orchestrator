@@ -14,6 +14,8 @@ import copy
 import hashlib
 import io
 import json
+import random
+import re
 import sys
 import threading
 import urllib.error
@@ -29,7 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.document_diff_review import (  # noqa: E402
     DocumentDiffReviewError,
-    _contains_inline_data_uri,
+    _contains_data_uri,
+    _scan_for_leaks,
     validate_document_diff_envelope,
     validate_document_diff_findings,
 )
@@ -258,29 +261,11 @@ def _mutated(**changes) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("caption data:image/png;base64,AAAA", True),
-        ("DATA:text/plain,review", True),
-        ("data:not-a-uri because-whitespace,", False),
-        (("data:" * 1600) + "suffix", False),
-        (("data:" * 1600) + ",", True),
-        ("data:broken header\nthen DATA:image/png;base64,AAAA", True),
-    ],
-)
-def test_inline_data_uri_detection_is_linear_and_preserves_fail_closed_boundary(
-    value: str,
-    expected: bool,
-) -> None:
-    """Repeated attacker-controlled prefixes must not trigger regex backtracking."""
-    assert _contains_inline_data_uri(value) is expected
-
-
-@pytest.mark.parametrize(
     ("envelope", "status", "code"),
     [
         (_mutated(**{"objects.0.head_text": "data:image/png;base64,iVBORw0KGgo="}), 422, "inline_binary_content"),
         (_mutated(**{"objects.0.head_text": "data:image/png;name=" + "x" * 101 + ";base64,AAAA"}), 422, "inline_binary_content"),
+        (_mutated(**{"objects.0.head_text": "DATA:,x"}), 422, "inline_binary_content"),
         (_mutated(**{"objects.0.head_text": base64.b64encode(HEAD_DOCX).decode()[:4000]}), 422, "inline_binary_content"),
         (
             _mutated(**{"objects.0.head_text": base64.urlsafe_b64encode(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8).decode()}),
@@ -322,6 +307,7 @@ def test_inline_data_uri_detection_is_linear_and_preserves_fail_closed_boundary(
     ids=[
         "data_uri",
         "long_data_uri_header",
+        "uppercase_empty_data_uri",
         "base64_docx",
         "urlsafe_base64_image",
         "secret",
@@ -493,3 +479,60 @@ def test_total_extracted_text_budget_rejects_individually_bounded_objects() -> N
         validate_document_diff_envelope(envelope)
     assert (error.value.status, error.value.code) == (413, "request_too_large")
     assert "envelope text" in str(error.value)
+
+
+def test_data_uri_scan_handles_repeated_scheme_without_comma() -> None:
+    """A repeated scheme without a comma is not inline media."""
+    pathological = "data:" * 20_000
+    assert not _contains_data_uri(pathological)
+    _scan_for_leaks(pathological, "objects[0].head_text")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "data:image/png;base64,iVBORw0KGgo=",
+        "DATA:,x",
+        "Data:text/plain;charset=utf-8,hello",
+        "see data:,x inline",
+        "data:" + "a;" * 128 + ",AAAA",
+        "data:" + "a;" * 150 + ",AAAA",
+    ],
+    ids=[
+        "png_base64",
+        "uppercase_empty",
+        "mixed_case_charset",
+        "embedded",
+        "header_at_256_bound",
+        "header_over_256_bound",
+    ],
+)
+def test_data_uri_is_rejected_as_inline_binary(value) -> None:
+    with pytest.raises(DocumentDiffReviewError) as error:
+        _scan_for_leaks(value, "objects[0].head_text")
+    assert (error.value.status, error.value.code) == (422, "inline_binary_content")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "data:" + "a;" * 150,
+        "data: image/png, not a uri",
+        "the data, as reported",
+    ],
+    ids=["long_header_without_comma", "whitespace_in_header", "no_scheme"],
+)
+def test_non_data_uri_text_is_not_flagged(value) -> None:
+    """Whitespace or an absent comma prevents a data-URI match."""
+    assert not _contains_data_uri(value)
+    _scan_for_leaks(value, "objects[0].head_text")
+
+
+def test_data_uri_scanner_matches_the_contract_on_varied_short_text() -> None:
+    """The linear scanner preserves the original data-URI language."""
+    unbounded = re.compile(r"data:[^,\s]*,", re.IGNORECASE)
+    rng = random.Random(1262)
+    alphabet = ["data:", "DATA:", "Data:", ",", ";", "/", " ", "\n", "a", "b64", "="]
+    for _ in range(3000):
+        value = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        assert _contains_data_uri(value) == bool(unbounded.search(value)), value
