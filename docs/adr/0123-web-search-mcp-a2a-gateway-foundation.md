@@ -390,6 +390,8 @@ Not built this iteration, in either form.
   protocol*. Retrieved 2026-09-02, from https://a2a-protocol.org/latest/
 - SearXNG Authors. (n.d.). *SearXNG search API*. Retrieved 2026-09-02, from
   https://docs.searxng.org/dev/search_api.html
+- SearXNG Authors. (n.d.). *settings.yml*. Retrieved 2026-09-30, from
+  https://docs.searxng.org/admin/settings/settings
 - daijro. (n.d.). *Camoufox: Anti-detect browser built for web scraping &
   AI agents* [Software repository]. GitHub. Retrieved 2026-09-02, from
   https://github.com/daijro/camoufox
@@ -408,6 +410,12 @@ ownership/certificate writes and Granian startup; the overlay runs nonroot
 with matching tmpfs ownership and an authenticated Wardnet CONNECT proxy on
 an internal-only network. These are source/static checks, not container
 startup, working search, hosted acceptance or deployed Strix/Noema evidence.
+The repaired overlay no longer passes the SearXNG secret or Wardnet proxy token
+through the SearXNG container environment. A fail-closed renderer resolves both
+from the credential registry, writes a settings file below a mode-`0700` host
+directory, and Compose mounts that file read-only at the documented
+`SEARXNG_SETTINGS_PATH`. Official-record requests also send the repository's
+identified `User-Agent`, including the GitHub Advisory request path.
 Central workflow wiring, independent manifest enforcement in its gate,
 version-range evaluation and the original end-to-end false-positive
 reproduction remain open under #1347. Security gates are unchanged.

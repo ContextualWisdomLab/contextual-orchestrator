@@ -7491,3 +7491,24 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-30 PR #1348 SearXNG secret and advisory transport repair
+
+PR #1348 exact head `5fa67db3bbeabae9cc7ad121a97f9f10d33875e5`
+remained Proposed after review found two runtime defects. The SearXNG overlay
+placed both `SEARXNG_SECRET` and `WARDNET_EGRESS_PROXY_TOKEN` in the container
+environment, contrary to the repository KV boundary, and GitHub Advisory fetches
+omitted the required identified `User-Agent`, so every GHSA check could degrade
+to `unverified` without evaluating the record.
+
+The repair resolves both SearXNG values from the credential registry in a
+fail-closed renderer, atomically writes the settings below a mode-`0700` host
+directory, and mounts that file read-only through Compose. The SearXNG runtime
+environment now carries only the non-secret settings path. Official-record
+requests carry the repository's identified `User-Agent`. RED contracts observed
+the missing renderer module, both secret names in Compose, and the absent header;
+the corresponding focused contracts are the acceptance boundary. Live SearXNG
+startup, authenticated Wardnet egress, protected exact-head Checks, independent
+approval, ordinary merge, immutable release, and Strix/Noema consumer adoption
+remain unverified; the PR stays Draft until those source-review findings and
+hosted gates are cleared.

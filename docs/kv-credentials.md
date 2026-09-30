@@ -134,11 +134,18 @@ config, cache and temporary directories belong to UID/GID 977. Static compose
 validation is not proof of container startup or successful search.
 
 Configure the existing Wardnet credentials/database and Camoufox prerequisites
-above. Generate a dedicated search secret without printing it, then start the
-search service and its Wardnet dependency before the MCP server:
+above. Register a dedicated search secret in the same persistent KV, render the
+SearXNG settings from the two KV entries into the protected deployment directory,
+then start the search service and its Wardnet dependency before the MCP server.
+The SearXNG container receives only the settings-file path in its environment;
+neither secret is exposed through container environment inspection.
 
 ```bash
-export SEARXNG_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python -c 'import secrets; print(secrets.token_urlsafe(32))' \
+  | python -m contextual_orchestrator register-credential \
+      --name SEARXNG_SECRET --value-stdin
+python -m contextual_orchestrator.searxng_config \
+  --output ./.secrets/searxng-settings.yml
 docker compose -f compose.camoufox-wardnet.yaml -f compose.searxng.yaml up -d searxng
 printf '%s' 'http://127.0.0.1:8088' | python -m contextual_orchestrator \
   register-credential --name SEARXNG_URL --value-stdin
@@ -148,7 +155,10 @@ python -m contextual_orchestrator.web_search_mcp
 ```
 
 Use the persistent KV backend described above for separate registration/server
-processes; the default in-memory registry does not survive the CLI process.
+processes and for `searxng_config`; the default in-memory registry does not
+survive the CLI process. `SEARXNG_SETTINGS_FILE` may select another generated
+settings path for Compose. Keep its parent directory restricted to the deploying
+operator; the renderer creates or tightens that directory to mode `0700`.
 The operator must provision `/srv/review-snapshot` from the intended repository
 and exact reviewed revision, mount it read-only, and run a dedicated MCP server
 for that snapshot. Neither the model nor the MCP caller can choose a path or
@@ -424,4 +434,3 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
-

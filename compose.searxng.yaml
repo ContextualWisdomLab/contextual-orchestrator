@@ -7,8 +7,7 @@ services:
     image: docker.io/searxng/searxng@sha256:3284e8900e9b3e5df284ae8c48a26851ae2eff6f99b4b0b18ec3da5a4d9095c3
     user: "977:977"
     environment:
-      SEARXNG_SECRET: ${SEARXNG_SECRET:?set the SearXNG secret}
-      WARDNET_EGRESS_PROXY_TOKEN: ${WARDNET_EGRESS_PROXY_TOKEN:?set the dedicated Wardnet egress token}
+      SEARXNG_SETTINGS_PATH: /run/secrets/searxng_settings
       GRANIAN_HOST: "0.0.0.0"
       PYTHONDONTWRITEBYTECODE: "1"
     ports:
@@ -16,8 +15,9 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    secrets:
+      - searxng_settings
     tmpfs:
-      - /etc/searxng:uid=977,gid=977,mode=0700
       - /var/cache/searxng:uid=977,gid=977,mode=0700
       - /tmp:uid=977,gid=977,mode=0700
     dns: [172.30.0.2]
@@ -26,33 +26,6 @@ services:
         condition: service_healthy
     networks:
       camoufox_egress: {}
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        set -eu
-        /usr/local/searxng/.venv/bin/python - <<'PY'
-        import json, os
-        from urllib.parse import quote
-        secret = json.dumps(os.environ["SEARXNG_SECRET"])
-        token = quote(os.environ["WARDNET_EGRESS_PROXY_TOKEN"], safe="")
-        proxy = json.dumps("http://wardnet:" + token + "@172.30.0.2:8080")
-        with open("/etc/searxng/settings.yml", "w") as settings:
-            settings.write(f"""use_default_settings: true
-        server:
-          secret_key: {secret}
-          bind_address: "0.0.0.0"
-          limiter: false
-          image_proxy: false
-        search:
-          formats:
-            - html
-            - json
-        outgoing:
-          proxies:
-            all://: [{proxy}]
-        """)
-        PY
-        exec /usr/local/searxng/entrypoint.sh
     restart: unless-stopped
 
 networks:
@@ -61,3 +34,7 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/24
+
+secrets:
+  searxng_settings:
+    file: ${SEARXNG_SETTINGS_FILE:-./.secrets/searxng-settings.yml}
