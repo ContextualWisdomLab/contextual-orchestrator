@@ -7552,3 +7552,19 @@ and reports studied-item matching-score inclusion and requires an
 `8 attempted / 0 failed` per-item IRLS denominator before recovery flags are
 valid. These
 claims remain Proposed pending the same delivery gates.
+
+Exact-head hosted verification on predecessor
+`b1bf379b1cdc7e61ef4dc3cda8c276afa9be037e` then exposed two remaining
+owner defects in `Security and Quality` run
+[`36870037894`](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36870037894):
+six decision-receipt fixtures still assumed unconditional or cached triage,
+and the runtime plus security-CI hash locks still selected vulnerable urllib3
+2.7.0. Successor `404c23c459fc2f6514edc0a963dd777b188d94a9`
+supplies exact fitted evidence, requires fresh per-request triage, synchronizes
+receipt assertions on the durable close boundary, and advances both locks to
+urllib3 2.8.0. Its recorded local evidence is **195 impacted tests passed**,
+**40 decision-receipt tests passed** with the intermittent case passing five
+consecutive runs, and **0 known vulnerabilities** in both lock audits. These
+claims remain **Proposed** until all hosted exact-head Checks, qualifying
+independent approval, ordinary merge, immutable release, and consumer pinning
+complete.

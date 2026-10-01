@@ -434,10 +434,15 @@ def test_triage_malformed_evidence_fails_closed(failure: object) -> None:
         return failure
 
     orchestrator._psychometric_router.ranked_evidence = evidence  # type: ignore[method-assign]
-    orchestrator.client.chat = lambda *_args, **_kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        AssertionError("malformed evidence must not dispatch triage")
-    )
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
     assert orchestrator._compute_triage_verdict("task") is True
+    assert called == []
 
 
 # --- real-time judge on route paths -----------------------------------------
