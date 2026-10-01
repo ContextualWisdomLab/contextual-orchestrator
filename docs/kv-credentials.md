@@ -151,6 +151,12 @@ printf '%s' 'http://127.0.0.1:8088' | python -m contextual_orchestrator \
   register-credential --name SEARXNG_URL --value-stdin
 printf '%s' '/srv/review-snapshot' | python -m contextual_orchestrator \
   register-credential --name VULNERABILITY_REPOSITORY_SNAPSHOT --value-stdin
+printf '%s' "$WEB_SEARCH_MCP_AUTH_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name WEB_SEARCH_MCP_AUTH_TOKEN --value-stdin
+printf '%s' "$WEB_SEARCH_MCP_ISSUER_URL" | python -m contextual_orchestrator \
+  register-credential --name WEB_SEARCH_MCP_ISSUER_URL --value-stdin
+printf '%s' 'http://127.0.0.1:8765/mcp' | python -m contextual_orchestrator \
+  register-credential --name WEB_SEARCH_MCP_RESOURCE_URL --value-stdin
 python -m contextual_orchestrator.web_search_mcp
 ```
 
@@ -162,12 +168,39 @@ operator; the renderer creates or tightens that directory to mode `0700`.
 The operator must provision `/srv/review-snapshot` from the intended repository
 and exact reviewed revision, mount it read-only, and run a dedicated MCP server
 for that snapshot. Neither the model nor the MCP caller can choose a path or
-submit package evidence. Do not reuse one server across unrelated snapshots.
-The MCP server requires the deployment-provided `mcp` SDK 2.x and `api` extra.
+submit package evidence. Server construction captures the supported root-manifest
+package identities and any capture failure once. Later snapshot credential or file
+changes do not alter that server's assessments; construct a new server to capture
+new state. Bearer rotation still takes effect but never switches repository evidence.
+Keep the source stable and read-only during capture: this bounded read is not an
+atomic checkout or proof of repository, reviewed revision or CI-job identity. Do
+not reuse one server across unrelated snapshots. The MCP server requires the
+deployment-provided `mcp` SDK 2.x and `api` extra.
+
+Provision a separate search bearer credential, never a chat, administrator,
+SearXNG upstream or model-provider key. It must contain at least 32 ASCII bearer
+characters without whitespace. Configure the actual HTTPS authorization-server
+issuer responsible for this credential; do not substitute a dummy issuer URL.
+The resource URL must exactly match the loopback host, port and `/mcp` path being
+served. Missing or malformed authorization configuration stops startup before
+binding. The environment values shown above are bootstrap transport into the
+persistent KV, not runtime configuration reads.
+
+The exact search bearer grants only `web_search:read` for the two read tools on
+this server. The official SDK enforces authentication and that scope before tool
+execution. Protected-resource metadata advertises the configured issuer; this
+server does not implement authorization, token issuance or client registration
+endpoints, nor verify issuer availability at startup. Direct in-memory fixture
+construction remains possible, but the production serving entrypoint has no
+unauthenticated option. Credential rotation/revocation takes effect through KV
+lookups. This prerequisite does not bind grants to a repository, reviewed head or
+CI job, prove central SDK 1.28.1 compatibility, or establish release/live acceptance.
 
 `assess_vulnerability_claim` takes `identifier`, `package_name` and `ecosystem`
-(`PyPI`, `npm`, `crates.io`). It reads supported root manifests from that
-snapshot and compares structured official affected-package identities. Missing
+(`PyPI`, `npm`, `crates.io`). It uses the server's captured supported root-manifest
+identities and compares structured official affected-package identities. Capture
+errors remain unavailable even if the source is repaired afterward. Direct library
+assessment without captured evidence retains its existing read-through behavior. Missing
 or unsupported manifests, unknown workspace coverage, search failure and
 insufficient records remain `unverified`, not clean. A package match is also
 `unverified`: versions/ranges are not checked, and `finding_allowed=false`.
