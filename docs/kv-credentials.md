@@ -163,7 +163,11 @@ The operator must provision `/srv/review-snapshot` from the intended repository
 and exact reviewed revision, mount it read-only, and run a dedicated MCP server
 for that snapshot. Neither the model nor the MCP caller can choose a path or
 submit package evidence. Do not reuse one server across unrelated snapshots.
-The MCP server requires the deployment-provided `mcp` SDK 2.x and `api` extra.
+Install the project `api` extra for the MCP server. It declares
+`mcp>=2.0,<3.0`, both project lock paths resolve MCP 2.2.0, and server
+construction fails closed if the installed package is missing or is not major
+version 2. Protected API CI uses that locked extra; an absent SDK is not an
+optional passing test state.
 
 `assess_vulnerability_claim` takes `identifier`, `package_name` and `ecosystem`
 (`PyPI`, `npm`, `crates.io`). It reads supported root manifests from that

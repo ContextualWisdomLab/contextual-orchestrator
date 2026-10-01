@@ -402,11 +402,16 @@ Not built this iteration, in either form.
 
 The earlier snippet-negation check returned `supported`; the regression was
 RED before removing that trust. Focused manifest/record identity, MCP schema
-and compose contracts pass locally. The project Python 3.13 environment does
-not include the optional MCP SDK; a separate already-installed SDK 2.0
-interpreter passes the real tool registration/schema tests without dependency
-installation. Compose configuration merges successfully without starting any
-container. The pinned image metadata and exact entrypoint revision
+and compose contracts pass locally. Source commit
+`75ba97651f70134179e26f5480b448afef1c8cc9` (tree
+`8717790292a5db857200fde1b43536b5f23bc7fd`) declares
+`mcp>=2.0,<3.0` in the `api` extra and locks MCP 2.2.0 in `uv.lock` and the
+hash-pinned `requirements.lock`. Server construction verifies the installed
+major before importing SDK primitives; registration and schema tests are
+mandatory. A Python 3.12 `uv sync --locked` run passed the related suite, and
+a clean Python 3.12 `--require-hashes` environment passed the MCP and lock
+contracts with `PYTHONPATH=.`. Compose configuration merges successfully
+without starting any container. The pinned image metadata and exact entrypoint revision
 `4e2c1ea7f468c9d1b16206e9d4079999a2eb0627` show UID/GID 977, root-only
 ownership/certificate writes and Granian startup; the overlay runs nonroot
 with matching tmpfs ownership and an authenticated Wardnet CONNECT proxy on

@@ -7510,11 +7510,25 @@ false. SearXNG remains a separate informational MCP tool.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
-one optional MCP SDK test skipped, plus Python compilation and diff checks.
-This is Proposed source evidence only: the undeclared/enforced MCP 2.x runtime
-dependency, caller authentication or verified isolation, installed-version
-applicability, exact-head protected Checks, independent approval, ordinary
-merge, immutable release, and consumer adoption remain open.
+one optional MCP SDK test skipped, plus Python compilation and diff checks on
+the first source tree. Follow-up source commit
+`75ba97651f70134179e26f5480b448afef1c8cc9` (tree
+`8717790292a5db857200fde1b43536b5f23bc7fd`) closes that dependency gap:
+`mcp>=2.0,<3.0` is part of the protected `api` extra, MCP 2.2.0 is present in
+both project locks, server construction rejects a missing or non-2.x SDK, and
+the real registration/schema tests no longer skip. Python 3.12
+`uv sync --locked` verification passed 103 related tests with only the Docker
+CLI Compose-runtime test skipped; a clean Python 3.12 hash-locked environment
+passed 25 MCP/lock tests with `PYTHONPATH=.`. Ruff, compileall, lock checking,
+and diff checking pass for the changed surface.
+
+This remains Proposed source evidence only. Caller authentication or verified
+dedicated isolation, installed-version applicability, protected exact-head
+Checks, independent approval, ordinary merge, immutable release, and consumer
+adoption remain open. A repository-wide local run is not claimed: it was
+stopped when the configured environment reached an external OpenRouter request;
+no credential-bearing external test traffic was authorized. Protected CI must
+provide the clean-room full-suite evidence on this exact head.
 
 PR #1348 exact head `5fa67db3bbeabae9cc7ad121a97f9f10d33875e5`
 remained Proposed after review found two runtime defects. The SearXNG overlay

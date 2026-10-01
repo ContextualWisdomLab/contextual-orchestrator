@@ -12,6 +12,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- The loopback web-search MCP server now declares `mcp>=2.0,<3.0` in the
+  protected `api` extra, locks MCP 2.2.0 in both project lock paths, and fails
+  closed before server construction when the installed SDK is missing or not
+  major version 2. Its registration and schema tests no longer treat an absent
+  SDK as optional passing evidence.
 - Vulnerability claim verdicts now fetch deterministically constructed MITRE
   CVE or GitHub Advisory records directly through the existing DNS-pinned,
   no-redirect transport. SearXNG remains an explicitly invoked informational
