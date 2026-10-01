@@ -74,7 +74,7 @@ def _serve(monkeypatch, statuses: tuple[int, int, int]) -> tuple[int, str | None
     request = urllib.request.Request(
         f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
         data=json.dumps(
-            {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "review this change"}]}
+            {"model": TaskOrchestrator.FREE_MODEL, "orchestration_mode": "route", "messages": [{"role": "user", "content": "review this change"}]}
         ).encode(),
         headers={"content-type": "application/json", "authorization": f"Bearer {_TOKEN}", "connection": "close"},
         method="POST",

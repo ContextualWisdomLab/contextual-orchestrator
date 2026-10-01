@@ -107,6 +107,7 @@ def test_http_virtual_free_tools_stay_on_route() -> None:
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "scan the trusted workspace"}],
                 "tools": _TOOLS,
             },
@@ -175,6 +176,7 @@ def test_http_virtual_free_tools_stream_stays_on_control_plane() -> None:
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "scan the trusted workspace"}],
                 "tools": _TOOLS,
                 "stream": True,
@@ -364,6 +366,7 @@ def test_http_virtual_free_tools_reselect_worker_on_retryable_failure() -> None:
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "scan the trusted workspace"}],
                 "tools": _TOOLS,
             },
@@ -1211,7 +1214,7 @@ class _ToolCallClient:
 
 
 def test_http_virtual_free_tools_preserve_provider_tool_calls() -> None:
-    """Virtual + tools stays on route and returns the worker's tool_calls."""
+    """Virtual + tools in auto mode conducts and still returns the worker's tool_calls."""
     client = _ToolCallClient()
     orchestrator = TaskOrchestrator(_free_agents(), client=client)
     server = build_server(
@@ -1240,7 +1243,7 @@ def test_http_virtual_free_tools_preserve_provider_tool_calls() -> None:
     assert message["content"] is None
     assert message["tool_calls"][0]["function"]["name"] == "inspect_repository"
     assert body["choices"][0]["finish_reason"] == "tool_calls"
-    assert body["orchestration"]["mode"] == "route"
+    assert body["orchestration"]["mode"] == "conduct"
 
 
 def test_http_tools_reject_deferred_batch_routing() -> None:

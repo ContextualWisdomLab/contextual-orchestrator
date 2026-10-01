@@ -288,22 +288,115 @@ def test_assignment_design_uses_declared_trial_count(monkeypatch) -> None:
 
 
 def test_candidate_group_dif_requires_declared_sample_size() -> None:
-    """DIF evidence cannot invent a 4,000-row default."""
+    """DIF evidence cannot invent population or algorithm controls."""
     parameters = inspect.signature(heldout._validate_candidate_group_dif).parameters
-    assert parameters["sample_size"].default is None
+    for name in (
+        "sample_size",
+        "exclude_studied_item",
+        "fdr_q",
+        "max_iter",
+        "max_rounds",
+        "min_anchor_items",
+    ):
+        assert parameters[name].default is None
     with pytest.raises(ValueError, match="sample_size"):
         heldout._validate_candidate_group_dif()
     with pytest.raises(ValueError, match="sample_size"):
         heldout._validate_candidate_group_dif(sample_size=True)
     with pytest.raises(ValueError, match="even"):
         heldout._validate_candidate_group_dif(sample_size=3)
+    declared = {
+        "sample_size": heldout.DECLARED_DIF_SAMPLE_SIZE,
+        "exclude_studied_item": False,
+        "fdr_q": 0.05,
+        "max_iter": 50,
+        "max_rounds": 3,
+        "min_anchor_items": 4,
+    }
+    for field_name in (
+        "exclude_studied_item",
+        "fdr_q",
+        "max_iter",
+        "max_rounds",
+        "min_anchor_items",
+    ):
+        invalid = dict(declared)
+        invalid[field_name] = None
+        with pytest.raises(ValueError, match=field_name):
+            heldout._validate_candidate_group_dif(**invalid)
 
 
 def test_candidate_group_dif_uses_declared_sample_size() -> None:
-    """The declared sample size is the actual two-group DIF population."""
-    report = heldout._validate_candidate_group_dif(sample_size=40)
-    assert report["sample_size"] == 40
+    """The declared design is the actual two-group DIF protocol."""
+    report = heldout._validate_candidate_group_dif(
+        sample_size=heldout.DECLARED_DIF_SAMPLE_SIZE,
+        exclude_studied_item=heldout.DECLARED_DIF_EXCLUDE_STUDIED_ITEM,
+        fdr_q=heldout.DECLARED_DIF_FDR_Q,
+        max_iter=heldout.DECLARED_DIF_MAX_ITER,
+        max_rounds=heldout.DECLARED_DIF_MAX_ROUNDS,
+        min_anchor_items=heldout.DECLARED_DIF_MIN_ANCHOR_ITEMS,
+    )
+    assert report["sample_size"] == heldout.DECLARED_DIF_SAMPLE_SIZE
+    assert report["exclude_studied_item"] is False
+    assert report["fdr_q"] == heldout.DECLARED_DIF_FDR_Q
+    assert report["max_iterations"] == heldout.DECLARED_DIF_MAX_ITER
+    assert report["max_purification_rounds"] == heldout.DECLARED_DIF_MAX_ROUNDS
+    assert report["minimum_anchor_items"] == heldout.DECLARED_DIF_MIN_ANCHOR_ITEMS
+    assert report["api_symbol"] == "detect_dif_logistic_purified"
+    assert report["item_fit_attempted"] == 8
+    assert report["item_fit_failed"] == 0
     assert len(report["expected_dif_items"]) == 1
+
+
+def test_candidate_group_dif_rejects_item_fit_failures(monkeypatch) -> None:
+    """A failed per-item IRLS fit invalidates the DIF recovery artifact."""
+    original = heldout.fast_mlsirm.detect_dif_logistic_purified
+
+    def failed_item(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result["converged"] = result["converged"].copy()
+        result["converged"][0] = False
+        return result
+
+    monkeypatch.setattr(
+        heldout.fast_mlsirm,
+        "detect_dif_logistic_purified",
+        failed_item,
+    )
+    with pytest.raises(ValueError, match="1 of 8 item fits failed"):
+        heldout._validate_candidate_group_dif(
+            sample_size=heldout.DECLARED_DIF_SAMPLE_SIZE,
+            exclude_studied_item=False,
+            fdr_q=heldout.DECLARED_DIF_FDR_Q,
+            max_iter=heldout.DECLARED_DIF_MAX_ITER,
+            max_rounds=heldout.DECLARED_DIF_MAX_ROUNDS,
+            min_anchor_items=heldout.DECLARED_DIF_MIN_ANCHOR_ITEMS,
+        )
+
+
+def test_candidate_group_dif_rejects_purification_failure(monkeypatch) -> None:
+    """A nonconverged purification loop cannot authorize recovery flags."""
+    original = heldout.fast_mlsirm.detect_dif_logistic_purified
+
+    def failed_purification(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result["purify_converged"] = False
+        return result
+
+    monkeypatch.setattr(
+        heldout.fast_mlsirm,
+        "detect_dif_logistic_purified",
+        failed_purification,
+    )
+    with pytest.raises(ValueError, match="purification failed to converge"):
+        heldout._validate_candidate_group_dif(
+            sample_size=heldout.DECLARED_DIF_SAMPLE_SIZE,
+            exclude_studied_item=False,
+            fdr_q=heldout.DECLARED_DIF_FDR_Q,
+            max_iter=heldout.DECLARED_DIF_MAX_ITER,
+            max_rounds=heldout.DECLARED_DIF_MAX_ROUNDS,
+            min_anchor_items=heldout.DECLARED_DIF_MIN_ANCHOR_ITEMS,
+        )
 
 
 def test_score_reliability_requires_declared_sample_size() -> None:

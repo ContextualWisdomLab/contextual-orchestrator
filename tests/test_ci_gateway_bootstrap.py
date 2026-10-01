@@ -208,6 +208,7 @@ def test_main_serves_authenticated_models_and_orchestrator_free_from_bootstrap(
         chat_url = f"http://127.0.0.1:{port}/v1/chat/completions"
         chat_request = {
             "model": "orchestrator/free",
+            "orchestration_mode": "route",
             "messages": [{"role": "user", "content": "verify the owner boundary"}],
         }
         for token in (None, "wrong-owner-token"):

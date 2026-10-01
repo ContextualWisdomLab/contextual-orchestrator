@@ -7491,3 +7491,91 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-30 Free-pool triage evidence and cache isolation
+
+PR [#1346](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1346)
+at reviewed head `fc363850492f14ab7696b00c9724a7753bf6007c` restores automatic
+route-versus-conduct triage for `orchestrator/free`, but review reproduced two
+owner-boundary gaps. A free auto request could return a legacy unresolved
+`conduct` cache entry without executing the free-only triage verdict, and an
+empty eligible triage pool returned the lower-assurance `route` decision. The
+latter contradicted the fail-closed missing-capability contract even though it
+correctly avoided a paid-agent fallback.
+
+The proposed owner repair resolves free auto triage before response-cache
+lookup, partitions the cache key by the resulting route/conduct mode, and maps
+missing eligible triage evidence to conduct. The gateway therefore either uses
+a free-only structured verdict or retains the verified path; it never invents
+a direct-route authorization. Two focused regressions were observed RED on the
+reviewed head and GREEN after the repair. Protected exact-head Checks,
+independent approval, ordinary merge, immutable release, and consumer update
+remain required, so this evidence is **Proposed**, not an accepted production
+claim. Issue [#1345](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/1345)
+remains open for shared capability evidence, cross-model execution policy,
+tool-bearing streaming, and serving-agent visibility beyond this bounded fix.
+
+Hosted `Security and Quality` run
+[`36667298196`](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36667298196),
+job `109734589699`, then exposed one stale repository contract on exact
+predecessor `3199c298f5eff612c1104288c2306ba752dd8ee9`: production correctly
+returned `workflow_required=True` when no eligible triage agent existed, while
+`test_triage_with_no_agents_degrades_to_direct_route` still required the former
+lower-assurance route result. The source invariant and neighboring transport
+failure contract already required fail-closed conduct, so the owner repair
+renames that test and asserts conduct without changing production. The isolated
+RED reproduced locally; the corrected measured-routing file passes 37 tests and
+the related routing/cache/HTTP/stream set passes **174 tests** with warnings as
+errors. The hosted full suite and all exact-head gates must rerun on the repair.
+
+Follow-up no-heuristics review on 2026-10-01 found that schema-valid triage
+still selected the statically first model and converted its uncalibrated
+boolean directly into route authority. The owner repair now requires complete,
+uniquely identified fast-mlsirm fitted success probabilities for every eligible
+candidate on the exact prompt before any triage model is called. Missing,
+partial, duplicate, invalid, tied, or identity-stale evidence fails closed to
+conduct; semantic-neighbor fallback is disabled for this decision. Nine focused
+RED cases cover missing evidence, posterior ordering, nonfinite and out-of-range
+probabilities, tied leaders, partial sets, duplicates, and stale identities.
+This follow-up remains
+**Proposed** until exact-head hosted Checks, independent approval, ordinary
+merge, immutable release, and downstream pinning complete.
+
+Independent review then found that the first repair queried raw user text while
+judged observations use canonical system/developer/user interaction identity,
+cached route verdicts could outlive their evidence, and posterior selection
+could cross the worker-exclusion partition. The direct repair binds lookup to
+the canonical interaction, removes automatic-triage verdict caching, admits
+only worker-eligible candidates, and fails closed on owner exceptions or
+malformed rows. The accompanying fast-mlsirm 0.11.4 DIF migration now declares
+and reports studied-item matching-score inclusion and requires an
+`8 attempted / 0 failed` per-item IRLS denominator before recovery flags are
+valid. These
+claims remain Proposed pending the same delivery gates.
+
+Exact-head hosted verification on predecessor
+`b1bf379b1cdc7e61ef4dc3cda8c276afa9be037e` then exposed two remaining
+owner defects in `Security and Quality` run
+[`36870037894`](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36870037894):
+six decision-receipt fixtures still assumed unconditional or cached triage,
+and the runtime plus security-CI hash locks still selected vulnerable urllib3
+2.7.0. Successor `404c23c459fc2f6514edc0a963dd777b188d94a9`
+supplies exact fitted evidence, requires fresh per-request triage, synchronizes
+receipt assertions on the durable close boundary, and advances both locks to
+urllib3 2.8.0. Its recorded local evidence is **195 impacted tests passed**,
+**40 decision-receipt tests passed** with the intermittent case passing five
+consecutive runs, and **0 known vulnerabilities** in both lock audits. These
+claims remain **Proposed** until all hosted exact-head Checks, qualifying
+independent approval, ordinary merge, immutable release, and consumer pinning
+complete.
+
+## 2026-10-02 AUTO-ROUTING-UNCERTAINTY-01
+
+| Gap | Exact evidence | Action | Status |
+| --- | --- | --- | --- |
+| Automatic route admission used an uncalibrated fast-mlsirm point-probability maximum as decision authority. | CO PR [#1346](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1346) predecessor `d6061498756a2e30e7d759c5e44f5233860da17b`; focused RED showed a single 0.99 point prediction authorized direct route. Review also reproduced stale unresolved route-cache reuse across the gateway default, `orchestrator/auto`, and `orchestrator/free`. fast-mlsirm 0.11.4 exposes no calibrated uncertainty, posterior-dominance, indeterminate-result, or decision-loss contract for this boundary. | CO resolves every special `mode="auto"` model to conduct before cache lookup and performs no auxiliary triage; explicit `mode="route"` remains caller-controlled. fast-mlsirm issue [#2315](https://github.com/ContextualWisdomLab/fast-mlsirm/issues/2315) owns Rust-backed uncertainty, true-parameter calibration/coverage tests, immutable release, then CO version bump and contract tests. | **Proposed** — focused RED→GREEN and impacted local tests passed; hosted exact-head Checks, independent approval, ordinary merge, owner release, and consumer bump remain required. |
+
+Context Map: fast-mlsirm remains the canonical psychometric measurement owner;
+CO consumes only an immutable released contract and does not reproduce the
+estimator. The fail-closed port preserves that ownership boundary while the
+owner feature is incomplete. No ADR is promoted to Accepted by this repair.
