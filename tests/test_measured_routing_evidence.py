@@ -231,7 +231,7 @@ def test_triage_failure_fails_closed_to_conduct() -> None:
     assert orchestrator._needs_workflow("anything at all") is True
 
 
-def test_triage_verdicts_are_recomputed_for_current_evidence(
+def test_workflow_decision_callable_is_not_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -378,10 +378,10 @@ def test_point_evidence_cannot_promote_any_candidate() -> None:
         (0.5, 0.5),
     ],
 )
-def test_triage_rejects_invalid_or_tied_psychometric_evidence(
+def test_point_evidence_never_dispatches_triage(
     scores: tuple[float, ...],
 ) -> None:
-    """Only a unique, finite fitted probability may select a triage model."""
+    """Invalid, tied, and unique point estimates cannot select triage."""
     agents = tuple(
         ModelAgent(f"candidate_{index}", "mock", priority=index)
         for index in range(len(scores))
