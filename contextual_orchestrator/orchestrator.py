@@ -536,10 +536,6 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     default=None,
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
-# Set while an ``orchestrator/free`` request is triaged, so the triage call
-# itself never falls back to a non-free agent.
-_REQUEST_TRIAGE_FREE_ONLY: ContextVar[bool] = ContextVar("request_triage_free_only", default=False)
-
 
 def _resolved_openrouter_provider(agent: ModelAgent) -> str:
     """Canonical provider identity for the ZDR-pin decision, base_url-first.
@@ -1104,10 +1100,10 @@ class WorkflowStep:
 class OrchestrationPolicy:
     """Policy knobs that govern routing, verification, and admin visibility.
 
-    Route-vs-conduct selection is evidence-based: one exact-schema model
-    triage call (cached by content hash) replaces the former keyword-hint and
-    character-length rules, which were hand-tuned heuristics with no
-    literature or measured grounding.
+    Special auto models currently fail closed to conduct without a triage
+    dispatch. The former keyword-hint and character-length rules remain absent;
+    a released calibrated decision-uncertainty contract is required before
+    automatic route admission can return.
     """
 
     route_p95_seconds: float = 2.5
@@ -8122,7 +8118,7 @@ class TaskOrchestrator:
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
 
-    def _would_route_without_triage(self, mode: str, model_name: str) -> bool | None:
+    def _would_route_without_triage(self, mode: str, model_name: str) -> bool:
         """Return the route decision that requires no live triage call.
 
         Special auto models fail closed to conduct until fast-mlsirm releases
@@ -8154,16 +8150,8 @@ class TaskOrchestrator:
         model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
-        cheap_decision = self._would_route_without_triage(mode, model_name)
-        if cheap_decision is not None:
-            return cheap_decision
-        text = self._latest_user_text(messages)
-        prompt_context = self._prompt_interaction(messages)
-        token = _REQUEST_TRIAGE_FREE_ONLY.set(model_name == self.FREE_MODEL)
-        try:
-            return not self._needs_workflow(text, prompt_context)
-        finally:
-            _REQUEST_TRIAGE_FREE_ONLY.reset(token)
+        return self._would_route_without_triage(mode, model_name)
+
 
     @_request_execution_scoped
     def stream_route(
@@ -11102,9 +11090,9 @@ class TaskOrchestrator:
             )
         return affinities
 
-    # --- structured complexity triage (replaces keyword hint tables) -------
+    # --- dormant structured triage contract (no auto dispatch) -------------
 
-    #: Exact-schema instruction for the single structured triage call.
+    #: Exact-schema instruction retained for the future released contract.
     TRIAGE_SYSTEM_PROMPT = (
         "You classify whether a user task requires an orchestrated multi-step "
         "workflow (planning plus verification across steps) or one direct answer. "
@@ -11117,13 +11105,11 @@ class TaskOrchestrator:
         text: str,
         prompt_context: str | None = None,
     ) -> bool:
-        """Decide route-vs-conduct with one strict JSON verdict; fail to conduct.
+        """Delegate to the contained workflow decision.
 
-        Evidence policy: the decision is made by a model under an exact output
-        schema, never by keyword matching. Any failure of the triage call or
-        parse or missing eligible triage agent fails closed toward the
-        orchestrated path, which carries verifier assurance. Verdicts are
-        recomputed against the current candidate roster and fitted evidence.
+        The default does not dispatch a model. It returns conduct until the
+        canonical owner releases calibrated decision uncertainty. This wrapper
+        remains for the future contract and deterministic unit seams.
         """
         return self._compute_triage_verdict(text, prompt_context)
 
