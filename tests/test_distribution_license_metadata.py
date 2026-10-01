@@ -22,11 +22,37 @@ import tomllib
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+NATIVE_DISTRIBUTION_DIRECTORIES = (
+    REPOSITORY_ROOT / "rust" / "decision_receipt",
+    REPOSITORY_ROOT / "rust" / "token_counter",
+)
 
 
 def _pyproject() -> dict:
     with open(REPOSITORY_ROOT / "pyproject.toml", "rb") as handle:
         return tomllib.load(handle)
+
+
+def test_native_distribution_license_metadata_matches_bundled_license() -> None:
+    """Keep both native source declarations aligned with the repository grant."""
+    root_license = (REPOSITORY_ROOT / "LICENSE").read_bytes()
+
+    for distribution_directory in NATIVE_DISTRIBUTION_DIRECTORIES:
+        with open(distribution_directory / "pyproject.toml", "rb") as handle:
+            pyproject = tomllib.load(handle)
+        with open(distribution_directory / "Cargo.toml", "rb") as handle:
+            cargo_package = tomllib.load(handle)["package"]
+
+        assert pyproject["build-system"] == {
+            "build-backend": "maturin",
+            "requires": ["maturin==1.15.0"],
+        }
+        project = pyproject["project"]
+        assert project.get("license") == "MIT"
+        assert project.get("license-files") == ["LICENSE"]
+        assert cargo_package.get("license") == "MIT"
+        assert cargo_package.get("license-file") == "LICENSE"
+        assert (distribution_directory / "LICENSE").read_bytes() == root_license
 
 
 def test_license_declaration_matches_the_repository_license_file() -> None:
