@@ -8,10 +8,38 @@ fails closed when the installed SDK is missing or has another major version.
 from __future__ import annotations
 
 import importlib.metadata
+import secrets
 from typing import Any
 
+from .credentials import NotConfigured, get_credential
 from .vulnerability_claim import assess_vulnerability_claim
 from .web_search import web_search
+
+MCP_SERVER_TOKEN_CREDENTIAL = "WEB_SEARCH_MCP_TOKEN"
+MCP_SERVER_SCOPE = "web-search"
+
+
+class _StaticMCPTokenVerifier:
+    """Verify one KV-backed local deployment bearer without retaining callers."""
+
+    def __init__(self, expected_token: str) -> None:
+        self._expected_token = expected_token.encode("utf-8")
+
+    async def verify_token(self, token: str) -> Any | None:
+        """Return SDK access data only for the exact configured bearer."""
+        try:
+            accepted = secrets.compare_digest(token.encode("utf-8"), self._expected_token)
+        except (AttributeError, TypeError, ValueError):
+            accepted = False
+        if not accepted:
+            return None
+        from mcp.server.auth.provider import AccessToken
+
+        return AccessToken(
+            token=token,
+            client_id="web-search-mcp-caller",
+            scopes=[MCP_SERVER_SCOPE],
+        )
 
 
 def web_search_tool_payload(query: str) -> list[dict[str, Any]]:
@@ -35,7 +63,11 @@ def build_web_search_mcp_server() -> Any:
         ImportError: The installed ``mcp`` package is missing or older than 2.x.
     """
     _require_mcp_sdk_2()
+    token = get_credential(MCP_SERVER_TOKEN_CREDENTIAL)
+    if not token:
+        raise NotConfigured(f"credential {MCP_SERVER_TOKEN_CREDENTIAL} is not configured")
     try:
+        from mcp.server.auth.settings import AuthSettings
         from mcp.server.mcpserver import MCPServer
     except ImportError as exc:
         raise ImportError(
@@ -50,6 +82,12 @@ def build_web_search_mcp_server() -> Any:
             "Repository evidence comes from an operator-selected snapshot. "
             "This identity check does not check versions or authorize a finding."
         ),
+        auth=AuthSettings(
+            issuer_url="http://127.0.0.1",
+            resource_server_url=None,
+            required_scopes=[MCP_SERVER_SCOPE],
+        ),
+        token_verifier=_StaticMCPTokenVerifier(token),
     )
 
     @server.tool(name="web_search", description="Search the configured SearXNG instance.")
