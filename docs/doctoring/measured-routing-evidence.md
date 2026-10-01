@@ -23,9 +23,10 @@ groups. Two measurement systems feed the ladder:
 
 The ranking quantity `stability / ewma_latency_seconds` has the unit expected
 successful responses per second across every member. Token throughput remains
-diagnostic evidence and is not mixed into that score. Workflow triage is a strict structured call that
-fails closed to conducted orchestration when its reply violates the exact
-`{"workflow_required": bool}` schema.
+diagnostic evidence and is not mixed into that score. The intended
+workflow-triage contract uses a strict structured call. Current containment
+does not dispatch it: special auto models fail closed to conduct until
+calibrated decision uncertainty is released.
 
 ## Research-to-code mapping
 
@@ -70,10 +71,11 @@ uncertainty, posterior-dominance decision, or decision-loss contract existed.
 
 The bounded owner repair removes point-estimate admission from automatic
 triage. `_compute_triage_verdict` now returns `workflow_required=True` without
-an auxiliary triage dispatch. Consequently `mode="auto"` retains the conducted
-workflow until the canonical psychometric owner supplies a released contract;
-explicit caller-selected `mode="route"` is unchanged. This is a containment
-decision, not a new heuristic or a claim that conduct is universally optimal.
+an auxiliary triage dispatch. The gateway default, `orchestrator/auto`, and
+`orchestrator/free` resolve to conduct before cache lookup so an unresolved
+legacy route entry cannot bypass containment. Explicit caller-selected
+`mode="route"` is unchanged. This is a containment decision, not a new
+heuristic or a claim that conduct is universally optimal.
 
 Upstream fast-mlsirm issue
 [#2315](https://github.com/ContextualWisdomLab/fast-mlsirm/issues/2315) owns the

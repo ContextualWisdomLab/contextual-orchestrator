@@ -286,14 +286,24 @@ def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() 
     assert records[1]["cost_amount"] == 0.0
 
 
-def test_orchestrator_free_auto_triages_before_reusing_an_unresolved_cache_entry() -> None:
-    """A free auto verdict must separate route and conduct cache entries."""
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        TaskOrchestrator.AUTO_MODEL,
+        TaskOrchestrator.FREE_MODEL,
+    ],
+)
+def test_auto_containment_ignores_an_unresolved_route_cache_entry(
+    model_name: str,
+) -> None:
+    """Special auto models must resolve conduct before cache lookup."""
     client = _CountingModelClient()
     orchestrator = TaskOrchestrator(
         [
             ModelAgent(
-                "mock_free_worker",
-                "mock-free-model",
+                "mock_worker",
+                "mock-model",
                 base_url="mock://worker",
                 provider_name="mock",
                 tags=("reasoning", "writing", "cost:free"),
@@ -305,17 +315,17 @@ def test_orchestrator_free_auto_triages_before_reusing_an_unresolved_cache_entry
     orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
     triage_calls = 0
 
-    def _route_verdict(_text: str, _prompt_context: str | None = None) -> bool:
+    def _forbidden_triage(_text: str, _prompt_context: str | None = None) -> bool:
         nonlocal triage_calls
         triage_calls += 1
         return False
 
-    orchestrator._triage_fn = _route_verdict
-    messages = [{"role": "user", "content": "free auto cache partition request"}]
+    orchestrator._triage_fn = _forbidden_triage
+    messages = [{"role": "user", "content": "auto cache containment request"}]
     legacy_key = orchestrator._cache_key(
         messages,
         "auto",
-        TaskOrchestrator.FREE_MODEL,
+        model_name,
         None,
         resolved_mode=None,
     )
@@ -323,73 +333,23 @@ def test_orchestrator_free_auto_triages_before_reusing_an_unresolved_cache_entry
     orchestrator._cache_provider.put(
         legacy_key,
         {
-            "mode": "conduct",
-            "answer": "stale conduct answer",
-            "trace": [{"role": "thinker"}],
+            "mode": "route",
+            "answer": "stale route answer",
+            "trace": [{"role": "worker"}],
         },
     )
 
     result = orchestrator.complete(
         messages,
         mode="auto",
-        model_name=TaskOrchestrator.FREE_MODEL,
+        model_name=model_name,
     )
 
-    assert triage_calls == 1
-    assert client.calls == 1
-    assert result["cache_status"] == "miss"
-    assert result["mode"] == "route"
-    assert result["answer"] != "stale conduct answer"
-
-
-def test_auto_default_model_cache_hit_never_invokes_live_triage() -> None:
-    """A warm cache entry for the default/auto path must not pay for triage.
-
-    Regression: folding ``resolved_mode`` into the cache key made ``complete()``
-    call ``would_route()`` -- and therefore the live, model-backed triage call
-    -- unconditionally *before* the cache lookup. For ``mode="auto"`` against
-    the gateway default model, that decision genuinely needs a real provider
-    call whenever the process-local triage cache is cold (a fresh replica, an
-    evicted entry), even when the distributed response cache already holds the
-    answer. A cache hit must short-circuit before that call ever happens.
-    """
-    client = _CountingModelClient()
-    orchestrator = TaskOrchestrator(
-        [
-            ModelAgent(
-                "mock_worker",
-                "mock-model",
-                base_url="mock://worker",
-                provider_name="mock",
-                tags=("reasoning", "writing"),
-            )
-        ],
-        client=client,
-        cache_provider=_MemoryCache(),
-    )
-    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
-    triage_calls = 0
-
-    def _counting_triage(_text: str, _prompt_context: str | None = None) -> bool:
-        nonlocal triage_calls
-        triage_calls += 1
-        return False
-
-    orchestrator._triage_fn = _counting_triage
-    messages = [{"role": "user", "content": "warm-cache default auto request"}]
-    key = orchestrator._cache_key(messages, "auto", TaskOrchestrator.GATEWAY_DEFAULT_MODEL, None)
-    assert isinstance(orchestrator._cache_provider, _MemoryCache)
-    orchestrator._cache_provider.put(
-        key,
-        {"mode": "route", "answer": "warm answer", "trace": [{"role": "worker"}]},
-    )
-
-    result = orchestrator.complete(messages, mode="auto")
-
-    assert result["cache_status"] == "hit"
-    assert result["answer"] == "warm answer"
     assert triage_calls == 0
-    assert client.calls == 0
+    assert client.calls > 0
+    assert result["cache_status"] == "miss"
+    assert result["mode"] == "conduct"
+    assert result["answer"] != "stale route answer"
 
 
 def test_zdr_only_request_never_reads_or_writes_the_response_cache() -> None:
