@@ -426,3 +426,11 @@ identified `User-Agent`, including the GitHub Advisory request path.
 Central workflow wiring, independent manifest enforcement in its gate,
 version-range evaluation and the original end-to-end false-positive
 reproduction remain open under #1347. Security gates are unchanged.
+Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
+`e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
+loopback caller path. Server construction now requires the KV-backed
+`WEB_SEARCH_MCP_TOKEN`, delegates bearer enforcement to the official SDK, and
+grants only the exact `web-search` scope after constant-time equality. Missing
+configuration fails closed; missing and mismatched HTTP bearers return 401.
+This is the dedicated local snapshot boundary, not a substitute for the
+Keyverse/OIDC verifier required by any public or multi-tenant deployment.

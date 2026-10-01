@@ -151,6 +151,9 @@ printf '%s' 'http://127.0.0.1:8088' | python -m contextual_orchestrator \
   register-credential --name SEARXNG_URL --value-stdin
 printf '%s' '/srv/review-snapshot' | python -m contextual_orchestrator \
   register-credential --name VULNERABILITY_REPOSITORY_SNAPSHOT --value-stdin
+python -c 'import secrets; print(secrets.token_urlsafe(32))' \
+  | python -m contextual_orchestrator register-credential \
+      --name WEB_SEARCH_MCP_TOKEN --value-stdin
 python -m contextual_orchestrator.web_search_mcp
 ```
 
@@ -168,6 +171,14 @@ Install the project `api` extra for the MCP server. It declares
 construction fails closed if the installed package is missing or is not major
 version 2. Protected API CI uses that locked extra; an absent SDK is not an
 optional passing test state.
+
+Every Streamable HTTP request must present the registered token as
+`Authorization: Bearer <token>`. Missing or mismatched tokens receive HTTP 401
+through the SDK authentication middleware before a tool runs. This opaque
+bearer is a local, dedicated-snapshot deployment boundary; the server still
+refuses non-loopback binds. A public or multi-tenant deployment requires the
+existing Keyverse/OIDC external-verifier boundary rather than reusing this
+local token.
 
 `assess_vulnerability_claim` takes `identifier`, `package_name` and `ecosystem`
 (`PyPI`, `npm`, `crates.io`). It reads supported root manifests from that

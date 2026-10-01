@@ -7522,10 +7522,20 @@ CLI Compose-runtime test skipped; a clean Python 3.12 hash-locked environment
 passed 25 MCP/lock tests with `PYTHONPATH=.`. Ruff, compileall, lock checking,
 and diff checking pass for the changed surface.
 
-This remains Proposed source evidence only. Caller authentication or verified
-dedicated isolation, installed-version applicability, protected exact-head
-Checks, independent approval, ordinary merge, immutable release, and consumer
-adoption remain open. A repository-wide local run is not claimed: it was
+This remains Proposed source evidence only. The local caller boundary was then
+repaired in source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36`
+(tree `e12b41633ca903fb9f3fbc190105bf59465852ee`): server construction
+requires the KV-backed `WEB_SEARCH_MCP_TOKEN`, exact constant-time equality
+grants only the `web-search` scope through the official SDK verifier, and
+missing or mismatched HTTP bearers return 401 before tool execution. The
+related Python 3.12 suite is now 106 passed with only the Docker CLI test
+skipped; the clean hash-lock path passes 28 MCP/lock tests. This local opaque
+bearer does not replace the Keyverse/OIDC verifier required for public or
+multi-tenant service.
+
+Installed-version applicability, protected exact-head Checks, independent
+approval, ordinary merge, immutable release, and consumer adoption remain
+open. A repository-wide local run is not claimed: it was
 stopped when the configured environment reached an external OpenRouter request;
 no credential-bearing external test traffic was authorized. Protected CI must
 provide the clean-room full-suite evidence on this exact head.
