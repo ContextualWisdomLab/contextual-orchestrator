@@ -50,13 +50,14 @@ jobs:
           toolchain: "1.97.1" # Keep aligned with mise.toml.
           components: rustfmt, clippy
 
-      - name: Build locked native decision measurement
+      - name: Build locked native distributions
         run: |
           set -euo pipefail
           rustup show active-toolchain
           uv sync --locked --extra api --extra db --extra queue --group dev --group native-build
           uv run --no-sync maturin develop --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml
           uv run --no-sync maturin build --locked --release --features pyo3/extension-module --manifest-path rust/decision_receipt/Cargo.toml --out "$RUNNER_TEMP/decision-wheels"
+          uv run --no-sync maturin build --locked --release --features pyo3/extension-module --manifest-path rust/token_counter/Cargo.toml --out "$RUNNER_TEMP/token-wheels"
 
       - name: Run full test suite
         run: uv run --no-sync python -m pytest -q -ra
@@ -89,6 +90,7 @@ jobs:
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
           uv build --wheel --offline --no-build-isolation --out-dir dist
           python scripts/verify_decision_wheel_manifest.py dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl
+          python scripts/verify_native_wheel_license.py LICENSE "$RUNNER_TEMP"/decision-wheels/*.whl "$RUNNER_TEMP"/token-wheels/*.whl
           python -m pip install --no-deps \
             --target "$RUNNER_TEMP/nim-wheel-site" \
             dist/contextual_orchestrator-*.whl "$RUNNER_TEMP"/decision-wheels/*.whl

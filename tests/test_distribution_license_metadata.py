@@ -34,6 +34,7 @@ def _pyproject() -> dict:
 
 
 def test_native_distribution_license_metadata_matches_bundled_license() -> None:
+    """Keep both native source declarations aligned with the repository grant."""
     root_license = (REPOSITORY_ROOT / "LICENSE").read_bytes()
 
     for distribution_directory in NATIVE_DISTRIBUTION_DIRECTORIES:
