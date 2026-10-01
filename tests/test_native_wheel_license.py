@@ -12,7 +12,11 @@ MIT_TEXT = b"MIT License\n\nunit fixture\n"
 
 
 def _write_wheel(
-    path: Path, *, expression: str = "MIT", include_license: bool = True
+    path: Path,
+    *,
+    expression: str = "MIT",
+    extra_expression: str | None = None,
+    include_license: bool = True,
 ) -> None:
     """Write a minimal synthetic wheel fixture for artifact-only unit tests."""
     metadata = (
@@ -20,7 +24,8 @@ def _write_wheel(
         "Name: native-fixture\n"
         "Version: 1.0.0\n"
         f"License-Expression: {expression}\n"
-        "License-File: LICENSE\n\n"
+        + (f"License-Expression: {extra_expression}\n" if extra_expression else "")
+        + "License-File: LICENSE\n\n"
     )
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("native_fixture-1.0.0.dist-info/METADATA", metadata)
@@ -45,6 +50,14 @@ class NativeWheelLicenseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "native.whl"
             _write_wheel(wheel, expression="Apache-2.0")
+            with self.assertRaisesRegex(ValueError, "License-Expression"):
+                verify_native_wheel_license(wheel, MIT_TEXT)
+
+    def test_rejects_ambiguous_expression_headers(self) -> None:
+        """Reject conflicting duplicate license-expression authority."""
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "native.whl"
+            _write_wheel(wheel, extra_expression="Apache-2.0")
             with self.assertRaisesRegex(ValueError, "License-Expression"):
                 verify_native_wheel_license(wheel, MIT_TEXT)
 

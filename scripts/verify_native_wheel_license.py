@@ -18,10 +18,14 @@ def verify_native_wheel_license(wheel_path: Path, expected_license: bytes) -> No
             raise ValueError("native wheel must contain exactly one METADATA file")
         metadata_path = metadata_paths[0]
         metadata = email.message_from_bytes(archive.read(metadata_path))
-        if metadata.get("License-Expression") != "MIT":
-            raise ValueError("native wheel License-Expression must be MIT")
-        if "LICENSE" not in (metadata.get_all("License-File") or []):
-            raise ValueError("native wheel License-File must declare LICENSE")
+        if (metadata.get_all("License-Expression") or []) != ["MIT"]:
+            raise ValueError(
+                "native wheel must declare exactly License-Expression: MIT"
+            )
+        if (metadata.get_all("License-File") or []) != ["LICENSE"]:
+            raise ValueError(
+                "native wheel must declare exactly License-File: LICENSE"
+            )
         license_path = metadata_path.removesuffix("METADATA") + "licenses/LICENSE"
         try:
             bundled_license = archive.read(license_path)
