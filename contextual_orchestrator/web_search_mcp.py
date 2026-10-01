@@ -1,8 +1,8 @@
 """Expose web search and advisory checks as Streamable HTTP MCP tools.
 
-The official ``mcp`` SDK is the same deployment-provided package the Camoufox
-client already uses. It is imported only when the server is built, so the rest
-of the gateway keeps running where that package is absent.
+The protected API environment installs the official ``mcp`` 2.x SDK from the
+project lock. It is imported only when the server is built, and server startup
+fails closed when the installed SDK is missing or has another major version.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ def build_web_search_mcp_server() -> Any:
     Raises:
         ImportError: The installed ``mcp`` package is missing or older than 2.x.
     """
+    _require_mcp_sdk_2()
     try:
         from mcp.server.mcpserver import MCPServer
     except ImportError as exc:
@@ -70,6 +71,17 @@ def build_web_search_mcp_server() -> Any:
         return vulnerability_claim_tool_payload(identifier, package_name, ecosystem)
 
     return server
+
+
+def _require_mcp_sdk_2() -> str:
+    """Return the installed MCP version or fail closed outside major 2."""
+    try:
+        version = importlib.metadata.version("mcp")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise ImportError("web search MCP server requires mcp SDK 2.x (not installed)") from exc
+    if version.split(".", 1)[0] != "2":
+        raise ImportError(f"web search MCP server requires mcp SDK 2.x (installed: {version})")
+    return version
 
 
 def serve_web_search_mcp(*, host: str = "127.0.0.1", port: int = 8765) -> None:

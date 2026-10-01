@@ -1,4 +1,5 @@
 import re
+import tomllib
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -234,6 +235,21 @@ def test_python_lockfile_uses_hash_pinning():
     assert "fastapi==" in lock_text
     assert "uvicorn==" in lock_text
     assert "sqlalchemy==" in lock_text
+
+
+def test_mcp_sdk_2_is_declared_and_locked_for_protected_api_tests():
+    project = tomllib.loads(read_text("pyproject.toml"))
+    api_dependencies = project["project"]["optional-dependencies"]["api"]
+    project_lock = read_text("requirements.lock")
+    uv_packages = {
+        package["name"]: package["version"]
+        for package in tomllib.loads(read_text("uv.lock"))["package"]
+    }
+
+    assert "mcp>=2.0,<3.0" in api_dependencies
+    locked_version = re.search(r"(?m)^mcp==(\d+)\.", project_lock)
+    assert locked_version is not None and locked_version.group(1) == "2"
+    assert uv_packages["mcp"].split(".", 1)[0] == "2"
 
 
 def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
