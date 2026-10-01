@@ -158,16 +158,18 @@ package list or filesystem path. The operator registers a read-only repository
 snapshot in the KV. Bounded root `pyproject.toml`, `package.json`,
 `package-lock.json`, `Cargo.toml` and `Cargo.lock` readers establish positive
 package presence; absence, unsupported formats and workspaces remain unknown.
-Search results discover exact official record URLs, but snippets never judge
-the claim. Generated MITRE CVE and GitHub Advisory JSON endpoints are fetched
-through the existing bounded, DNS-pinned, no-redirect HTTP transport; exact
+The claim path constructs MITRE CVE and GitHub Advisory JSON endpoints from
+validated identifiers and fetches them directly through the existing bounded,
+DNS-pinned, no-redirect HTTP transport; SearXNG is not a discovery or verdict
+dependency. Exact
 record identity and ecosystem-qualified affected package names are compared.
 Generic product prose is insufficient. Python distribution names use Python
 normalization, not a cross-ecosystem substring match. A structured package
 mismatch can reject that identity claim; a match stays `unverified` because
 installed versions and affected ranges are not checked. `finding_allowed` and
 `versions_checked` remain false. Missing search, snapshot or record evidence is
-`unverified`, never a clean-repository verdict or a finding. Strix and
+`unverified`, never a clean-repository verdict or a finding. Search remains a
+separate explicitly invoked informational tool. Strix and
 Noema workflow files in `ContextualWisdomLab/.github` still have to point at
 this server; that wiring is outside this repository. The general MCP
 client/proxy role stays unbuilt.

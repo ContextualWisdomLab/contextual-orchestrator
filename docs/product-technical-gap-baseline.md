@@ -7494,6 +7494,28 @@ lifecycle policy and keeps ResourceWarning visible as a failure signal.
 
 ## 2026-09-30 PR #1348 SearXNG secret and advisory transport repair
 
+### 2026-10-02 no-heuristics advisory authority repair — Proposed
+
+Independent review found that the verdict path required SearXNG to return an
+exact official URL before fetching the already deterministic official record.
+Search ranking, index freshness, or availability could therefore suppress a
+structured package-identity decision. Source repair commit
+`f45869fd46bcb8687ca892c8bf9bfea38346571d` (tree
+`5c61fec7a160b9face6d9eea849ea26ddb1e4213`) removes search from the verdict
+path, deletes its obsolete URL-ranking helper, and directly fetches the
+identifier-derived MITRE CVE or GitHub Advisory endpoint through the existing
+DNS-pinned, no-redirect transport. Missing or insufficient official evidence
+still returns `unverified`; `finding_allowed` and `versions_checked` remain
+false. SearXNG remains a separate informational MCP tool.
+
+The RED regression reproduced `package_match=None` despite a valid structured
+record when search was unavailable. GREEN verification completed 75 tests with
+one optional MCP SDK test skipped, plus Python compilation and diff checks.
+This is Proposed source evidence only: the undeclared/enforced MCP 2.x runtime
+dependency, caller authentication or verified isolation, installed-version
+applicability, exact-head protected Checks, independent approval, ordinary
+merge, immutable release, and consumer adoption remain open.
+
 PR #1348 exact head `5fa67db3bbeabae9cc7ad121a97f9f10d33875e5`
 remained Proposed after review found two runtime defects. The SearXNG overlay
 placed both `SEARXNG_SECRET` and `WARDNET_EGRESS_PROXY_TOKEN` in the container

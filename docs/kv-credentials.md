@@ -168,10 +168,12 @@ The MCP server requires the deployment-provided `mcp` SDK 2.x and `api` extra.
 `assess_vulnerability_claim` takes `identifier`, `package_name` and `ecosystem`
 (`PyPI`, `npm`, `crates.io`). It reads supported root manifests from that
 snapshot and compares structured official affected-package identities. Missing
-or unsupported manifests, unknown workspace coverage, search failure and
+or unsupported manifests, unknown workspace coverage, official-record failure and
 insufficient records remain `unverified`, not clean. A package match is also
 `unverified`: versions/ranges are not checked, and `finding_allowed=false`.
-Search snippets cannot authorize or reject a vulnerability finding. Central
+The claim path constructs the official endpoint from the validated identifier;
+SearXNG ranking and availability never select or admit evidence. Search snippets
+cannot authorize or reject a vulnerability finding. Central
 Strix/Noema wiring and real end-to-end proof remain open under #1347.
 Camoufox-rendered browsing (for JS-heavy fact-check targets, not search) and
 its `quarantine-sandbox-runtime` session isolation remain a documented

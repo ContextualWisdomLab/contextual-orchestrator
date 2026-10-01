@@ -12,6 +12,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Vulnerability claim verdicts now fetch deterministically constructed MITRE
+  CVE or GitHub Advisory records directly through the existing DNS-pinned,
+  no-redirect transport. SearXNG remains an explicitly invoked informational
+  search tool; its ranking, indexing, or availability no longer controls
+  claim admission. Missing authoritative record evidence still fails closed.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one
