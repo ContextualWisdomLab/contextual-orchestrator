@@ -1,5 +1,34 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-02 security-tool urllib3 lock parity — Proposed
+
+PR [#1352](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1352)
+predecessor head `5f66743fd7675b89ff4906683b0ad4d4d6431fe6` raised the
+application dependency floor and regenerated the application locks for the
+three urllib3 advisories fixed in 2.8.0, but left
+`requirements-security-ci.txt` and `requirements-security-tools.txt` pinned
+to vulnerable urllib3 2.7.0. RED repository metadata coverage reproduced the
+missing declarative floors. A clean Python 3.12
+`pip install --require-hashes -r requirements-security-ci.txt` then exposed a
+second contract gap: regenerating the CI lock without its prior transitive
+`typing-extensions` entry made the documented hash installation incomplete.
+
+Ordinary-forward repair commit
+`e582818e6dcf3d3892f74577569574e4fdbb3e5d` (tree
+`fcfe8eabed8398dd7711e3516b6cbbc7eb580adf`) adds explicit
+`urllib3>=2.8.0` inputs to both security-tool lock roots, preserves
+`typing-extensions==4.16.0` as an explicit CI input, regenerates both locks,
+and adds executable lock-floor and pin-parity contracts. The focused metadata
+suite completes **18 tests**; the clean Python 3.12 hash installation succeeds;
+and `pip-audit` reports **no known vulnerabilities** for each regenerated
+security lock. `git diff --check` also passes.
+
+This evidence is **Proposed**, not acceptance. The prerequisite stack
+#1346 → #1348 → #1351 remains unmerged, the PR remains Draft, and protected
+exact-head Security/Quality, CodeQL, independent approval, ordinary merge,
+immutable release, and consumer verification remain required. A skipped gate
+on a non-`main` stacked base is not GREEN.
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
