@@ -252,6 +252,28 @@ def test_mcp_sdk_2_is_declared_and_locked_for_protected_api_tests():
     assert uv_packages["mcp"].split(".", 1)[0] == "2"
 
 
+def test_urllib3_security_release_is_locked_for_every_install_path():
+    """Keep the Trivy-verified urllib3 repair consistent across install paths."""
+    expected_version = "2.8.0"
+    compiled_versions = [
+        re.search(r"(?m)^urllib3==([^ ;\\]+)", read_text(lock_path)).group(1)
+        for lock_path in (
+            "requirements.lock",
+            "requirements-security-ci.txt",
+            "requirements-security-tools.txt",
+        )
+    ]
+    uv_packages = {
+        package["name"]: package["version"]
+        for package in tomllib.loads(read_text("uv.lock"))["package"]
+    }
+
+    assert compiled_versions == [expected_version] * len(compiled_versions)
+    assert uv_packages["urllib3"] == expected_version
+    for input_path in ("requirements-security-ci.in", "requirements-security-tools.in"):
+        assert "urllib3>=2.8.0" in read_text(input_path)
+
+
 def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     """CI must install the uv lock so git-backed runtime dependencies are present."""
     workflow_text = read_text(".github/workflows/security.yml")
