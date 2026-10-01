@@ -537,6 +537,7 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
 
+
 def _resolved_openrouter_provider(agent: ModelAgent) -> str:
     """Canonical provider identity for the ZDR-pin decision, base_url-first.
 
@@ -8151,7 +8152,6 @@ class TaskOrchestrator:
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         return self._would_route_without_triage(mode, model_name)
-
 
     @_request_execution_scoped
     def stream_route(
