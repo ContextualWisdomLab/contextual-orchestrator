@@ -21,3 +21,5 @@ Automatic triage now uses the canonical system/developer/user interaction
 identity used by judged observations, preserves worker-exclusion partitions,
 and recomputes against the current roster and fitted evidence instead of
 reusing a stale route-authorizing verdict cache.
+The locked urllib3 dependency is upgraded from 2.7.0 to 2.8.0, the upstream
+fixed release for CVE-2026-97687, CVE-2026-97688, and CVE-2026-97689.
