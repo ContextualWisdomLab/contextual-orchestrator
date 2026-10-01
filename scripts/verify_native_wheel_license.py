@@ -18,6 +18,10 @@ def verify_native_wheel_license(wheel_path: Path, expected_license: bytes) -> No
             raise ValueError("native wheel must contain exactly one METADATA file")
         metadata_path = metadata_paths[0]
         metadata = email.message_from_bytes(archive.read(metadata_path))
+        if (metadata.get_all("Metadata-Version") or []) != ["2.4"]:
+            raise ValueError(
+                "native wheel must declare exactly Metadata-Version: 2.4"
+            )
         if (metadata.get_all("License-Expression") or []) != ["MIT"]:
             raise ValueError(
                 "native wheel must declare exactly License-Expression: MIT"

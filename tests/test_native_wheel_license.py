@@ -14,13 +14,14 @@ MIT_TEXT = b"MIT License\n\nunit fixture\n"
 def _write_wheel(
     path: Path,
     *,
+    metadata_version: str = "2.4",
     expression: str = "MIT",
     extra_expression: str | None = None,
     include_license: bool = True,
 ) -> None:
     """Write a minimal synthetic wheel fixture for artifact-only unit tests."""
     metadata = (
-        "Metadata-Version: 2.4\n"
+        f"Metadata-Version: {metadata_version}\n"
         "Name: native-fixture\n"
         "Version: 1.0.0\n"
         f"License-Expression: {expression}\n"
@@ -44,6 +45,14 @@ class NativeWheelLicenseTest(unittest.TestCase):
             wheel = Path(directory) / "native.whl"
             _write_wheel(wheel)
             verify_native_wheel_license(wheel, MIT_TEXT)
+
+    def test_rejects_pre_pep_639_metadata_version(self) -> None:
+        """Reject PEP 639 fields under an earlier Core Metadata version."""
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "native.whl"
+            _write_wheel(wheel, metadata_version="2.3")
+            with self.assertRaisesRegex(ValueError, "Metadata-Version"):
+                verify_native_wheel_license(wheel, MIT_TEXT)
 
     def test_rejects_wrong_expression(self) -> None:
         """Reject a wheel whose expression differs from the repository grant."""
