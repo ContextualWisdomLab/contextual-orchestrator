@@ -42,28 +42,49 @@ fails closed to conducted orchestration when its reply violates the exact
 
 PR #1346 exposed that strict JSON validation governed only reply shape: the
 runtime still selected the statically first triage model and accepted its
-boolean without fitted quality evidence. The repaired boundary reuses the
-released Rust-backed fast-mlsirm `PsychometricRoutingEvidence` owner. A triage
-call is admitted only when every eligible candidate has one uniquely identified,
-finite fitted success probability in `[0, 1]` for the exact prompt; partial or
-duplicate evidence, an invalid probability, an unknown deployment identity, or
-a tied leading posterior returns
-`workflow_required=True`. Passing no embedding vector deliberately disables
-semantic-neighbor warm starts at this authority boundary, so similarity cannot
-authorize direct routing. Explicit `mode="route"` remains caller authority and
-does not pass through this automatic triage decision.
+boolean without fitted quality evidence. An intermediate repair reused the
+released Rust-backed fast-mlsirm `PsychometricRoutingEvidence` owner and
+admitted triage from a unique maximum fitted probability. The 2026-10-02 review
+below supersedes that admission rule because a point estimate is not calibrated
+decision uncertainty and does not establish posterior dominance.
 
-The exact identity is the same canonical system/developer/user interaction
-JSON used when recording judged outcomes, not the latest user text alone.
-Worker-excluded candidates never enter the posterior comparison. Automatic
-triage verdicts are deliberately not cached: a cached direct-route answer
-could outlive the roster, deployment identity, or fitted evidence that
-authorized it.
+That intermediate implementation used the same canonical
+system/developer/user interaction JSON as judged outcomes, excluded
+worker-ineligible candidates, and avoided caching route-authorizing verdicts.
+Those safeguards remain historical evidence but did not create calibrated
+decision authority.
 
-This is a fail-closed source contract, not evidence that the fitted probability
-is population-calibrated or that route improves customer outcomes. Protected
-exact-head Checks, independent approval, immutable release, and consumer pin
-remain required before the behavior is production authority.
+This section records the superseded intermediate contract; it is not production
+authority or evidence that route improves customer outcomes.
+
+### Point-estimate admission containment, 2026-10-02
+
+At PR #1346 exact predecessor
+`d6061498756a2e30e7d759c5e44f5233860da17b`,
+`PsychometricRoutingEvidence.ranked_evidence` exposed only fitted point
+probabilities. `_compute_triage_verdict` nevertheless treated a complete,
+finite, uniquely maximal value as authority to dispatch a triage model and
+accept its boolean route verdict. A focused regression with one candidate at
+0.99 reproduced RED: the request routed directly even though no calibrated
+uncertainty, posterior-dominance decision, or decision-loss contract existed.
+
+The bounded owner repair removes point-estimate admission from automatic
+triage. `_compute_triage_verdict` now returns `workflow_required=True` without
+an auxiliary triage dispatch. Consequently `mode="auto"` retains the conducted
+workflow until the canonical psychometric owner supplies a released contract;
+explicit caller-selected `mode="route"` is unchanged. This is a containment
+decision, not a new heuristic or a claim that conduct is universally optimal.
+
+Upstream fast-mlsirm issue
+[#2315](https://github.com/ContextualWisdomLab/fast-mlsirm/issues/2315) owns the
+required Rust-backed calibrated uncertainty and posterior-dominance result,
+true-parameter calibration and interval-coverage tests, immutable release, and
+CO consumer bump. Indeterminate or missing evidence must fail closed. Local
+repair evidence is the observed RED above followed by 52 measured-routing
+tests, 40 decision-receipt tests, and 180 impacted routing/HTTP/stream tests
+passing. Status remains **Proposed** until hosted exact-head Checks, qualifying
+independent approval, ordinary merge, immutable owner release, and consumer
+pinning complete.
 
 ### Citation correction, 2026-09-09
 

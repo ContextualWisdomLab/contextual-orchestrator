@@ -11,28 +11,13 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import build_server, SecurityConfig
 
 
-def _admit_single_triage_candidate(orchestrator, monkeypatch):
-    """Supply exact fitted evidence for a one-candidate receipt fixture."""
-    def ranked_evidence(candidate_ids, prompt_context, task_vector):
-        del prompt_context, task_vector
-        assert len(candidate_ids) == 1
-        return [(next(iter(candidate_ids)), 1.0)]
-
-    monkeypatch.setattr(
-        orchestrator._psychometric_router,
-        "ranked_evidence",
-        ranked_evidence,
-    )
-
-
-@pytest.mark.parametrize("scenario", ["saturated", "success", "conduct_success", "classifier_error", "trace_rejection"])
+@pytest.mark.parametrize("scenario", ["saturated", "success", "conduct_success", "classifier_error", "trace_request"])
 @pytest.mark.parametrize("measurement_enabled", [False, True])
 def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatch, scenario, measurement_enabled):
     """Classification and task execution share capacity and release it exactly once."""
     from contextual_orchestrator.server import RequestError
     orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
                                     state_db=tmp_path / "state.db")
-    _admit_single_triage_candidate(orchestrator, monkeypatch)
     security = SecurityConfig(auth_token="test-token", max_concurrent_runs=1)
     original_acquire, original_release = security.acquire_run_slot, security.release_run_slot
     acquired, released, calls = [], [], []
@@ -64,14 +49,14 @@ def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatc
     try:
         body = {"model": "orchestrator/auto", "mode": "auto", "stream": True,
                 "messages": [{"role": "user", "content": "capacity question"}]}
-        if scenario == "trace_rejection":
+        if scenario == "trace_request":
             body["include_orchestration_trace"] = True
         connection.request("POST", "/v1/chat/completions", json.dumps(body),
                            {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
         response = connection.getresponse()
         response.read()
         assert response.status == {"saturated": 503, "success": 200, "conduct_success": 200,
-                                   "classifier_error": 400, "trace_rejection": 400}[scenario]
+                                   "classifier_error": 400, "trace_request": 200}[scenario]
         connection.close()
         server.shutdown()
         if scenario == "saturated":
@@ -94,12 +79,11 @@ def test_chat_stream_classification_owns_one_capacity_lease(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("invalid_field", [None, "routing", "attribution", "user", "metadata", "implicit_trace", "explicit_trace", "authorized_trace"])
-def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_field):
-    """Auto stream classification must share the eventual task's admission clock."""
+def test_http_auto_stream_admits_before_fail_closed_conduct(tmp_path, monkeypatch, invalid_field):
+    """Fail-closed auto conduct shares the eventual task's admission clock."""
     from contextual_orchestrator.decision_receipts import _CURRENT_DECISION, export_decision_receipts
     orchestrator = TaskOrchestrator([ModelAgent("worker_one", "mock/worker")],
                                     state_db=tmp_path / "state.db")
-    _admit_single_triage_candidate(orchestrator, monkeypatch)
     snapshots = []
     original_chat = orchestrator.client.chat
     def observed_chat(agent, messages, **kwargs):
@@ -130,23 +114,27 @@ def test_http_auto_stream_admits_before_triage(tmp_path, monkeypatch, invalid_fi
                            {"Content-Type": "application/json", "Authorization": "Bearer test-token"})
         response = connection.getresponse()
         response.read()
-        expected_status = 401 if invalid_field == "explicit_trace" else (400 if invalid_field in ("routing", "attribution", "user", "metadata", "authorized_trace") else 200)
+        expected_status = (
+            401
+            if invalid_field in ("implicit_trace", "explicit_trace")
+            else 400
+            if invalid_field in ("routing", "attribution", "user", "metadata")
+            else 200
+        )
         assert response.status == expected_status
         connection.close()
         server.shutdown()
-        if invalid_field == "authorized_trace":
-            observation, = export_decision_receipts(orchestrator._store)["observations"]
-            assert observation["status"] == "selection_failed"
-            assert observation["durable_ack_elapsed_ns"] is None
-            assert snapshots[0]["request_id"] == observation["request_id"]
-            return
         if expected_status != 200:
             assert snapshots == []
-            assert orchestrator._store.load("accepted_request") == []
+            accepted_requests = orchestrator._store.load("accepted_request")
+            if invalid_field == "implicit_trace":
+                assert len(accepted_requests) == 1
+            else:
+                assert accepted_requests == []
             return
         assert snapshots and all(snapshot is not None for snapshot in snapshots)
         observation, = export_decision_receipts(orchestrator._store)["observations"]
-        assert observation["first_provider_phase"] == "structured_triage"
+        assert observation["first_provider_phase"] == "task_execution"
         assert observation["durable_ack_elapsed_ns"] is not None
         assert snapshots[0]["request_id"] == observation["request_id"]
     finally:
@@ -750,28 +738,21 @@ def test_legacy_identity_backfill_and_indexed_window(tmp_path):
         store.close()
 
 
-def test_http_recomputed_triage_keeps_task_ack_after_auxiliary_work(tmp_path, monkeypatch):
-    """Each uncached triage dispatch stays auxiliary to its task decision."""
+def test_http_point_evidence_conducts_without_auxiliary_triage(tmp_path, monkeypatch):
+    """Point evidence conducts without creating a triage dispatch receipt."""
     from contextual_orchestrator.decision_receipts import _CURRENT_DECISION
 
     orchestrator = TaskOrchestrator(
         [ModelAgent("worker_one", "mock/worker", tags=("writing",))],
         state_db=tmp_path / "state.db",
     )
-    _admit_single_triage_candidate(orchestrator, monkeypatch)
     original_chat = orchestrator.client.chat
-    auxiliary_ready = threading.Event()
-    auxiliary_release = threading.Event()
-    auxiliary_snapshots = []
     task_snapshots = []
 
     def controlled_chat(agent, messages, **kwargs):
         measurement = _CURRENT_DECISION.get()
         if messages[0]["content"] == orchestrator.TRIAGE_SYSTEM_PROMPT:
-            auxiliary_snapshots.append(measurement.snapshot())
-            auxiliary_ready.set()
-            assert auxiliary_release.wait(10)
-            return '{"workflow_required": false}'
+            raise AssertionError("point evidence must not dispatch triage")
         task_snapshots.append(measurement.snapshot())
         return original_chat(agent, messages, **kwargs)
 
@@ -788,34 +769,22 @@ def test_http_recomputed_triage_keeps_task_ack_after_auxiliary_work(tmp_path, mo
                 "messages": [{"role": "user", "content": "same question"}],
             }), {"Content-Type": "application/json", "Authorization": "Bearer test-token",
                  "x-cache-bypass": "true"})
-            if request_index == 0:
-                assert auxiliary_ready.wait(10)
-                snapshot = auxiliary_snapshots[0]
-                assert snapshot["durable_ack_elapsed_ns"] is None
-                assert snapshot.get("first_provider_elapsed_ns") is not None
-                assert snapshot.get("first_provider_phase") == "structured_triage"
-                auxiliary_release.set()
             response = connection.getresponse()
             response.read()
             assert response.status == 200
             connection.close()
         server.shutdown()
         server.server_close()
-        assert len(auxiliary_snapshots) == 2
-        assert len(task_snapshots) == 2
-        for task_snapshot in task_snapshots:
-            assert task_snapshot["first_provider_elapsed_ns"] < task_snapshot["selection_elapsed_ns"] <= task_snapshot["durable_ack_elapsed_ns"]
-            assert task_snapshot["first_provider_phase"] == "structured_triage"
+        assert len(task_snapshots) >= 2
         from contextual_orchestrator.decision_receipts import export_decision_receipts
         exported = export_decision_receipts(orchestrator._store)
         for observation in exported["observations"]:
+            assert observation["selection_elapsed_ns"] is not None
+            assert observation["durable_ack_elapsed_ns"] is not None
+            assert observation["first_provider_phase"] == "task_execution"
             assert observation["first_provider_boundary"] == "provider_ready_before_diagnostic_commit"
-            auxiliary, = observation["auxiliary_dispatches"]
-            assert auxiliary["phase"] == "structured_triage"
-            assert auxiliary["outcome"] == "completed"
-            assert auxiliary["finished_elapsed_ns"] <= observation["selection_elapsed_ns"]
+            assert observation["auxiliary_dispatches"] == []
     finally:
-        auxiliary_release.set()
         server.shutdown()
         worker.join()
         server.server_close()

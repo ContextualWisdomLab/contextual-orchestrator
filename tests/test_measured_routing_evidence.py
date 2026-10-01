@@ -270,8 +270,27 @@ def test_triage_without_exact_psychometric_evidence_fails_closed() -> None:
     assert called == []
 
 
-def test_triage_uses_fast_mlsirm_posterior_order() -> None:
-    """The fitted contextual-success order, not static priority, selects triage."""
+def test_point_probabilities_never_authorize_direct_route() -> None:
+    """Point estimates without calibrated uncertainty must conduct."""
+    agent = ModelAgent("measured_agent", "mock", tags=("reasoning",))
+    orchestrator = _orch(agent)
+    evidence_id = orchestrator._psychometric_candidate_ids((agent,))[0]
+    orchestrator._psychometric_router.ranked_evidence = (  # type: ignore[method-assign]
+        lambda candidate_ids, prompt, vector: [(evidence_id, 0.99)]
+    )
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("observed request") is True
+    assert called == []
+
+
+def test_point_probability_order_does_not_authorize_triage() -> None:
+    """A unique point ordering is not calibrated decision evidence."""
     static_first = ModelAgent("static_first", "mock", priority=100)
     measured_first = ModelAgent("measured_first", "mock", priority=1)
     orchestrator = _orch(static_first, measured_first)
@@ -291,12 +310,12 @@ def test_triage_uses_fast_mlsirm_posterior_order() -> None:
         return '{"workflow_required": false}'
 
     orchestrator.client.chat = record
-    assert orchestrator._compute_triage_verdict("observed request") is False
-    assert called == ["measured_first"]
+    assert orchestrator._compute_triage_verdict("observed request") is True
+    assert called == []
 
 
-def test_auto_triage_uses_canonical_prompt_interaction() -> None:
-    """System/developer/user identity matches contextual-quality observations."""
+def test_auto_triage_point_evidence_fails_closed_before_dispatch() -> None:
+    """Canonical prompt point evidence cannot authorize a direct route."""
     agent = ModelAgent("general_agent", "mock", tags=("reasoning",))
     orchestrator = _orch(agent)
     messages = [
@@ -319,12 +338,12 @@ def test_auto_triage_uses_canonical_prompt_interaction() -> None:
 
     orchestrator.client.chat = record
 
-    assert orchestrator.would_route(messages, mode="auto") is True
-    assert triage_messages[0][1]["content"] == prompt_context
+    assert orchestrator.would_route(messages, mode="auto") is False
+    assert triage_messages == []
 
 
-def test_triage_never_promotes_role_excluded_candidate() -> None:
-    """Posterior ranking stays inside the worker-eligible partition."""
+def test_point_evidence_cannot_promote_any_candidate() -> None:
+    """Point estimates cannot promote eligible or excluded candidates."""
     eligible = ModelAgent("eligible_agent", "mock", priority=1)
     excluded = ModelAgent(
         "excluded_agent",
@@ -347,8 +366,8 @@ def test_triage_never_promotes_role_excluded_candidate() -> None:
         return '{"workflow_required": false}'
 
     orchestrator.client.chat = record
-    assert orchestrator._compute_triage_verdict("task") is False
-    assert called == ["eligible_agent"]
+    assert orchestrator._compute_triage_verdict("task") is True
+    assert called == []
 
 
 @pytest.mark.parametrize(
