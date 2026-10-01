@@ -12,6 +12,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Security installation inputs and all three Python lock paths now retain
+  `urllib3>=2.8.0`/`urllib3==2.8.0`, carrying the validated #1352 repair into
+  this branch after exact-head Trivy identified CVE-2026-97687,
+  CVE-2026-97688, and CVE-2026-97689 in 2.7.0. Hash-only clean installs and
+  `pip-audit` cover the runtime, CI-security, and security-tools environments.
 - The loopback web-search MCP server now declares `mcp>=2.0,<3.0` in the
   protected `api` extra, locks MCP 2.2.0 in both project lock paths, and fails
   closed before server construction when the installed SDK is missing or not

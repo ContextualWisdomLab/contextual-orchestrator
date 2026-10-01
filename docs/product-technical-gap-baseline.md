@@ -7533,6 +7533,22 @@ skipped; the clean hash-lock path passes 28 MCP/lock tests. This local opaque
 bearer does not replace the Keyverse/OIDC verifier required for public or
 multi-tenant service.
 
+Exact-head Security Scan run `36934941160`, job `110612956893`, then supplied
+the hosted RED evidence for the predecessor head: Trivy found HIGH
+CVE-2026-97687, MEDIUM CVE-2026-97688, and HIGH CVE-2026-97689 in locked
+`urllib3==2.7.0`. The repair carries the already validated #1352 dependency
+delta instead of introducing a second policy: both security-tool inputs retain
+the reviewed `urllib3>=2.8.0` floor, the CI input also retains the exact
+`typing-extensions==4.16.0` requirement needed by hash-only installation, and
+`uv.lock`, `requirements.lock`, `requirements-security-ci.txt`, and
+`requirements-security-tools.txt` resolve `urllib3==2.8.0`. A metadata
+regression binds all install paths to that release. Clean Python 3.12
+`--require-hashes` installs succeeded for all three environments; all three
+locks returned no known vulnerabilities from `pip-audit`, and the complete
+SearXNG/advisory/MCP/security-metadata impact suite passed 84 tests. A new
+exact-head hosted Security Scan remains required; predecessor failure evidence
+is not converted into GREEN by the local repair.
+
 Installed-version applicability, protected exact-head Checks, independent
 approval, ordinary merge, immutable release, and consumer adoption remain
 open. A repository-wide local run is not claimed: it was
