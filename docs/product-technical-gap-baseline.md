@@ -7527,3 +7527,28 @@ renames that test and asserts conduct without changing production. The isolated
 RED reproduced locally; the corrected measured-routing file passes 37 tests and
 the related routing/cache/HTTP/stream set passes **174 tests** with warnings as
 errors. The hosted full suite and all exact-head gates must rerun on the repair.
+
+Follow-up no-heuristics review on 2026-10-01 found that schema-valid triage
+still selected the statically first model and converted its uncalibrated
+boolean directly into route authority. The owner repair now requires complete,
+uniquely identified fast-mlsirm fitted success probabilities for every eligible
+candidate on the exact prompt before any triage model is called. Missing,
+partial, duplicate, invalid, tied, or identity-stale evidence fails closed to
+conduct; semantic-neighbor fallback is disabled for this decision. Nine focused
+RED cases cover missing evidence, posterior ordering, nonfinite and out-of-range
+probabilities, tied leaders, partial sets, duplicates, and stale identities.
+This follow-up remains
+**Proposed** until exact-head hosted Checks, independent approval, ordinary
+merge, immutable release, and downstream pinning complete.
+
+Independent review then found that the first repair queried raw user text while
+judged observations use canonical system/developer/user interaction identity,
+cached route verdicts could outlive their evidence, and posterior selection
+could cross the worker-exclusion partition. The direct repair binds lookup to
+the canonical interaction, removes automatic-triage verdict caching, admits
+only worker-eligible candidates, and fails closed on owner exceptions or
+malformed rows. The accompanying fast-mlsirm 0.11.4 DIF migration now declares
+and reports studied-item matching-score inclusion and requires an
+`8 attempted / 0 failed` per-item IRLS denominator before recovery flags are
+valid. These
+claims remain Proposed pending the same delivery gates.

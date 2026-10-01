@@ -72,11 +72,11 @@ def test_auto_route_follows_structured_triage_verdict() -> None:
     verdict is injectable here for deterministic testing.
     """
     orchestrator = _orch()
-    orchestrator._triage_fn = lambda text: False
+    orchestrator._triage_fn = lambda text, prompt_context=None: False
     prompt = "x" * 2000
     assert orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
 
-    orchestrator._triage_fn = lambda text: True
+    orchestrator._triage_fn = lambda text, prompt_context=None: True
     assert not orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
 
 
@@ -84,7 +84,9 @@ def test_orchestrator_free_auto_follows_triage_like_gateway_default() -> None:
     orchestrator = _orch()
     prompt = [{"role": "user", "content": "review this diff and verify the regression" * 100}]
     for verdict in (True, False):
-        orchestrator._triage_fn = lambda text, verdict=verdict: verdict
+        orchestrator._triage_fn = (
+            lambda text, prompt_context=None, verdict=verdict: verdict
+        )
         for model_name in (TaskOrchestrator.FREE_MODEL, TaskOrchestrator.GATEWAY_DEFAULT_MODEL):
             assert orchestrator.would_route(prompt, mode="auto", model_name=model_name) is not verdict
 

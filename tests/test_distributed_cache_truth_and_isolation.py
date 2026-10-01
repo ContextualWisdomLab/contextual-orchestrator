@@ -305,7 +305,7 @@ def test_orchestrator_free_auto_triages_before_reusing_an_unresolved_cache_entry
     orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
     triage_calls = 0
 
-    def _route_verdict(_text: str) -> bool:
+    def _route_verdict(_text: str, _prompt_context: str | None = None) -> bool:
         nonlocal triage_calls
         triage_calls += 1
         return False
@@ -370,7 +370,7 @@ def test_auto_default_model_cache_hit_never_invokes_live_triage() -> None:
     orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
     triage_calls = 0
 
-    def _counting_triage(_text: str) -> bool:
+    def _counting_triage(_text: str, _prompt_context: str | None = None) -> bool:
         nonlocal triage_calls
         triage_calls += 1
         return False

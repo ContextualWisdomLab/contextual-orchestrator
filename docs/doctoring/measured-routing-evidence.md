@@ -34,9 +34,36 @@ fails closed to conducted orchestration when its reply violates the exact
 | EWMA with gain 1/8 for latency and throughput | Jacobson's congestion-avoidance estimator is the canonical low-pass filter for volatile network measurements; it needs no tuning window. | Exact-arithmetic tests reproduce hand-computed EWMA values. |
 | Laplace rule of succession as stability prior | Beta(1,1) is an explicit uniform prior for Bernoulli probability, not a uniquely assumption-free choice (Gelman et al., 2013). Calibration and sensitivity to the prior require separate evidence. | Stability tests assert alpha/(alpha+beta) exactly; arithmetic correctness is not calibration evidence. |
 | Cosine similarity over declared metadata documents | Dense retrieval established query-document cosine ordering without keyword overlap (Karpukhin et al., 2020). Affinity uses operator-declared descriptors only. | Deterministic mock-embedding tests verify cosine ordering and zero-vector guards. |
-| Strict JSON triage verdict | The schema is a CO boundary-validation decision. Zheng et al. (2023) examine judge agreement and biases; their citation does not establish that this schema makes a verdict correct. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash; these checks do not measure human agreement. |
+| Strict JSON triage verdict | The schema is a CO boundary-validation decision. Zheng et al. (2023) examine judge agreement and biases; their citation does not establish that this schema makes a verdict correct. | Parser tests reject seven malformed-reply classes. Verdicts are recomputed against current exact-context evidence and roster identity; these checks do not measure human agreement. |
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
 | Per-member quality ledger; latent-interaction research candidate | Jeon et al. (2021) model latent item–respondent interactions. Separate per-member Beta posteriors do not implement that model, establish multilevel validity, or justify group-level inference from individual results. | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`; interaction recovery and cross-group validity remain separate acceptance work. |
+
+### Exact-context triage admission correction, 2026-10-01
+
+PR #1346 exposed that strict JSON validation governed only reply shape: the
+runtime still selected the statically first triage model and accepted its
+boolean without fitted quality evidence. The repaired boundary reuses the
+released Rust-backed fast-mlsirm `PsychometricRoutingEvidence` owner. A triage
+call is admitted only when every eligible candidate has one uniquely identified,
+finite fitted success probability in `[0, 1]` for the exact prompt; partial or
+duplicate evidence, an invalid probability, an unknown deployment identity, or
+a tied leading posterior returns
+`workflow_required=True`. Passing no embedding vector deliberately disables
+semantic-neighbor warm starts at this authority boundary, so similarity cannot
+authorize direct routing. Explicit `mode="route"` remains caller authority and
+does not pass through this automatic triage decision.
+
+The exact identity is the same canonical system/developer/user interaction
+JSON used when recording judged outcomes, not the latest user text alone.
+Worker-excluded candidates never enter the posterior comparison. Automatic
+triage verdicts are deliberately not cached: a cached direct-route answer
+could outlive the roster, deployment identity, or fitted evidence that
+authorized it.
+
+This is a fail-closed source contract, not evidence that the fitted probability
+is population-calibrated or that route improves customer outcomes. Protected
+exact-head Checks, independent approval, immutable release, and consumer pin
+remain required before the behavior is production authority.
 
 ### Citation correction, 2026-09-09
 

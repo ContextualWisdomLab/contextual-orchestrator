@@ -22,7 +22,7 @@ def test_route_once() -> None:
     orchestrator = build()
     # Mock transports cannot emit strict triage JSON; pin a direct-answer
     # verdict so this test exercises the single-step route path itself.
-    orchestrator._triage_fn = lambda text: False
+    orchestrator._triage_fn = lambda text, prompt_context=None: False
     result = orchestrator.complete([{"role": "user", "content": "Write a short status update."}], mode="auto")
     assert result["mode"] == "route"
     assert len(result["trace"]) == 1

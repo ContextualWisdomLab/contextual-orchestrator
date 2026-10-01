@@ -8,5 +8,16 @@ and synthesizer workflow. Both paths stay free-only. `conduct()` and
 call is now free-only too. When no free triage agent ranks, it fails closed to
 the verified conduct path instead of authorizing route or falling back to a
 paid agent. Free auto requests resolve triage before response-cache lookup so
-route and conduct answers cannot share an unresolved key. The triage cache key
-separates free-only verdicts. An explicit `mode="route"` still forces route.
+route and conduct answers cannot share an unresolved key. Automatic triage
+verdicts are not cached. An explicit `mode="route"` still forces route.
+Triage model admission now requires complete, uniquely identified, finite
+fast-mlsirm fitted probabilities for every eligible candidate on the exact
+prompt. Missing, partial, duplicate, invalid, or tied psychometric evidence
+fails closed to conduct; static priority and semantic-neighbor order cannot
+authorize a direct-route verdict. The held-out psychometric benchmark
+also uses fast-mlsirm's current `detect_dif_logistic_purified` API instead of
+its deprecated alias.
+Automatic triage now uses the canonical system/developer/user interaction
+identity used by judged observations, preserves worker-exclusion partitions,
+and recomputes against the current roster and fitted evidence instead of
+reusing a stale route-authorizing verdict cache.

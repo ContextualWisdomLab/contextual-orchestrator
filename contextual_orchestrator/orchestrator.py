@@ -5732,12 +5732,11 @@ class TaskOrchestrator:
         )
         self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
-        # task text and agent metadata, plus strict triage verdicts keyed by
-        # content hash. Bounds are operational memory limits, never weights.
+        # task text and agent metadata. Triage verdicts are deliberately not
+        # cached because candidate and fitted-evidence identity can change.
         self._evidence_lock = threading.Lock()
         self._task_vector_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._descriptor_vector_cache: OrderedDict[str, list[float]] = OrderedDict()
-        self._triage_cache: OrderedDict[str, bool] = OrderedDict()
         # Strict structured verdict parser seam; tests may substitute it, and
         # production always uses the exact-schema implementation below.
         self._triage_fn = self._triage_workflow_required
@@ -8171,9 +8170,10 @@ class TaskOrchestrator:
         if cheap_decision is not None:
             return cheap_decision
         text = self._latest_user_text(messages)
+        prompt_context = self._prompt_interaction(messages)
         token = _REQUEST_TRIAGE_FREE_ONLY.set(model_name == self.FREE_MODEL)
         try:
-            return not self._needs_workflow(text)
+            return not self._needs_workflow(text, prompt_context)
         finally:
             _REQUEST_TRIAGE_FREE_ONLY.reset(token)
 
@@ -11124,48 +11124,105 @@ class TaskOrchestrator:
         '{"workflow_required": false} and nothing else.'
     )
 
-    def _triage_workflow_required(self, text: str) -> bool:
+    def _triage_workflow_required(
+        self,
+        text: str,
+        prompt_context: str | None = None,
+    ) -> bool:
         """Decide route-vs-conduct with one strict JSON verdict; fail to conduct.
 
         Evidence policy: the decision is made by a model under an exact output
         schema, never by keyword matching. Any failure of the triage call or
         parse or missing eligible triage agent fails closed toward the
         orchestrated path, which carries verifier assurance. Verdicts are
-        cached by content hash.
+        recomputed against the current candidate roster and fitted evidence.
         """
-        digest = hashlib.sha256(
-            (
-                _request_endpoint_partition()
-                + "\x1f"
-                + text
-                + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")
-                + ("\x00free_only" if _REQUEST_TRIAGE_FREE_ONLY.get() else "")
-            ).encode("utf-8")
-        ).hexdigest()
-        with self._evidence_lock:
-            cached = self._triage_cache.get(digest)
-        if cached is not None:
-            return cached
-        verdict = self._compute_triage_verdict(text)
-        self._cache_put(self._triage_cache, digest, verdict)
-        return verdict
+        return self._compute_triage_verdict(text, prompt_context)
 
-    def _compute_triage_verdict(self, text: str) -> bool:
-        """One uncached triage decision for :meth:`_triage_workflow_required`."""
+    def _compute_triage_verdict(
+        self,
+        text: str,
+        prompt_context: str | None = None,
+    ) -> bool:
+        """One uncached, psychometrically admitted triage decision.
+
+        Only fitted fast-mlsirm evidence for the exact prompt may choose the
+        triage model. Missing, invalid, or tied evidence fails closed to the
+        verified conduct path instead of falling back to static ordering.
+        """
+        exact_context = prompt_context if prompt_context is not None else text
         try:
-            candidates = self._ranked_agents(text, "worker", free_only=True)
-        except RuntimeError:
-            candidates = []
-        if not candidates and not _REQUEST_ZDR_ONLY.get() and not _REQUEST_TRIAGE_FREE_ONLY.get():
+            try:
+                candidates = self._ranked_agents(text, "worker", free_only=True)
+            except RuntimeError:
+                candidates = []
             candidates = [
-                agent for agent in self.agents if _agent_matches_request_endpoint(agent)
+                agent
+                for agent in candidates
+                if "worker" not in agent.provider_exclusions
             ]
-        if not candidates:
+            if (
+                not candidates
+                and not _REQUEST_ZDR_ONLY.get()
+                and not _REQUEST_TRIAGE_FREE_ONLY.get()
+            ):
+                try:
+                    candidates = self._ranked_agents(
+                        text,
+                        "worker",
+                        free_only=False,
+                    )
+                except RuntimeError:
+                    candidates = []
+                candidates = [
+                    agent
+                    for agent in candidates
+                    if "worker" not in agent.provider_exclusions
+                ]
+            if not candidates:
+                return True
+            candidates_by_evidence_id = dict(
+                zip(
+                    self._psychometric_candidate_ids(candidates),
+                    candidates,
+                    strict=True,
+                )
+            )
+            evidence = self._psychometric_router.ranked_evidence(
+                candidates_by_evidence_id,
+                exact_context,
+                None,
+            )
+            evidence_ids = [
+                evidence_id for evidence_id, _probability in evidence
+            ]
+            probabilities = [
+                probability for _evidence_id, probability in evidence
+            ]
+            if (
+                len(evidence) != len(candidates_by_evidence_id)
+                or len(set(evidence_ids)) != len(evidence_ids)
+                or set(evidence_ids) != set(candidates_by_evidence_id)
+                or any(
+                    type(probability) is not float
+                    or not math.isfinite(probability)
+                    or not 0.0 <= probability <= 1.0
+                    for probability in probabilities
+                )
+            ):
+                return True
+            triage_probability = max(probabilities)
+            if probabilities.count(triage_probability) != 1:
+                return True
+            triage_evidence_id = evidence[
+                probabilities.index(triage_probability)
+            ][0]
+            triage_agent = candidates_by_evidence_id[triage_evidence_id]
+        except (KeyError, RuntimeError, TypeError, ValueError):
             return True
-        triage_agent = candidates[0]
         messages: list[ChatMessage] = [
             {"role": "system", "content": self.TRIAGE_SYSTEM_PROMPT},
-            {"role": "user", "content": text},
+            {"role": "user", "content": exact_context},
         ]
         try:
             with observe_auxiliary_dispatch([triage_agent.id], "structured_triage"):
@@ -13034,16 +13091,20 @@ class TaskOrchestrator:
             raise KeyError(agent_pool_id)
         return self._agent(worker_agent_id)
 
-    def _needs_workflow(self, text: str) -> bool:
+    def _needs_workflow(
+        self,
+        text: str,
+        prompt_context: str | None = None,
+    ) -> bool:
         """Route-vs-conduct decision from a strict structured triage verdict.
 
         Keyword hint tables are intentionally absent: keyword matching cannot
         handle negation, mixed language, or tasks that quote trigger words, and
         hand-tuned thresholds are not evidence. The verdict comes from one
-        exact-schema model call (cached by content hash) and fails closed to
-        the orchestrated path on any uncertainty.
+        exact-schema model call bound to the canonical prompt interaction and
+        fails closed to the orchestrated path on any uncertainty.
         """
-        return bool(self._triage_fn(text))
+        return bool(self._triage_fn(text, prompt_context))
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         for message in reversed(messages):
