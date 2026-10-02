@@ -1,5 +1,69 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-02 exact-head evidence: PR #973 delivered video ownership gap, blocked only by external review gates
+
+Observation time: 2026-10-02. PR [#973](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/973)
+(`docs(gap): close delivered video ownership gap`, branch
+`docs/video_job_gap_closed`) is at exact head
+`c2f9b1cfd46b2d41c1b27ce3c1130e450a1275c4`, merge state `BEHIND`
+against `main` (base recorded as `2e414d15…`, truncated in the collected
+evidence). The "Next Queue Targets" line for #973 below previously
+described an unrelated catalog feature; it is corrected to the PR's
+actual title and branch.
+
+### The delivered video ownership gap is closed at this head
+
+Consistent with ADR 0037 (accepted 2026-08-26), PR #912, and this
+baseline's own 2026-08-25/2026-08-26 records:
+
+- `contextual_orchestrator/video_jobs.py` keeps immutable ownership in
+  `video_job_records`, the first complete provider usage report in
+  `video_job_usages` (first-write-wins), and the pre-0037
+  `video_job_owners` map only as a legacy compatibility path. Submissions
+  return opaque `videojob_…` gateway ids; ownership is bound to the
+  authenticated principal and a non-secret provider-affine agent digest;
+  provider job ids are recursively rewritten out of every response before
+  it crosses the public boundary.
+- `contextual_orchestrator/server.py` resolves `/v1/videos` follow-ups
+  through the stored owner: unknown, foreign, and pre-ownership records
+  fail closed as the same redacted 404, a removed agent returns the
+  operator-action 503, and usage stays `unavailable` until the provider
+  returns complete non-negative counts.
+- `docs/doctoring/video-job-resource.md` records the asynchronous-resource
+  contract with full citations (Garcia-Molina & Salem 1987; Birrell &
+  Nelson 1984; OpenRouter video generation; RFC 9110).
+
+### Failed-check RCA: both failures are external review-sidecar gates
+
+- **Required Noema Review/noema-review** (run `33864234640`, check run
+  `101034200191`): failed at step 13, "Prepare Noema model verdict", with
+  `HTTPError: HTTP Error 502: Bad Gateway` from the Noema gateway serving
+  `deepseek-ai/deepseek-v4-pro-0813` (`phase=response_error`,
+  `duration=337.2s`, `caller attempts=1`). Root cause: an external Noema
+  gateway transport failure inside the review sidecar's own verdict
+  preparation. It is not a defect in this repository's source or docs, and
+  no edit within this repository can remediate a 502 from the external
+  gateway; recovery requires a fresh sidecar dispatch after gateway
+  recovery. The failed job log itself was not collectable (`gh run
+  view --log-failed` returned HTTP 404 for workflow `320927564`), so
+  this RCA rests on the check-run annotations, which are unambiguous.
+- **Required OpenCode Review/opencode-review**: fails closed with no
+  current-head `opencode-agent[bot]` verdict. This is the documented
+  central-sidecar gate (see the 2026-08-30 and 2026-08-31 entries and
+  `ContextualWisdomLab/.github#1422`/`#1440`); its dispatch and verdict
+  checker live in the central `.github` repository, outside this repo's
+  write authority.
+
+Every other exact-head check is successful or intentionally skipped:
+CodeQL, tests and package quality, property and coverage-guided fuzzing,
+Strix admit-current-head, the scoped detect-changed-scope security scans,
+and independent Devin and CodeRabbit reviews all completed successfully;
+trivy-fs, dependency-review, osv-scan, scorecard, gitleaks, and the
+multi-language Semgrep pass were skipped. No protected control was
+bypassed. `BEHIND` plus the two external gate failures are the only merge
+blockers; check latency is recorded as evidence, not treated as a defect
+or as a reason to invent a repository-side remediation.
+
 ## 2026-09-01 Autonomous Commercialization Loop: PR #970 Merge, Token Accounting & Cost Gateway Harmonization
 
 Observation time: 2026-09-01 Asia/Seoul.
@@ -17,7 +81,7 @@ Observation time: 2026-09-01 Asia/Seoul.
 ### Next Queue Targets
 - **PR #971**: `fix(embedding-router): route plain unspecified embedding batches to cheapest member`
 - **PR #972**: `fix(gateway): respect client custom_id in batch chat responses`
-- **PR #973**: `feat(catalog): provider latency routing telemetry and scoring`
+- **PR #973**: `docs(gap): close delivered video ownership gap` (open at head `c2f9b1c`, merge state `BEHIND`; exact-head evidence in the 2026-10-02 entry above)
 - **Remaining Open PRs**: [#976](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/976), [#977](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/977), [#978](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/978), [#980](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/980), [#981](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/981), [#982](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/982), [#983](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/983), [#984](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/984), [#985](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/985), [#986](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/986), [#992](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/992), [#993](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/993).
 
 ## 2026-08-31 live continuation: PR queue recheck, worktree reconciliation, issue #940 deferral, and issue #927 closure
