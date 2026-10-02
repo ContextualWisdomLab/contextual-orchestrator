@@ -7516,10 +7516,20 @@ lockfile only after package identity matches. Manifest constraints and
 linked/local/git/custom-registry rows, unsupported formats, and malformed
 headers, fields, rows, or version strings reject version evidence without a
 partial receipt. This closes version provenance,
-not affected-range evaluation: the claim remains `unverified` with
-`versions_checked=false` and `finding_allowed=false`. A separately reviewed
-ecosystem-standard range evaluator, central Strix/Noema wiring, exact input
-reproduction, immutable release, and consumer adoption remain open.
+not affected-range evaluation on that source tree: the claim remained
+`unverified` with `versions_checked=false` and `finding_allowed=false`.
+Broader ecosystem range coverage, central Strix/Noema wiring, exact input
+reproduction, immutable release, and consumer adoption remained open.
+
+The following bounded slice implements the official CVE 5.x
+`versions`/`defaultStatus` algorithm for exact, non-overlapping SemVer 2.0.0
+ranges. It authorizes a finding only when an exact npm/crates.io lock version
+has status `affected`; a fully checked `unaffected` set is rejected. The public
+receipt exposes the affected installed versions. Wildcard bounds, `changes`,
+non-SemVer types, overlapping ranges, `unknown`, platform/component scopes,
+conflicting product rows, GHSA range syntax, and absent lock evidence remain
+`unverified`. This is a deliberately executable standards-backed subset, not
+an approximation or a claim that all advisory range formats are supported.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

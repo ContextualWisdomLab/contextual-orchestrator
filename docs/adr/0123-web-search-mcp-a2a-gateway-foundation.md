@@ -174,9 +174,16 @@ and unsupported lock formats are not installed-version evidence. One malformed
 row rejects the entire version-evidence set rather than publishing a partial
 receipt. The lockfile evidence follows npm's exact-tree contract, Cargo's
 resolved-version contract, and SemVer's exact-version grammar (npm, Inc., n.d.;
-Rust Project Developers, n.d.; Semantic Versioning, n.d.). It does not itself
-establish that an advisory range contains a version.
-`finding_allowed` and `versions_checked` remain false. Missing search, snapshot or record evidence is
+Rust Project Developers, n.d.; Semantic Versioning, n.d.). For CVE records,
+the server applies the CVE 5.x `versions`/`defaultStatus` decision algorithm
+only when every installed lock version and every bound is exact SemVer 2.0.0,
+the ranges are non-overlapping, and matching product rows agree (CVE Project,
+2026). At least one `affected` installed version produces `supported` plus
+`finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
+Wildcard bounds, status changes, non-SemVer version types, unknown statuses,
+platform/component qualifiers, overlaps, and conflicting rows fail closed as
+`unverified`. GHSA ranges are not interpreted by this slice. Missing search,
+snapshot or record evidence is
 `unverified`, never a clean-repository verdict or a finding. Search remains a
 separate explicitly invoked informational tool. Strix and
 Noema workflow files in `ContextualWisdomLab/.github` still have to point at
@@ -374,9 +381,9 @@ Not built this iteration, in either form.
 
 1. Point Strix and Noema at the loopback MCP server (Decision §2). The server
    and the claim check exist; the central workflow files do not call them yet.
-2. Add an ecosystem-standard affected-range evaluator with executable
-   provenance. Until it compares the preserved exact lockfile versions,
-   `versions_checked` and `finding_allowed` must remain false.
+2. Extend the bounded CVE exact-SemVer evaluator only through separately
+   reviewed standard algorithms: CVE wildcard/status-change semantics and
+   ecosystem-specific GHSA range syntax remain fail-closed.
 3. Design and build the A2A Gateway once a concrete two-agent delegation
    caller exists (Decision §3).
 4. Build Camoufox browsing as a general capability, reusing the existing
@@ -403,6 +410,9 @@ Not built this iteration, in either form.
   https://docs.searxng.org/dev/search_api.html
 - SearXNG Authors. (n.d.). *settings.yml*. Retrieved 2026-09-30, from
   https://docs.searxng.org/admin/settings/settings
+- CVE Project. (2026). *CVE 5.0 product and version encodings* (schema commit
+  `ce5f5c865f14dc40a6548d36b74751abca1c588a`). Retrieved 2026-10-03, from
+  https://github.com/CVEProject/cve-schema/blob/ce5f5c865f14dc40a6548d36b74751abca1c588a/schema/docs/versions.md
 - npm, Inc. (n.d.). *package-lock.json*. Retrieved 2026-10-02, from
   https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/
 - Rust Project Developers. (n.d.). *Cargo.toml vs. Cargo.lock*. Retrieved
