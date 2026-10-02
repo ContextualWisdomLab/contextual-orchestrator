@@ -7508,6 +7508,19 @@ DNS-pinned, no-redirect transport. Missing or insufficient official evidence
 still returns `unverified`; `finding_allowed` and `versions_checked` remain
 false. SearXNG remains a separate informational MCP tool.
 
+The next bounded source slice now preserves SemVer 2.0.0 exact
+installed-version evidence from registry-backed npm `package-lock.json` v2/v3
+rows and crates.io `Cargo.lock` rows.
+The public receipt exposes unique deterministic versions plus the source
+lockfile only after package identity matches. Manifest constraints and
+linked/local/git/custom-registry rows, unsupported formats, and malformed
+headers, fields, rows, or version strings reject version evidence without a
+partial receipt. This closes version provenance,
+not affected-range evaluation: the claim remains `unverified` with
+`versions_checked=false` and `finding_allowed=false`. A separately reviewed
+ecosystem-standard range evaluator, central Strix/Noema wiring, exact input
+reproduction, immutable release, and consumer adoption remain open.
+
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
 one optional MCP SDK test skipped, plus Python compilation and diff checks on

@@ -166,8 +166,17 @@ record identity and ecosystem-qualified affected package names are compared.
 Generic product prose is insufficient. Python distribution names use Python
 normalization, not a cross-ecosystem substring match. A structured package
 mismatch can reject that identity claim; a match stays `unverified` because
-installed versions and affected ranges are not checked. `finding_allowed` and
-`versions_checked` remain false. Missing search, snapshot or record evidence is
+affected ranges are not checked. SemVer 2.0.0 exact installed versions from
+registry-backed npm `package-lock.json` v2/v3 package rows and crates.io
+`Cargo.lock` package rows are preserved as provenance when present; manifest
+constraints, linked/local/git/custom-registry dependencies, malformed fields,
+and unsupported lock formats are not installed-version evidence. One malformed
+row rejects the entire version-evidence set rather than publishing a partial
+receipt. The lockfile evidence follows npm's exact-tree contract, Cargo's
+resolved-version contract, and SemVer's exact-version grammar (npm, Inc., n.d.;
+Rust Project Developers, n.d.; Semantic Versioning, n.d.). It does not itself
+establish that an advisory range contains a version.
+`finding_allowed` and `versions_checked` remain false. Missing search, snapshot or record evidence is
 `unverified`, never a clean-repository verdict or a finding. Search remains a
 separate explicitly invoked informational tool. Strix and
 Noema workflow files in `ContextualWisdomLab/.github` still have to point at
@@ -344,12 +353,9 @@ Not built this iteration, in either form.
 
 ## Consequences
 
-- Strix and Noema still cannot call `web_search()` today — no MCP server
-  role, no A2A role, and no CLI/HTTP wiring ships in this change (see "What
-  remains" below). This is deliberate: shipping a real, tested, 100%-covered
-  library call is a sound first slice; wiring two unbuilt protocol gateways
-  and an unready sandbox around it in the same change would not be
-  verifiable end-to-end and would misrepresent readiness.
+- Strix and Noema still cannot call `web_search()` today because their central
+  workflows are not wired to the bounded loopback MCP server. The server role
+  and CLI exist in this PR; A2A and general MCP proxy roles remain deferred.
 - Any operator who registers `SEARXNG_URL` (and optionally `SEARXNG_TOKEN`)
   can call `contextual_orchestrator.web_search.web_search()` today against
   their own SearXNG deployment — this is real, not a stub.
@@ -368,16 +374,19 @@ Not built this iteration, in either form.
 
 1. Point Strix and Noema at the loopback MCP server (Decision §2). The server
    and the claim check exist; the central workflow files do not call them yet.
-2. Design and build the A2A Gateway once a concrete two-agent delegation
+2. Add an ecosystem-standard affected-range evaluator with executable
+   provenance. Until it compares the preserved exact lockfile versions,
+   `versions_checked` and `finding_allowed` must remain false.
+3. Design and build the A2A Gateway once a concrete two-agent delegation
    caller exists (Decision §3).
-3. Build Camoufox browsing as a general capability, reusing the existing
+4. Build Camoufox browsing as a general capability, reusing the existing
    Wardnet+Camoufox-MCP boundary (Decision §4), and re-evaluate the
    `quarantine-sandbox-runtime` migration once
    `ContextualWisdomLab/.github#1590` is resolved and the runtime has a real
    `CommandExecutionBackend`-backed HTTP/CLI surface.
-4. Add a second search engine (YaCy) once there is a real deployment to test
+5. Add a second search engine (YaCy) once there is a real deployment to test
    the client against.
-5. A Domain Event / span for `web_search()` calls, once a caller needs an
+6. A Domain Event / span for `web_search()` calls, once a caller needs an
    audit trail.
 
 ## References
@@ -394,6 +403,13 @@ Not built this iteration, in either form.
   https://docs.searxng.org/dev/search_api.html
 - SearXNG Authors. (n.d.). *settings.yml*. Retrieved 2026-09-30, from
   https://docs.searxng.org/admin/settings/settings
+- npm, Inc. (n.d.). *package-lock.json*. Retrieved 2026-10-02, from
+  https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/
+- Rust Project Developers. (n.d.). *Cargo.toml vs. Cargo.lock*. Retrieved
+  2026-10-02, from
+  https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
+- Semantic Versioning. (n.d.). *Semantic Versioning 2.0.0*. Retrieved
+  2026-10-02, from https://semver.org/spec/v2.0.0.html
 - daijro. (n.d.). *Camoufox: Anti-detect browser built for web scraping &
   AI agents* [Software repository]. GitHub. Retrieved 2026-09-02, from
   https://github.com/daijro/camoufox
