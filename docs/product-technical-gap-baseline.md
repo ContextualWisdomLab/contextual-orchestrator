@@ -7555,6 +7555,13 @@ file in favor of a present `npm-shrinkwrap.json`. The bounded reader now removes
 the inactive package lock from package evidence and rejects version authority
 until shrinkwrap support is implemented, so lock precedence cannot become an
 undocumented fallback.
+A seventh RED regression demonstrated that an undocumented nested `name` field
+could relabel `node_modules/lodash` and its lodash tarball as `react`, producing
+`supported` and `finding_allowed=true` for a React record. npm documents the
+`packages` keys as package locations and does not define `name` as a nested
+package-descriptor field. Both package-presence and installed-version readers
+now reject that unsupported identity override for the entire lockfile instead
+of guessing alias semantics or parsing identity from a tarball URL.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
