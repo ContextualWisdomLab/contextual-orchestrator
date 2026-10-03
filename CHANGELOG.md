@@ -17,9 +17,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Exact, non-overlapping `semver` ranges can authorize only the installed
   versions they contain or reject a fully checked unaffected set. Wildcard
   bounds, status changes, non-SemVer ranges, overlapping ranges, unknown
-  statuses, platform/component scopes, unrecognized version-entry fields, and
-  conflicting product rows remain `unverified`; the receipt exposes
-  `affected_installed_versions` when a finding is authorized.
+  statuses, platform/component scopes, unrecognized product/version-entry
+  fields, and conflicting product rows remain `unverified`; the receipt
+  exposes `affected_installed_versions` when a finding is authorized.
 - Vulnerability claim receipts now preserve SemVer 2.0.0 exact installed
   versions from registry-backed npm `package-lock.json` v2/v3 rows and
   crates.io `Cargo.lock` rows,
