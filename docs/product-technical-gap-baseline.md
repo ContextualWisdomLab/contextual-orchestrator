@@ -7540,7 +7540,10 @@ any matching row. A third RED regression demonstrated that a non-SemVer
 single-version entry fell through to `defaultStatus: affected` and authorized
 an unrelated exact installed version; every executable single-version entry
 now passes the same exact SemVer 2.0.0 grammar as lock evidence and range
-bounds.
+bounds. A fourth RED regression demonstrated that an explicitly empty
+`versions` array violated the schema's `minItems: 1` contract yet fell through
+to `defaultStatus: affected`; explicit empty arrays now fail closed while a
+schema-valid default-only product row remains executable.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
