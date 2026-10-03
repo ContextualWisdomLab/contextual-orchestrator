@@ -22,6 +22,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   data versions, missing or malformed published-metadata identity/provenance,
   missing required Published CNA provenance, descriptions, or references,
   malformed CNA provider UUIDs or unrecognized provider properties,
+  malformed, duplicate, or non-English CNA description evidence,
   unrecognized record/metadata/product/version-entry fields, and conflicting
   product rows remain `unverified`; the receipt exposes
   `affected_installed_versions` when a finding is authorized.

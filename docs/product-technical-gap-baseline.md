@@ -7603,6 +7603,17 @@ status:** provider identity is source-GREEN and remains Proposed pending
 exact-head hosted acceptance; optional provider values, description/reference
 contents, CNA extensions, and ADP reconciliation remain open and fail-closed
 scope rather than inferred semantics.
+A thirteenth RED regression demonstrated that `descriptions` could be null,
+empty, malformed, lack the schema-required English entry, carry an unknown
+field, or contain invalid supporting media while the affected range still
+authorized `supported` with `finding_allowed=true`. Description evidence now
+enforces the pinned schema's language patterns, required and bounded text,
+English-entry requirement, JSON uniqueness, exact property sets, and complete
+supporting-media structure before package or version interpretation. **Gap /
+Action / status:** CNA descriptions are source-GREEN and remain Proposed
+pending exact-head hosted acceptance; optional provider values, reference
+contents, CNA extension semantics, and complete CNA/ADP reconciliation remain
+open and must not be inferred.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

@@ -471,8 +471,12 @@ the pinned schema's `providerMetadata`, `descriptions`, `affected`, and
 the three previously ignored required fields now fails closed instead of
 authorizing a finding. The provider provenance object must also carry the
 schema-required UUID v4 `orgId` and no unrecognized properties. Optional
-provider values, description/reference contents, extension semantics, and
-complete CNA/ADP reconciliation remain Proposed.
+provider values remain outside this slice. Description evidence must now match
+the pinned schema's BCP 47 subset, contain non-empty bounded text and at least
+one English entry, preserve JSON `uniqueItems`, reject unrecognized fields, and
+fully validate optional supporting-media objects before package or version
+interpretation. Reference contents, extension semantics, and complete CNA/ADP
+reconciliation remain Proposed.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed
