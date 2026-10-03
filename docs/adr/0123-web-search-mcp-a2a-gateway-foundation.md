@@ -489,7 +489,10 @@ admits only the required CNA properties it validates plus a schema-bounded
 extension fails closed until its contract and decision semantics are explicitly
 implemented; a property being named by the schema is not evidence that it is
 decision-neutral. Validation of those optional properties and complete CNA/ADP
-reconciliation remain Proposed.
+reconciliation remain Proposed. Records carrying an ADP container, an invalid
+empty ADP array, or an unrecognized container property fail closed rather than
+silently discarding another publisher's evidence or guessing reconciliation
+precedence.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed

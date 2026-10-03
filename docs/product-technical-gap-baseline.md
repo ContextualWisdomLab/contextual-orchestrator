@@ -7657,6 +7657,16 @@ property admission is source-GREEN and remains Proposed pending exact-head
 hosted acceptance; validation and interpretation of the other optional named
 CNA properties and complete CNA/ADP reconciliation remain open and must not be
 inferred.
+A seventeenth RED regression demonstrated that a schema-valid ADP marking the
+installed range unaffected, an invalid empty ADP array, and an unrecognized
+publisher container were all silently discarded while the CNA range still
+authorized `supported` with `finding_allowed=true`. The evaluator now requires
+the exact currently interpreted container set `{cna}`. Any ADP-bearing or
+unrecognized container record fails closed until a complete multi-publisher
+validation, conflict, precedence, and provenance contract is implemented.
+**Gap / Action / status:** conservative container admission is source-GREEN and
+remains Proposed pending exact-head hosted acceptance; complete CNA/ADP
+reconciliation remains open and must not be inferred.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

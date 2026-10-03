@@ -25,6 +25,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   malformed, duplicate, or non-English CNA description evidence,
   malformed, duplicate, or non-RFC-3986 CNA reference evidence,
   unvalidated optional CNA properties or uninterpreted CNA extensions,
+  unreconciled ADP or unrecognized CVE container evidence,
   unrecognized record/metadata/product/version-entry fields, and conflicting
   product rows remain `unverified`; the receipt exposes
   `affected_installed_versions` when a finding is authorized.
