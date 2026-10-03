@@ -7614,6 +7614,23 @@ Action / status:** CNA descriptions are source-GREEN and remain Proposed
 pending exact-head hosted acceptance; optional provider values, reference
 contents, CNA extension semantics, and complete CNA/ADP reconciliation remain
 open and must not be inferred.
+A fourteenth RED regression demonstrated that `references` could be null,
+empty, oversized, duplicate, omit or corrupt its URL, use a non-RFC-3986 URI,
+carry unknown fields, invalid names, duplicate or unknown tags, or malformed
+tag extensions while an affected range still authorized `supported` with
+`finding_allowed=true`. Reference evidence now enforces the pinned schema's
+array bounds, unique objects and tags, exact fields, URL/name lengths, RFC 3986
+URI syntax, official tag enumeration, and `x_` extension grammar before package
+or version interpretation. `rfc3986-validator` 0.1.1 is direct, hash-locked,
+and MIT-licensed; this repairs the installed `jsonschema` checker's missing URI
+backend without inventing a URL heuristic. Independent review reproduced a
+partial-match fail-open for a URI ending in a line feed; full-input consumption
+and accepted/rejected schema-boundary regressions now cover 512 references,
+2048-character URLs, 512-character names, and 128-character extension tags.
+**Gap / Action / status:** CNA
+references are source-GREEN and remain Proposed pending exact-head hosted
+acceptance; optional provider values, CNA extension semantics, and complete
+CNA/ADP reconciliation remain open and must not be inferred.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

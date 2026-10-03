@@ -475,8 +475,14 @@ provider values remain outside this slice. Description evidence must now match
 the pinned schema's BCP 47 subset, contain non-empty bounded text and at least
 one English entry, preserve JSON `uniqueItems`, reject unrecognized fields, and
 fully validate optional supporting-media objects before package or version
-interpretation. Reference contents, extension semantics, and complete CNA/ADP
-reconciliation remain Proposed.
+interpretation. Required references likewise enforce the pinned array, object,
+length, exact-field, tag-enum/extension, uniqueness, and RFC 3986 URI contracts.
+The MIT-licensed `rfc3986-validator` 0.1.1 is a direct runtime dependency because
+the installed `jsonschema` format checker otherwise treats `uri` as an unchecked
+annotation when its optional validation backend is absent. The validator match
+must consume the complete input because its regular expression can otherwise
+accept the prefix of a URI followed by a terminal line feed. Extension semantics
+and complete CNA/ADP reconciliation remain Proposed.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed
