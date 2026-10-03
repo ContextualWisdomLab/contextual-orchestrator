@@ -469,8 +469,10 @@ The bounded CVE evaluator also requires every Published CNA container to carry
 the pinned schema's `providerMetadata`, `descriptions`, `affected`, and
 `references` fields before package or version interpretation. Omitting any of
 the three previously ignored required fields now fails closed instead of
-authorizing a finding. This records field-presence authority only; validation
-of their nested values and complete CNA/ADP schema semantics remains Proposed.
+authorizing a finding. The provider provenance object must also carry the
+schema-required UUID v4 `orgId` and no unrecognized properties. Optional
+provider values, description/reference contents, extension semantics, and
+complete CNA/ADP reconciliation remain Proposed.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed

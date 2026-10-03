@@ -7594,6 +7594,15 @@ closed as `unverified`. **Gap / Action / status:** required-field presence is
 source-GREEN and remains Proposed pending exact-head hosted acceptance; nested
 CNA value validation, extension semantics, and ADP reconciliation remain open
 and must not be inferred by this bounded evaluator.
+A twelfth RED regression demonstrated that present-but-null or empty CNA
+`providerMetadata`, a malformed `orgId`, and an unrecognized provider identity
+property each still authorized `supported` with `finding_allowed=true`.
+Provider provenance now requires the pinned schema's UUID v4 `orgId` and exact
+provider property set before package or version interpretation. **Gap / Action /
+status:** provider identity is source-GREEN and remains Proposed pending
+exact-head hosted acceptance; optional provider values, description/reference
+contents, CNA extensions, and ADP reconciliation remain open and fail-closed
+scope rather than inferred semantics.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
