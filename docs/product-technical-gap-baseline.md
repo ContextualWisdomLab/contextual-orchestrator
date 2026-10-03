@@ -7544,6 +7544,11 @@ bounds. A fourth RED regression demonstrated that an explicitly empty
 `versions` array violated the schema's `minItems: 1` contract yet fell through
 to `defaultStatus: affected`; explicit empty arrays now fail closed while a
 schema-valid default-only product row remains executable.
+A fifth RED regression demonstrated that a row whose npm package name was
+`lodash` but whose Package URL identified `react` still authorized `lodash`.
+Until the repository snapshot carries standards-complete PURL identity
+evidence, any `packageURL` field now fails closed before range evaluation rather
+than being ignored or partially parsed.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

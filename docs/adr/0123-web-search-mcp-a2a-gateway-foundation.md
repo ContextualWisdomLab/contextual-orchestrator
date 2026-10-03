@@ -181,9 +181,10 @@ the ranges are non-overlapping, and matching product rows agree (CVE Project,
 2026). At least one `affected` installed version produces `supported` plus
 `finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
 Wildcard bounds, status changes, non-SemVer or explicitly empty version
-entries, unknown statuses, platform/component qualifiers, fields outside the
-CVE product/version-entry schemas, overlaps, and conflicting rows fail closed
-as `unverified`. GHSA ranges are not interpreted by this slice. Missing search,
+entries, unknown statuses, platform/component qualifiers, unverified Package
+URLs, fields outside the CVE product/version-entry schemas, overlaps, and
+conflicting rows fail closed as `unverified`. GHSA ranges are not interpreted
+by this slice. Missing search,
 snapshot or record evidence is
 `unverified`, never a clean-repository verdict or a finding. Search remains a
 separate explicitly invoked informational tool. Strix and
