@@ -16,7 +16,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
   Exact, non-overlapping `semver` ranges can authorize only the installed
   versions they contain or reject a fully checked unaffected set. Wildcard
-  bounds, status changes, non-SemVer or explicitly empty version entries,
+  bounds, status changes, non-SemVer, empty, or duplicate version entries,
   overlapping ranges, unknown statuses, platform/component scopes, unverified
   Package URLs, missing or malformed CVE record headers, unsupported non-5.x
   data versions, missing or malformed published-metadata identity/provenance,
@@ -26,7 +26,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   malformed, duplicate, or non-RFC-3986 CNA reference evidence,
   unvalidated optional CNA properties or uninterpreted CNA extensions,
   unreconciled ADP or unrecognized CVE container evidence,
-  unrecognized record/metadata/product/version-entry fields, and conflicting
+  missing status evidence or malformed/oversized product identity, metadata,
+  or CVE versions,
+  unrecognized record/metadata/product/version-entry fields on any product row,
+  and conflicting
   product rows remain `unverified`; the receipt exposes
   `affected_installed_versions` when a finding is authorized.
 - Vulnerability claim receipts now preserve SemVer 2.0.0 exact installed

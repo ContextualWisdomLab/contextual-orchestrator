@@ -7667,6 +7667,37 @@ validation, conflict, precedence, and provenance contract is implemented.
 **Gap / Action / status:** conservative container admission is source-GREEN and
 remains Proposed pending exact-head hosted acceptance; complete CNA/ADP
 reconciliation remains open and must not be inferred.
+An eighteenth RED regression demonstrated that duplicate, nonmatching
+`unaffected` version entries were silently accepted, allowing
+`defaultStatus: affected` to authorize the installed version despite the
+pinned product schema's `uniqueItems` contract. The evaluator now applies JSON
+Schema item equality to the complete `versions` array before matching any
+installed version. **Gap / Action / status:** version-entry uniqueness is
+source-GREEN and remains Proposed pending exact-head hosted acceptance;
+wildcard/status-change semantics and complete CNA/ADP reconciliation remain
+open and fail closed.
+A nineteenth RED regression demonstrated that null, empty, oversized, or
+malformed optional `vendor`, `product`, and `repo` values, an oversized
+`collectionURL` that normalized to an admitted registry, an oversized matching
+`packageName`, and a schema-overlong but syntactically exact SemVer could still
+authorize `supported` with `finding_allowed=true`. The evaluator now validates
+the pinned identity/string bounds before URL normalization and consumes the
+complete RFC 3986 repository URI before version matching; optional metadata
+remains informational and is never inferred as identity or scope.
+**Gap / Action / status:** optional product metadata and executable version
+lengths are source-GREEN and remain Proposed pending exact-head hosted
+acceptance; other optional CNA properties, wildcard/status-change semantics,
+and complete CNA/ADP reconciliation remain open and fail closed.
+A twentieth RED regression demonstrated that schema validation occurred only
+after filtering to the requested package. Null optional metadata, a malformed
+repository URI, duplicate versions, or an unknown property on another product
+row—or a row omitting both `versions` and `defaultStatus`—was silently ignored
+while the target row authorized `supported` with `finding_allowed=true`. The
+evaluator now validates every `affected` row against its bounded executable
+product contract and required status evidence before target-package
+selection. **Gap / Action / status:** whole-array product-row admission is
+source-GREEN and remains Proposed pending exact-head hosted acceptance; the
+same wildcard/status-change and multi-publisher gaps remain fail closed.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

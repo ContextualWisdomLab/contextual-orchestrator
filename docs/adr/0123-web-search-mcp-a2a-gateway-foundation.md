@@ -185,8 +185,9 @@ Rust Project Developers, n.d.; Semantic Versioning, n.d.). For CVE records,
 the server first requires the record to declare `dataType: CVE_RECORD` and a
 schema-valid 5.x `dataVersion`. It then applies the CVE 5.x
 `versions`/`defaultStatus` decision algorithm only when every installed lock
-version and every bound is exact SemVer 2.0.0, the ranges are non-overlapping,
-and matching product rows agree (CVE Project, 2026). At least one `affected`
+version and every bound is exact SemVer 2.0.0, version entries satisfy the
+schema's `uniqueItems`, the ranges are non-overlapping, and matching product
+rows agree (CVE Project, 2026). At least one `affected`
 installed version produces `supported` plus
 `finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
 Wildcard bounds, status changes, non-SemVer or explicitly empty version
@@ -493,6 +494,17 @@ reconciliation remain Proposed. Records carrying an ADP container, an invalid
 empty ADP array, or an unrecognized container property fail closed rather than
 silently discarding another publisher's evidence or guessing reconciliation
 precedence.
+For admitted product rows, `collectionURL` and `packageName` enforce their
+pinned 1–2048 identity bounds before URL normalization; optional `vendor` and
+`product` strings enforce the pinned 1–512 and 1–2048 bounds; `repo` enforces
+the complete RFC 3986 URI and 1–2048 contract; and every executable version
+string enforces the schema's 1–1024 bound. Informational values are validated
+but are not inferred as package or scope authority. The evaluator validates
+every `affected` product row before selecting the requested package, so a
+malformed nonmatching row cannot leave an otherwise invalid CVE record with
+finding authority. Every row must carry `versions` or `defaultStatus` as the
+pinned product schema requires; absence is not converted into an inferred
+neutral default.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed
