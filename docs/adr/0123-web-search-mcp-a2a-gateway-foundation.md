@@ -180,7 +180,7 @@ only when every installed lock version and every bound is exact SemVer 2.0.0,
 the ranges are non-overlapping, and matching product rows agree (CVE Project,
 2026). At least one `affected` installed version produces `supported` plus
 `finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
-Wildcard bounds, status changes, non-SemVer version types, unknown statuses,
+Wildcard bounds, status changes, non-SemVer entries/version types, unknown statuses,
 platform/component qualifiers, fields outside the CVE product/version-entry
 schemas, overlaps, and conflicting rows fail closed as `unverified`. GHSA
 ranges are not interpreted by this slice. Missing search,

@@ -7526,7 +7526,7 @@ The following bounded slice implements the official CVE 5.x
 ranges. It authorizes a finding only when an exact npm/crates.io lock version
 has status `affected`; a fully checked `unaffected` set is rejected. The public
 receipt exposes the affected installed versions. Wildcard bounds, `changes`,
-non-SemVer types, overlapping ranges, `unknown`, platform/component scopes,
+non-SemVer entries/types, overlapping ranges, `unknown`, platform/component scopes,
 unrecognized product/version-entry fields, conflicting product rows, GHSA range
 syntax, and absent lock evidence remain `unverified`. This is a deliberately
 executable standards-backed subset, not an approximation or a claim that all
@@ -7536,7 +7536,11 @@ the evaluator now enforces the CVE schema's exact range-object field set. A
 second RED regression demonstrated that an unknown product-level scope field
 also previously authorized a finding; the evaluator now enforces the CVE 5.1.1
 product object's `additionalProperties: false` contract before interpreting
-any matching row.
+any matching row. A third RED regression demonstrated that a non-SemVer
+single-version entry fell through to `defaultStatus: affected` and authorized
+an unrelated exact installed version; every executable single-version entry
+now passes the same exact SemVer 2.0.0 grammar as lock evidence and range
+bounds.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
