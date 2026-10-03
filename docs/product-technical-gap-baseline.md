@@ -7562,6 +7562,13 @@ could relabel `node_modules/lodash` and its lodash tarball as `react`, producing
 package-descriptor field. Both package-presence and installed-version readers
 now reject that unsupported identity override for the entire lockfile instead
 of guessing alias semantics or parsing identity from a tarball URL.
+An eighth RED regression demonstrated that absent CVE record headers, an
+unrecognized `dataType`, a non-string `dataVersion`, and a future 6.x record
+were all evaluated as if they selected the implemented 5.x algorithm, allowing
+`supported` and `finding_allowed=true`. The evaluator now requires the CVE
+schema's `CVE_RECORD` discriminator and exact 5.x `dataVersion` pattern before
+reading metadata, package identity, or version ranges; unsupported schema
+versions remain `unverified` rather than being interpreted speculatively.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

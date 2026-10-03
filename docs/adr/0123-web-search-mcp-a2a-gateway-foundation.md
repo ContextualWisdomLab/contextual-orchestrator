@@ -182,15 +182,18 @@ exact-tree and lock-precedence
 contracts, Cargo's
 resolved-version contract, and SemVer's exact-version grammar (npm, Inc., n.d.;
 Rust Project Developers, n.d.; Semantic Versioning, n.d.). For CVE records,
-the server applies the CVE 5.x `versions`/`defaultStatus` decision algorithm
-only when every installed lock version and every bound is exact SemVer 2.0.0,
-the ranges are non-overlapping, and matching product rows agree (CVE Project,
-2026). At least one `affected` installed version produces `supported` plus
+the server first requires the record to declare `dataType: CVE_RECORD` and a
+schema-valid 5.x `dataVersion`. It then applies the CVE 5.x
+`versions`/`defaultStatus` decision algorithm only when every installed lock
+version and every bound is exact SemVer 2.0.0, the ranges are non-overlapping,
+and matching product rows agree (CVE Project, 2026). At least one `affected`
+installed version produces `supported` plus
 `finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
 Wildcard bounds, status changes, non-SemVer or explicitly empty version
 entries, unknown statuses, platform/component qualifiers, unverified Package
-URLs, fields outside the CVE product/version-entry schemas, overlaps, and
-conflicting rows fail closed as `unverified`. GHSA ranges are not interpreted
+URLs, absent or malformed record headers, unsupported non-5.x data versions,
+fields outside the CVE product/version-entry schemas, overlaps, and conflicting
+rows fail closed as `unverified`. GHSA ranges are not interpreted
 by this slice. Missing search,
 snapshot or record evidence is
 `unverified`, never a clean-repository verdict or a finding. Search remains a
@@ -419,9 +422,9 @@ Not built this iteration, in either form.
   https://docs.searxng.org/dev/search_api.html
 - SearXNG Authors. (n.d.). *settings.yml*. Retrieved 2026-09-30, from
   https://docs.searxng.org/admin/settings/settings
-- CVE Project. (2026). *CVE 5.0 product and version encodings* (schema commit
+- CVE Project. (2026). *CVE Record Format schema* (schema commit
   `ce5f5c865f14dc40a6548d36b74751abca1c588a`). Retrieved 2026-10-03, from
-  https://github.com/CVEProject/cve-schema/blob/ce5f5c865f14dc40a6548d36b74751abca1c588a/schema/docs/versions.md
+  https://github.com/CVEProject/cve-schema/blob/ce5f5c865f14dc40a6548d36b74751abca1c588a/schema/CVE_Record_Format.json
 - npm, Inc. (n.d.). *package-lock.json*. Retrieved 2026-10-02, from
   https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/
 - Rust Project Developers. (n.d.). *Cargo.toml vs. Cargo.lock*. Retrieved
