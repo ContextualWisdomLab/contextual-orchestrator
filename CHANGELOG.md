@@ -17,7 +17,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retries only final synthesis on a ready route. After HTTP 413 retires one
   route, another rate-limited route can still recover. This repair changes
   retry timing, not the Chat Completions JSON-schema request or response
-  fields; explicit model pins and expired budgets remain fail-closed.
+  fields; explicit model pins and expired budgets remain fail-closed. A zero
+  wait budget now limits only an all-cooling pool and does not prevent
+  immediate failover from an explicit 429 to an already-ready sibling.
 - Structured non-stream `/v1/responses` requests now preflight every required
   conduct role for `orchestrator/free`. Image-capable worker-only pools fail
   closed with typed HTTP 400 before template planning instead of surfacing a
