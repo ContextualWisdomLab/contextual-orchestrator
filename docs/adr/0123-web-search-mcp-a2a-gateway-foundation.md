@@ -170,9 +170,12 @@ affected ranges are not checked. SemVer 2.0.0 exact installed versions from
 registry-backed npm `package-lock.json` v2/v3 package rows and crates.io
 `Cargo.lock` package rows are preserved as provenance when present; manifest
 constraints, linked/local/git/custom-registry dependencies, malformed fields,
-and unsupported lock formats are not installed-version evidence. One malformed
+unsupported lock formats, and a present higher-precedence
+`npm-shrinkwrap.json` are not installed-version evidence. The inactive
+`package-lock.json` is not consulted when shrinkwrap is present. One malformed
 row rejects the entire version-evidence set rather than publishing a partial
-receipt. The lockfile evidence follows npm's exact-tree contract, Cargo's
+receipt. The lockfile evidence follows npm's exact-tree and lock-precedence
+contracts, Cargo's
 resolved-version contract, and SemVer's exact-version grammar (npm, Inc., n.d.;
 Rust Project Developers, n.d.; Semantic Versioning, n.d.). For CVE records,
 the server applies the CVE 5.x `versions`/`defaultStatus` decision algorithm

@@ -7549,6 +7549,12 @@ A fifth RED regression demonstrated that a row whose npm package name was
 Until the repository snapshot carries standards-complete PURL identity
 evidence, any `packageURL` field now fails closed before range evaluation rather
 than being ignored or partially parsed.
+A sixth RED regression demonstrated that a vulnerable version from
+`package-lock.json` still authorized a finding even when npm would ignore that
+file in favor of a present `npm-shrinkwrap.json`. The bounded reader now removes
+the inactive package lock from package evidence and rejects version authority
+until shrinkwrap support is implemented, so lock precedence cannot become an
+undocumented fallback.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

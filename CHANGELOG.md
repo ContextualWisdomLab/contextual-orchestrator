@@ -25,9 +25,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   versions from registry-backed npm `package-lock.json` v2/v3 rows and
   crates.io `Cargo.lock` rows,
   including deterministic multi-version evidence and the source lockfile.
-  Manifest ranges, linked/local/git npm packages, missing lockfiles, and
-  malformed headers, fields, rows, or version strings remain non-evidence for
-  the entire lockfile. Lock provenance alone never classifies a version; only
+  Manifest ranges, linked/local/git npm packages, higher-precedence
+  `npm-shrinkwrap.json`, missing lockfiles, and malformed headers, fields,
+  rows, or version strings remain non-evidence for the entire lockfile. Lock
+  provenance alone never classifies a version; only
   the separately reviewed bounded CVE evaluator above can set
   `versions_checked` or `finding_allowed`.
 - Security installation inputs and all three Python lock paths now retain
