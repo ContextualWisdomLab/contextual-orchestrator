@@ -7585,6 +7585,15 @@ requires the official Published metadata's `cveId`, `assignerOrgId`, and
 grammars; and rejects metadata fields outside the pinned schema before package
 or version interpretation. Optional metadata fields that do not affect this
 bounded decision remain outside this slice's validation scope.
+An eleventh RED regression demonstrated that the Published CNA container could
+omit schema-required `providerMetadata`, `descriptions`, or `references` while
+its `affected` range still authorized `supported` with
+`finding_allowed=true`. Package and version interpretation now requires all
+four official CNA fields, including `affected`; missing required evidence fails
+closed as `unverified`. **Gap / Action / status:** required-field presence is
+source-GREEN and remains Proposed pending exact-head hosted acceptance; nested
+CNA value validation, extension semantics, and ADP reconciliation remain open
+and must not be inferred by this bounded evaluator.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

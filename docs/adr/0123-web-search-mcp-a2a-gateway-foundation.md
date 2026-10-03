@@ -465,6 +465,12 @@ identified `User-Agent`, including the GitHub Advisory request path.
 Central workflow wiring, independent manifest enforcement in its gate,
 version-range evaluation and the original end-to-end false-positive
 reproduction remain open under #1347. Security gates are unchanged.
+The bounded CVE evaluator also requires every Published CNA container to carry
+the pinned schema's `providerMetadata`, `descriptions`, `affected`, and
+`references` fields before package or version interpretation. Omitting any of
+the three previously ignored required fields now fails closed instead of
+authorizing a finding. This records field-presence authority only; validation
+of their nested values and complete CNA/ADP schema semantics remains Proposed.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed
