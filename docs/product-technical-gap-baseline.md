@@ -7569,6 +7569,13 @@ were all evaluated as if they selected the implemented 5.x algorithm, allowing
 schema's `CVE_RECORD` discriminator and exact 5.x `dataVersion` pattern before
 reading metadata, package identity, or version ranges; unsupported schema
 versions remain `unverified` rather than being interpreted speculatively.
+A ninth RED regression demonstrated that an unknown top-level property could
+coexist with the four understood CVE record fields and still authorize
+`supported` with `finding_allowed=true`. Both Published and Rejected records
+set `additionalProperties: false`; the evaluator now requires the exact root
+field set before interpreting the bounded 5.x payload. Future or malformed
+record extensions remain `unverified` until a reviewed schema contract adds
+their semantics.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

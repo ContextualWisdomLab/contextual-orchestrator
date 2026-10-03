@@ -192,8 +192,8 @@ installed version produces `supported` plus
 Wildcard bounds, status changes, non-SemVer or explicitly empty version
 entries, unknown statuses, platform/component qualifiers, unverified Package
 URLs, absent or malformed record headers, unsupported non-5.x data versions,
-fields outside the CVE product/version-entry schemas, overlaps, and conflicting
-rows fail closed as `unverified`. GHSA ranges are not interpreted
+fields outside the CVE record/product/version-entry schemas, overlaps, and
+conflicting rows fail closed as `unverified`. GHSA ranges are not interpreted
 by this slice. Missing search,
 snapshot or record evidence is
 `unverified`, never a clean-repository verdict or a finding. Search remains a
