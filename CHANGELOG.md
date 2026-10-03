@@ -24,6 +24,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   malformed CNA provider UUIDs, short names, timestamps, or properties,
   malformed, duplicate, or non-English CNA description evidence,
   malformed, duplicate, or non-RFC-3986 CNA reference evidence,
+  unvalidated optional CNA properties or uninterpreted CNA extensions,
   unrecognized record/metadata/product/version-entry fields, and conflicting
   product rows remain `unverified`; the receipt exposes
   `affected_installed_versions` when a finding is authorized.

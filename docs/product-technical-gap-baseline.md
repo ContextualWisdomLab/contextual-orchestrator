@@ -7630,8 +7630,8 @@ and accepted/rejected schema-boundary regressions now cover 512 references,
 **Gap / Action / status:** CNA
 references are source-GREEN and remain Proposed pending exact-head hosted
 acceptance; optional provider values are completed below, while CNA extension
-semantics and complete CNA/ADP reconciliation remain open and must not be
-inferred.
+handling is completed conservatively below and complete CNA/ADP reconciliation
+remains open and must not be inferred.
 A fifteenth RED regression demonstrated that optional provider `shortName`
 values outside the pinned 2–32 character contract and malformed `dateUpdated`
 values—including impossible calendar dates or times and terminal-line-feed
@@ -7641,8 +7641,22 @@ full-input matching and validates short-name types and exact bounds before any
 package or version interpretation. Valid leap-day timestamps, absent timezone,
 fractional seconds, offsets, and both short-name boundaries remain accepted.
 **Gap / Action / status:** CNA provider metadata is source-GREEN and remains
-Proposed pending exact-head hosted acceptance; CNA extension semantics and
-complete CNA/ADP reconciliation remain open and must not be inferred.
+Proposed pending exact-head hosted acceptance; CNA extension handling is
+completed conservatively below, while complete CNA/ADP reconciliation remains
+open and must not be inferred.
+A sixteenth RED regression demonstrated that unrecognized CNA properties,
+schema-valid and schema-invalid `x_` extension names, a schema-valid `disputed`
+tag, and a CPE applicability rule marking the installed CPE non-vulnerable could
+add uninterpreted decision semantics while the understood affected range still
+authorized `supported` with `finding_allowed=true`. The evaluator now admits
+only validated required properties plus a schema-bounded 1–256 character
+`title`. Every other optional named property and every extension fails closed
+until its contract and decision semantics are explicitly implemented; it does
+not inspect names or values to guess neutrality. **Gap / Action / status:** CNA
+property admission is source-GREEN and remains Proposed pending exact-head
+hosted acceptance; validation and interpretation of the other optional named
+CNA properties and complete CNA/ADP reconciliation remain open and must not be
+inferred.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

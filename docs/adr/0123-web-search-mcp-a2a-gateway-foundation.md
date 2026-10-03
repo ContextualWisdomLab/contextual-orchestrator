@@ -483,8 +483,13 @@ The MIT-licensed `rfc3986-validator` 0.1.1 is a direct runtime dependency becaus
 the installed `jsonschema` format checker otherwise treats `uri` as an unchecked
 annotation when its optional validation backend is absent. The validator match
 must consume the complete input because its regular expression can otherwise
-accept the prefix of a URI followed by a terminal line feed. CNA extension
-semantics and complete CNA/ADP reconciliation remain Proposed.
+accept the prefix of a URI followed by a terminal line feed. The evaluator
+admits only the required CNA properties it validates plus a schema-bounded
+1–256 character `title`. Every other optional named property and every `x_`
+extension fails closed until its contract and decision semantics are explicitly
+implemented; a property being named by the schema is not evidence that it is
+decision-neutral. Validation of those optional properties and complete CNA/ADP
+reconciliation remain Proposed.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed
