@@ -19,8 +19,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   bounds, status changes, non-SemVer or explicitly empty version entries,
   overlapping ranges, unknown statuses, platform/component scopes, unverified
   Package URLs, missing or malformed CVE record headers, unsupported non-5.x
-  data versions, unrecognized record/product/version-entry fields, and
-  conflicting product rows remain `unverified`; the receipt exposes
+  data versions, missing or malformed published-metadata identity/provenance,
+  unrecognized record/metadata/product/version-entry fields, and conflicting
+  product rows remain `unverified`; the receipt exposes
   `affected_installed_versions` when a finding is authorized.
 - Vulnerability claim receipts now preserve SemVer 2.0.0 exact installed
   versions from registry-backed npm `package-lock.json` v2/v3 rows and

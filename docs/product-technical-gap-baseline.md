@@ -7576,6 +7576,15 @@ set `additionalProperties: false`; the evaluator now requires the exact root
 field set before interpreting the bounded 5.x payload. Future or malformed
 record extensions remain `unverified` until a reviewed schema contract adds
 their semantics.
+A tenth RED regression demonstrated that a Published record could omit its
+required assigning-organization identity, carry a malformed organization UUID,
+use a schema-invalid lowercase CVE ID, or add an unknown provenance field and
+still authorize `supported` with `finding_allowed=true`. The evaluator now
+requires the official Published metadata's `cveId`, `assignerOrgId`, and
+`state` fields; enforces the schema's UUID v4 and exact uppercase ASCII CVE ID
+grammars; and rejects metadata fields outside the pinned schema before package
+or version interpretation. Optional metadata fields that do not affect this
+bounded decision remain outside this slice's validation scope.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
