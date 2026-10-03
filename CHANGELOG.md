@@ -21,7 +21,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Package URLs, missing or malformed CVE record headers, unsupported non-5.x
   data versions, missing or malformed published-metadata identity/provenance,
   missing required Published CNA provenance, descriptions, or references,
-  malformed CNA provider UUIDs or unrecognized provider properties,
+  malformed CNA provider UUIDs, short names, timestamps, or properties,
   malformed, duplicate, or non-English CNA description evidence,
   malformed, duplicate, or non-RFC-3986 CNA reference evidence,
   unrecognized record/metadata/product/version-entry fields, and conflicting

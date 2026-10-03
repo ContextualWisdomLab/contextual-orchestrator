@@ -470,8 +470,10 @@ the pinned schema's `providerMetadata`, `descriptions`, `affected`, and
 `references` fields before package or version interpretation. Omitting any of
 the three previously ignored required fields now fails closed instead of
 authorizing a finding. The provider provenance object must also carry the
-schema-required UUID v4 `orgId` and no unrecognized properties. Optional
-provider values remain outside this slice. Description evidence must now match
+schema-required UUID v4 `orgId`, optional 2–32 character `shortName`, optional
+exact-schema `dateUpdated` timestamp, and no unrecognized properties. Timestamp
+validation uses the pinned schema pattern verbatim with full-input matching;
+it does not infer or normalize dates. Description evidence must now match
 the pinned schema's BCP 47 subset, contain non-empty bounded text and at least
 one English entry, preserve JSON `uniqueItems`, reject unrecognized fields, and
 fully validate optional supporting-media objects before package or version
@@ -481,8 +483,8 @@ The MIT-licensed `rfc3986-validator` 0.1.1 is a direct runtime dependency becaus
 the installed `jsonschema` format checker otherwise treats `uri` as an unchecked
 annotation when its optional validation backend is absent. The validator match
 must consume the complete input because its regular expression can otherwise
-accept the prefix of a URI followed by a terminal line feed. Extension semantics
-and complete CNA/ADP reconciliation remain Proposed.
+accept the prefix of a URI followed by a terminal line feed. CNA extension
+semantics and complete CNA/ADP reconciliation remain Proposed.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed

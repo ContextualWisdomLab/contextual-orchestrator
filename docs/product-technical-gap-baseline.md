@@ -7600,9 +7600,9 @@ property each still authorized `supported` with `finding_allowed=true`.
 Provider provenance now requires the pinned schema's UUID v4 `orgId` and exact
 provider property set before package or version interpretation. **Gap / Action /
 status:** provider identity is source-GREEN and remains Proposed pending
-exact-head hosted acceptance; optional provider values, description/reference
-contents, CNA extensions, and ADP reconciliation remain open and fail-closed
-scope rather than inferred semantics.
+exact-head hosted acceptance; optional provider values are completed below,
+while description/reference contents, CNA extensions, and ADP reconciliation
+remain open and fail-closed scope rather than inferred semantics.
 A thirteenth RED regression demonstrated that `descriptions` could be null,
 empty, malformed, lack the schema-required English entry, carry an unknown
 field, or contain invalid supporting media while the affected range still
@@ -7611,9 +7611,9 @@ enforces the pinned schema's language patterns, required and bounded text,
 English-entry requirement, JSON uniqueness, exact property sets, and complete
 supporting-media structure before package or version interpretation. **Gap /
 Action / status:** CNA descriptions are source-GREEN and remain Proposed
-pending exact-head hosted acceptance; optional provider values, reference
-contents, CNA extension semantics, and complete CNA/ADP reconciliation remain
-open and must not be inferred.
+pending exact-head hosted acceptance; reference contents are completed below,
+while optional provider values, CNA extension semantics, and complete CNA/ADP
+reconciliation remain open and must not be inferred.
 A fourteenth RED regression demonstrated that `references` could be null,
 empty, oversized, duplicate, omit or corrupt its URL, use a non-RFC-3986 URI,
 carry unknown fields, invalid names, duplicate or unknown tags, or malformed
@@ -7629,8 +7629,20 @@ and accepted/rejected schema-boundary regressions now cover 512 references,
 2048-character URLs, 512-character names, and 128-character extension tags.
 **Gap / Action / status:** CNA
 references are source-GREEN and remain Proposed pending exact-head hosted
-acceptance; optional provider values, CNA extension semantics, and complete
-CNA/ADP reconciliation remain open and must not be inferred.
+acceptance; optional provider values are completed below, while CNA extension
+semantics and complete CNA/ADP reconciliation remain open and must not be
+inferred.
+A fifteenth RED regression demonstrated that optional provider `shortName`
+values outside the pinned 2–32 character contract and malformed `dateUpdated`
+values—including impossible calendar dates or times and terminal-line-feed
+partial matches—still authorized `supported` with `finding_allowed=true`.
+Provider validation now applies the pinned timestamp regex verbatim with
+full-input matching and validates short-name types and exact bounds before any
+package or version interpretation. Valid leap-day timestamps, absent timezone,
+fractional seconds, offsets, and both short-name boundaries remain accepted.
+**Gap / Action / status:** CNA provider metadata is source-GREEN and remains
+Proposed pending exact-head hosted acceptance; CNA extension semantics and
+complete CNA/ADP reconciliation remain open and must not be inferred.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with
