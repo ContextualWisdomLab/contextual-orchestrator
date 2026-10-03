@@ -186,8 +186,9 @@ the server first requires the record to declare `dataType: CVE_RECORD` and a
 schema-valid 5.x `dataVersion`. It then applies the CVE 5.x
 `versions`/`defaultStatus` decision algorithm only when every installed lock
 version and every bound is exact SemVer 2.0.0, version entries satisfy the
-schema's `uniqueItems`, the ranges are non-overlapping, and matching product
-rows agree (CVE Project, 2026). At least one `affected`
+schema's `uniqueItems`, every range is mathematically non-empty, the complete
+range and exact-version set is non-overlapping, and matching product rows agree
+(CVE Project, 2026). At least one `affected`
 installed version produces `supported` plus
 `finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
 Wildcard bounds, status changes, non-SemVer or explicitly empty version
@@ -505,6 +506,14 @@ malformed nonmatching row cannot leave an otherwise invalid CVE record with
 finding authority. Every row must carry `versions` or `defaultStatus` as the
 pinned product schema requires; absence is not converted into an inferred
 neutral default.
+Range admission is independent of the installed snapshot: the evaluator parses
+each executable entry once, rejects an exclusive range unless its lower bound
+is strictly less than its upper bound, orders ranges by SemVer precedence, and
+rejects any global intersection among ranges and exact-version entries,
+including one outside every installed version. The `0` earliest-version
+sentinel cannot define an exclusive interval below SemVer's minimum
+`0.0.0-0`. This prevents an unrelated installed version from concealing
+contradictory or empty evidence elsewhere in the same product record.
 Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
 `e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
 loopback caller path. Server construction now requires the KV-backed

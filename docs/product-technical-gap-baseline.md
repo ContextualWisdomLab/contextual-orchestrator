@@ -7698,6 +7698,19 @@ product contract and required status evidence before target-package
 selection. **Gap / Action / status:** whole-array product-row admission is
 source-GREEN and remains Proposed pending exact-head hosted acceptance; the
 same wildcard/status-change and multi-publisher gaps remain fail closed.
+A twenty-first RED regression demonstrated that overlap detection depended on
+the installed snapshot: two product ranges could overlap away from every
+installed version while a separate affected range still authorized
+`supported` with `finding_allowed=true`. A hidden exact-version/range conflict,
+duplicate exact-version rules with different statuses, empty or reversed
+exclusive ranges, and a `0` sentinel range below the minimum SemVer could
+likewise fall through to an `affected` default. The evaluator now parses each
+entry once, requires mathematically ordered non-empty bounds, sorts entries by
+SemVer precedence, and rejects any intersection across the complete product
+version set before evaluating installed versions. **Gap / Action / status:**
+global range consistency is source-GREEN and remains Proposed pending
+exact-head hosted acceptance; wildcard/status-change semantics and complete
+CNA/ADP reconciliation remain open and fail closed.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

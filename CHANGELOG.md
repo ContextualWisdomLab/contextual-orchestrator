@@ -14,8 +14,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
-  Exact, non-overlapping `semver` ranges can authorize only the installed
-  versions they contain or reject a fully checked unaffected set. Wildcard
+  Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous
+  single-version entries can authorize only the installed versions they
+  contain or reject a fully checked unaffected set. Wildcard
   bounds, status changes, non-SemVer, empty, or duplicate version entries,
   overlapping ranges, unknown statuses, platform/component scopes, unverified
   Package URLs, missing or malformed CVE record headers, unsupported non-5.x
