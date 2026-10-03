@@ -7543,26 +7543,26 @@ class TaskOrchestrator:
                     candidate for candidate in available
                     if self._rate_limit_remaining(candidate.id) is not None
                 ]
-                if wait_deadline is not None and time.monotonic() >= wait_deadline:
-                    storm = rate_limited_storm_error(
-                        agent_id=preferred.id,
-                        model=preferred.model,
-                        retry_after_seconds=0.0,
-                        transport="structured_synthesis",
-                        cooldown_source=self._rate_limit_cooldown_source(preferred.id),
-                    )
-                    raise _attach_route_evidence_to_upstream_error(
-                        storm,
-                        _route_evidence_payload(
-                            eligible_agent_ids=synthesis_eligible_agent_ids,
-                            attempted=synthesis_route_attempts,
-                            terminal_reason="rate_limited_storm",
-                            stage="structured_repair" if repair_mode else "structured_synthesis",
-                        ),
-                    ) from None
                 if available and len(cooling) == len(available):
                     if wait_deadline is None:
                         wait_deadline = time.monotonic() + self._rate_limit_wait_budget(preferred)
+                    if time.monotonic() >= wait_deadline:
+                        storm = rate_limited_storm_error(
+                            agent_id=preferred.id,
+                            model=preferred.model,
+                            retry_after_seconds=0.0,
+                            transport="structured_synthesis",
+                            cooldown_source=self._rate_limit_cooldown_source(preferred.id),
+                        )
+                        raise _attach_route_evidence_to_upstream_error(
+                            storm,
+                            _route_evidence_payload(
+                                eligible_agent_ids=synthesis_eligible_agent_ids,
+                                attempted=synthesis_route_attempts,
+                                terminal_reason="rate_limited_storm",
+                                stage="structured_repair" if repair_mode else "structured_synthesis",
+                            ),
+                        ) from None
                     try:
                         self._await_rate_limit_recovery(
                             cooling,

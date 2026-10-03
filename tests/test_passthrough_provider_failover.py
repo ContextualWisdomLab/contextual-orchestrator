@@ -637,9 +637,14 @@ def test_orchestrated_structured_synthesis_advances_on_413(model: str) -> None:
     ]
 
 
-@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize(
+    ("status", "rate_limit_wait_seconds"),
+    [(429, 30.0), (429, 0.0), (503, 30.0)],
+)
 def test_review_free_structured_synthesis_advances_only_after_429(
-    status: int, request: pytest.FixtureRequest,
+    status: int,
+    rate_limit_wait_seconds: float,
+    request: pytest.FixtureRequest,
 ) -> None:
     """Quota rejection can advance; an ambiguous 503 stays on its candidate."""
     failure = _http_error(status)
@@ -661,6 +666,7 @@ def test_review_free_structured_synthesis_advances_only_after_429(
                        tags=("cost:free", "review", "response_format")),
         ],
         client=client,
+        rate_limit_wait_seconds=rate_limit_wait_seconds,
     )
     with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
         if status == 429:
@@ -688,6 +694,63 @@ def test_review_free_structured_synthesis_advances_only_after_429(
                 )
             assert caught.value.provider_status == status
             assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_review_free_structured_synthesis_zero_budget_reports_all_429s(
+    request: pytest.FixtureRequest,
+) -> None:
+    """A zero wait budget reports every immediate quota rejection without replay."""
+    primary_failure = _http_error(429)
+    fallback_failure = _http_error(429)
+    request.addfinalizer(primary_failure.close)
+    request.addfinalizer(fallback_failure.close)
+    client = SequencedProxyClient(
+        {
+            "primary_agent": primary_failure,
+            "fallback_agent": fallback_failure,
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                priority=10,
+                tags=("cost:free", "review", "response_format"),
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                priority=1,
+                tags=("cost:free", "review", "response_format"),
+            ),
+        ],
+        client=client,
+        rate_limit_wait_seconds=0.0,
+    )
+
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.proxy_completion(
+                {
+                    "model": TaskOrchestrator.FREE_MODEL,
+                    "messages": [{"role": "user", "content": "review"}],
+                    "response_format": {"type": "json_object"},
+                },
+                single_agent=False,
+            )
+
+    assert caught.value.provider_status == 429
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    route = caught.value.extra_detail["route"]
+    assert [attempt["agent_id"] for attempt in route["attempted"]] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+    assert route["terminal_reason"] == "rate_limited_storm"
 
 
 def test_review_free_structured_synthesis_timeout_has_unknown_outcome() -> None:

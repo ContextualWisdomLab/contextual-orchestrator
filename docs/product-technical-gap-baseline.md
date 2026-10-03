@@ -283,6 +283,18 @@ call counts and typed errors cover these boundaries. This source evidence does
 not establish provider idempotency, a protected release, or Noema approval;
 the observed Noema job used the older `767e67fb` sidecar pin.
 
+Exact-parent follow-up `0b4d2503f1f72aba4dc0cd05ce5f1504425b3e36`
+found that structured synthesis created a zero-duration recovery deadline
+after the first explicit 429, then enforced it before checking whether another
+eligible candidate was already ready. The RED case called only the primary and
+raised `rate_limited_storm`; the same test already proved ordinary-budget 429
+advancement and ambiguous-503 no-replay. GREEN scopes deadline expiry to the
+existing all-candidates-cooling branch, so `rate_limit_wait_seconds=0` still
+permits immediate ready-sibling failover while an all-429 pool returns typed
+429 without replay. The two adjacent owner suites pass 178 tests. This remains
+Proposed pending exact-head hosted checks, independent approval, protected
+integration, immutable release, and consumer adoption.
+
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
 Review of PR #1104 at `78d331451c2e9667e949d1d274dfe48708782fa9`
