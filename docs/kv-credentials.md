@@ -126,9 +126,70 @@ printf '%s' "$SEARXNG_TOKEN" | python -m contextual_orchestrator \
   register-credential --name SEARXNG_TOKEN --value-stdin
 ```
 
-This module does not deploy SearXNG itself — point it at any SearXNG instance
-you already run (the project's own Docker Compose deployment is documented at
-[docs.searxng.org](https://docs.searxng.org/admin/installation-docker.html)).
+`compose.searxng.yaml` is an overlay for the existing Wardnet deployment, not
+an independent Internet-connected search service. SearXNG runs nonroot on an
+internal-only network with Wardnet DNS and authenticated HTTPS CONNECT. The
+pinned image's entrypoint skips root-only chown/certificate writes; writable
+config, cache and temporary directories belong to UID/GID 977. Static compose
+validation is not proof of container startup or successful search.
+
+Configure the existing Wardnet credentials/database and Camoufox prerequisites
+above. Register a dedicated search secret in the same persistent KV, render the
+SearXNG settings from the two KV entries into the protected deployment directory,
+then start the search service and its Wardnet dependency before the MCP server.
+The SearXNG container receives only the settings-file path in its environment;
+neither secret is exposed through container environment inspection.
+
+```bash
+python -c 'import secrets; print(secrets.token_urlsafe(32))' \
+  | python -m contextual_orchestrator register-credential \
+      --name SEARXNG_SECRET --value-stdin
+python -m contextual_orchestrator.searxng_config \
+  --output ./.secrets/searxng-settings.yml
+docker compose -f compose.camoufox-wardnet.yaml -f compose.searxng.yaml up -d searxng
+printf '%s' 'http://127.0.0.1:8088' | python -m contextual_orchestrator \
+  register-credential --name SEARXNG_URL --value-stdin
+printf '%s' '/srv/review-snapshot' | python -m contextual_orchestrator \
+  register-credential --name VULNERABILITY_REPOSITORY_SNAPSHOT --value-stdin
+python -c 'import secrets; print(secrets.token_urlsafe(32))' \
+  | python -m contextual_orchestrator register-credential \
+      --name WEB_SEARCH_MCP_TOKEN --value-stdin
+python -m contextual_orchestrator.web_search_mcp
+```
+
+Use the persistent KV backend described above for separate registration/server
+processes and for `searxng_config`; the default in-memory registry does not
+survive the CLI process. `SEARXNG_SETTINGS_FILE` may select another generated
+settings path for Compose. Keep its parent directory restricted to the deploying
+operator; the renderer creates or tightens that directory to mode `0700`.
+The operator must provision `/srv/review-snapshot` from the intended repository
+and exact reviewed revision, mount it read-only, and run a dedicated MCP server
+for that snapshot. Neither the model nor the MCP caller can choose a path or
+submit package evidence. Do not reuse one server across unrelated snapshots.
+Install the project `api` extra for the MCP server. It declares
+`mcp>=2.0,<3.0`, both project lock paths resolve MCP 2.2.0, and server
+construction fails closed if the installed package is missing or is not major
+version 2. Protected API CI uses that locked extra; an absent SDK is not an
+optional passing test state.
+
+Every Streamable HTTP request must present the registered token as
+`Authorization: Bearer <token>`. Missing or mismatched tokens receive HTTP 401
+through the SDK authentication middleware before a tool runs. This opaque
+bearer is a local, dedicated-snapshot deployment boundary; the server still
+refuses non-loopback binds. A public or multi-tenant deployment requires the
+existing Keyverse/OIDC external-verifier boundary rather than reusing this
+local token.
+
+`assess_vulnerability_claim` takes `identifier`, `package_name` and `ecosystem`
+(`PyPI`, `npm`, `crates.io`). It reads supported root manifests from that
+snapshot and compares structured official affected-package identities. Missing
+or unsupported manifests, unknown workspace coverage, official-record failure and
+insufficient records remain `unverified`, not clean. A package match is also
+`unverified`: versions/ranges are not checked, and `finding_allowed=false`.
+The claim path constructs the official endpoint from the validated identifier;
+SearXNG ranking and availability never select or admit evidence. Search snippets
+cannot authorize or reject a vulnerability finding. Central
+Strix/Noema wiring and real end-to-end proof remain open under #1347.
 Camoufox-rendered browsing (for JS-heavy fact-check targets, not search) and
 its `quarantine-sandbox-runtime` session isolation remain a documented
 follow-up; see the ADR.
@@ -390,4 +451,3 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
-
