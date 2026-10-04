@@ -116,3 +116,49 @@ def test_claim_tool_schema_does_not_accept_paths_or_package_lists(
     server = build_web_search_mcp_server()
     tool = next(tool for tool in server._tool_manager.list_tools() if tool.name == "assess_vulnerability_claim")
     assert set(tool.parameters["properties"]) == {"identifier", "package_name", "ecosystem"}
+
+
+def test_advertised_claim_contract_matches_bounded_version_verdict(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Advertise supported exact-SemVer findings without promising general coverage."""
+    import json
+
+    from contextual_orchestrator import vulnerability_claim as claims
+    from test_vulnerability_claim import _versioned_record
+
+    values = {
+        "WEB_SEARCH_MCP_TOKEN": "mcp-test-token",
+        claims.REPOSITORY_SNAPSHOT_CREDENTIAL: str(tmp_path),
+    }
+    monkeypatch.setattr(web_search_mcp, "get_credential", values.get)
+    monkeypatch.setattr(claims, "get_credential", values.get)
+    (tmp_path / "package-lock.json").write_text(json.dumps({
+        "lockfileVersion": 3,
+        "packages": {"node_modules/lodash": {
+            "version": "1.5.0",
+            "resolved": "https://registry.npmjs.org/lodash/-/lodash-1.5.0.tgz",
+        }},
+    }))
+    record = _versioned_record("CVE-2024-1234", [{
+        "version": "1.0.0", "lessThan": "2.0.0",
+        "versionType": "semver", "status": "affected",
+    }])
+    monkeypatch.setattr(claims, "_fetch_official_record", lambda _url: record)
+    server = build_web_search_mcp_server()
+    result = asyncio.run(server.call_tool("assess_vulnerability_claim", {
+        "identifier": "CVE-2024-1234", "package_name": "lodash", "ecosystem": "npm",
+    }))
+    assert not result.is_error
+    assert result.structured_content["versions_checked"] is True
+    assert result.structured_content["finding_allowed"] is True
+    tool = next(tool for tool in asyncio.run(server.list_tools())
+                if tool.name == "assess_vulnerability_claim")
+    for text in (server.instructions, tool.description):
+        assert text is not None
+        assert "Versions are not checked" not in text
+        assert "does not check versions" not in text
+        assert "no finding is authorized" not in text
+        assert "exact SemVer" in text
+        assert "finding_allowed" in text
+        assert "GHSA" in text and "unverified" in text

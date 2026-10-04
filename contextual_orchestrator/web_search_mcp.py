@@ -12,7 +12,11 @@ import secrets
 from typing import Any
 
 from .credentials import NotConfigured, get_credential
-from .vulnerability_claim import assess_vulnerability_claim
+from .vulnerability_claim import (
+    RepositoryPackageEvidence,
+    assess_vulnerability_claim,
+    capture_repository_package_evidence,
+)
 from .web_search import web_search
 
 MCP_SERVER_TOKEN_CREDENTIAL = "WEB_SEARCH_MCP_TOKEN"
@@ -51,9 +55,12 @@ def vulnerability_claim_tool_payload(
     identifier: str,
     package_name: str,
     ecosystem: str,
+    *, repository_evidence: tuple[RepositoryPackageEvidence, ...] | None = None,
 ) -> dict[str, Any]:
-    """Return identity evidence; unchecked versions cannot authorize a finding."""
-    return assess_vulnerability_claim(identifier, package_name, ecosystem).as_dict()
+    """Return bounded identity/version evidence without rereading a server's source."""
+    return assess_vulnerability_claim(
+        identifier, package_name, ecosystem, repository_evidence=repository_evidence,
+    ).as_dict()
 
 
 def build_web_search_mcp_server() -> Any:
@@ -74,13 +81,17 @@ def build_web_search_mcp_server() -> Any:
             "web search MCP server requires mcp SDK 2.x "
             f"(installed: {_installed_mcp_sdk_version()})"
         ) from exc
+    repository_evidence = capture_repository_package_evidence()
     server = MCPServer(
         name="web_search_gateway",
         instructions=(
             "Before reporting a CVE or GHSA, call assess_vulnerability_claim "
             "with the identifier, package name and ecosystem (PyPI, npm, crates.io). "
             "Repository evidence comes from an operator-selected snapshot. "
-            "This identity check does not check versions or authorize a finding."
+            "Only bounded CVE exact SemVer evidence from npm/crates.io locks can "
+            "authorize a finding when finding_allowed is true. GHSA ranges and "
+            "unsupported or incomplete evidence remain unverified; search results "
+            "alone never authorize a finding."
         ),
         auth=AuthSettings(
             issuer_url="http://127.0.0.1",
@@ -98,7 +109,9 @@ def build_web_search_mcp_server() -> Any:
         name="assess_vulnerability_claim",
         description=(
             "Check package identity against trusted repository manifests and an "
-            "official record. Versions are not checked; no finding is authorized."
+            "official record. Bounded CVE exact SemVer evaluation for npm/crates.io "
+            "locks may set finding_allowed=true. GHSA ranges and unsupported or "
+            "incomplete evidence remain unverified."
         ),
     )
     def assess_vulnerability_claim_tool(
@@ -106,7 +119,9 @@ def build_web_search_mcp_server() -> Any:
         package_name: str,
         ecosystem: str,
     ) -> dict[str, Any]:
-        return vulnerability_claim_tool_payload(identifier, package_name, ecosystem)
+        return vulnerability_claim_tool_payload(
+            identifier, package_name, ecosystem, repository_evidence=repository_evidence,
+        )
 
     return server
 

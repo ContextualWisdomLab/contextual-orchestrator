@@ -161,7 +161,10 @@ Use the persistent KV backend described above for separate registration/server
 processes and for `searxng_config`; the default in-memory registry does not
 survive the CLI process. `SEARXNG_SETTINGS_FILE` may select another generated
 settings path for Compose. Keep its parent directory restricted to the deploying
-operator; the renderer creates or tightens that directory to mode `0700`.
+operator. The renderer creates a missing destination directory with mode `0700`.
+An existing parent must already be owned by the deploying user and have mode
+`0700`; otherwise the renderer refuses the write without changing permissions
+or publishing settings. It never tightens an arbitrary shared directory.
 The operator must provision `/srv/review-snapshot` from the intended repository
 and exact reviewed revision, mount it read-only, and run a dedicated MCP server
 for that snapshot. Neither the model nor the MCP caller can choose a path or
@@ -184,8 +187,14 @@ local token.
 (`PyPI`, `npm`, `crates.io`). It reads supported root manifests from that
 snapshot and compares structured official affected-package identities. Missing
 or unsupported manifests, unknown workspace coverage, official-record failure and
-insufficient records remain `unverified`, not clean. A package match is also
-`unverified`: versions/ranges are not checked, and `finding_allowed=false`.
+insufficient records remain `unverified`, not clean. A package match alone cannot
+authorize a finding. Bounded CVE exact SemVer evaluation uses registry-backed npm
+and crates.io lock versions: an explicitly affected installed version can return
+`supported` with `finding_allowed=true`; a fully checked unaffected set returns
+`rejected`. GHSA ranges, PyPI installed-version evidence and unsupported or
+incomplete version/scope evidence remain `unverified` with `finding_allowed=false`.
+Declared HTTP body lengths must match the received bytes before record parsing;
+incomplete chunked framing also fails closed.
 The claim path constructs the official endpoint from the validated identifier;
 SearXNG ranking and availability never select or admit evidence. Search snippets
 cannot authorize or reject a vulnerability finding. Central

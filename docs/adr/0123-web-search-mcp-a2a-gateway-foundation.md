@@ -165,8 +165,11 @@ dependency. Exact
 record identity and ecosystem-qualified affected package names are compared.
 Generic product prose is insufficient. Python distribution names use Python
 normalization, not a cross-ecosystem substring match. A structured package
-mismatch can reject that identity claim; a match stays `unverified` because
-affected ranges are not checked. SemVer 2.0.0 exact installed versions from
+mismatch can reject that identity claim; a match alone does not authorize a
+finding. Bounded CVE exact SemVer evaluation may authorize supported installed
+versions as described below; unsupported evidence remains `unverified`.
+Declared HTTP body lengths must match the received bytes before record parsing;
+incomplete chunked framing also fails closed. SemVer 2.0.0 exact installed versions from
 registry-backed npm `package-lock.json` v2/v3 package rows and crates.io
 `Cargo.lock` package rows are preserved as provenance when present; manifest
 constraints, linked/local/git/custom-registry dependencies, malformed fields,
@@ -325,10 +328,13 @@ Not built this iteration, in either form.
 - **web search** — a query against one configured metasearch *engine*,
   returning bounded `WebSearchResult` rows. Never means rendering/browsing a
   specific URL (that is Camoufox Browsing Context's job).
-- **grounding** — using a `WebSearchResult`'s `url`/`content` as citable
-  evidence for a claim. This ADR ships retrieval and bounded package-identity checks only; deciding
-  whether installed versions are vulnerable is a separate, unbuilt judge/verifier
-  concern, not conflated here.
+- **grounding** — retaining retrieved sources as citable evidence, not treating
+  search snippets as finding authority. The claim tool separately checks official
+  record identity and repository package presence. Bounded CVE exact SemVer
+  evaluation of npm/crates.io lock versions can authorize a finding only when
+  `finding_allowed=true`. GHSA ranges and unsupported or incomplete evidence
+  remain `unverified`. General judging and central consumer integration remain
+  separate, unfinished concerns.
 - **engine** — one metasearch backend implementation (`searxng` today, `yacy`
   documented as next). Never a model provider — `ModelAgent`/`model_group`
   already own that term in Provider Routing Context.

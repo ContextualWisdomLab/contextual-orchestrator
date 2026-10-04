@@ -53,7 +53,11 @@ def write_searxng_settings(path: Path) -> None:
     """
     destination = path.expanduser().resolve(strict=False)
     destination.parent.mkdir(mode=stat.S_IRWXU, parents=True, exist_ok=True)
-    os.chmod(destination.parent, stat.S_IRWXU)
+    parent = destination.parent.stat()
+    if (not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid != os.geteuid()
+            or stat.S_IMODE(parent.st_mode) != stat.S_IRWXU):
+        raise ValueError("settings parent must already be an owner-private directory (0700)")
     descriptor, temporary_name = tempfile.mkstemp(
         dir=destination.parent,
         prefix=f".{destination.name}.",
