@@ -191,8 +191,13 @@ insufficient records remain `unverified`, not clean. A package match alone canno
 authorize a finding. Bounded CVE exact SemVer evaluation uses registry-backed npm
 and crates.io lock versions: an explicitly affected installed version can return
 `supported` with `finding_allowed=true`; a fully checked unaffected set returns
-`rejected`. GHSA ranges, PyPI installed-version evidence and unsupported or
-incomplete version/scope evidence remain `unverified` with `finding_allowed=false`.
+`rejected`. If the lock also has linked, workspace, mirror, git or other
+non-registry copies of the package, an affected registry copy still returns
+`supported` with `finding_allowed=true` and `versions_checked=false`; an
+unaffected registry subset is never `rejected` and stays `unverified`.
+GHSA ranges, PyPI installed-version evidence and other unsupported or
+incomplete version/scope evidence remain `unverified` with
+`finding_allowed=false`.
 Declared HTTP body lengths must match the received bytes before record parsing;
 incomplete chunked framing also fails closed.
 The claim path constructs the official endpoint from the validated identifier;

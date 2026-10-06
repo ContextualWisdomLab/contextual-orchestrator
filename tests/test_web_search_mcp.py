@@ -162,3 +162,5 @@ def test_advertised_claim_contract_matches_bounded_version_verdict(
         assert "exact SemVer" in text
         assert "finding_allowed" in text
         assert "GHSA" in text and "unverified" in text
+        assert "versions_checked=false" in text
+        assert "never rejected" in text

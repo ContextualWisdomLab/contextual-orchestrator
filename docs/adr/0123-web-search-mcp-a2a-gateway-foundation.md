@@ -194,6 +194,11 @@ range and exact-version set is non-overlapping, and matching product rows agree
 (CVE Project, 2026). At least one `affected`
 installed version produces `supported` plus
 `finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
+When a lock also contains linked, workspace, mirror, git or other
+non-registry copies of the claimed package, those copies are not evaluated:
+an affected registry copy still produces `supported` with
+`versions_checked=false`, but an unaffected registry subset produces
+`unverified`, never `rejected`.
 Wildcard bounds, status changes, non-SemVer or explicitly empty version
 entries, unknown statuses, platform/component qualifiers, unverified Package
 URLs, absent or malformed record headers, unsupported non-5.x data versions,
@@ -332,7 +337,9 @@ Not built this iteration, in either form.
   search snippets as finding authority. The claim tool separately checks official
   record identity and repository package presence. Bounded CVE exact SemVer
   evaluation of npm/crates.io lock versions can authorize a finding only when
-  `finding_allowed=true`. GHSA ranges and unsupported or incomplete evidence
+  `finding_allowed=true`; an affected registry copy beside unevaluated lock
+  copies reports `versions_checked=false`, and such a partial unaffected set
+  is never `rejected`. GHSA ranges and unsupported or incomplete evidence
   remain `unverified`. General judging and central consumer integration remain
   separate, unfinished concerns.
 - **engine** — one metasearch backend implementation (`searxng` today, `yacy`

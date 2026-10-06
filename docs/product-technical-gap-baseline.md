@@ -7494,6 +7494,61 @@ lifecycle policy and keeps ResourceWarning visible as a failure signal.
 
 ## 2026-09-30 PR #1348 SearXNG secret and advisory transport repair
 
+### 2026-10-06 incomplete installed-version evidence repair — Proposed
+
+Independent review of head `fff79e1a` found two paths that returned `rejected`
+with `versions_checked=true` from incomplete version evidence. The lockfile
+parsers skipped linked, unresolved, mirror-registry npm rows and git or
+private-registry Cargo rows. When the claimed package also had a
+public-registry copy, only that subset was evaluated, so an affected
+non-registry copy could be hidden behind an unaffected one. Separately, a CVE
+single-version entry was compared by string equality, so `1.0.0+meta` did not
+match an affected `1.0.0` despite equal SemVer precedence.
+
+The parsers now report, separately from registry versions, every package
+named by a lock row that was not evaluated: the dependency path name, an npm
+alias's declared `name`, and declared names on linked workspace target rows.
+The lock root project row is excluded. An unaffected registry subset of such a
+package yields `unverified`, never `rejected`; an affected registry copy still
+yields `supported` with `versions_checked=false` and a reason noting the
+unevaluated copies. Unrelated non-registry rows do not affect other packages.
+The version parser itself rejects a nameless non-registry Cargo row, although
+the public path already fails earlier during identity parsing. Single-version
+entries use SemVer precedence for matching and overlap detection, so build
+metadata is ignored in both the supporting and rejecting directions. Supported
+input remains root npm v2/v3 and Cargo locks; other lock formats and
+subdirectory projects are not evaluated. The alias, link and supported-
+retention regressions exercise both read-through and frozen MCP capture
+evidence; the earlier completeness regressions use read-through only. On the
+predecessor tree the REDs were mixed: assertion failures reproduced
+`rejected` (and, after the first repair, the lost `supported` verdict), while
+the input-hardening REDs below failed with `RecursionError` or a forbidden
+fetch. Registry-only and unrelated-row controls kept the rejection path; the
+separate root-row control names the root project like the claim, so it
+discriminates root exclusion. The MCP instructions, tool description, ADR and KV
+guide now disclose `versions_checked=false` with `finding_allowed=true` and
+that a partial unaffected set is never rejected; documentation guards fail
+without that disclosure.
+
+The same candidate hardens two inputs. Manifest and record parsing now treat
+`RecursionError` from deeply nested JSON or TOML as unavailable evidence, so
+capture records an error instead of stopping MCP startup. CVE and GHSA
+identifier patterns use `re.ASCII`, so fullwidth or Arabic-Indic digits and
+the long-s `ſ` are rejected before any fetch; one existing schema test now uses
+an ASCII claim identifier for that reason. The `RecursionError` handler in the
+version phase is reached only if a lock changes between reads.
+
+Issue #1347 acceptance tests pin the unmodified MITRE CVE-2024-1234 record
+(SHA-256 `1b338b63b95b269a83580872eb1e57ec8bc27b2b4f0b01fbcf20c37a2b03c6de`,
+retrieved 2026-10-06). It describes a WordPress plugin with no structured
+package identity and has ADP containers, so a lodash claim is withheld as
+`unverified`, not `rejected`; the original Python/Rust repository returns
+`unverified` without fetching. Loopback tests show a refused or stalled
+SearXNG raises instead of returning results, through the MCP payload too, and
+does not change a claim verdict. These are characterization tests, not repair
+REDs. The focused offline impact suite (328 tests, `-W error`, loopback-only)
+passed. Hosted exact-head checks, approval and merge remain open.
+
 ### 2026-10-02 no-heuristics advisory authority repair — Proposed
 
 Independent review found that the verdict path required SearXNG to return an

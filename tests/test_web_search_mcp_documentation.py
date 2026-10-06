@@ -14,6 +14,8 @@ def _assert_bounded_claim_contract(text: str) -> None:
     assert "npm" in paragraph and "crates.io" in paragraph
     assert "finding_allowed" in paragraph
     assert "GHSA" in paragraph and "unverified" in paragraph
+    assert "versions_checked=false" in paragraph.replace("`", "")
+    assert "never `rejected`" in paragraph or "never rejected" in paragraph
     for denial in (
         "versions/ranges are not checked",
         "affected ranges are not checked",
@@ -48,7 +50,18 @@ def test_public_claim_contract_matches_version_authority(document, start, end):
 def test_contract_guard_rejects_wrapped_contradictions(denial):
     """A supported clause cannot hide a later contradictory wrapped statement."""
     supported = ("Bounded CVE exact SemVer npm/crates.io evidence may authorize "
-                 "finding_allowed=true. GHSA ranges remain unverified.")
+                 "finding_allowed=true, including with versions_checked=false when "
+                 "other lock copies were not evaluated; such an unaffected subset "
+                 "is never rejected. GHSA ranges remain unverified.")
     _assert_bounded_claim_contract(supported.replace("exact SemVer", "exact\nSemVer"))
     with pytest.raises(AssertionError):
         _assert_bounded_claim_contract(supported + "\n" + denial)
+
+
+def test_contract_guard_requires_partial_evaluation_disclosure():
+    """A contract omitting supported-with-unchecked-copies is incomplete."""
+    with pytest.raises(AssertionError):
+        _assert_bounded_claim_contract(
+            "Bounded CVE exact SemVer npm/crates.io evidence may authorize "
+            "finding_allowed=true. GHSA ranges and incomplete evidence remain unverified."
+        )

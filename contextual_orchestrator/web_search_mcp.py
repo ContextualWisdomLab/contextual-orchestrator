@@ -89,7 +89,9 @@ def build_web_search_mcp_server() -> Any:
             "with the identifier, package name and ecosystem (PyPI, npm, crates.io). "
             "Repository evidence comes from an operator-selected snapshot. "
             "Only bounded CVE exact SemVer evidence from npm/crates.io locks can "
-            "authorize a finding when finding_allowed is true. GHSA ranges and "
+            "authorize a finding when finding_allowed is true; with unevaluated "
+            "lock copies an affected registry version reports versions_checked=false "
+            "and an unaffected partial set is never rejected. GHSA ranges and "
             "unsupported or incomplete evidence remain unverified; search results "
             "alone never authorize a finding."
         ),
@@ -110,8 +112,10 @@ def build_web_search_mcp_server() -> Any:
         description=(
             "Check package identity against trusted repository manifests and an "
             "official record. Bounded CVE exact SemVer evaluation for npm/crates.io "
-            "locks may set finding_allowed=true. GHSA ranges and unsupported or "
-            "incomplete evidence remain unverified."
+            "locks may set finding_allowed=true, with versions_checked=false when "
+            "other lock copies were not evaluated; an unaffected partial set is "
+            "never rejected. GHSA ranges and unsupported or incomplete evidence "
+            "remain unverified."
         ),
     )
     def assess_vulnerability_claim_tool(

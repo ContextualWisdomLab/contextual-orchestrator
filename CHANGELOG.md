@@ -12,6 +12,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Vulnerability claim receipts no longer reject a claim from a partial
+  installed-version set. When a root npm or Cargo lock also has linked,
+  workspace, alias, mirror, git or other non-registry copies of the claimed
+  package, an unaffected registry subset returns `unverified`; an affected
+  registry copy still returns `supported` with `finding_allowed=true` and
+  `versions_checked=false`. CVE single-version entries use SemVer precedence,
+  deeply nested manifests become unavailable evidence instead of crashing MCP
+  capture, and non-ASCII digits in CVE or GHSA identifiers are rejected
+  before any fetch.
+
 - Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
   Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous
