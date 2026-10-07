@@ -11987,9 +11987,18 @@ class TaskOrchestrator:
                             # A review completion may have been accepted before
                             # this transport failure. An explicit 429 rejection
                             # may advance; other post-send outcomes stay sticky.
-                            if exc.provider_status != 429:
-                                self._record_failure(agent.id)
-                            raise
+                            self._record_failure(agent.id)
+                            _append_typed_route_failure(
+                                route_attempts, agent, exc, transport="chat"
+                            )
+                            raise _attach_route_evidence_to_upstream_error(
+                                exc,
+                                _route_evidence_payload(
+                                    eligible_agent_ids=eligible_agent_ids,
+                                    attempted=route_attempts,
+                                    terminal_reason="fail_closed",
+                                ),
+                            )
                         # The primary chat call is a bounded, side-effect-free
                         # model request, not a tool invocation: classify from
                         # the provider's own already-computed retryability

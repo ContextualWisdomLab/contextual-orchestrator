@@ -519,6 +519,84 @@ def test_mixed_free_pool_replay_follows_failed_candidate(primary_review: bool) -
         orchestrator.close()
 
 
+def test_review_fail_closed_preserves_quota_and_terminal_route_context() -> None:
+    """A sticky review failure keeps every attempted candidate in its receipt."""
+    primary = ModelAgent(
+        "primary_agent",
+        "primary-model",
+        priority=10,
+        tags=("cost:free", "reasoning", "review"),
+    )
+    fallback = ModelAgent(
+        "fallback_agent",
+        "fallback-model",
+        priority=1,
+        tags=("cost:free", "reasoning", "review"),
+    )
+    orchestrator = TaskOrchestrator([primary, fallback], tool_retry_attempts=0)
+    terminal_failure = ProviderUpstreamError(
+        agent_id=fallback.id,
+        model=fallback.model,
+        error_code="service_unavailable",
+        message="upstream outcome is unknown",
+        client_status=503,
+        provider_status=503,
+        retryable=True,
+        transport="chat",
+    )
+    outcomes = QueuedChatOutcomes(
+        {
+            primary.id: [_rate_limited_upstream_error(1.0, primary.id)],
+            fallback.id: [terminal_failure],
+        }
+    )
+    orchestrator.client.chat = outcomes
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            orchestrator._invoke_with_rate_limit_recovery(
+                primary,
+                [{"role": "user", "content": "review"}],
+                text="review",
+                role="worker",
+                allowed_agent_ids={primary.id, fallback.id},
+                review_no_replay=True,
+                virtual_selector=True,
+            )
+
+        route = excinfo.value.extra_detail["route"]
+        assert excinfo.value is terminal_failure
+        assert route["eligible_agent_ids"] == [primary.id, fallback.id]
+        assert [row["agent_id"] for row in route["attempted"]] == [
+            primary.id,
+            fallback.id,
+        ]
+        assert [row["provider_status"] for row in route["attempted"]] == [429, 503]
+        assert [
+            (
+                row["outcome"],
+                row["error_code"],
+                row["retryable"],
+                row["transport"],
+            )
+            for row in route["attempted"]
+        ] == [
+            ("retryable_transport", "rate_limit_exceeded", True, "chat"),
+            ("retryable_transport", "service_unavailable", True, "chat"),
+        ]
+        assert route["terminal_reason"] == "fail_closed"
+        assert outcomes.calls == [primary.id, fallback.id]
+        assert primary.id not in orchestrator._circuit
+        assert orchestrator._circuit[fallback.id]["failures"] == 1.0
+        assert orchestrator._group_router.member_report(primary.id)[
+            "failure_count"
+        ] == 0
+        assert orchestrator._group_router.member_report(fallback.id)[
+            "failure_count"
+        ] == 1
+    finally:
+        orchestrator.close()
+
+
 def _free_route_agents() -> list[ModelAgent]:
     return [
         ModelAgent(

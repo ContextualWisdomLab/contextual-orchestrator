@@ -25,6 +25,19 @@
   because the fallback returns success; the explicit `model_not_found`
   control advances. The minimal predicate makes all three cases GREEN and
   preserves the existing 429, zero-wait, 503, and timeout controls.
+- **Follow-up causal-context gap / RCA:** the exact PR head could record an
+  explicit 429 and then stop safely on a review-tagged candidate's ambiguous
+  503, yet `_invoke` raised before appending the terminal candidate or
+  attaching its accumulated route. `_invoke_with_rate_limit_recovery` therefore
+  received an error with no `route`, losing both the rejected and terminal
+  attempts even though it correctly refused replay.
+- **Follow-up PRD / TRD / executable evidence:** a fail-closed review must keep
+  its original error taxonomy and expose every attempted candidate, status,
+  and terminal reason without authorizing another send. The exact-parent RED
+  raises `KeyError: 'route'` for the 429→503 scene. The smallest GREEN reuses
+  the existing typed-attempt and route-attachment helpers; the regression and
+  the adjacent rate-limit/review controls pass without changing selection,
+  timeout, or fallback authority.
 - **Status / action:** **Proposed / merge HOLD** pending full exact-tree
   verification, fresh hosted Checks, and qualifying independent approval.
 
