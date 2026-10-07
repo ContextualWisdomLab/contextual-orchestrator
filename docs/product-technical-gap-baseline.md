@@ -1,5 +1,46 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-07 structured review refusal proof — Proposed
+
+- **Gap / user failure scene:** `CO#1227@605b6e33f53ed9fae6bbad2449c291a3b964634d`
+  could receive a bodyless HTTP 404 or 410 after sending a structured
+  `orchestrator/free` review to one provider, then replay the same review to a
+  second provider. A missing model-refusal body did not prove that the first
+  provider rejected the request before executing it.
+- **RCA:** `send_synthesis_once` advanced every virtual
+  `model_not_found` classification. The passthrough and ordinary invocation
+  boundaries already required `model_refusal_proven` for review-tagged free
+  candidates, but structured synthesis omitted that proof gate.
+- **PRD / invariant:** one ambiguous review send has one provider execution
+  opportunity. Only an explicit provider model refusal, an explicit quota
+  rejection, or another separately proven safe boundary may authorize a new
+  provider send; bodyless status alone fails closed.
+- **TRD / Context Map:** CO owns provider classification and routing. The
+  structured-synthesis router now reuses the classified
+  `model_refusal_proven` evidence before changing candidates. The central
+  `.github` review caller still selects only `orchestrator/free` and does not
+  implement provider fallback. No DB, ERD, UI, ontology, or API-shape change
+  applies.
+- **Executable evidence:** exact-parent RED fails both bodyless 404 and 410
+  because the fallback returns success; the explicit `model_not_found`
+  control advances. The minimal predicate makes all three cases GREEN and
+  preserves the existing 429, zero-wait, 503, and timeout controls.
+- **Follow-up causal-context gap / RCA:** the exact PR head could record an
+  explicit 429 and then stop safely on a review-tagged candidate's ambiguous
+  503, yet `_invoke` raised before appending the terminal candidate or
+  attaching its accumulated route. `_invoke_with_rate_limit_recovery` therefore
+  received an error with no `route`, losing both the rejected and terminal
+  attempts even though it correctly refused replay.
+- **Follow-up PRD / TRD / executable evidence:** a fail-closed review must keep
+  its original error taxonomy and expose every attempted candidate, status,
+  and terminal reason without authorizing another send. The exact-parent RED
+  raises `KeyError: 'route'` for the 429→503 scene. The smallest GREEN reuses
+  the existing typed-attempt and route-attachment helpers; the regression and
+  the adjacent rate-limit/review controls pass without changing selection,
+  timeout, or fallback authority.
+- **Status / action:** **Proposed / merge HOLD** pending full exact-tree
+  verification, fresh hosted Checks, and qualifying independent approval.
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
@@ -254,6 +295,46 @@ environment's missing locked `pytest-asyncio` and inherited deprecated
 `jsonschema.RefResolver` warnings remain explicit. Hosted exact-head gates,
 independent review, protected merge, immutable release, and consumer adoption
 remain required.
+## 2026-09-25 review tool-request admission (#1106, proposed)
+
+The #940 baseline below intentionally allowed a free model with unknown tool
+support to receive a tool request. Issue #1106's later Strix tool-call 404
+shows why plain-chat readiness cannot authorize that request shape. The owner
+now requires positive discovery evidence for review-pool tool calls: the
+existing `tool_call:single|multi` tags determine admission for the actual
+request, and an empty eligible set returns typed 503 before provider send.
+Focused RED reproduced unknown-evidence admission, missing fail-closed
+behavior, and replay after ambiguous failures. The locked local environment
+passed 388 neighboring tests on 2026-09-25. Four provider-reliability tests
+were deselected after reproducing the same failures on unmodified `origin/main`
+at `5665b0ad` (selection-design receipt and provider allowlist classification).
+This is local contract evidence, not live provider readiness, judged review
+quality, protected delivery, or issue #1106 completion. Calibrated allocation,
+immutable release, and the central consumer's preflight removal remain open.
+The follow-up RED showed unsafe review replay after a post-send timeout;
+review-tagged completions now stop on that unknown outcome. A separate RED
+showed that the review route stopped after an explicit provider 429 even with
+another eligible free candidate. The owner now records the rejected candidate's
+cooldown and advances on direct 429, including HTTP tool requests and JSON-schema
+synthesis. An all-429 pool waits only within its configured budget and otherwise
+returns typed 429. A wrapped error with a nested 429 remains sticky because the
+outer send's outcome is unknown. Direct pre-send local-slot failure can still
+advance; HTTP 503 and post-send timeout remain terminal. Synthetic transport
+call counts and typed errors cover these boundaries. This source evidence does
+not establish provider idempotency, a protected release, or Noema approval;
+the observed Noema job used the older `767e67fb` sidecar pin.
+
+Exact-parent follow-up `0b4d2503f1f72aba4dc0cd05ce5f1504425b3e36`
+found that structured synthesis created a zero-duration recovery deadline
+after the first explicit 429, then enforced it before checking whether another
+eligible candidate was already ready. The RED case called only the primary and
+raised `rate_limited_storm`; the same test already proved ordinary-budget 429
+advancement and ambiguous-503 no-replay. GREEN scopes deadline expiry to the
+existing all-candidates-cooling branch, so `rate_limit_wait_seconds=0` still
+permits immediate ready-sibling failover while an all-429 pool returns typed
+429 without replay. The two adjacent owner suites pass 178 tests. This remains
+Proposed pending exact-head hosted checks, independent approval, protected
+integration, immutable release, and consumer adoption.
 
 ## 2026-09-08 item-covariate two-group boundary repair (proposed)
 
