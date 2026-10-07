@@ -7887,3 +7887,16 @@ JSON member identity is source-GREEN and remains Proposed pending exact-head
 review and hosted acceptance; wildcard/status-change semantics, complete
 CNA/ADP reconciliation, central Strix/Noema integration, immutable release,
 and consumer verification remain open.
+
+The same duplicate-member root cause remained reachable through repository
+JSON evidence: a package-lock row containing both `version: 9.0.0` and
+`version: 1.5.0` inherited the final value and authorized an affected finding.
+Official advisory, `package.json`, and `package-lock.json` decoding now share
+the same RFC 8259-bound duplicate-name and non-finite-constant rejection; TOML
+continues to use its native duplicate-key rejection. This also closes the
+ignored-metadata path where `auditScore: NaN` survived beside otherwise valid
+package and version evidence. **Gap / Action / status:** deterministic
+repository JSON evidence is source-GREEN and remains Proposed pending
+exact-head review and hosted acceptance; clean-lock installation, complete
+CNA/ADP reconciliation, central Strix/Noema integration, immutable release,
+and consumer verification remain open.

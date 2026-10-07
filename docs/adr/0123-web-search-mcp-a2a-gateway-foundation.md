@@ -483,11 +483,15 @@ Official-record retrieval also inherits `ModelClient`'s default
 `timeout=None`; neither the client nor its validated transport call supplies a
 leaf-authored elapsed-time cutoff. Provider termination and explicit external
 cancellation remain distinct from advisory-content validation.
-Official-record JSON also rejects duplicate object member names at every
-nesting level. RFC 8259 identifies unique names as the interoperable form and
-documents unpredictable receiver behavior for duplicates; selecting Python's
-last decoded value would therefore be an undocumented evidence-resolution
-rule (Bray, 2017). Ambiguous records fail closed before CNA/GHSA semantics.
+Official-record and repository manifest/lock JSON share one strict decoder that
+rejects duplicate object member names at every nesting level and rejects the
+non-standard `NaN`, `Infinity`, and `-Infinity` constants accepted by Python's
+default decoder. RFC 8259 identifies unique names as the interoperable form,
+documents unpredictable receiver behavior for duplicates, and excludes those
+constants from its number grammar; silently accepting either behavior would be
+an undocumented evidence-resolution rule (Bray, 2017). Ambiguous records fail
+closed before CNA/GHSA semantics, and ambiguous manifests or locks cannot
+establish package identity or installed-version evidence.
 Central workflow wiring, independent manifest enforcement in its gate,
 version-range evaluation and the original end-to-end false-positive
 reproduction remain open under #1347. Security gates are unchanged.
