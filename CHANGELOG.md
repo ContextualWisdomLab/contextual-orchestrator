@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Structured `orchestrator/free` review synthesis now treats bodyless HTTP 404
+  and 410 as unproved outcomes and stops before another provider send. An
+  explicit provider `model_not_found` refusal still advances to an eligible
+  free sibling, preserving the existing fail-closed replay boundary.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one

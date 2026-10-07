@@ -128,8 +128,9 @@ behavior for the review pool; other virtual selectors retain their prior
 contract. The same no-replay rule follows each actual review-tagged candidate
 through route and conduct calls for uncertain outcomes, including a mixed free
 pool. A non-review
-candidate retains its prior retry policy. A bodyless HTTP 404 cannot authorize
-another review send. No provider idempotency agreement has been established.
+candidate retains its prior retry policy. A bodyless HTTP 404 or 410 cannot
+authorize another review send in passthrough or structured synthesis. No
+provider idempotency agreement has been established.
 This matches the non-idempotent retry boundary in
 [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
 

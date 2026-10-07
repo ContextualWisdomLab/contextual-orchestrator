@@ -1,5 +1,33 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-07 structured review refusal proof — Proposed
+
+- **Gap / user failure scene:** `CO#1227@605b6e33f53ed9fae6bbad2449c291a3b964634d`
+  could receive a bodyless HTTP 404 or 410 after sending a structured
+  `orchestrator/free` review to one provider, then replay the same review to a
+  second provider. A missing model-refusal body did not prove that the first
+  provider rejected the request before executing it.
+- **RCA:** `send_synthesis_once` advanced every virtual
+  `model_not_found` classification. The passthrough and ordinary invocation
+  boundaries already required `model_refusal_proven` for review-tagged free
+  candidates, but structured synthesis omitted that proof gate.
+- **PRD / invariant:** one ambiguous review send has one provider execution
+  opportunity. Only an explicit provider model refusal, an explicit quota
+  rejection, or another separately proven safe boundary may authorize a new
+  provider send; bodyless status alone fails closed.
+- **TRD / Context Map:** CO owns provider classification and routing. The
+  structured-synthesis router now reuses the classified
+  `model_refusal_proven` evidence before changing candidates. The central
+  `.github` review caller still selects only `orchestrator/free` and does not
+  implement provider fallback. No DB, ERD, UI, ontology, or API-shape change
+  applies.
+- **Executable evidence:** exact-parent RED fails both bodyless 404 and 410
+  because the fallback returns success; the explicit `model_not_found`
+  control advances. The minimal predicate makes all three cases GREEN and
+  preserves the existing 429, zero-wait, 503, and timeout controls.
+- **Status / action:** **Proposed / merge HOLD** pending full exact-tree
+  verification, fresh hosted Checks, and qualifying independent approval.
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR

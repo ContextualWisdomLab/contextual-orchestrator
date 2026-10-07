@@ -7473,6 +7473,14 @@ class TaskOrchestrator:
                             if (
                                 virtual_model
                                 and classified.error_code == "model_not_found"
+                                and (
+                                    not free_only
+                                    or "review" not in candidate.tags
+                                    or classified.extra_detail.get(
+                                        "model_refusal_proven"
+                                    )
+                                    is True
+                                )
                             ):
                                 last_model_not_found = classified
                                 request_exclusions.add(candidate.id)

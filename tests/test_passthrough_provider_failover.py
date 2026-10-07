@@ -696,6 +696,93 @@ def test_review_free_structured_synthesis_advances_only_after_429(
             assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
+@pytest.mark.parametrize("status", [404, 410])
+def test_review_free_structured_synthesis_bodyless_model_status_is_sticky(
+    status: int,
+    request: pytest.FixtureRequest,
+) -> None:
+    """An unproved model status cannot replay a structured free review."""
+    failure = _http_error(status)
+    request.addfinalizer(failure.close)
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {
+                "model": "fallback-model",
+                "choices": [{"message": {"content": "{}"}}],
+            },
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("primary_agent", "primary-model", priority=10,
+                       tags=("cost:free", "review", "response_format")),
+            ModelAgent("fallback_agent", "fallback-model", priority=1,
+                       tags=("cost:free", "review", "response_format")),
+        ],
+        client=client,
+    )
+
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
+        with pytest.raises(ProviderUpstreamError) as caught:
+            orchestrator.proxy_completion(
+                {
+                    "model": TaskOrchestrator.FREE_MODEL,
+                    "messages": [{"role": "user", "content": "review"}],
+                    "response_format": {"type": "json_object"},
+                },
+                single_agent=False,
+            )
+
+    assert caught.value.provider_status == status
+    assert caught.value.extra_detail.get("model_refusal_proven") is None
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+@pytest.mark.parametrize("status", [404, 410])
+def test_review_free_structured_synthesis_proved_model_refusal_can_advance(
+    status: int,
+    request: pytest.FixtureRequest,
+) -> None:
+    """An explicit model refusal may advance structured synthesis."""
+    failure = _http_error(status, {"error": {"code": "model_not_found"}})
+    request.addfinalizer(failure.close)
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {
+                "model": "fallback-model",
+                "choices": [{"message": {"content": "{}"}}],
+            },
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("primary_agent", "primary-model", priority=10,
+                       tags=("cost:free", "review", "response_format")),
+            ModelAgent("fallback_agent", "fallback-model", priority=1,
+                       tags=("cost:free", "review", "response_format")),
+        ],
+        client=client,
+    )
+
+    with patch.object(orchestrator, "conduct", return_value=_structured_workflow()):
+        result = orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "review"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
 def test_review_free_structured_synthesis_zero_budget_reports_all_429s(
     request: pytest.FixtureRequest,
 ) -> None:
