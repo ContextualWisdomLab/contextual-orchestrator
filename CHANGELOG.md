@@ -22,6 +22,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   capture, and non-ASCII digits in CVE or GHSA identifiers are rejected
   before any fetch.
 
+- CVE product collection identities now require an exact supported registry
+  URI. Arbitrarily stripping trailing slashes could previously turn another
+  URI path into npm, PyPI, or crates.io evidence and authorize a finding; such
+  records now remain `unverified` instead of gaining inferred identity.
+
 - Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
   Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous

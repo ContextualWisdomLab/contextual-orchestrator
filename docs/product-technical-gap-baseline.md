@@ -7766,6 +7766,16 @@ version set before evaluating installed versions. **Gap / Action / status:**
 global range consistency is source-GREEN and remains Proposed pending
 exact-head hosted acceptance; wildcard/status-change semantics and complete
 CNA/ADP reconciliation remain open and fail closed.
+A twenty-second RED regression demonstrated that `collectionURL.rstrip("/")`
+collapsed an arbitrary trailing-slash path such as
+`https://registry.npmjs.org////` into the npm registry identity, allowing an
+otherwise executable affected range to return `supported` with
+`finding_allowed=true`. The evaluator now grants ecosystem identity only to
+the four exact collection URIs already listed in its bounded contract; any
+other URI remains unsupported without an evidence-backed equivalence rule.
+**Gap / Action / status:** exact collection identity is source-GREEN and
+remains Proposed pending exact-head hosted acceptance; wildcard/status-change
+semantics and complete CNA/ADP reconciliation remain open and fail closed.
 
 The RED regression reproduced `package_match=None` despite a valid structured
 record when search was unavailable. GREEN verification completed 75 tests with

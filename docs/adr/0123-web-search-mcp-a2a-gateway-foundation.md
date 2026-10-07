@@ -509,7 +509,9 @@ empty ADP array, or an unrecognized container property fail closed rather than
 silently discarding another publisher's evidence or guessing reconciliation
 precedence.
 For admitted product rows, `collectionURL` and `packageName` enforce their
-pinned 1–2048 identity bounds before URL normalization; optional `vendor` and
+pinned 1–2048 identity bounds. Only the four explicitly supported collection
+URIs have ecosystem authority; no path stripping or other URI equivalence is
+inferred. Optional `vendor` and
 `product` strings enforce the pinned 1–512 and 1–2048 bounds; `repo` enforces
 the complete RFC 3986 URI and 1–2048 contract; and every executable version
 string enforces the schema's 1–1024 bound. Informational values are validated
