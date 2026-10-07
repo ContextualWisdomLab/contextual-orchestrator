@@ -37,6 +37,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   matches. A terminal line feed can no longer satisfy the pinned grammar and
   let malformed required evidence authorize a vulnerability finding.
 
+- Official CVE/GHSA record retrieval now inherits the gateway's default
+  `timeout=None` contract. The evidence path no longer converts an arbitrary
+  ten-second elapsed-time cutoff into an `unverified` verdict.
+
 - Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
   Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous

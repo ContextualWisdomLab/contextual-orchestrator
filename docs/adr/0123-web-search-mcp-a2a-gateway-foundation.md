@@ -477,6 +477,10 @@ from the credential registry, writes a settings file below a mode-`0700` host
 directory, and Compose mounts that file read-only at the documented
 `SEARXNG_SETTINGS_PATH`. Official-record requests also send the repository's
 identified `User-Agent`, including the GitHub Advisory request path.
+Official-record retrieval also inherits `ModelClient`'s default
+`timeout=None`; neither the client nor its validated transport call supplies a
+leaf-authored elapsed-time cutoff. Provider termination and explicit external
+cancellation remain distinct from advisory-content validation.
 Central workflow wiring, independent manifest enforcement in its gate,
 version-range evaluation and the original end-to-end false-positive
 reproduction remain open under #1347. Security gates are unchanged.

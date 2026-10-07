@@ -7854,6 +7854,18 @@ and remains Proposed pending exact-head review and hosted acceptance; wildcard a
 status-change semantics, complete CNA/ADP reconciliation, central Strix/Noema
 integration, immutable release, and consumer verification remain open.
 
+PR #1348 next exposed an undocumented ten-second official-record deadline:
+both the `ModelClient` and validated transport call forced `timeout=10`, so an
+otherwise authoritative slow CVE/GHSA response could be converted into an
+`unverified` verdict solely by elapsed time. The path now inherits the shared
+`timeout=None` default without introducing another retry or fallback.
+**Gap / Action / status:** no fixed official-record deadline is source-GREEN
+and remains Proposed pending exact-head review and hosted acceptance; explicit
+external cancellation and provider termination remain transport concerns,
+while wildcard/status-change semantics, complete CNA/ADP reconciliation,
+central Strix/Noema integration, immutable release, and consumer verification
+remain open.
+
 PR #1348 next reproduced two required-evidence partial matches. Python
 `match()` accepted a terminal line feed after both the CNA language tag `en`
 and the reference extension tag `x_project`; each malformed record then
