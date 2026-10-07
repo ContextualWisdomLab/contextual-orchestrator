@@ -33,6 +33,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   authorizes `supported` and `finding_allowed=true`; documented case and
   ecosystem-specific name normalization remain unchanged.
 
+- CNA language and reference-tag extension grammars now require full-input
+  matches. A terminal line feed can no longer satisfy the pinned grammar and
+  let malformed required evidence authorize a vulnerability finding.
+
 - Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
   Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous

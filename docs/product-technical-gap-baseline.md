@@ -7853,3 +7853,13 @@ consulted. **Gap / Action / status:** unpadded caller identity is source-GREEN
 and remains Proposed pending exact-head review and hosted acceptance; wildcard and
 status-change semantics, complete CNA/ADP reconciliation, central Strix/Noema
 integration, immutable release, and consumer verification remain open.
+
+PR #1348 next reproduced two required-evidence partial matches. Python
+`match()` accepted a terminal line feed after both the CNA language tag `en`
+and the reference extension tag `x_project`; each malformed record then
+reached `supported` and `finding_allowed=true`. The existing pinned grammars
+now require full-input matches. **Gap / Action / status:** complete CNA
+language/reference-tag grammar consumption is source-GREEN and remains
+Proposed pending exact-head review and hosted acceptance; wildcard and
+status-change semantics, complete CNA/ADP reconciliation, central Strix/Noema
+integration, immutable release, and consumer verification remain open.

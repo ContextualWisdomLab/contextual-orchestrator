@@ -494,6 +494,9 @@ one English entry, preserve JSON `uniqueItems`, reject unrecognized fields, and
 fully validate optional supporting-media objects before package or version
 interpretation. Required references likewise enforce the pinned array, object,
 length, exact-field, tag-enum/extension, uniqueness, and RFC 3986 URI contracts.
+Language and reference-tag extension regular expressions must consume the
+complete input; Python's `$`-before-terminal-line-feed behavior is not accepted
+as evidence of a complete grammar match.
 The MIT-licensed `rfc3986-validator` 0.1.1 is a direct runtime dependency because
 the installed `jsonschema` format checker otherwise treats `uri` as an unchecked
 annotation when its optional validation backend is absent. The validator match
