@@ -7875,3 +7875,15 @@ language/reference-tag grammar consumption is source-GREEN and remains
 Proposed pending exact-head review and hosted acceptance; wildcard and
 status-change semantics, complete CNA/ADP reconciliation, central Strix/Noema
 integration, immutable release, and consumer verification remain open.
+
+PR #1348 next reproduced ambiguous official JSON admission. Python's default
+decoder retained only the last occurrence of a duplicate object member, so a
+nested CVE/GHSA evidence field could carry conflicting values without an
+executable reconciliation rule. RFC 8259 documents unique object names as the
+interoperable form and duplicate-name receiver behavior as unpredictable. The
+official-record boundary now rejects duplicate names at every nesting level
+before semantic evaluation. **Gap / Action / status:** deterministic official
+JSON member identity is source-GREEN and remains Proposed pending exact-head
+review and hosted acceptance; wildcard/status-change semantics, complete
+CNA/ADP reconciliation, central Strix/Noema integration, immutable release,
+and consumer verification remain open.

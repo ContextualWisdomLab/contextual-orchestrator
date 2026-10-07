@@ -441,6 +441,8 @@ Not built this iteration, in either form.
 - CVE Project. (2026). *CVE Record Format schema* (schema commit
   `ce5f5c865f14dc40a6548d36b74751abca1c588a`). Retrieved 2026-10-03, from
   https://github.com/CVEProject/cve-schema/blob/ce5f5c865f14dc40a6548d36b74751abca1c588a/schema/CVE_Record_Format.json
+- Bray, T. (2017). *The JavaScript Object Notation (JSON) Data Interchange
+  Format* (RFC 8259). RFC Editor. https://doi.org/10.17487/RFC8259
 - npm, Inc. (n.d.). *package-lock.json*. Retrieved 2026-10-02, from
   https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/
 - Rust Project Developers. (n.d.). *Cargo.toml vs. Cargo.lock*. Retrieved
@@ -481,6 +483,11 @@ Official-record retrieval also inherits `ModelClient`'s default
 `timeout=None`; neither the client nor its validated transport call supplies a
 leaf-authored elapsed-time cutoff. Provider termination and explicit external
 cancellation remain distinct from advisory-content validation.
+Official-record JSON also rejects duplicate object member names at every
+nesting level. RFC 8259 identifies unique names as the interoperable form and
+documents unpredictable receiver behavior for duplicates; selecting Python's
+last decoded value would therefore be an undocumented evidence-resolution
+rule (Bray, 2017). Ambiguous records fail closed before CNA/GHSA semantics.
 Central workflow wiring, independent manifest enforcement in its gate,
 version-range evaluation and the original end-to-end false-positive
 reproduction remain open under #1347. Security gates are unchanged.

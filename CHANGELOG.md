@@ -41,6 +41,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `timeout=None` contract. The evidence path no longer converts an arbitrary
   ten-second elapsed-time cutoff into an `unverified` verdict.
 
+- Official CVE/GHSA JSON now rejects duplicate object member names at every
+  nesting level. Ambiguous records can no longer inherit Python's last-value
+  decoding behavior and authorize a finding from one of multiple conflicting
+  representations of the same evidence field.
+
 - Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
   Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous
