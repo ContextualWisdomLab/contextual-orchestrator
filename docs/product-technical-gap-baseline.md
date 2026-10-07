@@ -7843,3 +7843,13 @@ startup, authenticated Wardnet egress, protected exact-head Checks, independent
 approval, ordinary merge, immutable release, and Strix/Noema consumer adoption
 remain unverified; the PR stays Draft until those source-review findings and
 hosted gates are cleared.
+
+PR #1348 next reproduced an input-boundary inference: leading or trailing
+whitespace on either the caller CVE identifier or package name was stripped,
+so four padded identities each reached `supported` and
+`finding_allowed=true` against otherwise valid lock/CVE evidence. The boundary
+now rejects padded identity bytes before repository or network evidence is
+consulted. **Gap / Action / status:** unpadded caller identity is source-GREEN
+and remains Proposed pending exact-head review and hosted acceptance; wildcard and
+status-change semantics, complete CNA/ADP reconciliation, central Strix/Noema
+integration, immutable release, and consumer verification remain open.

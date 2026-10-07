@@ -521,6 +521,12 @@ malformed nonmatching row cannot leave an otherwise invalid CVE record with
 finding authority. Every row must carry `versions` or `defaultStatus` as the
 pinned product schema requires; absence is not converted into an inferred
 neutral default.
+Caller-supplied CVE/GHSA and package identity values likewise must be unpadded.
+The boundary rejects leading or trailing whitespace instead of stripping it,
+because no cited standard or executable contract authorizes that equivalence
+and the repaired value can otherwise reach `supported` and
+`finding_allowed=true`. Existing documented identifier-case and
+ecosystem-specific package-name equivalences remain unchanged.
 Range admission is independent of the installed snapshot: the evaluator parses
 each executable entry once, rejects an exclusive range unless its lower bound
 is strictly less than its upper bound, orders ranges by SemVer precedence, and

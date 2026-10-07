@@ -27,6 +27,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   URI path into npm, PyPI, or crates.io evidence and authorize a finding; such
   records now remain `unverified` instead of gaining inferred identity.
 
+- Vulnerability claim inputs now require unpadded CVE/GHSA and package
+  identities. Leading or trailing whitespace is rejected instead of stripped,
+  so a padded caller value cannot be repaired into an identifier that
+  authorizes `supported` and `finding_allowed=true`; documented case and
+  ecosystem-specific name normalization remain unchanged.
+
 - Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
   to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
   Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous
