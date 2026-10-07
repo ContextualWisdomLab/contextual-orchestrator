@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import io
+import json
 import logging
 import sys
+import threading
+import urllib.error
+import urllib.request
 
 import pytest
 
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     NotConfigured,
+    delete_credential,
     get_credential,
+    register_credential,
     set_backend,
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
+from contextual_orchestrator.server import build_server
 
 
 @pytest.fixture(autouse=True)
@@ -251,6 +259,190 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     assert review_gateway.REVIEW_MAX_BODY_BYTES == 32 * 1024 * 1024
     assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
 
+
+def test_main_preseeded_kv_uses_only_selected_registry_credentials(monkeypatch):
+    """Remote-owner bootstrap needs no provider secret in its process environment."""
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    register_credential("OPENAI_API_KEY", "stored-openai-secret")
+    register_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME, "stored-review-token")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "untrusted-environment-secret")
+
+    def unexpected_bootstrap(*_args, **_kwargs):
+        raise AssertionError("preseeded mode read provider environment")
+
+    monkeypatch.setattr(
+        review_gateway,
+        "register_review_credentials",
+        unexpected_bootstrap,
+    )
+    discovered = [_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")]
+
+    def fake_discover(sources):
+        assert {source.credential_name for source in sources} == {"OPENROUTER_API_KEY"}
+        return discovered, []
+
+    monkeypatch.setattr(review_gateway, "discover_all_models", fake_discover)
+    captured = {}
+    monkeypatch.setattr(review_gateway, "serve", lambda orchestrator, **kwargs: captured.update(orchestrator=orchestrator, **kwargs))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_gateway", "--preseeded-kv", "--credential-name", "OPENROUTER_API_KEY"],
+    )
+
+    review_gateway.main()
+
+    assert get_credential("OPENROUTER_API_KEY") == "stored-router-secret"
+    assert captured["security"].auth_token == "stored-review-token"
+    assert [agent.credential_key for agent in captured["orchestrator"].agents] == [
+        "OPENROUTER_API_KEY"
+    ]
+    captured["orchestrator"].close()
+
+
+def test_main_production_uses_split_kv_tokens_and_explicit_public_bind(monkeypatch):
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
+    register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
+    monkeypatch.setattr(review_gateway, "register_review_credentials", lambda *_a, **_kw: pytest.fail("environment bootstrap"))
+    monkeypatch.setattr(
+        review_gateway,
+        "discover_all_models",
+        lambda sources: ([_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")], []),
+    )
+    captured = {}
+    monkeypatch.setattr(review_gateway, "serve", lambda orchestrator, **kwargs: captured.update(orchestrator=orchestrator, **kwargs))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_gateway", "--preseeded-kv", "--production", "--allow-public-bind", "--host", "0.0.0.0"],
+    )
+
+    review_gateway.main()
+
+    assert captured["host"] == "0.0.0.0"
+    assert captured["security"].auth_token == ""
+    assert captured["security"].admin_token == "admin-secret"
+    assert captured["security"].inference_token == "inference-secret"
+    assert captured["security"].allow_public_bind is True
+    captured["orchestrator"].close()
+
+
+def test_preseeded_production_serves_free_route_with_inference_scope(monkeypatch):
+    register_credential("OPENROUTER_API_KEY", "stored-router-secret")
+    register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, "admin-secret")
+    register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "inference-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "wrong-environment-secret")
+    monkeypatch.setattr(review_gateway, "register_review_credentials", lambda *_a, **_kw: pytest.fail("environment bootstrap"))
+    monkeypatch.setattr(
+        review_gateway,
+        "discover_all_models",
+        lambda sources: ([_discovered("openrouter", "review-model", "OPENROUTER_API_KEY")], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.ModelClient._validate_provider",
+        lambda self, agent: (0, ("127.0.0.1", 443)),
+    )
+    provider_headers = []
+
+    def fake_open_provider(self, request, destination=None, *, timeout=None):
+        provider_headers.append(request.get_header("Authorization"))
+        return io.BytesIO(json.dumps({
+            "id": "chatcmpl-review", "object": "chat.completion", "model": "review-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "reviewed"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }).encode())
+
+    monkeypatch.setattr("contextual_orchestrator.orchestrator.ModelClient._open_provider", fake_open_provider)
+    captured = {}
+
+    def fake_serve(orchestrator, **kwargs):
+        server = build_server(orchestrator, **kwargs)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        captured.update(orchestrator=orchestrator, server=server, thread=thread)
+
+    monkeypatch.setattr(review_gateway, "serve", fake_serve)
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--preseeded-kv", "--production", "--port", "0"])
+    review_gateway.main()
+
+    server = captured["server"]
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def request(path, token, body=None):
+            headers = {"connection": "close"}
+            if token:
+                headers["authorization"] = f"Bearer {token}"
+            if body is not None:
+                headers["content-type"] = "application/json"
+            call = urllib.request.Request(
+                url + path,
+                data=json.dumps(body).encode() if body is not None else None,
+                headers=headers,
+            )
+            try:
+                with urllib.request.urlopen(call, timeout=5) as response:
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                with error:
+                    return error.code, json.loads(error.read())
+
+        assert request("/v1/models", None)[0] == 401
+        assert request("/v1/models", "admin-secret")[0] == 401
+        assert request("/admin/state", "admin-secret")[0] == 200
+        assert provider_headers == []
+        status, models = request("/v1/models", "inference-secret")
+        assert status == 200
+        assert "orchestrator/free" in {row["id"] for row in models["data"]}
+        status, answer = request(
+            "/v1/chat/completions",
+            "inference-secret",
+            {"model": "orchestrator/free", "messages": [{"role": "user", "content": "review"}]},
+        )
+        assert status == 200, answer
+        assert answer["model"] == "orchestrator/free"
+        assert provider_headers
+        assert set(provider_headers) == {"Bearer stored-router-secret"}
+        sent_before_revocation = len(provider_headers)
+        delete_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME)
+        assert request("/v1/models", "inference-secret")[0] == 401
+        assert request(
+            "/v1/chat/completions",
+            "inference-secret",
+            {"model": "orchestrator/free", "messages": [{"role": "user", "content": "review"}]},
+        )[0] == 401
+        assert len(provider_headers) == sent_before_revocation
+        register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, "rotated-inference-secret")
+        assert request("/v1/models", "inference-secret")[0] == 401
+        assert request("/v1/models", "rotated-inference-secret")[0] == 200
+        delete_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME)
+        assert request("/admin/state", "admin-secret")[0] == 401
+    finally:
+        server.shutdown()
+        captured["thread"].join(timeout=5)
+        server.server_close()
+        captured["orchestrator"].close()
+
+
+@pytest.mark.parametrize(
+    "argv, admin_token, inference_token, message",
+    [
+        (["--production"], "admin", "inference", "requires --preseeded-kv"),
+        (["--preseeded-kv", "--production"], "admin", "", "distinct admin and inference"),
+        (["--preseeded-kv", "--production"], "same", "same", "distinct admin and inference"),
+        (["--preseeded-kv", "--production", "--host", "0.0.0.0"], "admin", "inference", "public bind requires"),
+    ],
+)
+def test_main_production_rejects_unsafe_startup(monkeypatch, capsys, argv, admin_token, inference_token, message):
+    if admin_token:
+        register_credential(review_gateway.REVIEW_ADMIN_CREDENTIAL_NAME, admin_token)
+    if inference_token:
+        register_credential(review_gateway.REVIEW_INFERENCE_CREDENTIAL_NAME, inference_token)
+    monkeypatch.setattr(sys, "argv", ["review_gateway", *argv])
+    with pytest.raises(SystemExit):
+        review_gateway.main()
+    assert message in capsys.readouterr().err
 
 def test_main_configures_redacted_logging_before_discovery(monkeypatch, capsys):
     """INFO sends discovery and request summaries to redacted stderr."""
