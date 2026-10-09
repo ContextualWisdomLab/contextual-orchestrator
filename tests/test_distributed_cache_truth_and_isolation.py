@@ -352,6 +352,53 @@ def test_auto_containment_ignores_an_unresolved_route_cache_entry(
     assert result["answer"] != "stale route answer"
 
 
+def test_auto_containment_rejects_a_route_payload_under_the_conduct_cache_key() -> None:
+    """A cache payload cannot override the mode encoded in its resolved key."""
+    client = _CountingModelClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "mock_worker",
+                "mock-model",
+                base_url="mock://worker",
+                provider_name="mock",
+                tags=("reasoning", "writing", "cost:free"),
+            )
+        ],
+        client=client,
+        cache_provider=_MemoryCache(),
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    messages = [{"role": "user", "content": "resolved cache containment request"}]
+    conduct_key = orchestrator._cache_key(
+        messages,
+        "auto",
+        TaskOrchestrator.FREE_MODEL,
+        None,
+        resolved_mode="conduct",
+    )
+    assert isinstance(orchestrator._cache_provider, _MemoryCache)
+    orchestrator._cache_provider.put(
+        conduct_key,
+        {
+            "mode": "route",
+            "answer": "stale route answer",
+            "trace": [{"role": "worker"}],
+        },
+    )
+
+    result = orchestrator.complete(
+        messages,
+        mode="auto",
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert client.calls > 0
+    assert result["cache_status"] == "miss"
+    assert result["mode"] == "conduct"
+    assert result["answer"] != "stale route answer"
+
+
 def test_zdr_only_request_never_reads_or_writes_the_response_cache() -> None:
     """A ZDR-flagged request must not persist its prompt/answer to a shared cache.
 

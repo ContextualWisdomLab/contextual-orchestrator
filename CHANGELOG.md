@@ -12,6 +12,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Response-cache hits now require the payload mode to match the route/conduct
+  decision encoded in the resolved cache key. A stale or malformed route
+  payload can no longer override fail-closed conduct for `orchestrator/free`.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one

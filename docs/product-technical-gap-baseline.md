@@ -7575,6 +7575,16 @@ complete.
 | --- | --- | --- | --- |
 | Automatic route admission used an uncalibrated fast-mlsirm point-probability maximum as decision authority. | CO PR [#1346](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1346) predecessor `d6061498756a2e30e7d759c5e44f5233860da17b`; focused RED showed a single 0.99 point prediction authorized direct route. Review also reproduced stale unresolved route-cache reuse across the gateway default, `orchestrator/auto`, and `orchestrator/free`. fast-mlsirm 0.11.4 exposes no calibrated uncertainty, posterior-dominance, indeterminate-result, or decision-loss contract for this boundary. | CO resolves every special `mode="auto"` model to conduct before cache lookup and performs no auxiliary triage; explicit `mode="route"` remains caller-controlled. fast-mlsirm issue [#2315](https://github.com/ContextualWisdomLab/fast-mlsirm/issues/2315) owns Rust-backed uncertainty, true-parameter calibration/coverage tests, immutable release, then CO version bump and contract tests. | **Proposed** — focused RED→GREEN and impacted local tests passed; hosted exact-head Checks, independent approval, ordinary merge, owner release, and consumer bump remain required. |
 
+Independent review of successor `d603d9b2670d4756e97f83f4eeb8a393377bc398`
+found a second cache-admission defect: a structurally valid `route` payload
+stored under the resolved `conduct` key was accepted without matching its
+payload mode to the key decision. The focused RED returned that stale answer
+as a hit with zero provider calls. The bounded repair admits a cached response
+only when its mode equals the current resolved mode; otherwise the live
+fail-closed conduct path runs and replaces the invalid entry. This evidence is
+also **Proposed** until the repaired exact head completes hosted Checks and
+independent review.
+
 Context Map: fast-mlsirm remains the canonical psychometric measurement owner;
 CO consumes only an immutable released contract and does not reproduce the
 estimator. The fail-closed port preserves that ownership boundary while the

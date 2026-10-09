@@ -8089,6 +8089,7 @@ class TaskOrchestrator:
         if (
             isinstance(cached, Mapping)
             and isinstance(cached.get("mode"), str)
+            and cached["mode"] == resolved_mode
             and isinstance(cached.get("answer"), str)
             and isinstance(cached.get("trace"), list)
         ):
