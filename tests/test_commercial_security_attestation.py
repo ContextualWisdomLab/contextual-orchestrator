@@ -97,6 +97,31 @@ def test_commercial_security_attestation_report_separates_local_and_external_evi
     assert items["audit_export_evidence"]["completion_state"] == "ready"
     assert items["vulnerability_scan_evidence"]["completion_state"] == "warning"
     assert items["vulnerability_scan_evidence"]["source_gap_status"] == "external_attestation_required"
+    vulnerability_action = str(items["vulnerability_scan_evidence"]["action"])
+    vulnerability_exit = str(items["vulnerability_scan_evidence"]["exit_criteria"])
+    for required_binding in (
+        "receipt_schema_version",
+        "scan_profile_id",
+        "required_scan_manifest_digest",
+        "scan_id",
+        "repository_full_name",
+        "source_revision",
+        "workflow_run_id",
+        "run_attempt",
+        "job_id",
+        "artifact_name",
+        "digest_algorithm",
+        "artifact_digest",
+        "tool_name",
+        "tool_version",
+        "conclusion",
+        "generated_at",
+    ):
+        assert required_binding in vulnerability_action
+    assert "workflow definitions as sufficient" not in vulnerability_exit
+    assert "validates a released typed receipt for every required hosted scan" in vulnerability_exit
+    assert "waiver as a separate legal decision" in vulnerability_exit
+    assert "never changes this evidence state" in vulnerability_exit
     assert items["third_party_attestation_pen_test"]["completion_state"] == "warning"
     assert items["third_party_attestation_pen_test"]["source_gap_status"] == "external_attestation_required"
     assert items["buyer_privacy_dpa_questionnaire"]["completion_state"] == "warning"

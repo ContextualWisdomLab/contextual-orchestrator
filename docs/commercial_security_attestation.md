@@ -82,7 +82,13 @@ external attestations or buyer-specific privacy terms already exist:
 - audit/export evidence maps the security packet back to
   `/api/v1/commercial_evidence_exports/latest`;
 - vulnerability scan evidence remains an external-attestation warning until the
-  latest hosted scan outputs are attached or waived;
+  runtime validates a released Noema typed receipt for every required hosted
+  scan. The receipt must bind its schema version, scan-profile identity, and
+  immutable required-scan manifest digest. Each identified scan result must
+  bind repository, revision, workflow run and attempt, job, artifact identity
+  and digest algorithm/value, tool identity/version, conclusion, and generation
+  time. Workflow definitions alone are not scan-result evidence; a buyer waiver
+  is a separate legal decision and never changes the technical evidence state;
 - third-party attestation or penetration-test evidence remains an
   external-attestation warning until the buyer accepts the evidence, assessment,
   or waiver;

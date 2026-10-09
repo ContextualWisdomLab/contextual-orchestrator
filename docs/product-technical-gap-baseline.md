@@ -7494,6 +7494,26 @@ lifecycle policy and keeps ResourceWarning visible as a failure signal.
 
 ## 2026-09-30 PR #1348 SearXNG secret and advisory transport repair
 
+### 2026-10-09 exact-revision vulnerability evidence contract — Proposed
+
+PR #1348 exact head `40d5da20ffdff89315da45852626ec1d6036ea98`
+kept the hosted vulnerability-scan item at `warning`, but its exit criterion
+allowed workflow definitions to substitute for a scan result. A workflow file
+cannot prove which repository revision ran, which job produced the evidence,
+or which immutable artifact the buyer received. The fail-closed buyer contract
+now states the missing canonical contract explicitly: a released Noema typed
+receipt must bind every required scan result to repository, revision, workflow
+run and attempt, job, artifact identity and digest algorithm/value, tool
+identity/version, conclusion, and generation time, while a versioned scan
+profile and immutable required-scan manifest digest define the complete set.
+Definitions alone never upgrade the warning. A buyer waiver is a separate
+legal decision and never
+changes the technical evidence state. This PR removes the false exit and keeps
+the item `warning`; it does not claim receipt intake or validation. Focused
+tests pass locally. The Noema owner RED→contract→CI GREEN→immutable release,
+CO receipt validator and consumer bump, exact-head hosted Checks, independent
+approval, ordinary merge, and consumer adoption remain required.
+
 ### 2026-10-06 incomplete installed-version evidence repair — Proposed
 
 Independent review of head `fff79e1a` found two paths that returned `rejected`
