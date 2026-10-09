@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 import threading
 import urllib.error
 import urllib.request
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -104,6 +107,46 @@ def test_commercial_security_attestation_report_separates_local_and_external_evi
     assert report["related_runtime_reports"]["commercial_operations_status"] == "commercial_operations_ready_with_warnings"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["security_attestation_links"]["runtime_endpoint"] == "/api/v1/commercial_security_attestations/latest"
+
+
+@pytest.mark.parametrize("configuration_name", ("dependabot.yml", "dependabot.yaml"))
+def test_hosted_dependabot_configuration_blocks_buyer_security_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    configuration_name: str,
+) -> None:
+    """A restored hosted updater must not remain buyer-ready evidence."""
+    original_lexists = os.path.lexists
+
+    def lexists_with_dependabot(path: os.PathLike[str] | str) -> bool:
+        if os.fspath(path).endswith(f"/.github/{configuration_name}"):
+            return True
+        return original_lexists(path)
+
+    monkeypatch.setattr(os.path, "lexists", lexists_with_dependabot)
+    orchestrator = build()
+    exercise_runtime(orchestrator)
+    report_arguments = {
+        "target_contract_value_krw": TARGET_CONTRACT_VALUE_KRW,
+        "locale_bundles": ADMIN_TRANSLATIONS,
+        "security_profile": {
+            "auth_mode": "split_token",
+            "allow_public_bind": False,
+            "expose_trace_by_default": False,
+            "rate_limit_requests": 60,
+            "max_concurrent_runs": 8,
+        },
+    }
+
+    release = orchestrator.commercial_release_candidate_report(**report_arguments)
+    procurement = orchestrator.commercial_procurement_readiness_report(**report_arguments)
+    security = orchestrator.commercial_security_attestation_report(**report_arguments)
+
+    release_artifacts = {item["item_name"]: item for item in release["release_artifacts"]}
+    procurement_items = {item["item_name"]: item for item in procurement["procurement_items"]}
+
+    assert release_artifacts["security_package_metadata"]["completion_state"] == "blocked"
+    assert procurement_items["security_package_metadata"]["completion_state"] == "blocked"
+    assert item_by_name(security)["security_workflow_metadata"]["completion_state"] == "blocked"
 
 
 def test_commercial_security_attestation_endpoint_openapi_admin_and_docs_contract() -> None:

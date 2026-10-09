@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -110,6 +111,12 @@ def test_security_workflow_supports_stacked_pull_requests():
         assert f"{filter_name}:" not in pull_request_trigger
     assert "permissions:\n  contents: read\n" in workflow_text
     assert "pull_request_target:" not in workflow_text
+
+
+def test_hosted_dependabot_version_updates_remain_disabled():
+    """Keep both supported Dependabot configuration names absent."""
+    assert not os.path.lexists(ROOT_DIR / ".github/dependabot.yml")
+    assert not os.path.lexists(ROOT_DIR / ".github/dependabot.yaml")
 
 
 def test_atheris_lock_is_parseable_and_matches_shared_project_pins():
@@ -252,6 +259,7 @@ def test_security_tool_lockfile_uses_hash_pinning():
 if __name__ == "__main__":  # pragma: no cover
     test_readme_links_deepwiki_and_security_workflow_badges()
     test_security_workflow_covers_core_repository_security_process()
+    test_hosted_dependabot_version_updates_remain_disabled()
     test_codeowners_requires_repository_owner_review()
     test_security_policy_documents_reporting_and_automation()
     test_database_design_avoids_plaintext_prompt_output_storage()

@@ -19,12 +19,12 @@ effort: S
 supersedes: null
 superseded-by: null
 related:
-  - path: "docs/planning/adrs/0137-stop-hosted-version-update-proposals.md"
-    relation: proposed-supersession
   - path: "docs/planning/adrs/0004-pr-review-merge-loop.md"
     relation: informational
   - path: "docs/planning/adrs/0007-sast-transport-and-sql-hardening.md"
     relation: informational
+  - path: "docs/planning/adrs/0140-stop-hosted-dependabot-version-updates.md"
+    relation: proposed supersession
 asr_triggers:
   - kind: security
     evidence: "The current-head Strix scan reported a critical Dependabot cooldown finding in .github/dependabot.yml, alongside provider failures that required fail-closed handling."
@@ -40,6 +40,10 @@ success_criteria:
 ---
 
 # Add an explicit Dependabot dependency cooldown
+
+> **Proposed supersession:** ADR 0140 proposes removing repository Dependabot
+> version-update configuration. Until that proposal is ordinarily merged, this
+> accepted decision remains the protected-default-branch policy.
 
 ## Context
 
