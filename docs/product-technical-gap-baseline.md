@@ -7491,3 +7491,24 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-10-09 Hosted dependency version-update ownership
+
+**Status:** Proposed on `ContextualWisdomLab/contextual-orchestrator#1353`;
+maintainer decision, exact-head Checks, and protected integration are pending.
+
+**Context Map / Gap.** Contextual Orchestrator owns its dependency declarations
+and security acceptance. GitHub Dependabot previously produced weekly hosted
+GitHub Actions and pip version-update proposals, while the central `.github`
+control plane and repository workflows independently own dependency review,
+CodeQL, `pip-audit`, SBOM, Trivy, OSV, Scorecard, and vulnerability-alert
+evidence. Deleting `.github/dependabot.yml` without repairing its executable
+test and buyer-facing evidence caused a deterministic `FileNotFoundError` and
+left a false current-file claim.
+
+**Action / evidence.** ADR-0137 records the proposed operational tradeoff and
+the absence of a replacement updater. The obsolete configuration-shape test is
+removed rather than replaced by a source-absence change detector, and buyer
+evidence now distinguishes vulnerability alerts from version-update scheduling.
+The proposal is not Accepted until a maintainer approves and the exact head
+passes required Checks and ordinary protected integration.

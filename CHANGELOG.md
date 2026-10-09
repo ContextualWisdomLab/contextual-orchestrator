@@ -12,6 +12,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Proposed retirement of hosted Dependabot version-update proposals while
+  preserving vulnerability alerts and the required CodeQL, dependency-review,
+  `pip-audit`, SBOM, Trivy, OSV, and Scorecard security controls. ADR-0137
+  records the policy tradeoff; protected integration and maintainer approval
+  remain required.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one

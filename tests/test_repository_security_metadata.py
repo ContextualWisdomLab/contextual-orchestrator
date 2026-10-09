@@ -112,23 +112,6 @@ def test_security_workflow_supports_stacked_pull_requests():
     assert "pull_request_target:" not in workflow_text
 
 
-def test_dependabot_tracks_actions_and_python_dependencies():
-    dependabot_text = read_text(".github/dependabot.yml")
-
-    entries = {
-        match.group(1): match.group(2)
-        for match in re.finditer(
-            r"(?ms)^  - package-ecosystem:\s+([^\n]+)\n(.*?)(?=^  - package-ecosystem:|\Z)",
-            dependabot_text,
-        )
-    }
-
-    assert set(entries) == {"github-actions", "pip"}
-    for entry in entries.values():
-        assert "timezone: Asia/Seoul" in entry
-        assert re.search(r"(?m)^    cooldown:\n      default-days: 7$", entry)
-
-
 def test_atheris_lock_is_parseable_and_matches_shared_project_pins():
     """The combined fuzz job needs one consistent, continuation-safe lock set."""
     project_lock = read_text("requirements.lock")
@@ -269,7 +252,6 @@ def test_security_tool_lockfile_uses_hash_pinning():
 if __name__ == "__main__":  # pragma: no cover
     test_readme_links_deepwiki_and_security_workflow_badges()
     test_security_workflow_covers_core_repository_security_process()
-    test_dependabot_tracks_actions_and_python_dependencies()
     test_codeowners_requires_repository_owner_review()
     test_security_policy_documents_reporting_and_automation()
     test_database_design_avoids_plaintext_prompt_output_storage()

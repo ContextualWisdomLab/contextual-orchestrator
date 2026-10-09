@@ -28,7 +28,7 @@ creates an extraction trigger.
 | Commercial evidence export | `/api/v1/commercial_evidence_exports/latest` | Portable buyer evidence source. |
 | Security policy | `SECURITY.md` | Vulnerability reporting and support scope evidence. |
 | Dependency and package metadata | `requirements.lock`, `pyproject.toml` | Supply-chain review baseline. |
-| Security workflow metadata | `.github/workflows/security.yml`, `.github/dependabot.yml`, `ContextualWisdomLab/.github` central required security workflows | Local CodeQL and supply-chain controls, dependency update metadata, and centralized dependency review, Trivy, OSV, and Scorecard governance. |
+| Security workflow metadata | `.github/workflows/security.yml`, `ContextualWisdomLab/.github` central required security workflows, and GitHub Dependabot alerts | Local CodeQL and supply-chain controls plus centralized dependency review, Trivy, OSV, Scorecard, and vulnerability-alert governance. |
 | Runtime access controls | `contextual_orchestrator/server.py` | Admin/inference auth, trace exposure, rate limit, and concurrency evidence. |
 
 ## Runtime Shape
@@ -75,7 +75,7 @@ external attestations or buyer-specific privacy terms already exist:
   source;
 - `requirements.lock` and `pyproject.toml` give the buyer a dependency and
   package-metadata baseline;
-- security workflow metadata defines Dependabot, CodeQL, dependency review,
+- security workflow metadata defines Dependabot alert, CodeQL, dependency review,
   pip-audit, SBOM, Trivy, and OSSF Scorecard controls;
 - runtime access controls expose admin/inference auth mode, public bind opt-in,
   trace exposure default, rate limit, and concurrency controls;

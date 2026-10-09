@@ -19,6 +19,8 @@ effort: S
 supersedes: null
 superseded-by: null
 related:
+  - path: "docs/planning/adrs/0137-stop-hosted-version-update-proposals.md"
+    relation: proposed-supersession
   - path: "docs/planning/adrs/0004-pr-review-merge-loop.md"
     relation: informational
   - path: "docs/planning/adrs/0007-sast-transport-and-sql-hardening.md"
