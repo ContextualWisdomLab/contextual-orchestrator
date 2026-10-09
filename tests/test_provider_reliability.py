@@ -877,7 +877,9 @@ def _free_pool_orchestrator(
     orchestrator = TaskOrchestrator(
         agents, client=client, tool_retry_attempts=1, tool_retry_backoff_seconds=0.0
     )
-    orchestrator._triage_fn = lambda text: False  # force the single-worker route path
+    orchestrator._triage_fn = (  # force the single-worker route path
+        lambda text, prompt_context=None: False
+    )
     orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
     return orchestrator
 
@@ -1217,7 +1219,7 @@ def test_auto_model_still_fails_over_on_retryable_5xx_without_change() -> None:
     orchestrator = TaskOrchestrator(
         agents, client=client, tool_retry_attempts=0, tool_retry_backoff_seconds=0.0
     )
-    orchestrator._triage_fn = lambda text: False
+    orchestrator._triage_fn = lambda text, prompt_context=None: False
     orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
 
     result = orchestrator.route_once(
@@ -1285,7 +1287,9 @@ def test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_age
         tool_retry_attempts=1,
         tool_retry_backoff_seconds=0.0,
     )
-    orchestrator._triage_fn = lambda text: False  # force the single-worker route path
+    orchestrator._triage_fn = (  # force the single-worker route path
+        lambda text, prompt_context=None: False
+    )
     orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
 
     result = orchestrator.route_once(

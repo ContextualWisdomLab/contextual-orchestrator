@@ -83,24 +83,31 @@ def build(client: RecordingClient | None = None) -> TaskOrchestrator:
     )
 
 
-def test_fugu_contract_fuses_fast_route_and_deep_workflow() -> None:
-    """Auto mode fuses a fast direct route with deep orchestrated workflows.
+def test_fugu_split_is_deferred_during_uncertainty_containment() -> None:
+    """Auto mode conducts until its decision-uncertainty contract is released.
 
-    The split decision is the structured triage verdict (one exact-schema
-    model call), not keyword matching; mock transports cannot emit that JSON,
-    so the verdicts are pinned here to exercise both arms of the fusion.
+    Fugu motivates adaptive allocation but does not authorize an uncalibrated
+    point-estimate split. Explicit route remains caller authority.
     """
     orchestrator = build()
-    orchestrator._triage_fn = lambda text: "architecture" in text
+    orchestrator._triage_fn = lambda *_args: False
 
-    fast = orchestrator.complete([{"role": "user", "content": "Write one sentence."}], mode="auto")
+    contained = orchestrator.complete(
+        [{"role": "user", "content": "Write one sentence."}],
+        mode="auto",
+    )
     deep = orchestrator.complete(
         [{"role": "user", "content": "Analyze the architecture, implement the code, and verify risks."}],
         mode="auto",
     )
+    explicit = orchestrator.complete(
+        [{"role": "user", "content": "Write one sentence."}],
+        mode="route",
+    )
 
-    assert fast["mode"] == "route"
+    assert contained["mode"] == "conduct"
     assert deep["mode"] == "conduct"
+    assert explicit["mode"] == "route"
 
 
 def test_trinity_contract_has_explicit_thinker_worker_verifier_roles() -> None:

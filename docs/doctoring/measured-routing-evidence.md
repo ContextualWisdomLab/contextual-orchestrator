@@ -23,9 +23,10 @@ groups. Two measurement systems feed the ladder:
 
 The ranking quantity `stability / ewma_latency_seconds` has the unit expected
 successful responses per second across every member. Token throughput remains
-diagnostic evidence and is not mixed into that score. Workflow triage is a strict structured call that
-fails closed to conducted orchestration when its reply violates the exact
-`{"workflow_required": bool}` schema.
+diagnostic evidence and is not mixed into that score. The intended
+workflow-triage contract uses a strict structured call. Current containment
+does not dispatch it: special auto models fail closed to conduct until
+calibrated decision uncertainty is released.
 
 ## Research-to-code mapping
 
@@ -34,9 +35,58 @@ fails closed to conducted orchestration when its reply violates the exact
 | EWMA with gain 1/8 for latency and throughput | Jacobson's congestion-avoidance estimator is the canonical low-pass filter for volatile network measurements; it needs no tuning window. | Exact-arithmetic tests reproduce hand-computed EWMA values. |
 | Laplace rule of succession as stability prior | Beta(1,1) is an explicit uniform prior for Bernoulli probability, not a uniquely assumption-free choice (Gelman et al., 2013). Calibration and sensitivity to the prior require separate evidence. | Stability tests assert alpha/(alpha+beta) exactly; arithmetic correctness is not calibration evidence. |
 | Cosine similarity over declared metadata documents | Dense retrieval established query-document cosine ordering without keyword overlap (Karpukhin et al., 2020). Affinity uses operator-declared descriptors only. | Deterministic mock-embedding tests verify cosine ordering and zero-vector guards. |
-| Strict JSON triage verdict | The schema is a CO boundary-validation decision. Zheng et al. (2023) examine judge agreement and biases; their citation does not establish that this schema makes a verdict correct. | Parser tests reject seven malformed-reply classes and cache verdicts by content hash; these checks do not measure human agreement. |
+| Dormant strict JSON triage contract | The schema is a CO boundary-validation proposal. Zheng et al. (2023) examine judge agreement and biases; their citation does not establish that this schema makes a verdict correct. | Parser tests reject seven malformed-reply classes. Special auto models do not dispatch this contract during containment; parser checks do not measure human agreement. |
 | Real-time judging before returning answers | RouteLLM/FrugalGPT motivate quality-aware routing between models (Ong et al., 2024; Chen et al., 2023); here quality is measured per deployment instead of trained offline. | Judge-driven failover tests prove rejection routes to the next candidate within budget while updating both ledgers. |
 | Per-member quality ledger; latent-interaction research candidate | Jeon et al. (2021) model latent item–respondent interactions. Separate per-member Beta posteriors do not implement that model, establish multilevel validity, or justify group-level inference from individual results. | Quality-ledger reports expose per-member posteriors consumed by `_measured_member_order`; interaction recovery and cross-group validity remain separate acceptance work. |
+
+### Exact-context triage admission correction, 2026-10-01
+
+PR #1346 exposed that strict JSON validation governed only reply shape: the
+runtime still selected the statically first triage model and accepted its
+boolean without fitted quality evidence. An intermediate repair reused the
+released Rust-backed fast-mlsirm `PsychometricRoutingEvidence` owner and
+admitted triage from a unique maximum fitted probability. The 2026-10-02 review
+below supersedes that admission rule because a point estimate is not calibrated
+decision uncertainty and does not establish posterior dominance.
+
+That intermediate implementation used the same canonical
+system/developer/user interaction JSON as judged outcomes, excluded
+worker-ineligible candidates, and avoided caching route-authorizing verdicts.
+Those safeguards remain historical evidence but did not create calibrated
+decision authority.
+
+This section records the superseded intermediate contract; it is not production
+authority or evidence that route improves customer outcomes.
+
+### Point-estimate admission containment, 2026-10-02
+
+At PR #1346 exact predecessor
+`d6061498756a2e30e7d759c5e44f5233860da17b`,
+`PsychometricRoutingEvidence.ranked_evidence` exposed only fitted point
+probabilities. `_compute_triage_verdict` nevertheless treated a complete,
+finite, uniquely maximal value as authority to dispatch a triage model and
+accept its boolean route verdict. A focused regression with one candidate at
+0.99 reproduced RED: the request routed directly even though no calibrated
+uncertainty, posterior-dominance decision, or decision-loss contract existed.
+
+The bounded owner repair removes point-estimate admission from automatic
+triage. `_compute_triage_verdict` now returns `workflow_required=True` without
+an auxiliary triage dispatch. The gateway default, `orchestrator/auto`, and
+`orchestrator/free` resolve to conduct before cache lookup so an unresolved
+legacy route entry cannot bypass containment. Explicit caller-selected
+`mode="route"` is unchanged. This is a containment decision, not a new
+heuristic or a claim that conduct is universally optimal.
+
+Upstream fast-mlsirm issue
+[#2315](https://github.com/ContextualWisdomLab/fast-mlsirm/issues/2315) owns the
+required Rust-backed calibrated uncertainty and posterior-dominance result,
+true-parameter calibration and interval-coverage tests, immutable release, and
+CO consumer bump. Indeterminate or missing evidence must fail closed. Local
+repair evidence is the observed RED above followed by 52 measured-routing
+tests, 40 decision-receipt tests, and 180 impacted routing/HTTP/stream tests
+passing. Status remains **Proposed** until hosted exact-head Checks, qualifying
+independent approval, ordinary merge, immutable owner release, and consumer
+pinning complete.
 
 ### Citation correction, 2026-09-09
 

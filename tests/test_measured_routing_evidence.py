@@ -231,25 +231,237 @@ def test_triage_failure_fails_closed_to_conduct() -> None:
     assert orchestrator._needs_workflow("anything at all") is True
 
 
-def test_triage_verdicts_are_cached_by_content_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workflow_decision_callable_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[str] = []
 
     orchestrator = _orch(ModelAgent("general_agent", "mock", tags=("reasoning",)))
 
-    def counting_compute(text: str) -> bool:
+    def counting_compute(text: str, prompt_context: str | None = None) -> bool:
         calls.append(text)
         return False
 
     monkeypatch.setattr(orchestrator, "_compute_triage_verdict", counting_compute)
     assert orchestrator._needs_workflow("same text") is False
     assert orchestrator._needs_workflow("same text") is False
-    assert calls == ["same text"]  # second decision served from the verdict cache
+    assert calls == ["same text", "same text"]
 
 
-def test_triage_with_no_agents_degrades_to_direct_route() -> None:
+def test_triage_with_no_agents_fails_closed_to_conduct() -> None:
+    """Missing decision evidence must not authorize the cheaper route path."""
     orchestrator = _orch(ModelAgent("general_agent", "mock"))
     orchestrator.agents = []
-    assert orchestrator._compute_triage_verdict("text") is False
+    assert orchestrator._compute_triage_verdict("text") is True
+
+
+def test_triage_without_exact_psychometric_evidence_fails_closed() -> None:
+    """An uncalibrated model verdict must not authorize direct routing."""
+    orchestrator = _orch(ModelAgent("general_agent", "mock", tags=("reasoning",)))
+    orchestrator._psychometric_router.ranked_evidence = lambda *_: []  # type: ignore[method-assign]
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("unobserved request") is True
+    assert called == []
+
+
+def test_point_probabilities_never_authorize_direct_route() -> None:
+    """Point estimates without calibrated uncertainty must conduct."""
+    agent = ModelAgent("measured_agent", "mock", tags=("reasoning",))
+    orchestrator = _orch(agent)
+    evidence_id = orchestrator._psychometric_candidate_ids((agent,))[0]
+    orchestrator._psychometric_router.ranked_evidence = (  # type: ignore[method-assign]
+        lambda candidate_ids, prompt, vector: [(evidence_id, 0.99)]
+    )
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("observed request") is True
+    assert called == []
+
+
+def test_point_probability_order_does_not_authorize_triage() -> None:
+    """A unique point ordering is not calibrated decision evidence."""
+    static_first = ModelAgent("static_first", "mock", priority=100)
+    measured_first = ModelAgent("measured_first", "mock", priority=1)
+    orchestrator = _orch(static_first, measured_first)
+    evidence_ids = orchestrator._psychometric_candidate_ids(
+        (static_first, measured_first)
+    )
+    orchestrator._psychometric_router.ranked_evidence = (  # type: ignore[method-assign]
+        lambda candidate_ids, prompt, vector: [
+            (evidence_ids[1], 0.9),
+            (evidence_ids[0], 0.1),
+        ]
+    )
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("observed request") is True
+    assert called == []
+
+
+def test_auto_triage_point_evidence_fails_closed_before_dispatch() -> None:
+    """Canonical prompt point evidence cannot authorize a direct route."""
+    agent = ModelAgent("general_agent", "mock", tags=("reasoning",))
+    orchestrator = _orch(agent)
+    messages = [
+        {"role": "system", "content": "System contract"},
+        {"role": "developer", "content": "Developer contract"},
+        {"role": "user", "content": "same user text"},
+    ]
+    prompt_context = orchestrator._prompt_interaction(messages)
+    evidence_id = orchestrator._psychometric_candidate_ids((agent,))[0]
+    context_id = orchestrator._psychometric_router.context_id(prompt_context)
+    orchestrator._psychometric_router._scores = {context_id: {evidence_id: 0.8}}
+    orchestrator._psychometric_router._fit_revision = (
+        orchestrator._psychometric_router._revision
+    )
+    triage_messages: list[list[dict[str, object]]] = []
+
+    def record(agent, messages, temperature=0.0):
+        triage_messages.append(messages)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+
+    assert orchestrator.would_route(messages, mode="auto") is False
+    assert triage_messages == []
+
+
+def test_point_evidence_cannot_promote_any_candidate() -> None:
+    """Point estimates cannot promote eligible or excluded candidates."""
+    eligible = ModelAgent("eligible_agent", "mock", priority=1)
+    excluded = ModelAgent(
+        "excluded_agent",
+        "mock",
+        priority=100,
+        provider_exclusions=("worker",),
+    )
+    orchestrator = _orch(eligible, excluded)
+    evidence_ids = orchestrator._psychometric_candidate_ids((eligible, excluded))
+    scores = {evidence_ids[0]: 0.2, evidence_ids[1]: 0.9}
+    orchestrator._psychometric_router.ranked_evidence = (  # type: ignore[method-assign]
+        lambda candidate_ids, prompt, vector: [
+            (candidate_id, scores[candidate_id]) for candidate_id in candidate_ids
+        ]
+    )
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("task") is True
+    assert called == []
+
+
+@pytest.mark.parametrize(
+    "scores",
+    [
+        (float("nan"),),
+        (1.1,),
+        (0.5, 0.5),
+    ],
+)
+def test_point_evidence_never_dispatches_triage(
+    scores: tuple[float, ...],
+) -> None:
+    """Invalid, tied, and unique point estimates cannot select triage."""
+    agents = tuple(
+        ModelAgent(f"candidate_{index}", "mock", priority=index)
+        for index in range(len(scores))
+    )
+    orchestrator = _orch(*agents)
+    evidence_ids = orchestrator._psychometric_candidate_ids(agents)
+    orchestrator._psychometric_router.ranked_evidence = (  # type: ignore[method-assign]
+        lambda candidate_ids, prompt, vector: list(zip(evidence_ids, scores, strict=True))
+    )
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("uncertain request") is True
+    assert called == []
+
+
+@pytest.mark.parametrize(
+    "evidence_rows",
+    [
+        [("first", 0.8)],
+        [("first", 0.8), ("first", 0.7)],
+        [("first", 0.8), ("unknown", 0.7)],
+        [("first", 0.8), ("second", float("nan"))],
+    ],
+)
+def test_triage_requires_complete_candidate_evidence(
+    evidence_rows: list[tuple[str, float]],
+) -> None:
+    """Partial, duplicate, stale, or invalid candidate evidence fails closed."""
+    first = ModelAgent("first_candidate", "mock")
+    second = ModelAgent("second_candidate", "mock")
+    orchestrator = _orch(first, second)
+    evidence_ids = orchestrator._psychometric_candidate_ids((first, second))
+    aliases = {"first": evidence_ids[0], "second": evidence_ids[1]}
+    supplied = [(aliases.get(name, name), score) for name, score in evidence_rows]
+    orchestrator._psychometric_router.ranked_evidence = (  # type: ignore[method-assign]
+        lambda candidate_ids, prompt, vector: supplied
+    )
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("observed request") is True
+    assert called == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("fit failed"),
+        [("malformed",)],
+        [("malformed", "not-a-probability")],
+    ],
+)
+def test_triage_malformed_evidence_fails_closed(failure: object) -> None:
+    """Owner errors and malformed rows never escape the conduct boundary."""
+    orchestrator = _orch(ModelAgent("general_agent", "mock"))
+
+    def evidence(*_args):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    orchestrator._psychometric_router.ranked_evidence = evidence  # type: ignore[method-assign]
+    called: list[str] = []
+
+    def record(agent, messages, temperature=0.0):
+        called.append(agent.id)
+        return '{"workflow_required": false}'
+
+    orchestrator.client.chat = record
+    assert orchestrator._compute_triage_verdict("task") is True
+    assert called == []
 
 
 # --- real-time judge on route paths -----------------------------------------

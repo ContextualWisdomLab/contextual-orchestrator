@@ -66,6 +66,14 @@ DECLARED_HELDOUT_BOOTSTRAP = {
     "seed": heldout_benchmark.DECLARED_BOOTSTRAP_SEED,
 }
 
+DECLARED_HELDOUT_DIF = {
+    "dif_exclude_studied_item": heldout_benchmark.DECLARED_DIF_EXCLUDE_STUDIED_ITEM,
+    "dif_fdr_q": heldout_benchmark.DECLARED_DIF_FDR_Q,
+    "dif_max_iter": heldout_benchmark.DECLARED_DIF_MAX_ITER,
+    "dif_max_rounds": heldout_benchmark.DECLARED_DIF_MAX_ROUNDS,
+    "dif_min_anchor_items": heldout_benchmark.DECLARED_DIF_MIN_ANCHOR_ITEMS,
+}
+
 
 def test_paired_bootstrap_interval_uses_within_context_differences() -> None:
     """Keep a constant within-context delta constant in every bootstrap replicate."""
@@ -162,7 +170,10 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
         ),
     )
 
-    report = heldout_benchmark.run_benchmark(**DECLARED_HELDOUT_BOOTSTRAP)
+    report = heldout_benchmark.run_benchmark(
+        **DECLARED_HELDOUT_BOOTSTRAP,
+        **DECLARED_HELDOUT_DIF,
+    )
 
     assert (
         report["latency_repetitions_per_context"]
@@ -745,8 +756,22 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     }
     assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
-    assert dif["method"] == "logistic_dif_purified"
+    assert dif["method"] == "purified_logistic_regression_dif"
     assert dif["sample_size"] == heldout_benchmark.DECLARED_DIF_SAMPLE_SIZE
+    assert dif["exclude_studied_item"] is False
+    assert dif["api_symbol"] == "detect_dif_logistic_purified"
+    assert dif["item_fit_attempted"] == 8
+    assert dif["item_fit_failed"] == 0
+    assert dif["fdr_q"] == heldout_benchmark.DECLARED_DIF_FDR_Q
+    assert dif["max_iterations"] == heldout_benchmark.DECLARED_DIF_MAX_ITER
+    assert (
+        dif["max_purification_rounds"]
+        == heldout_benchmark.DECLARED_DIF_MAX_ROUNDS
+    )
+    assert (
+        dif["minimum_anchor_items"]
+        == heldout_benchmark.DECLARED_DIF_MIN_ANCHOR_ITEMS
+    )
     assert dif["expected_dif_items"] == [0]
     assert dif["flagged_items"] == [0]
     assert dif["known_dif_recall"] == 1.0
