@@ -12,6 +12,90 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Vulnerability claim receipts no longer reject a claim from a partial
+  installed-version set. When a root npm or Cargo lock also has linked,
+  workspace, alias, mirror, git or other non-registry copies of the claimed
+  package, an unaffected registry subset returns `unverified`; an affected
+  registry copy still returns `supported` with `finding_allowed=true` and
+  `versions_checked=false`. CVE single-version entries use SemVer precedence,
+  deeply nested manifests become unavailable evidence instead of crashing MCP
+  capture, and non-ASCII digits in CVE or GHSA identifiers are rejected
+  before any fetch.
+
+- CVE product collection identities now require an exact supported registry
+  URI. Arbitrarily stripping trailing slashes could previously turn another
+  URI path into npm, PyPI, or crates.io evidence and authorize a finding; such
+  records now remain `unverified` instead of gaining inferred identity.
+
+- Vulnerability claim inputs now require unpadded CVE/GHSA and package
+  identities. Leading or trailing whitespace is rejected instead of stripped,
+  so a padded caller value cannot be repaired into an identifier that
+  authorizes `supported` and `finding_allowed=true`; documented case and
+  ecosystem-specific name normalization remain unchanged.
+
+- CNA language and reference-tag extension grammars now require full-input
+  matches. A terminal line feed can no longer satisfy the pinned grammar and
+  let malformed required evidence authorize a vulnerability finding.
+
+- Official CVE/GHSA record retrieval now inherits the gateway's default
+  `timeout=None` contract. The evidence path no longer converts an arbitrary
+  ten-second elapsed-time cutoff into an `unverified` verdict.
+
+- Official CVE/GHSA and repository manifest/lock JSON now share one strict
+  decoder that rejects duplicate object member names at every nesting level
+  and the non-standard `NaN`/`Infinity` constants accepted by Python's default
+  decoder. Ambiguous inputs can no longer authorize a finding from conflicting
+  advisory, package, or version evidence or ignored non-RFC metadata.
+
+- Vulnerability claim receipts now apply the CVE 5.x version-status algorithm
+  to exact SemVer 2.0.0 versions from registry-backed npm and crates.io locks.
+  Exact, globally non-overlapping, non-empty `semver` ranges and unambiguous
+  single-version entries can authorize only the installed versions they
+  contain or reject a fully checked unaffected set. Wildcard
+  bounds, status changes, non-SemVer, empty, or duplicate version entries,
+  overlapping ranges, unknown statuses, platform/component scopes, unverified
+  Package URLs, missing or malformed CVE record headers, unsupported non-5.x
+  data versions, missing or malformed published-metadata identity/provenance,
+  missing required Published CNA provenance, descriptions, or references,
+  malformed CNA provider UUIDs, short names, timestamps, or properties,
+  malformed, duplicate, or non-English CNA description evidence,
+  malformed, duplicate, or non-RFC-3986 CNA reference evidence,
+  unvalidated optional CNA properties or uninterpreted CNA extensions,
+  unreconciled ADP or unrecognized CVE container evidence,
+  missing status evidence or malformed/oversized product identity, metadata,
+  or CVE versions,
+  unrecognized record/metadata/product/version-entry fields on any product row,
+  and conflicting
+  product rows remain `unverified`; the receipt exposes
+  `affected_installed_versions` when a finding is authorized.
+- Vulnerability claim receipts now preserve SemVer 2.0.0 exact installed
+  versions from registry-backed npm `package-lock.json` v2/v3 rows and
+  crates.io `Cargo.lock` rows,
+  including deterministic multi-version evidence and the source lockfile.
+  Manifest ranges, linked/local/git npm packages, higher-precedence
+  `npm-shrinkwrap.json`, undocumented npm package-row identity overrides,
+  missing lockfiles, and malformed headers, fields, rows, or version strings
+  remain non-evidence for the entire lockfile. Lock
+  provenance alone never classifies a version; only
+  the separately reviewed bounded CVE evaluator above can set
+  `versions_checked` or `finding_allowed`.
+- Security installation inputs and all three Python lock paths now retain
+  `urllib3>=2.8.0`/`urllib3==2.8.0`, carrying the validated #1352 repair into
+  this branch after exact-head Trivy identified CVE-2026-97687,
+  CVE-2026-97688, and CVE-2026-97689 in 2.7.0. Hash-only clean installs and
+  `pip-audit` cover the runtime, CI-security, and security-tools environments.
+- The loopback web-search MCP server now declares `mcp>=2.0,<3.0` in the
+  protected `api` extra, locks MCP 2.2.0 in both project lock paths, and fails
+  closed before server construction when the installed SDK is missing or not
+  major version 2. Its registration and schema tests no longer treat an absent
+  SDK as optional passing evidence. Server construction also requires the
+  KV-backed `WEB_SEARCH_MCP_TOKEN`; the official SDK bearer middleware rejects
+  missing or mismatched credentials before invoking either tool.
+- Vulnerability claim verdicts now fetch deterministically constructed MITRE
+  CVE or GitHub Advisory records directly through the existing DNS-pinned,
+  no-redirect transport. SearXNG remains an explicitly invoked informational
+  search tool; its ranking, indexing, or availability no longer controls
+  claim admission. Missing authoritative record evidence still fails closed.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one

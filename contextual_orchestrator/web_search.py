@@ -215,7 +215,11 @@ def web_search(
         method="GET",
     )
     with client._open_provider(request, destination, timeout=timeout) as response:
+        # A bounded HTTPResponse.read can silently return a truncated JSON body.
+        expected_length = getattr(response, "length", None)
         raw = response.read(MAX_RESPONSE_BYTES + 1)
+        if expected_length is not None and len(raw) != expected_length:
+            raise ValueError("SearXNG HTTP body is incomplete")
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ValueError("SearXNG response exceeds the size limit")
     payload = json.loads(raw.decode("utf-8"))

@@ -2,10 +2,10 @@
 
 ## Status
 
-Partially accepted. The web-search tool (Decision §1) is implemented in this
-change. The MCP gateway, A2A gateway, and Camoufox-browsing pieces (Decision
-§2-4) are design-only: recorded here so the bounded contexts, their
-boundaries, and their sequencing are reconstructable, not implemented yet.
+Partially accepted. The web-search tool (Decision §1) is implemented. The MCP
+server role now exposes that tool and an advisory-claim check (Decision §2,
+server half only). The MCP client/proxy role, the A2A gateway, and
+Camoufox browsing (Decision §2-4) stay design-only.
 
 ## Context
 
@@ -129,7 +129,7 @@ metasearch client"):
 `SUPPORTED_ENGINES` is a one-tuple today; adding a second engine is a new
 entry plus a request-building function, not a redesign.
 
-### 2. MCP Gateway — design only, not built
+### 2. MCP Gateway — bounded server implemented; general client/proxy deferred
 
 An MCP role is two separable things, and the honest answer is contextual-orchestrator
 eventually needs **both**, sequenced by actual need:
@@ -150,8 +150,68 @@ eventually needs **both**, sequenced by actual need:
   real consumer; building it against zero live consumers would be
   speculative plumbing (see Aggregate/Domain Service note below).
 
-Not built this iteration. Sequencing: server role first, once a Strix or
-Noema caller is ready to consume `web_search()` through it.
+The bounded server role is a partial implementation of issue #1347:
+`python -m contextual_orchestrator.web_search_mcp` binds Streamable HTTP to
+loopback and registers `web_search` plus `assess_vulnerability_claim`. The
+claim tool accepts an identifier, package name and ecosystem, not a caller
+package list or filesystem path. The operator registers a read-only repository
+snapshot in the KV. Bounded root `pyproject.toml`, `package.json`,
+`package-lock.json`, `Cargo.toml` and `Cargo.lock` readers establish positive
+package presence; absence, unsupported formats and workspaces remain unknown.
+The claim path constructs MITRE CVE and GitHub Advisory JSON endpoints from
+validated identifiers and fetches them directly through the existing bounded,
+DNS-pinned, no-redirect HTTP transport; SearXNG is not a discovery or verdict
+dependency. Exact
+record identity and ecosystem-qualified affected package names are compared.
+Generic product prose is insufficient. Python distribution names use Python
+normalization, not a cross-ecosystem substring match. A structured package
+mismatch can reject that identity claim; a match alone does not authorize a
+finding. Bounded CVE exact SemVer evaluation may authorize supported installed
+versions as described below; unsupported evidence remains `unverified`.
+Declared HTTP body lengths must match the received bytes before record parsing;
+incomplete chunked framing also fails closed. SemVer 2.0.0 exact installed versions from
+registry-backed npm `package-lock.json` v2/v3 package rows and crates.io
+`Cargo.lock` package rows are preserved as provenance when present; manifest
+constraints, linked/local/git/custom-registry dependencies, malformed fields,
+undocumented npm package-row identity overrides, unsupported lock formats,
+and a present higher-precedence
+`npm-shrinkwrap.json` are not installed-version evidence. The inactive
+`package-lock.json` is not consulted when shrinkwrap is present. One malformed
+row rejects the entire version-evidence set rather than publishing a partial
+receipt. npm package identity comes from the documented `packages` location;
+the bounded reader does not interpret an undocumented nested `name` override
+or infer identity from a tarball URL. The lockfile evidence follows npm's
+exact-tree and lock-precedence
+contracts, Cargo's
+resolved-version contract, and SemVer's exact-version grammar (npm, Inc., n.d.;
+Rust Project Developers, n.d.; Semantic Versioning, n.d.). For CVE records,
+the server first requires the record to declare `dataType: CVE_RECORD` and a
+schema-valid 5.x `dataVersion`. It then applies the CVE 5.x
+`versions`/`defaultStatus` decision algorithm only when every installed lock
+version and every bound is exact SemVer 2.0.0, version entries satisfy the
+schema's `uniqueItems`, every range is mathematically non-empty, the complete
+range and exact-version set is non-overlapping, and matching product rows agree
+(CVE Project, 2026). At least one `affected`
+installed version produces `supported` plus
+`finding_allowed=true`; a fully checked `unaffected` set produces `rejected`.
+When a lock also contains linked, workspace, mirror, git or other
+non-registry copies of the claimed package, those copies are not evaluated:
+an affected registry copy still produces `supported` with
+`versions_checked=false`, but an unaffected registry subset produces
+`unverified`, never `rejected`.
+Wildcard bounds, status changes, non-SemVer or explicitly empty version
+entries, unknown statuses, platform/component qualifiers, unverified Package
+URLs, absent or malformed record headers, unsupported non-5.x data versions,
+missing or malformed published-metadata identity/provenance, fields outside the
+CVE record/metadata/product/version-entry schemas, overlaps, and conflicting
+rows fail closed as `unverified`. GHSA ranges are not interpreted by this
+slice. Missing search,
+snapshot or record evidence is
+`unverified`, never a clean-repository verdict or a finding. Search remains a
+separate explicitly invoked informational tool. Strix and
+Noema workflow files in `ContextualWisdomLab/.github` still have to point at
+this server; that wiring is outside this repository. The general MCP
+client/proxy role stays unbuilt.
 
 ### 3. A2A Gateway — design only, not built
 
@@ -273,10 +333,15 @@ Not built this iteration, in either form.
 - **web search** — a query against one configured metasearch *engine*,
   returning bounded `WebSearchResult` rows. Never means rendering/browsing a
   specific URL (that is Camoufox Browsing Context's job).
-- **grounding** — using a `WebSearchResult`'s `url`/`content` as citable
-  evidence for a claim. This ADR ships retrieval only; deciding whether
-  evidence supports or refutes a claim is a separate, unbuilt judge/verifier
-  concern, not conflated here.
+- **grounding** — retaining retrieved sources as citable evidence, not treating
+  search snippets as finding authority. The claim tool separately checks official
+  record identity and repository package presence. Bounded CVE exact SemVer
+  evaluation of npm/crates.io lock versions can authorize a finding only when
+  `finding_allowed=true`; an affected registry copy beside unevaluated lock
+  copies reports `versions_checked=false`, and such a partial unaffected set
+  is never `rejected`. GHSA ranges and unsupported or incomplete evidence
+  remain `unverified`. General judging and central consumer integration remain
+  separate, unfinished concerns.
 - **engine** — one metasearch backend implementation (`searxng` today, `yacy`
   documented as next). Never a model provider — `ModelAgent`/`model_group`
   already own that term in Provider Routing Context.
@@ -323,12 +388,9 @@ Not built this iteration, in either form.
 
 ## Consequences
 
-- Strix and Noema still cannot call `web_search()` today — no MCP server
-  role, no A2A role, and no CLI/HTTP wiring ships in this change (see "What
-  remains" below). This is deliberate: shipping a real, tested, 100%-covered
-  library call is a sound first slice; wiring two unbuilt protocol gateways
-  and an unready sandbox around it in the same change would not be
-  verifiable end-to-end and would misrepresent readiness.
+- Strix and Noema still cannot call `web_search()` today because their central
+  workflows are not wired to the bounded loopback MCP server. The server role
+  and CLI exist in this PR; A2A and general MCP proxy roles remain deferred.
 - Any operator who registers `SEARXNG_URL` (and optionally `SEARXNG_TOKEN`)
   can call `contextual_orchestrator.web_search.web_search()` today against
   their own SearXNG deployment — this is real, not a stub.
@@ -345,18 +407,21 @@ Not built this iteration, in either form.
 
 ## What remains (explicitly out of scope here)
 
-1. Wire `web_search()` into an MCP server surface once a Strix or Noema
-   caller is ready to consume it (Decision §2).
-2. Design and build the A2A Gateway once a concrete two-agent delegation
+1. Point Strix and Noema at the loopback MCP server (Decision §2). The server
+   and the claim check exist; the central workflow files do not call them yet.
+2. Extend the bounded CVE exact-SemVer evaluator only through separately
+   reviewed standard algorithms: CVE wildcard/status-change semantics and
+   ecosystem-specific GHSA range syntax remain fail-closed.
+3. Design and build the A2A Gateway once a concrete two-agent delegation
    caller exists (Decision §3).
-3. Build Camoufox browsing as a general capability, reusing the existing
+4. Build Camoufox browsing as a general capability, reusing the existing
    Wardnet+Camoufox-MCP boundary (Decision §4), and re-evaluate the
    `quarantine-sandbox-runtime` migration once
    `ContextualWisdomLab/.github#1590` is resolved and the runtime has a real
    `CommandExecutionBackend`-backed HTTP/CLI surface.
-4. Add a second search engine (YaCy) once there is a real deployment to test
+5. Add a second search engine (YaCy) once there is a real deployment to test
    the client against.
-5. A Domain Event / span for `web_search()` calls, once a caller needs an
+6. A Domain Event / span for `web_search()` calls, once a caller needs an
    audit trail.
 
 ## References
@@ -371,6 +436,128 @@ Not built this iteration, in either form.
   protocol*. Retrieved 2026-09-02, from https://a2a-protocol.org/latest/
 - SearXNG Authors. (n.d.). *SearXNG search API*. Retrieved 2026-09-02, from
   https://docs.searxng.org/dev/search_api.html
+- SearXNG Authors. (n.d.). *settings.yml*. Retrieved 2026-09-30, from
+  https://docs.searxng.org/admin/settings/settings
+- CVE Project. (2026). *CVE Record Format schema* (schema commit
+  `ce5f5c865f14dc40a6548d36b74751abca1c588a`). Retrieved 2026-10-03, from
+  https://github.com/CVEProject/cve-schema/blob/ce5f5c865f14dc40a6548d36b74751abca1c588a/schema/CVE_Record_Format.json
+- Bray, T. (2017). *The JavaScript Object Notation (JSON) Data Interchange
+  Format* (RFC 8259). RFC Editor. https://doi.org/10.17487/RFC8259
+- npm, Inc. (n.d.). *package-lock.json*. Retrieved 2026-10-02, from
+  https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/
+- Rust Project Developers. (n.d.). *Cargo.toml vs. Cargo.lock*. Retrieved
+  2026-10-02, from
+  https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
+- Semantic Versioning. (n.d.). *Semantic Versioning 2.0.0*. Retrieved
+  2026-10-02, from https://semver.org/spec/v2.0.0.html
 - daijro. (n.d.). *Camoufox: Anti-detect browser built for web scraping &
   AI agents* [Software repository]. GitHub. Retrieved 2026-09-02, from
   https://github.com/daijro/camoufox
+
+### Slice-2 repair evidence (2026-09-30)
+
+The earlier snippet-negation check returned `supported`; the regression was
+RED before removing that trust. Focused manifest/record identity, MCP schema
+and compose contracts pass locally. Source commit
+`75ba97651f70134179e26f5480b448afef1c8cc9` (tree
+`8717790292a5db857200fde1b43536b5f23bc7fd`) declares
+`mcp>=2.0,<3.0` in the `api` extra and locks MCP 2.2.0 in `uv.lock` and the
+hash-pinned `requirements.lock`. Server construction verifies the installed
+major before importing SDK primitives; registration and schema tests are
+mandatory. A Python 3.12 `uv sync --locked` run passed the related suite, and
+a clean Python 3.12 `--require-hashes` environment passed the MCP and lock
+contracts with `PYTHONPATH=.`. Compose configuration merges successfully
+without starting any container. The pinned image metadata and exact entrypoint revision
+`4e2c1ea7f468c9d1b16206e9d4079999a2eb0627` show UID/GID 977, root-only
+ownership/certificate writes and Granian startup; the overlay runs nonroot
+with matching tmpfs ownership and an authenticated Wardnet CONNECT proxy on
+an internal-only network. These are source/static checks, not container
+startup, working search, hosted acceptance or deployed Strix/Noema evidence.
+The repaired overlay no longer passes the SearXNG secret or Wardnet proxy token
+through the SearXNG container environment. A fail-closed renderer resolves both
+from the credential registry, writes a settings file below a mode-`0700` host
+directory, and Compose mounts that file read-only at the documented
+`SEARXNG_SETTINGS_PATH`. Official-record requests also send the repository's
+identified `User-Agent`, including the GitHub Advisory request path.
+Official-record retrieval also inherits `ModelClient`'s default
+`timeout=None`; neither the client nor its validated transport call supplies a
+leaf-authored elapsed-time cutoff. Provider termination and explicit external
+cancellation remain distinct from advisory-content validation.
+Official-record and repository manifest/lock JSON share one strict decoder that
+rejects duplicate object member names at every nesting level and rejects the
+non-standard `NaN`, `Infinity`, and `-Infinity` constants accepted by Python's
+default decoder. RFC 8259 identifies unique names as the interoperable form,
+documents unpredictable receiver behavior for duplicates, and excludes those
+constants from its number grammar; silently accepting either behavior would be
+an undocumented evidence-resolution rule (Bray, 2017). Ambiguous records fail
+closed before CNA/GHSA semantics, and ambiguous manifests or locks cannot
+establish package identity or installed-version evidence.
+Central workflow wiring, independent manifest enforcement in its gate,
+version-range evaluation and the original end-to-end false-positive
+reproduction remain open under #1347. Security gates are unchanged.
+The bounded CVE evaluator also requires every Published CNA container to carry
+the pinned schema's `providerMetadata`, `descriptions`, `affected`, and
+`references` fields before package or version interpretation. Omitting any of
+the three previously ignored required fields now fails closed instead of
+authorizing a finding. The provider provenance object must also carry the
+schema-required UUID v4 `orgId`, optional 2–32 character `shortName`, optional
+exact-schema `dateUpdated` timestamp, and no unrecognized properties. Timestamp
+validation uses the pinned schema pattern verbatim with full-input matching;
+it does not infer or normalize dates. Description evidence must now match
+the pinned schema's BCP 47 subset, contain non-empty bounded text and at least
+one English entry, preserve JSON `uniqueItems`, reject unrecognized fields, and
+fully validate optional supporting-media objects before package or version
+interpretation. Required references likewise enforce the pinned array, object,
+length, exact-field, tag-enum/extension, uniqueness, and RFC 3986 URI contracts.
+Language and reference-tag extension regular expressions must consume the
+complete input; Python's `$`-before-terminal-line-feed behavior is not accepted
+as evidence of a complete grammar match.
+The MIT-licensed `rfc3986-validator` 0.1.1 is a direct runtime dependency because
+the installed `jsonschema` format checker otherwise treats `uri` as an unchecked
+annotation when its optional validation backend is absent. The validator match
+must consume the complete input because its regular expression can otherwise
+accept the prefix of a URI followed by a terminal line feed. The evaluator
+admits only the required CNA properties it validates plus a schema-bounded
+1–256 character `title`. Every other optional named property and every `x_`
+extension fails closed until its contract and decision semantics are explicitly
+implemented; a property being named by the schema is not evidence that it is
+decision-neutral. Validation of those optional properties and complete CNA/ADP
+reconciliation remain Proposed. Records carrying an ADP container, an invalid
+empty ADP array, or an unrecognized container property fail closed rather than
+silently discarding another publisher's evidence or guessing reconciliation
+precedence.
+For admitted product rows, `collectionURL` and `packageName` enforce their
+pinned 1–2048 identity bounds. Only the four explicitly supported collection
+URIs have ecosystem authority; no path stripping or other URI equivalence is
+inferred. Optional `vendor` and
+`product` strings enforce the pinned 1–512 and 1–2048 bounds; `repo` enforces
+the complete RFC 3986 URI and 1–2048 contract; and every executable version
+string enforces the schema's 1–1024 bound. Informational values are validated
+but are not inferred as package or scope authority. The evaluator validates
+every `affected` product row before selecting the requested package, so a
+malformed nonmatching row cannot leave an otherwise invalid CVE record with
+finding authority. Every row must carry `versions` or `defaultStatus` as the
+pinned product schema requires; absence is not converted into an inferred
+neutral default.
+Caller-supplied CVE/GHSA and package identity values likewise must be unpadded.
+The boundary rejects leading or trailing whitespace instead of stripping it,
+because no cited standard or executable contract authorizes that equivalence
+and the repaired value can otherwise reach `supported` and
+`finding_allowed=true`. Existing documented identifier-case and
+ecosystem-specific package-name equivalences remain unchanged.
+Range admission is independent of the installed snapshot: the evaluator parses
+each executable entry once, rejects an exclusive range unless its lower bound
+is strictly less than its upper bound, orders ranges by SemVer precedence, and
+rejects any global intersection among ranges and exact-version entries,
+including one outside every installed version. The `0` earliest-version
+sentinel cannot define an exclusive interval below SemVer's minimum
+`0.0.0-0`. This prevents an unrelated installed version from concealing
+contradictory or empty evidence elsewhere in the same product record.
+Source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36` (tree
+`e12b41633ca903fb9f3fbc190105bf59465852ee`) also removes the unauthenticated
+loopback caller path. Server construction now requires the KV-backed
+`WEB_SEARCH_MCP_TOKEN`, delegates bearer enforcement to the official SDK, and
+grants only the exact `web-search` scope after constant-time equality. Missing
+configuration fails closed; missing and mismatched HTTP bearers return 401.
+This is the dedicated local snapshot boundary, not a substitute for the
+Keyverse/OIDC verifier required by any public or multi-tenant deployment.
