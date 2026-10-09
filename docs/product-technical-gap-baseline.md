@@ -7585,6 +7585,17 @@ fail-closed conduct path runs and replaces the invalid entry. This evidence is
 also **Proposed** until the repaired exact head completes hosted Checks and
 independent review.
 
+Exact-head review of successor `1b6f5df317025800cebad9218452caef1c5ad9d0`
+then found two stale fixture contracts. Provider-usage tests still tried to
+force single-call behavior through the removed automatic-triage seam and
+therefore measured four conduct calls, while the two-request decision-receipt
+test exported before each request handler had durably closed. Both defects were
+reproduced: usage totals were `200/20` instead of `50/5`, and a delayed close
+exposed `durable_ack_elapsed_ns=null`. The bounded repair explicitly selects
+route for the accounting-only fixtures and waits on each real measurement
+close before receipt export. This is test evidence only, not native-artifact or
+protected-hosted acceptance.
+
 Context Map: fast-mlsirm remains the canonical psychometric measurement owner;
 CO consumes only an immutable released contract and does not reproduce the
 estimator. The fail-closed port preserves that ownership boundary while the

@@ -740,7 +740,17 @@ def test_legacy_identity_backfill_and_indexed_window(tmp_path):
 
 def test_http_point_evidence_conducts_without_auxiliary_triage(tmp_path, monkeypatch):
     """Point evidence conducts without creating a triage dispatch receipt."""
-    from contextual_orchestrator.decision_receipts import _CURRENT_DECISION
+    from contextual_orchestrator.decision_receipts import DecisionMeasurement, _CURRENT_DECISION
+
+    receipt_closed = threading.Event()
+    original_close = DecisionMeasurement.close
+
+    def close_and_signal(measurement, reason="unfinished"):
+        """Observe durable finalization instead of racing the server epilogue."""
+        original_close(measurement, reason)
+        receipt_closed.set()
+
+    monkeypatch.setattr(DecisionMeasurement, "close", close_and_signal)
 
     orchestrator = TaskOrchestrator(
         [ModelAgent("worker_one", "mock/worker", tags=("writing",))],
@@ -763,6 +773,7 @@ def test_http_point_evidence_conducts_without_auxiliary_triage(tmp_path, monkeyp
     worker.start()
     try:
         for request_index in range(2):
+            receipt_closed.clear()
             connection = http.client.HTTPConnection(*server.server_address)
             connection.request("POST", "/v1/chat/completions", json.dumps({
                 "model": "orchestrator/auto", "mode": "auto",
@@ -773,6 +784,7 @@ def test_http_point_evidence_conducts_without_auxiliary_triage(tmp_path, monkeyp
             response.read()
             assert response.status == 200
             connection.close()
+            assert receipt_closed.wait(5), "request measurement did not finalize"
         server.shutdown()
         server.server_close()
         assert len(task_snapshots) >= 2
