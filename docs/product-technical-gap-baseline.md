@@ -1,5 +1,30 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-09 hosted Dependabot version-update retirement — Proposed
+
+PR [#1353](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1353)
+removes the repository's GitHub-hosted Dependabot version-update configuration
+under proposed ADR 0140. The predecessor head deleted the file but retained a
+metadata test that unconditionally opened it, so the ordinary test and security
+lanes failed before validating the intended policy. The repair replaces that
+stale assertion with an executable contract that both supported configuration
+names, `.github/dependabot.yml` and `.github/dependabot.yaml`, remain absent.
+Commercial security documentation no longer cites the deleted file as live
+evidence. CodeQL, dependency review, pip-audit, SBOM, Trivy, Scorecard, alerts,
+branch protection, and required Checks remain separate controls.
+
+**Context Map / ownership:** Contextual Orchestrator owns its dependency
+declarations, executable absence contract, and buyer-facing security evidence.
+The central `ContextualWisdomLab/.github` control plane and repository security
+workflows independently own dependency review, hosted scans, and protected
+merge evidence. This proposal introduces no replacement updater; dependency
+freshness remains an explicit operational Gap rather than an implied control.
+
+**Gap / Action / status:** source policy and metadata consistency are Proposed
+until #1353 has exact-head hosted Checks and independent approval. The failed
+predecessor Security and Quality run 37725322159 is RED evidence, not a merge
+gate. No protected-setting change, bypass, release, or completion is claimed.
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
