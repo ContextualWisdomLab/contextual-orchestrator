@@ -546,7 +546,7 @@ def test_nonstream_orchestrated_responses_support_structured_output(
     assert body["orchestration"]["mode"] == "conduct"
 
 
-def test_stream_failure_emits_terminal_responses_event() -> None:
+def test_stream_failure_emits_terminal_responses_event(caplog) -> None:
     token = "responses_stream_token"
     orchestrator = TaskOrchestrator([
         ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
@@ -560,7 +560,8 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        stream = _post(server, token, "orchestrator/free")
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            stream = _post(server, token, "orchestrator/free")
     finally:
         server.shutdown()
         server.server_close()
@@ -575,10 +576,19 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     assert event["event_detail"]["status_code"] == 500
     assert event["event_detail"]["transport_status_code"] == 200
     assert event["event_detail"]["response_status"] == "failed"
+    terminal = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("http_request method=POST path=/v1/responses ")
+    )
+    assert "status=200" in terminal
+    assert "served_model=unknown error_class=server_error" in terminal
 
 
 
-def test_stream_usage_failure_remains_inside_the_started_sse_protocol(monkeypatch) -> None:
+def test_stream_usage_failure_remains_inside_the_started_sse_protocol(
+    monkeypatch, caplog
+) -> None:
     """A post-header ledger failure emits Responses failure framing, never JSON HTTP."""
     token = "responses_stream_usage_failure_token"
     orchestrator = TaskOrchestrator([
@@ -598,7 +608,8 @@ def test_stream_usage_failure_remains_inside_the_started_sse_protocol(monkeypatc
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        stream = _post(server, token, "orchestrator/auto")
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            stream = _post(server, token, "orchestrator/auto")
     finally:
         server.shutdown()
         server.server_close()
@@ -612,6 +623,13 @@ def test_stream_usage_failure_remains_inside_the_started_sse_protocol(monkeypatc
     assert events[-1]["response"]["error"]["code"] == "usage_recording_failed"
     assert all(event["type"] != "response.completed" for event in events)
     assert stream.rstrip().endswith("data: [DONE]")
+    terminal = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("http_request method=POST path=/v1/responses ")
+    )
+    assert "status=200" in terminal
+    assert "served_model=unknown error_class=usage_recording_failed" in terminal
 
 
 def test_conduct_stream_emits_openai_reasoning_text_for_paper_roles() -> None:

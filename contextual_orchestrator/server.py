@@ -112,7 +112,8 @@ _BUILD_SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def _terminal_model_from_trace(result: Mapping[str, Any], orchestrator: TaskOrchestrator) -> str:
-    """Report only the final successful trace member, never an attempted model."""
+    """Report the immutable served-model snapshot from the final successful step."""
+    del orchestrator
     if result.get("cache_status") == "hit":
         return "unknown"
     trace = result.get("trace")
@@ -127,28 +128,49 @@ def _terminal_model_from_trace(result: Mapping[str, Any], orchestrator: TaskOrch
         or final.get("validation_outcome") not in (None, "accepted")
     ):
         return "unknown"
-    agent_id = final.get("served_agent_id") or final.get("agent_id")
-    for agent in orchestrator.agents:
-        if agent.id == agent_id and _LOG_MODEL.fullmatch(agent.model):
-            return agent.model
+    model = final.get("served_model")
+    if model is None and not final.get("served_agent_id"):
+        model = final.get("model")
+    if isinstance(model, str) and _LOG_MODEL.fullmatch(model):
+        return model
     return "unknown"
 
 
-def _terminal_model_from_response(result: Mapping[str, Any], orchestrator: TaskOrchestrator) -> str:
-    """Accept a final response model only when it names a configured member."""
-    model = result.get("model")
-    if isinstance(model, str) and _LOG_MODEL.fullmatch(model):
-        if any(agent.model == model for agent in orchestrator.agents):
-            return model
+def _terminal_model_from_response(
+    result: Mapping[str, Any],
+    orchestrator: TaskOrchestrator,
+    *,
+    requested_model: str | None = None,
+) -> str:
+    """Use the successful concrete request identity, never the provider's model field."""
+    del result
+    if not isinstance(requested_model, str):
+        return "unknown"
+    virtual_models = {
+        orchestrator.GATEWAY_DEFAULT_MODEL,
+        orchestrator.AUTO_MODEL,
+        orchestrator.FREE_MODEL,
+    }
+    if (
+        requested_model not in virtual_models
+        and _LOG_MODEL.fullmatch(requested_model)
+    ):
+        return requested_model
     return "unknown"
 
 
 def _terminal_model_from_proxy_completion(
-    result: Mapping[str, Any], orchestrator: TaskOrchestrator, *, tool_loop: bool
+    result: Mapping[str, Any],
+    orchestrator: TaskOrchestrator,
+    *,
+    tool_loop: bool,
+    requested_model: str,
 ) -> str:
     """Use the completed proxy response or its persisted final workflow step."""
     if tool_loop:
-        return _terminal_model_from_response(result, orchestrator)
+        return _terminal_model_from_response(
+            result, orchestrator, requested_model=requested_model
+        )
     lineage = result.get("orchestration")
     workflow_id = lineage.get("workflow_run_id") if isinstance(lineage, dict) else None
     if not isinstance(workflow_id, str):
@@ -5956,8 +5978,9 @@ def build_server(
                 self._terminal_served_model if status == 200 else "unknown",
                 (
                     "unknown" if status is None else
-                    "none" if status < 400 else
-                    self._terminal_error_class or "unknown"
+                    self._terminal_error_class or (
+                        "none" if status < 400 else "unknown"
+                    )
                 ),
                 log_build_sha,
             )
@@ -7546,7 +7569,10 @@ def build_server(
                             else _response_payload(proxied, include_trace)
                         )
                         self._terminal_served_model = _terminal_model_from_proxy_completion(
-                            proxied, orchestrator, tool_loop=tool_loop
+                            proxied,
+                            orchestrator,
+                            tool_loop=tool_loop,
+                            requested_model=model_name,
                         )
                         if stream:
                             self._send_sse(
@@ -8453,7 +8479,10 @@ def build_server(
                         },
                     )
                     self._terminal_served_model = _terminal_model_from_proxy_completion(
-                        proxied, orchestrator, tool_loop=tool_loop
+                        proxied,
+                        orchestrator,
+                        tool_loop=tool_loop,
+                        requested_model=body["model"],
                     )
                     self._send(_response_payload(proxied, include_trace=False))
                     return
@@ -8813,7 +8842,7 @@ def build_server(
                     and self._decision_failure_reason == "unfinished"):
                     self._decision_failure_reason = "selection_failed"
             request_id = current_request_id() or uuid.uuid4().hex
-            self._terminal_error_class = code if _LOG_ERROR.fullmatch(code) else "unknown"
+            self._record_terminal_error(code)
             error_detail = {**(detail or {}), "request_id": request_id}
             _LOGGER.warning(
                 "request_failed status=%s code=%s request_id=%s", status, code, request_id
@@ -8826,6 +8855,12 @@ def build_server(
                 self._send(payload, status, extra_headers=extra_headers)
             else:
                 self._send(payload, status)
+
+        def _record_terminal_error(self, code: str) -> None:
+            """Retain one bounded terminal error class, including after SSE headers."""
+            self._terminal_error_class = (
+                code if _LOG_ERROR.fullmatch(code) else "unknown"
+            )
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
@@ -9163,6 +9198,7 @@ def build_server(
                     raise
                 except ProviderUpstreamError as exc:
                     self._decision_failure_reason = "selection_failed"
+                    self._record_terminal_error(exc.error_code)
                     failed = {
                         **created_response,
                         "status": "failed",
@@ -9177,6 +9213,7 @@ def build_server(
                     return False
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     self._decision_failure_reason = "selection_failed"
+                    self._record_terminal_error("server_error")
                     failed = {
                         **created_response,
                         "status": "failed",
@@ -9196,6 +9233,7 @@ def build_server(
                             model_name=model_name,
                         )
                     except Exception:  # noqa: BLE001 - headers sent; remain inside SSE
+                        self._record_terminal_error("usage_recording_failed")
                         failed = {
                             **created_response,
                             "status": "failed",
@@ -9444,6 +9482,7 @@ def build_server(
                         return
                 except ToolFallbackStoppedError as exc:
                     self._decision_failure_reason = "selection_failed"
+                    self._record_terminal_error(TOOL_FALLBACK_STOPPED_CODE)
                     detail = {
                         **_tool_fallback_error_detail(exc),
                         "request_id": current_request_id() or uuid.uuid4().hex,
@@ -9461,6 +9500,7 @@ def build_server(
                         return
                 except ProviderUpstreamError as exc:
                     self._decision_failure_reason = "selection_failed"
+                    self._record_terminal_error(exc.error_code)
                     payload = _error_payload(
                         exc.error_code,
                         _provider_upstream_message(exc),
@@ -9474,6 +9514,7 @@ def build_server(
                         return
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     self._decision_failure_reason = "selection_failed"
+                    self._record_terminal_error("server_error")
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 self._write_sse("data: [DONE]\n\n")

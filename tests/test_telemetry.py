@@ -557,14 +557,35 @@ def test_terminal_model_uses_final_successful_member_only():
     orchestrator = SimpleNamespace(agents=agents)
     trace = [
         {"role": "worker", "agent_id": "first_agent", "output": "failed", "error": "synthetic_failure"},
-        {"role": "worker", "agent_id": "first_agent", "served_agent_id": "second_agent", "output": "ok"},
+        {
+            "role": "worker",
+            "agent_id": "first_agent",
+            "served_agent_id": "second_agent",
+            "served_model": "provider/second",
+            "output": "ok",
+        },
     ]
     assert server_module._terminal_model_from_trace({"trace": trace}, orchestrator) == "provider/second"
+    orchestrator.agents = [ModelAgent("replacement_agent", "provider/replacement")]
+    assert server_module._terminal_model_from_trace({"trace": trace}, orchestrator) == "provider/second"
+    assert server_module._terminal_model_from_trace(
+        {"trace": [trace[-1] | {"served_model": None}]}, orchestrator
+    ) == "unknown"
     assert server_module._terminal_model_from_trace({"trace": [trace[-1] | {"role": "judge"}]}, orchestrator) == "unknown"
     assert server_module._terminal_model_from_trace({"trace": [trace[-1] | {"failure_code": "synthetic"}]}, orchestrator) == "unknown"
     assert server_module._terminal_model_from_trace({"trace": trace, "cache_status": "hit"}, orchestrator) == "unknown"
     assert server_module._terminal_model_from_response({"model": "orchestrator/free"}, orchestrator) == "unknown"
-    assert server_module._terminal_model_from_response({"model": "provider/second"}, orchestrator) == "provider/second"
+    configured = orchestrator_module.TaskOrchestrator(
+        [ModelAgent("second_agent", "provider/second")]
+    )
+    assert server_module._terminal_model_from_response(
+        {"model": "provider/second"}, configured
+    ) == "unknown"
+    assert server_module._terminal_model_from_response(
+        {"model": "provider/first"},
+        configured,
+        requested_model="provider/second",
+    ) == "provider/second"
     assert server_module._terminal_model_from_response({"model": "provider/second\nsecret"}, orchestrator) == "unknown"
     with pytest.raises(ValueError, match="build_sha"):
         build_server(orchestrator, port=0, build_sha="unverified")
