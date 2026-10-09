@@ -1001,6 +1001,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--build-sha", default=None, help="Verified source commit for terminal request logs.")
     parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
     parser.add_argument("--admin-token", default="", help="Explicit local-development admin token; prefer a KV token name.")
     parser.add_argument("--inference-token", default="", help="Explicit local-development inference token; prefer a KV token name.")
@@ -1280,6 +1281,7 @@ def main(argv: list[str] | None = None) -> None:
             ),
             release_authority=release_authority,
             decision_receipts=args.decision_receipts,
+            build_sha=args.build_sha,
         )
         return
 

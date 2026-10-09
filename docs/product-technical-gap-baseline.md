@@ -1,5 +1,50 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-09 exact-head source integrity — Proposed
+
+**Gap / RCA.** PR #1248's first Git Data publication pointed at a remote
+`orchestrator.py` blob that differed from the locally verified file: it
+contained 24 NUL bytes and only 8,422 lines instead of 21,152. The exact-head
+telemetry suite therefore failed during collection even though the preceding
+local tree was GREEN.
+
+**Action / evidence.** The owner restored complete blob
+`f6e37b5102164cfc2132b8f66462ebb4ef116e89`; remote tree
+`370596c415e2f1f63b2fda7892d999ca34b7f48c` then matched the tested local tree
+byte-for-byte. The warnings-fatal four-file boundary suite is **234 passed**,
+with Python compilation and diff checks GREEN. Future exact-head acceptance
+must bind the published commit, tree, and critical source blobs to the tested
+tree; a local result alone is not publication evidence. Status remains
+Proposed until executable hosted Checks and independent approval are present.
+
+## 2026-10-09 terminal gateway outcome identity — Proposed
+
+**PRD / buyer-visible Gap.** PR #1248 introduced bounded terminal request
+summaries, but three executable edge cases could produce materially wrong
+operations evidence: a Responses SSE failure after HTTP 200 was logged as
+`error_class=none`; a provider-authored response `model` could impersonate a
+different configured model; and a completed workflow's model was resolved
+against the mutable current agent pool rather than the identity captured when
+the provider actually served the request.
+
+**TRD / Context Map / action.** The contextual-orchestrator HTTP telemetry
+boundary owns body-free terminal summaries. Provider payloads remain untrusted;
+the orchestration trace owns completed model identity, and the request handler
+owns post-header transport outcome. RED reproduced the HTTP-200/`none` false
+success. GREEN retains bounded SSE failure classes, derives concrete
+passthrough identity from the successful request rather than response bytes,
+and persists `served_model` on failover/synthesis/repair trace rows so later
+pool mutations cannot rewrite history. Existing response bodies and HTTP/SSE
+status framing are unchanged.
+
+**Evidence / status.** Four telemetry, Responses-stream, tool-stream, and
+provider-reliability files complete **234 tests** with warnings fatal in the
+offline lane; the added usage-ledger classification case also passes directly.
+Python compilation and diff checks remain required before publication. This is
+Proposed source evidence on `ContextualWisdomLab/contextual-orchestrator#1248`,
+not a protected-main release, deployment KPI, qualifying approval, or hosted
+Check result.
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
