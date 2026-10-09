@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Restored the complete orchestration source after a Git Data publication
+  produced a truncated blob containing NUL bytes. Exact-head evidence now
+  records and rechecks the remote tree and source-blob identity against the
+  locally tested tree before review or merge claims are reused.
 - Terminal gateway summaries now retain post-header SSE failure taxonomy,
   trust a successful concrete request identity instead of a provider-authored
   response `model`, and read the immutable served-model snapshot persisted on

@@ -1,5 +1,22 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-09 exact-head source integrity — Proposed
+
+**Gap / RCA.** PR #1248's first Git Data publication pointed at a remote
+`orchestrator.py` blob that differed from the locally verified file: it
+contained 24 NUL bytes and only 8,422 lines instead of 21,152. The exact-head
+telemetry suite therefore failed during collection even though the preceding
+local tree was GREEN.
+
+**Action / evidence.** The owner restored complete blob
+`f6e37b5102164cfc2132b8f66462ebb4ef116e89`; remote tree
+`370596c415e2f1f63b2fda7892d999ca34b7f48c` then matched the tested local tree
+byte-for-byte. The warnings-fatal four-file boundary suite is **234 passed**,
+with Python compilation and diff checks GREEN. Future exact-head acceptance
+must bind the published commit, tree, and critical source blobs to the tested
+tree; a local result alone is not publication evidence. Status remains
+Proposed until executable hosted Checks and independent approval are present.
+
 ## 2026-10-09 terminal gateway outcome identity — Proposed
 
 **PRD / buyer-visible Gap.** PR #1248 introduced bounded terminal request
