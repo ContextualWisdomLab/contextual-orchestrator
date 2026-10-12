@@ -12,6 +12,7 @@ dependencies = [
   "jsonschema>=4.26.0",
   "egressweave>=0.1.0,<0.2.0",
   "fast-mlsirm==0.11.4",
+  "urllib3>=2.8.0", # Security floor for the requests transitive dependency.
 ]
 
 [project.optional-dependencies]

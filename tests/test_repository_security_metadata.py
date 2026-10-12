@@ -264,6 +264,17 @@ def test_security_tool_lockfile_uses_hash_pinning():
     assert "--hash=sha256:" in lock_text
     assert "pip-audit==2.10.1" in lock_text
     assert "cyclonedx-bom==7.3.0" in lock_text
+    assert "typing-extensions==4.16.0" in lock_text
+
+
+def test_security_tool_lockfiles_retain_the_reviewed_urllib3_floor():
+    """Every security-tool environment must retain the reviewed urllib3 fix."""
+    for input_path, lock_path in (
+        ("requirements-security-ci.in", "requirements-security-ci.txt"),
+        ("requirements-security-tools.in", "requirements-security-tools.txt"),
+    ):
+        assert "urllib3>=2.8.0" in read_text(input_path)
+        assert re.search(r"(?m)^urllib3==2\.8\.0 \\$", read_text(lock_path))
 
 
 if __name__ == "__main__":  # pragma: no cover
