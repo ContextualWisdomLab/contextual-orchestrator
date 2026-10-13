@@ -1,8 +1,19 @@
+[build-system]
+# Declared explicitly so the PEP 639 licence metadata above is guaranteed to
+# be emitted: setuptools only understands the SPDX expression from 77.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "contextual-orchestrator"
 version = "0.2.0"
 description = "Paper-grounded model orchestration lab with an enterprise admin console."
 readme = "README.md"
+# PEP 639: the SPDX expression and the licence file that backs it, so the
+# built distribution declares the licence the repository actually carries
+# instead of leaving it undeclared for every downstream SBOM to guess.
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
   "cryptography>=43.0",
