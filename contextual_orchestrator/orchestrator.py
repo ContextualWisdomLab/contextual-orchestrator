@@ -6,7 +6,8 @@ from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
-from .decision_receipts import observe_auxiliary_dispatch, record_answer_cache_hit, record_initial_selection
+from .decision_receipts import (is_safe_usage_record_id, observe_auxiliary_dispatch,
+                                record_answer_cache_hit, record_initial_selection)
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import errno
@@ -5266,7 +5267,7 @@ class _StateStore:
                     observations.append({"admission_sequence": admission_sequence,
                                          "request_id": None, "link_status": "identity_unavailable",
                                          "decision_latency_ms": None,
-                                         "workflow_outcomes": [], "batch_associations": [],
+                                         "workflow_outcomes": [], "batch_associations": [], "usage_links": [],
                                          "links_truncated": False, "invalid_association_count": 0})
                     continue
                 initial_records = self._conn.execute(
@@ -5298,7 +5299,7 @@ class _StateStore:
                     status = "unclassified"
                 row = {"admission_sequence": admission_sequence, "request_id": request_id,
                        "decision_status": status, "workflow_outcomes": [],
-                       "batch_associations": [], "links_truncated": False,
+                       "batch_associations": [], "usage_links": [], "links_truncated": False,
                        "invalid_association_count": int(invalid_phase) + int(bool(initial_records) and not valid_initial)}
                 # Project only canonical measurement fields, never arbitrary stored text.
                 measurement = self._export_record(admission_payload)
@@ -5318,6 +5319,10 @@ class _StateStore:
                         row["invalid_association_count"] += 1
                 if not phases or invalid_phase:
                     row["durable_ack_elapsed_ns"] = None
+                link_failures = phase.get("usage_link_write_failures") if phases and not invalid_phase else None
+                row["usage_link_write_failures"] = (
+                    link_failures if type(link_failures) is int and link_failures >= 0 else None
+                )
                 acknowledgement = row["durable_ack_elapsed_ns"]
                 selection = row["selection_elapsed_ns"]
                 if acknowledgement is not None and (
@@ -5383,7 +5388,31 @@ class _StateStore:
                             row["links_truncated"] |= len(custom_ids) > 100
                             row[output_field].append({"batch_job_id": record.get("batch_job_id"),
                                                       "custom_ids": custom_ids[:100]})
-                row["link_status"] = ("linked" if row["workflow_outcomes"] or row["batch_associations"]
+                usage_links = self._conn.execute(
+                    "SELECT payload FROM orchestration_records WHERE kind = 'usage_link' "
+                    "AND key = ? AND seq <= ? ORDER BY seq LIMIT 65", (request_id, cutoff),
+                ).fetchall()
+                row["links_truncated"] |= len(usage_links) > 64
+                for (payload,) in usage_links[:64]:
+                    link = self._export_record(payload)
+                    if (link.get("request_id") != request_id
+                            or not is_safe_usage_record_id(link.get("usage_record_id"))
+                            or not isinstance(link.get("ledger_state"), str)
+                            or link.get("ledger_state") not in {
+                                "append_accepted", "append_rejected", "append_failed"
+                            }
+                            or not isinstance(link.get("measurement_status"), str)
+                            or link.get("measurement_status") not in {
+                                "measured", "estimated", "unavailable"
+                            }):
+                        row["invalid_association_count"] += 1
+                        continue
+                    row["usage_links"].append({
+                        "usage_record_id": link["usage_record_id"],
+                        "ledger_state": link["ledger_state"],
+                        "measurement_status": link["measurement_status"],
+                    })
+                row["link_status"] = ("linked" if row["workflow_outcomes"] or row["batch_associations"] or row["usage_links"]
                                       else "unmatched")
                 observations.append(row)
         return {"schema_version": 1, "scope": "service_admin_retained_admissions",
@@ -5464,7 +5493,7 @@ class _StateStore:
         }
 
     def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
-        if kind in self._MEASUREMENT_KINDS:
+        if kind in self._MEASUREMENT_KINDS or kind == "usage_link":
             request_id = payload.get("request_id")
             if not isinstance(request_id, str) or not request_id or (key is not None and key != request_id):
                 raise ValueError("measurement record requires a consistent request identity")

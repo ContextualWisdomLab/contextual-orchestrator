@@ -7,9 +7,15 @@ import threading
 import uuid
 import hashlib
 import json
+import re
 
 _CURRENT_DECISION = ContextVar("initial_decision", default=None)
 _LOGGER = logging.getLogger(__name__)
+
+
+def is_safe_usage_record_id(value):
+    """Admit only gateway-generated, bounded ledger identifiers to exports."""
+    return isinstance(value, str) and re.fullmatch(r"usage_[A-Za-z0-9_-]{1,250}", value) is not None
 
 
 class DecisionMeasurement:
@@ -38,6 +44,7 @@ class DecisionMeasurement:
         self._race_attempt_ids = set()
         self.first_provider_phase = None
         self._answer_cache_observed = False
+        self.usage_link_write_failures = 0
         self._lock = threading.Lock()
         self._token = _CURRENT_DECISION.set(self)
         try:
@@ -69,7 +76,25 @@ class DecisionMeasurement:
             "first_provider_phase": self.first_provider_phase,
             "first_provider_boundary": "provider_ready_before_diagnostic_commit",
             "metric_scope": "initial_task_route_decision",
+            "usage_link_write_failures": self.usage_link_write_failures,
         }
+
+    def record_usage_link(self, usage_record_id, ledger_state, measurement_status):
+        """Join a ledger append to this request without claiming durable billing."""
+        with self._lock:
+            if not is_safe_usage_record_id(usage_record_id):
+                self.usage_link_write_failures += 1
+                return
+            try:
+                self.store.save("usage_link", self.request_id, {
+                    "request_id": self.request_id,
+                    "usage_record_id": usage_record_id,
+                    "ledger_state": ledger_state,
+                    "measurement_status": measurement_status,
+                }, durable=True)
+            except Exception as exc:
+                self.usage_link_write_failures += 1
+                _LOGGER.warning("Usage link write failed error_type=%s", type(exc).__name__)
 
     def select(self, agent_ids, route_mode, *, attempt_id=None):
         """Acknowledge the first decision synchronously before provider dispatch."""
@@ -174,6 +199,13 @@ def record_answer_cache_hit():
     if measurement is not None:
         with measurement._lock:
             measurement._answer_cache_observed = True
+
+
+def record_usage_link(usage_record_id, ledger_state, measurement_status):
+    """Record a bounded association only inside an opted-in measurement."""
+    measurement = _CURRENT_DECISION.get()
+    if measurement is not None:
+        measurement.record_usage_link(usage_record_id, ledger_state, measurement_status)
 
 
 @contextmanager
