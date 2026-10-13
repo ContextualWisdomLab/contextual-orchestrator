@@ -960,6 +960,40 @@ def _fresh_backend():
         set_backend(None)
 
 
+_DISCOVERY_FIXTURE_THREAD_NAMES = {
+    "discover-provider-openai",
+    "discover-models-dev-metadata",
+    "discover-openrouter-zdr-model-ids",
+    "discover-openrouter-paid-inference",
+}
+
+
+def _release_discovery_fixture_events(*events: threading.Event) -> None:
+    """Release test-owned stalled discovery workers and require bounded exit."""
+    for event in events:
+        event.set()
+    deadline = time.monotonic() + 1.0
+    remaining_workers: list[str] = []
+    while True:
+        workers = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name in _DISCOVERY_FIXTURE_THREAD_NAMES
+        ]
+        if not workers:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            remaining_workers = [thread.name for thread in workers if thread.is_alive()]
+            break
+        for worker in workers:
+            worker.join(timeout=min(0.05, max(0.0, remaining)))
+    if remaining_workers and sys.exc_info()[0] is None:
+        raise AssertionError(
+            "discovery fixture workers did not exit: " + ", ".join(remaining_workers)
+        )
+
+
 class _Response:
     def __init__(self, payload: dict) -> None:
         self._body = json.dumps(payload).encode("utf-8")
@@ -2629,24 +2663,27 @@ def test_discover_all_models_bounds_a_stalled_provider_so_later_providers_still_
             )
         ]
 
-    started = time.monotonic()
-    with patch(
-        "contextual_orchestrator.model_discovery.discover_provider_models",
-        side_effect=fake_discover_provider_models,
-    ):
-        discovered, errors = discover_all_models(
-            (OPENAI_SOURCE, OPENROUTER_SOURCE),
-            discovery_deadline=0.2,
-        )
-    elapsed = time.monotonic() - started
+    try:
+        started = time.monotonic()
+        with patch(
+            "contextual_orchestrator.model_discovery.discover_provider_models",
+            side_effect=fake_discover_provider_models,
+        ):
+            discovered, errors = discover_all_models(
+                (OPENAI_SOURCE, OPENROUTER_SOURCE),
+                discovery_deadline=0.2,
+            )
+        elapsed = time.monotonic() - started
 
-    # Generous bound for CI jitter -- what matters is that this is nowhere
-    # near "forever" and is driven by the 0.2s deadline, not the test runner.
-    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled provider"
-    assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
-    assert len(errors) == 1
-    assert errors[0].provider_name == "openai"
-    assert errors[0].error_code == "discovery_timeout"
+        # Generous bound for CI jitter -- what matters is that this is nowhere
+        # near "forever" and is driven by the 0.2s deadline, not the test runner.
+        assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled provider"
+        assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
+        assert len(errors) == 1
+        assert errors[0].provider_name == "openai"
+        assert errors[0].error_code == "discovery_timeout"
+    finally:
+        _release_discovery_fixture_events(never_set)
 
 
 def test_discover_all_models_discovery_deadline_none_opts_into_unbounded_wait() -> None:
@@ -2703,31 +2740,34 @@ def test_discover_all_models_bounds_a_stalled_models_dev_metadata_fetch() -> Non
     def urlopen(request, timeout=None, **_kwargs):
         return _Response({"data": [{"id": "gpt-review"}]})
 
-    started = time.monotonic()
-    with (
-        patch(
-            "contextual_orchestrator.model_discovery._fetch_models_dev_metadata",
-            side_effect=fake_fetch_models_dev_metadata,
-        ),
-        patch(
-            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
-            side_effect=urlopen,
-        ),
-    ):
-        discovered, errors = discover_all_models(
-            (models_dev_source,),
-            discovery_deadline=0.2,
-        )
-    elapsed = time.monotonic() - started
+    try:
+        started = time.monotonic()
+        with (
+            patch(
+                "contextual_orchestrator.model_discovery._fetch_models_dev_metadata",
+                side_effect=fake_fetch_models_dev_metadata,
+            ),
+            patch(
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+                side_effect=urlopen,
+            ),
+        ):
+            discovered, errors = discover_all_models(
+                (models_dev_source,),
+                discovery_deadline=0.2,
+            )
+        elapsed = time.monotonic() - started
 
-    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled Models.dev fetch"
-    # The stalled shared fetch degrades to the same "no evidence" fallback
-    # (None) _fetch_models_dev_metadata already returns for an ordinary
-    # failure -- _merge_models_dev_metadata passes rows through unchanged --
-    # rather than blocking; the provider's own catalog discovery still
-    # succeeds untouched.
-    assert errors == []
-    assert [m.model_id for m in discovered] == ["gpt-review"]
+        assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled Models.dev fetch"
+        # The stalled shared fetch degrades to the same "no evidence" fallback
+        # (None) _fetch_models_dev_metadata already returns for an ordinary
+        # failure -- _merge_models_dev_metadata passes rows through unchanged --
+        # rather than blocking; the provider's own catalog discovery still
+        # succeeds untouched.
+        assert errors == []
+        assert [m.model_id for m in discovered] == ["gpt-review"]
+    finally:
+        _release_discovery_fixture_events(never_set)
 
 
 def test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch() -> None:
@@ -2749,30 +2789,33 @@ def test_discover_all_models_bounds_a_stalled_openrouter_zdr_fetch() -> None:
     def urlopen(request, timeout=None, **_kwargs):
         return _Response({"data": [{"id": "gpt-review"}]})
 
-    started = time.monotonic()
-    with (
-        patch(
-            "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
-            side_effect=fake_openrouter_zdr_model_ids,
-        ),
-        patch(
-            "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
-            side_effect=urlopen,
-        ),
-    ):
-        discovered, errors = discover_all_models(
-            (OPENAI_SOURCE,),
-            discovery_deadline=0.2,
-        )
-    elapsed = time.monotonic() - started
+    try:
+        started = time.monotonic()
+        with (
+            patch(
+                "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+                side_effect=fake_openrouter_zdr_model_ids,
+            ),
+            patch(
+                "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+                side_effect=urlopen,
+            ),
+        ):
+            discovered, errors = discover_all_models(
+                (OPENAI_SOURCE,),
+                discovery_deadline=0.2,
+            )
+        elapsed = time.monotonic() - started
 
-    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter ZDR fetch"
-    assert errors == []
-    assert [m.model_id for m in discovered] == ["gpt-review"]
-    # The stalled fetch degrades to the same empty-set fallback
-    # _openrouter_zdr_model_ids already returns for an ordinary failure --
-    # never marks a model ZDR-capable on missing/timed-out evidence.
-    assert discovered[0].zdr_capable is False
+        assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter ZDR fetch"
+        assert errors == []
+        assert [m.model_id for m in discovered] == ["gpt-review"]
+        # The stalled fetch degrades to the same empty-set fallback
+        # _openrouter_zdr_model_ids already returns for an ordinary failure --
+        # never marks a model ZDR-capable on missing/timed-out evidence.
+        assert discovered[0].zdr_capable is False
+    finally:
+        _release_discovery_fixture_events(never_set)
 
 
 def test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch() -> None:
@@ -2805,31 +2848,34 @@ def test_discover_all_models_bounds_a_stalled_openrouter_paid_inference_fetch() 
             )
         ]
 
-    started = time.monotonic()
-    with (
-        patch(
-            "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
-            side_effect=fake_openrouter_paid_inference_available,
-        ),
-        patch(
-            "contextual_orchestrator.model_discovery.discover_provider_models",
-            side_effect=fake_discover_provider_models,
-        ),
-    ):
-        discovered, errors = discover_all_models(
-            (OPENROUTER_SOURCE,),
-            discovery_deadline=0.2,
-        )
-    elapsed = time.monotonic() - started
+    try:
+        started = time.monotonic()
+        with (
+            patch(
+                "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+                side_effect=fake_openrouter_paid_inference_available,
+            ),
+            patch(
+                "contextual_orchestrator.model_discovery.discover_provider_models",
+                side_effect=fake_discover_provider_models,
+            ),
+        ):
+            discovered, errors = discover_all_models(
+                (OPENROUTER_SOURCE,),
+                discovery_deadline=0.2,
+            )
+        elapsed = time.monotonic() - started
 
-    assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter credits fetch"
-    assert errors == []
-    assert [m.model_id for m in discovered] == ["paid/model"]
-    # The stalled fetch degrades to the same "could not determine" fallback
-    # (None) openrouter_paid_inference_available already returns for an
-    # ordinary failure -- apply_openrouter_spend_admission's fail-closed rule
-    # never admits spend for a paid row without positive evidence.
-    assert discovered[0].spend_admitted is False
+        assert elapsed < 5.0, f"discover_all_models blocked for {elapsed:.1f}s on a stalled OpenRouter credits fetch"
+        assert errors == []
+        assert [m.model_id for m in discovered] == ["paid/model"]
+        # The stalled fetch degrades to the same "could not determine" fallback
+        # (None) openrouter_paid_inference_available already returns for an
+        # ordinary failure -- apply_openrouter_spend_admission's fail-closed rule
+        # never admits spend for a paid row without positive evidence.
+        assert discovered[0].spend_admitted is False
+    finally:
+        _release_discovery_fixture_events(never_set)
 
 
 @pytest.mark.parametrize("provider_name", ["nvidia_nim", "experiential_labs"])
