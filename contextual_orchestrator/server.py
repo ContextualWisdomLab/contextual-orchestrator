@@ -2087,6 +2087,26 @@ def _validate_zdr_only(body: dict[str, Any]) -> bool:
 
 
 
+def _responses_text_verbosity_only_noop(text: dict[str, Any]) -> bool:
+    """True when ``text`` only carries a known default-length verbosity no-op."""
+    return set(text) == {"verbosity"} and text.get("verbosity") in {
+        "low",
+        "medium",
+        "high",
+    }
+
+
+def _reject_responses_dual_text_plane(response_format_present: bool) -> None:
+    """Fail closed when Responses ``text`` and ``response_format`` are both set."""
+    if response_format_present:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text and response_format cannot both be set on /v1/responses; "
+            "use official text.format only",
+        )
+
+
 def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
     """Official Responses ``text`` — ``format`` shapes, omit-real optionals.
 
@@ -2095,7 +2115,9 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
     / ``json_schema`` formats, pop JSON-null or blank ``description`` and
     JSON-null ``strict`` so passthrough matches omit, and fail closed on
     unknown keys. ``verbosity`` is not applied: JSON null / blank is popped;
-    any other value is ``invalid_text``. ``text`` and ``response_format``
+    known low/medium/high levels are default-length no-ops even when
+    ``format`` is absent (SDKs send ``text: {verbosity: ...}`` alone);
+    any other verbosity is ``invalid_text``. ``text`` and ``response_format``
     cannot both be set — accepting the official default must not open a
     dual-plane passthrough. Flat ``json_schema`` ``name`` matches
     ``[a-zA-Z0-9_-]{1,64}`` (ASCII only).
@@ -2146,6 +2168,10 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
     if "format" not in text:
         if not text:
             return None
+        # Verbosity-only objects are default-length no-ops (no format plane).
+        if _responses_text_verbosity_only_noop(text):
+            _reject_responses_dual_text_plane(response_format_present)
+            return text
         raise RequestError(
             400,
             "invalid_text",
@@ -2160,6 +2186,9 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
         text.pop("format", None)
         if not text:
             return None
+        if _responses_text_verbosity_only_noop(text):
+            _reject_responses_dual_text_plane(response_format_present)
+            return text
         raise RequestError(
             400,
             "invalid_text",
@@ -2167,13 +2196,7 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
         )
     if not isinstance(fmt, dict):
         raise RequestError(400, "invalid_text", "text.format must be an object")
-    if response_format_present:
-        raise RequestError(
-            400,
-            "invalid_text",
-            "text and response_format cannot both be set on /v1/responses; "
-            "use official text.format only",
-        )
+    _reject_responses_dual_text_plane(response_format_present)
     fmt_type = fmt.get("type")
     # Explicit JSON null or blank type alone is treat-as-omit (SDK optional default).
     if fmt_type is None or (isinstance(fmt_type, str) and not fmt_type.strip()):
@@ -2182,6 +2205,9 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
             text.pop("format", None)
             if not text:
                 return None
+            if _responses_text_verbosity_only_noop(text):
+                _reject_responses_dual_text_plane(response_format_present)
+                return text
             raise RequestError(
                 400,
                 "invalid_text",

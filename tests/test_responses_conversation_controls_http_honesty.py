@@ -180,6 +180,7 @@ def test_http_responses_accepts_official_text_format_text() -> None:
 
 
 def test_http_responses_rejects_unsupported_text_shape() -> None:
+    """Unknown text keys still fail closed. Known verbosity-only levels are no-ops."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -187,13 +188,12 @@ def test_http_responses_rejects_unsupported_text_shape() -> None:
             {
                 "model": "mock-planner",
                 "input": "hello text control bad",
-                "text": {"verbosity": "high"},
+                "text": {"unknown_plane": True},
             },
         )
         assert status == 400, body
         blob = json.dumps(body)
-        assert "invalid_text" in blob or "unknown" not in blob
-        assert status == 400
+        assert "invalid_text" in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
