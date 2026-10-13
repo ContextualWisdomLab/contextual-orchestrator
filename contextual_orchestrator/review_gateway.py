@@ -324,19 +324,30 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     configure_logging(args.log_level, redactor=redact_text)
+    bootstrap_environment = {
+        name: os.environ.pop(name)
+        for name in (*REVIEW_CREDENTIAL_NAMES, REVIEW_AUTH_CREDENTIAL_NAME)
+        if name in os.environ
+    }
     try:
-        register_review_credentials(
-            os.environ,
+        try:
+            register_review_credentials(
+                bootstrap_environment,
+                credential_names=args.credential_names,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        auth_token = args.auth_token or get_credential(args.auth_token_key)
+        if not auth_token:
+            raise SystemExit(
+                f"KV credential {args.auth_token_key!r} or --auth-token is required"
+            )
+        orchestrator = build_review_orchestrator(
+            bootstrap_environment,
             credential_names=args.credential_names,
         )
-    except ValueError as exc:
-        parser.error(str(exc))
-    auth_token = args.auth_token or get_credential(args.auth_token_key)
-    if not auth_token:
-        raise SystemExit(f"KV credential {args.auth_token_key!r} or --auth-token is required")
-    orchestrator = build_review_orchestrator(
-        credential_names=args.credential_names,
-    )
+    finally:
+        bootstrap_environment.clear()
     serve(
         orchestrator,
         host=args.host,
