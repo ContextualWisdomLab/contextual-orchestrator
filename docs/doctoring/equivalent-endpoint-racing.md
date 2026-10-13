@@ -25,6 +25,6 @@ name similarity, hand-authored score, or inferred equivalence.
 Dean, J., & Barroso, L. A. (2013). The tail at scale. *Communications of the ACM,
 56*(2), 74–80. https://doi.org/10.1145/2408776.2408794
 
-Gardner, K., Harchol-Balter, M., Scheller-Wolf, A., & Van Houdt, B. (2017).
-Redundancy-d: The power of d choices for redundancy. *Operations Research,
-65*(4), 1078–1094. https://doi.org/10.1287/opre.2016.1582
+Gardner, K., Harchol-Balter, M., Scheller-Wolf, A., Velednitsky, M., &
+Zbarsky, S. (2017). Redundancy-d: The power of d choices for redundancy.
+*Operations Research, 65*(4), 1078–1094. https://doi.org/10.1287/opre.2016.1582

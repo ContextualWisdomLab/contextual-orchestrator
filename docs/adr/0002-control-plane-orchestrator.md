@@ -97,7 +97,7 @@ Sakana AI. (2026a, June 22). *Sakana Fugu: One model to command them all*.
 https://sakana.ai/fugu-release/
 
 Sakana AI. (2026b). *Fugu technical report* [Technical report].
-https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+https://github.com/SakanaAI/fugu/blob/1397abb416e4b774003a09b689ea120e0da02262/Fugu_technical_report.pdf
 
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
 *Trinity: An evolved LLM coordinator* [Preprint]. arXiv.
