@@ -603,6 +603,16 @@ SECRET_PATTERNS = (
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
+
+
+def _hosted_dependabot_version_updates_disabled(repository_root: Path) -> bool:
+    """Return true only when neither supported Dependabot config path exists."""
+    return not any(
+        os.path.lexists(repository_root / configuration_path)
+        for configuration_path in (".github/dependabot.yml", ".github/dependabot.yaml")
+    )
+
+
 MAX_MODEL_JUDGE_REPLY_CHARACTERS = 32_000
 CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 = "contextual-orchestrator-contract-v1"
 
@@ -15464,12 +15474,13 @@ class TaskOrchestrator:
                     "pyproject.toml",
                     "requirements.lock",
                     ".github/workflows/security.yml",
-                    ".github/dependabot.yml",
+                    "tests/test_repository_security_metadata.py",
                     "ContextualWisdomLab/.github central required security workflows",
                 ],
                 "repository_artifact",
                 "ready"
-                if all(
+                if _hosted_dependabot_version_updates_disabled(root)
+                and all(
                     has_file(path)
                     for path in (
                         "LICENSE",
@@ -15477,11 +15488,11 @@ class TaskOrchestrator:
                         "pyproject.toml",
                         "requirements.lock",
                         ".github/workflows/security.yml",
-                        ".github/dependabot.yml",
+                        "tests/test_repository_security_metadata.py",
                     )
                 )
                 else "blocked",
-                "License, security policy, package metadata, locked requirements, local supply-chain workflow, Dependabot metadata, and central required security workflows are present.",
+                "License, security policy, package metadata, locked requirements, local supply-chain workflow, hosted version-update absence contract, and central required security workflows are present.",
                 "Restore missing security or package metadata before release-candidate handoff.",
             ),
             self._buyer_evidence_item(
@@ -15800,22 +15811,23 @@ class TaskOrchestrator:
                     "SECURITY.md",
                     "requirements.lock",
                     ".github/workflows/security.yml",
-                    ".github/dependabot.yml",
+                    "tests/test_repository_security_metadata.py",
                     "ContextualWisdomLab/.github central required security workflows",
                 ],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
-                if all(
+                if _hosted_dependabot_version_updates_disabled(root)
+                and all(
                     has_file(path)
                     for path in (
                         "SECURITY.md",
                         "requirements.lock",
                         ".github/workflows/security.yml",
-                        ".github/dependabot.yml",
+                        "tests/test_repository_security_metadata.py",
                     )
                 )
                 else "blocked",
-                "evidence": "Security policy, locked dependencies, local supply-chain workflow, Dependabot metadata, and central required security workflows are present.",
+                "evidence": "Security policy, locked dependencies, local supply-chain workflow, hosted version-update absence contract, and central required security workflows are present.",
                 "required_input": "Restore missing security metadata before procurement review.",
             },
             {
@@ -16632,21 +16644,22 @@ class TaskOrchestrator:
                 "label": "Security workflow metadata",
                 "owner": "Security owner",
                 "sources": [
-                    ".github/dependabot.yml",
+                    "tests/test_repository_security_metadata.py",
                     ".github/workflows/security.yml",
                     "ContextualWisdomLab/.github central required security workflows",
                 ],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
-                if all(
+                if _hosted_dependabot_version_updates_disabled(root)
+                and all(
                     has_file(path)
                     for path in (
-                        ".github/dependabot.yml",
+                        "tests/test_repository_security_metadata.py",
                         ".github/workflows/security.yml",
                     )
                 )
                 else "blocked",
-                "evidence": "Dependabot plus local CodeQL and pip-audit/SBOM workflows are defined; dependency review, Trivy, OSV, and Scorecard are delegated to central required workflows.",
+                "evidence": "Hosted Dependabot version updates are disabled by repository contract; local CodeQL and pip-audit/SBOM workflows are defined, while dependency review, Trivy, OSV, and Scorecard are delegated to central required workflows.",
                 "action": "Attach workflow definitions and latest passing run evidence when the buyer review requests hosted CI proof.",
                 "exit_criteria": "Buyer can inspect the configured security workflow controls and their latest run status separately.",
             },
