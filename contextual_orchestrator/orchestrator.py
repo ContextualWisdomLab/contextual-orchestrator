@@ -7344,6 +7344,7 @@ class TaskOrchestrator:
                                     + len(structured_attempt_steps),
                                     "role": "synthesizer",
                                     "agent_id": candidate.id,
+                                    "served_model": candidate.model,
                                     "subtask": "Provider-facing structured synthesis",
                                     "access": [
                                         step["id"] for step in workflow["trace"]
@@ -7672,6 +7673,7 @@ class TaskOrchestrator:
                 "id": len(workflow["trace"]) + len(structured_attempt_steps),
                 "role": "synthesizer",
                 "agent_id": final_agent.id,
+                "served_model": final_agent.model,
                 "subtask": "Provider-facing structured synthesis",
                 "access": [step["id"] for step in workflow["trace"]],
                 "latency_ms": round(
@@ -7739,6 +7741,7 @@ class TaskOrchestrator:
                         "id": len(workflow["trace"]) + len(structured_attempt_steps),
                         "role": "repair",
                         "agent_id": final_agent.id,
+                        "served_model": final_agent.model,
                         "subtask": "Strict structured-output repair",
                         "access": [synthesis_step["id"]],
                         "latency_ms": round(
@@ -7781,6 +7784,7 @@ class TaskOrchestrator:
                     "id": len(workflow["trace"]) + len(structured_attempt_steps),
                     "role": "repair",
                     "agent_id": final_agent.id,
+                    "served_model": final_agent.model,
                     "subtask": "Strict structured-output repair",
                     "access": [synthesis_step["id"]],
                     "latency_ms": round(
@@ -7809,6 +7813,7 @@ class TaskOrchestrator:
                 "id": len(workflow["trace"]) + len(structured_attempt_steps),
                 "role": "repair",
                 "agent_id": final_agent.id,
+                "served_model": final_agent.model,
                 "subtask": "Strict structured-output repair",
                 "access": [synthesis_step["id"]],
                 "latency_ms": round(
@@ -9736,6 +9741,7 @@ class TaskOrchestrator:
                 "access": [],
                 "latency_ms": round(latency_seconds * 1000, 2),
                 "output": attempt_answer,
+                "served_model": attempt_served_model,
             }
             if attempt_usage is not None:
                 row["usage"] = attempt_usage
