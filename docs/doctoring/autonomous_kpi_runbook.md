@@ -1,5 +1,30 @@
 # Autonomous KPI experiment runbook
 
+## Paired observed quality measurement, 2026-09-28
+
+For a locked cohort evaluated under both baseline and candidate policies,
+predeclare the complete accepted task IDs. Record delivery and an independently
+adjudicated Boolean correctness result for each delivered answer. A failed
+delivery carries no invented judgment and counts as incorrect in the
+delivered-correct fraction. The judgment reference must resolve to a separate
+human evaluation record; the numerical function cannot authenticate that
+record or prove blinding and representative sampling. Keep privacy and task
+strata, sampling plan, adjudicator protocol, disagreements, and exclusions in
+the study record before observing results.
+
+`contextual_orchestrator.observed_quality.paired_delivered_correct_interval`
+rejects missing or duplicate task pairs and unjudged delivered answers. It
+reports candidate minus baseline with Newcombe's paired score method 10,
+including the four paired outcome counts and delivery-failure denominators.
+The formula follows [Newcombe (1998)](https://doi.org/10.1002/%28SICI%291097-0258%2819981130%2917%3A22%3C2635%3A%3AAID-SIM954%3E3.0.CO%3B2-C)
+and the [NCSS PASS manual, chapter 102](https://www.ncss.com/wp-content/themes/ncss/pdf/Procedures/PASS/Confidence_Intervals_for_the_Difference_Between_Two_Correlated_Proportions.pdf).
+The manual's 50-pair example (20 both correct, 12 candidate-only, 2
+baseline-only, 16 neither) gives a 95% interval of 0.0562 to 0.3292; the
+focused regression reproduces it. A positive local fixture is method
+verification only. The product gate remains the predeclared at-least-one-point
+observed gain with its interval wholly above zero; no hosted population,
+independent labels, or customer baseline has yet been supplied.
+
 ## Title-only citation reconciliation, 2026-09-12
 
 At parent `14a6a943e99bd1dcf8b65a2780b0c80dbc70edcb`, the Fox and Glas
