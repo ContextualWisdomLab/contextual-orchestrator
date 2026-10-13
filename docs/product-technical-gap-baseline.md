@@ -7491,3 +7491,432 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-30 PR #1348 SearXNG secret and advisory transport repair
+
+### 2026-10-09 exact-revision vulnerability evidence contract — Proposed
+
+PR #1348 exact head `40d5da20ffdff89315da45852626ec1d6036ea98`
+kept the hosted vulnerability-scan item at `warning`, but its exit criterion
+allowed workflow definitions to substitute for a scan result. A workflow file
+cannot prove which repository revision ran, which job produced the evidence,
+or which immutable artifact the buyer received. The fail-closed buyer contract
+now states the missing canonical contract explicitly: a released Noema typed
+receipt must bind every required scan result to repository, revision, workflow
+run and attempt, job, artifact identity and digest algorithm/value, tool
+identity/version, conclusion, and generation time, while a versioned scan
+profile and immutable required-scan manifest digest define the complete set.
+Definitions alone never upgrade the warning. A buyer waiver is a separate
+legal decision and never
+changes the technical evidence state. This PR removes the false exit and keeps
+the item `warning`; it does not claim receipt intake or validation. Focused
+tests pass locally. The Noema owner RED→contract→CI GREEN→immutable release,
+CO receipt validator and consumer bump, exact-head hosted Checks, independent
+approval, ordinary merge, and consumer adoption remain required.
+
+### 2026-10-06 incomplete installed-version evidence repair — Proposed
+
+Independent review of head `fff79e1a` found two paths that returned `rejected`
+with `versions_checked=true` from incomplete version evidence. The lockfile
+parsers skipped linked, unresolved, mirror-registry npm rows and git or
+private-registry Cargo rows. When the claimed package also had a
+public-registry copy, only that subset was evaluated, so an affected
+non-registry copy could be hidden behind an unaffected one. Separately, a CVE
+single-version entry was compared by string equality, so `1.0.0+meta` did not
+match an affected `1.0.0` despite equal SemVer precedence.
+
+The parsers now report, separately from registry versions, every package
+named by a lock row that was not evaluated: the dependency path name, an npm
+alias's declared `name`, and declared names on linked workspace target rows.
+The lock root project row is excluded. An unaffected registry subset of such a
+package yields `unverified`, never `rejected`; an affected registry copy still
+yields `supported` with `versions_checked=false` and a reason noting the
+unevaluated copies. Unrelated non-registry rows do not affect other packages.
+The version parser itself rejects a nameless non-registry Cargo row, although
+the public path already fails earlier during identity parsing. Single-version
+entries use SemVer precedence for matching and overlap detection, so build
+metadata is ignored in both the supporting and rejecting directions. Supported
+input remains root npm v2/v3 and Cargo locks; other lock formats and
+subdirectory projects are not evaluated. The alias, link and supported-
+retention regressions exercise both read-through and frozen MCP capture
+evidence; the earlier completeness regressions use read-through only. On the
+predecessor tree the REDs were mixed: assertion failures reproduced
+`rejected` (and, after the first repair, the lost `supported` verdict), while
+the input-hardening REDs below failed with `RecursionError` or a forbidden
+fetch. Registry-only and unrelated-row controls kept the rejection path; the
+separate root-row control names the root project like the claim, so it
+discriminates root exclusion. The MCP instructions, tool description, ADR and KV
+guide now disclose `versions_checked=false` with `finding_allowed=true` and
+that a partial unaffected set is never rejected; documentation guards fail
+without that disclosure.
+
+The same candidate hardens two inputs. Manifest and record parsing now treat
+`RecursionError` from deeply nested JSON or TOML as unavailable evidence, so
+capture records an error instead of stopping MCP startup. CVE and GHSA
+identifier patterns use `re.ASCII`, so fullwidth or Arabic-Indic digits and
+the long-s `ſ` are rejected before any fetch; one existing schema test now uses
+an ASCII claim identifier for that reason. The `RecursionError` handler in the
+version phase is reached only if a lock changes between reads.
+
+Issue #1347 acceptance tests pin the unmodified MITRE CVE-2024-1234 record
+(SHA-256 `1b338b63b95b269a83580872eb1e57ec8bc27b2b4f0b01fbcf20c37a2b03c6de`,
+retrieved 2026-10-06). It describes a WordPress plugin with no structured
+package identity and has ADP containers, so a lodash claim is withheld as
+`unverified`, not `rejected`; the original Python/Rust repository returns
+`unverified` without fetching. Loopback tests show a refused or stalled
+SearXNG raises instead of returning results, through the MCP payload too, and
+does not change a claim verdict. These are characterization tests, not repair
+REDs. The focused offline impact suite (328 tests, `-W error`, loopback-only)
+passed. Hosted exact-head checks, approval and merge remain open.
+
+### 2026-10-02 no-heuristics advisory authority repair — Proposed
+
+Independent review found that the verdict path required SearXNG to return an
+exact official URL before fetching the already deterministic official record.
+Search ranking, index freshness, or availability could therefore suppress a
+structured package-identity decision. Source repair commit
+`f45869fd46bcb8687ca892c8bf9bfea38346571d` (tree
+`5c61fec7a160b9face6d9eea849ea26ddb1e4213`) removes search from the verdict
+path, deletes its obsolete URL-ranking helper, and directly fetches the
+identifier-derived MITRE CVE or GitHub Advisory endpoint through the existing
+DNS-pinned, no-redirect transport. Missing or insufficient official evidence
+still returns `unverified`; `finding_allowed` and `versions_checked` remain
+false. SearXNG remains a separate informational MCP tool.
+
+The next bounded source slice now preserves SemVer 2.0.0 exact
+installed-version evidence from registry-backed npm `package-lock.json` v2/v3
+rows and crates.io `Cargo.lock` rows.
+The public receipt exposes unique deterministic versions plus the source
+lockfile only after package identity matches. Manifest constraints and
+linked/local/git/custom-registry rows, unsupported formats, and malformed
+headers, fields, rows, or version strings reject version evidence without a
+partial receipt. This closes version provenance,
+not affected-range evaluation on that source tree: the claim remained
+`unverified` with `versions_checked=false` and `finding_allowed=false`.
+Broader ecosystem range coverage, central Strix/Noema wiring, exact input
+reproduction, immutable release, and consumer adoption remained open.
+
+The following bounded slice implements the official CVE 5.x
+`versions`/`defaultStatus` algorithm for exact, non-overlapping SemVer 2.0.0
+ranges. It authorizes a finding only when an exact npm/crates.io lock version
+has status `affected`; a fully checked `unaffected` set is rejected. The public
+receipt exposes the affected installed versions. Wildcard bounds, `changes`,
+non-SemVer entries/types, overlapping ranges, `unknown`, platform/component scopes,
+unrecognized product/version-entry fields, conflicting product rows, GHSA range
+syntax, and absent lock evidence remain `unverified`. This is a deliberately
+executable standards-backed subset, not an approximation or a claim that all
+advisory range formats are supported. A RED regression demonstrated that an
+unknown field on an otherwise valid range previously authorized a finding;
+the evaluator now enforces the CVE schema's exact range-object field set. A
+second RED regression demonstrated that an unknown product-level scope field
+also previously authorized a finding; the evaluator now enforces the CVE 5.1.1
+product object's `additionalProperties: false` contract before interpreting
+any matching row. A third RED regression demonstrated that a non-SemVer
+single-version entry fell through to `defaultStatus: affected` and authorized
+an unrelated exact installed version; every executable single-version entry
+now passes the same exact SemVer 2.0.0 grammar as lock evidence and range
+bounds. A fourth RED regression demonstrated that an explicitly empty
+`versions` array violated the schema's `minItems: 1` contract yet fell through
+to `defaultStatus: affected`; explicit empty arrays now fail closed while a
+schema-valid default-only product row remains executable.
+A fifth RED regression demonstrated that a row whose npm package name was
+`lodash` but whose Package URL identified `react` still authorized `lodash`.
+Until the repository snapshot carries standards-complete PURL identity
+evidence, any `packageURL` field now fails closed before range evaluation rather
+than being ignored or partially parsed.
+A sixth RED regression demonstrated that a vulnerable version from
+`package-lock.json` still authorized a finding even when npm would ignore that
+file in favor of a present `npm-shrinkwrap.json`. The bounded reader now removes
+the inactive package lock from package evidence and rejects version authority
+until shrinkwrap support is implemented, so lock precedence cannot become an
+undocumented fallback.
+A seventh RED regression demonstrated that an undocumented nested `name` field
+could relabel `node_modules/lodash` and its lodash tarball as `react`, producing
+`supported` and `finding_allowed=true` for a React record. npm documents the
+`packages` keys as package locations and does not define `name` as a nested
+package-descriptor field. Both package-presence and installed-version readers
+now reject that unsupported identity override for the entire lockfile instead
+of guessing alias semantics or parsing identity from a tarball URL.
+An eighth RED regression demonstrated that absent CVE record headers, an
+unrecognized `dataType`, a non-string `dataVersion`, and a future 6.x record
+were all evaluated as if they selected the implemented 5.x algorithm, allowing
+`supported` and `finding_allowed=true`. The evaluator now requires the CVE
+schema's `CVE_RECORD` discriminator and exact 5.x `dataVersion` pattern before
+reading metadata, package identity, or version ranges; unsupported schema
+versions remain `unverified` rather than being interpreted speculatively.
+A ninth RED regression demonstrated that an unknown top-level property could
+coexist with the four understood CVE record fields and still authorize
+`supported` with `finding_allowed=true`. Both Published and Rejected records
+set `additionalProperties: false`; the evaluator now requires the exact root
+field set before interpreting the bounded 5.x payload. Future or malformed
+record extensions remain `unverified` until a reviewed schema contract adds
+their semantics.
+A tenth RED regression demonstrated that a Published record could omit its
+required assigning-organization identity, carry a malformed organization UUID,
+use a schema-invalid lowercase CVE ID, or add an unknown provenance field and
+still authorize `supported` with `finding_allowed=true`. The evaluator now
+requires the official Published metadata's `cveId`, `assignerOrgId`, and
+`state` fields; enforces the schema's UUID v4 and exact uppercase ASCII CVE ID
+grammars; and rejects metadata fields outside the pinned schema before package
+or version interpretation. Optional metadata fields that do not affect this
+bounded decision remain outside this slice's validation scope.
+An eleventh RED regression demonstrated that the Published CNA container could
+omit schema-required `providerMetadata`, `descriptions`, or `references` while
+its `affected` range still authorized `supported` with
+`finding_allowed=true`. Package and version interpretation now requires all
+four official CNA fields, including `affected`; missing required evidence fails
+closed as `unverified`. **Gap / Action / status:** required-field presence is
+source-GREEN and remains Proposed pending exact-head hosted acceptance; nested
+CNA value validation, extension semantics, and ADP reconciliation remain open
+and must not be inferred by this bounded evaluator.
+A twelfth RED regression demonstrated that present-but-null or empty CNA
+`providerMetadata`, a malformed `orgId`, and an unrecognized provider identity
+property each still authorized `supported` with `finding_allowed=true`.
+Provider provenance now requires the pinned schema's UUID v4 `orgId` and exact
+provider property set before package or version interpretation. **Gap / Action /
+status:** provider identity is source-GREEN and remains Proposed pending
+exact-head hosted acceptance; optional provider values are completed below,
+while description/reference contents, CNA extensions, and ADP reconciliation
+remain open and fail-closed scope rather than inferred semantics.
+A thirteenth RED regression demonstrated that `descriptions` could be null,
+empty, malformed, lack the schema-required English entry, carry an unknown
+field, or contain invalid supporting media while the affected range still
+authorized `supported` with `finding_allowed=true`. Description evidence now
+enforces the pinned schema's language patterns, required and bounded text,
+English-entry requirement, JSON uniqueness, exact property sets, and complete
+supporting-media structure before package or version interpretation. **Gap /
+Action / status:** CNA descriptions are source-GREEN and remain Proposed
+pending exact-head hosted acceptance; reference contents are completed below,
+while optional provider values, CNA extension semantics, and complete CNA/ADP
+reconciliation remain open and must not be inferred.
+A fourteenth RED regression demonstrated that `references` could be null,
+empty, oversized, duplicate, omit or corrupt its URL, use a non-RFC-3986 URI,
+carry unknown fields, invalid names, duplicate or unknown tags, or malformed
+tag extensions while an affected range still authorized `supported` with
+`finding_allowed=true`. Reference evidence now enforces the pinned schema's
+array bounds, unique objects and tags, exact fields, URL/name lengths, RFC 3986
+URI syntax, official tag enumeration, and `x_` extension grammar before package
+or version interpretation. `rfc3986-validator` 0.1.1 is direct, hash-locked,
+and MIT-licensed; this repairs the installed `jsonschema` checker's missing URI
+backend without inventing a URL heuristic. Independent review reproduced a
+partial-match fail-open for a URI ending in a line feed; full-input consumption
+and accepted/rejected schema-boundary regressions now cover 512 references,
+2048-character URLs, 512-character names, and 128-character extension tags.
+**Gap / Action / status:** CNA
+references are source-GREEN and remain Proposed pending exact-head hosted
+acceptance; optional provider values are completed below, while CNA extension
+handling is completed conservatively below and complete CNA/ADP reconciliation
+remains open and must not be inferred.
+A fifteenth RED regression demonstrated that optional provider `shortName`
+values outside the pinned 2–32 character contract and malformed `dateUpdated`
+values—including impossible calendar dates or times and terminal-line-feed
+partial matches—still authorized `supported` with `finding_allowed=true`.
+Provider validation now applies the pinned timestamp regex verbatim with
+full-input matching and validates short-name types and exact bounds before any
+package or version interpretation. Valid leap-day timestamps, absent timezone,
+fractional seconds, offsets, and both short-name boundaries remain accepted.
+**Gap / Action / status:** CNA provider metadata is source-GREEN and remains
+Proposed pending exact-head hosted acceptance; CNA extension handling is
+completed conservatively below, while complete CNA/ADP reconciliation remains
+open and must not be inferred.
+A sixteenth RED regression demonstrated that unrecognized CNA properties,
+schema-valid and schema-invalid `x_` extension names, a schema-valid `disputed`
+tag, and a CPE applicability rule marking the installed CPE non-vulnerable could
+add uninterpreted decision semantics while the understood affected range still
+authorized `supported` with `finding_allowed=true`. The evaluator now admits
+only validated required properties plus a schema-bounded 1–256 character
+`title`. Every other optional named property and every extension fails closed
+until its contract and decision semantics are explicitly implemented; it does
+not inspect names or values to guess neutrality. **Gap / Action / status:** CNA
+property admission is source-GREEN and remains Proposed pending exact-head
+hosted acceptance; validation and interpretation of the other optional named
+CNA properties and complete CNA/ADP reconciliation remain open and must not be
+inferred.
+A seventeenth RED regression demonstrated that a schema-valid ADP marking the
+installed range unaffected, an invalid empty ADP array, and an unrecognized
+publisher container were all silently discarded while the CNA range still
+authorized `supported` with `finding_allowed=true`. The evaluator now requires
+the exact currently interpreted container set `{cna}`. Any ADP-bearing or
+unrecognized container record fails closed until a complete multi-publisher
+validation, conflict, precedence, and provenance contract is implemented.
+**Gap / Action / status:** conservative container admission is source-GREEN and
+remains Proposed pending exact-head hosted acceptance; complete CNA/ADP
+reconciliation remains open and must not be inferred.
+An eighteenth RED regression demonstrated that duplicate, nonmatching
+`unaffected` version entries were silently accepted, allowing
+`defaultStatus: affected` to authorize the installed version despite the
+pinned product schema's `uniqueItems` contract. The evaluator now applies JSON
+Schema item equality to the complete `versions` array before matching any
+installed version. **Gap / Action / status:** version-entry uniqueness is
+source-GREEN and remains Proposed pending exact-head hosted acceptance;
+wildcard/status-change semantics and complete CNA/ADP reconciliation remain
+open and fail closed.
+A nineteenth RED regression demonstrated that null, empty, oversized, or
+malformed optional `vendor`, `product`, and `repo` values, an oversized
+`collectionURL` that normalized to an admitted registry, an oversized matching
+`packageName`, and a schema-overlong but syntactically exact SemVer could still
+authorize `supported` with `finding_allowed=true`. The evaluator now validates
+the pinned identity/string bounds before URL normalization and consumes the
+complete RFC 3986 repository URI before version matching; optional metadata
+remains informational and is never inferred as identity or scope.
+**Gap / Action / status:** optional product metadata and executable version
+lengths are source-GREEN and remain Proposed pending exact-head hosted
+acceptance; other optional CNA properties, wildcard/status-change semantics,
+and complete CNA/ADP reconciliation remain open and fail closed.
+A twentieth RED regression demonstrated that schema validation occurred only
+after filtering to the requested package. Null optional metadata, a malformed
+repository URI, duplicate versions, or an unknown property on another product
+row—or a row omitting both `versions` and `defaultStatus`—was silently ignored
+while the target row authorized `supported` with `finding_allowed=true`. The
+evaluator now validates every `affected` row against its bounded executable
+product contract and required status evidence before target-package
+selection. **Gap / Action / status:** whole-array product-row admission is
+source-GREEN and remains Proposed pending exact-head hosted acceptance; the
+same wildcard/status-change and multi-publisher gaps remain fail closed.
+A twenty-first RED regression demonstrated that overlap detection depended on
+the installed snapshot: two product ranges could overlap away from every
+installed version while a separate affected range still authorized
+`supported` with `finding_allowed=true`. A hidden exact-version/range conflict,
+duplicate exact-version rules with different statuses, empty or reversed
+exclusive ranges, and a `0` sentinel range below the minimum SemVer could
+likewise fall through to an `affected` default. The evaluator now parses each
+entry once, requires mathematically ordered non-empty bounds, sorts entries by
+SemVer precedence, and rejects any intersection across the complete product
+version set before evaluating installed versions. **Gap / Action / status:**
+global range consistency is source-GREEN and remains Proposed pending
+exact-head hosted acceptance; wildcard/status-change semantics and complete
+CNA/ADP reconciliation remain open and fail closed.
+A twenty-second RED regression demonstrated that `collectionURL.rstrip("/")`
+collapsed an arbitrary trailing-slash path such as
+`https://registry.npmjs.org////` into the npm registry identity, allowing an
+otherwise executable affected range to return `supported` with
+`finding_allowed=true`. The evaluator now grants ecosystem identity only to
+the four exact collection URIs already listed in its bounded contract; any
+other URI remains unsupported without an evidence-backed equivalence rule.
+**Gap / Action / status:** exact collection identity is source-GREEN and
+remains Proposed pending exact-head hosted acceptance; wildcard/status-change
+semantics and complete CNA/ADP reconciliation remain open and fail closed.
+
+The RED regression reproduced `package_match=None` despite a valid structured
+record when search was unavailable. GREEN verification completed 75 tests with
+one optional MCP SDK test skipped, plus Python compilation and diff checks on
+the first source tree. Follow-up source commit
+`75ba97651f70134179e26f5480b448afef1c8cc9` (tree
+`8717790292a5db857200fde1b43536b5f23bc7fd`) closes that dependency gap:
+`mcp>=2.0,<3.0` is part of the protected `api` extra, MCP 2.2.0 is present in
+both project locks, server construction rejects a missing or non-2.x SDK, and
+the real registration/schema tests no longer skip. Python 3.12
+`uv sync --locked` verification passed 103 related tests with only the Docker
+CLI Compose-runtime test skipped; a clean Python 3.12 hash-locked environment
+passed 25 MCP/lock tests with `PYTHONPATH=.`. Ruff, compileall, lock checking,
+and diff checking pass for the changed surface.
+
+This remains Proposed source evidence only. The local caller boundary was then
+repaired in source commit `9fb145e96eacf862b1de5162b0f5df1cf33cfe36`
+(tree `e12b41633ca903fb9f3fbc190105bf59465852ee`): server construction
+requires the KV-backed `WEB_SEARCH_MCP_TOKEN`, exact constant-time equality
+grants only the `web-search` scope through the official SDK verifier, and
+missing or mismatched HTTP bearers return 401 before tool execution. The
+related Python 3.12 suite is now 106 passed with only the Docker CLI test
+skipped; the clean hash-lock path passes 28 MCP/lock tests. This local opaque
+bearer does not replace the Keyverse/OIDC verifier required for public or
+multi-tenant service.
+
+Exact-head Security Scan run `36934941160`, job `110612956893`, then supplied
+the hosted RED evidence for the predecessor head: Trivy found HIGH
+CVE-2026-97687, MEDIUM CVE-2026-97688, and HIGH CVE-2026-97689 in locked
+`urllib3==2.7.0`. The repair carries the already validated #1352 dependency
+delta instead of introducing a second policy: both security-tool inputs retain
+the reviewed `urllib3>=2.8.0` floor, the CI input also retains the exact
+`typing-extensions==4.16.0` requirement needed by hash-only installation, and
+`uv.lock`, `requirements.lock`, `requirements-security-ci.txt`, and
+`requirements-security-tools.txt` resolve `urllib3==2.8.0`. A metadata
+regression binds all install paths to that release. Clean Python 3.12
+`--require-hashes` installs succeeded for all three environments; all three
+locks returned no known vulnerabilities from `pip-audit`, and the complete
+SearXNG/advisory/MCP/security-metadata impact suite passed 84 tests. A new
+exact-head hosted Security Scan remains required; predecessor failure evidence
+is not converted into GREEN by the local repair.
+
+Installed-version applicability, protected exact-head Checks, independent
+approval, ordinary merge, immutable release, and consumer adoption remain
+open. A repository-wide local run is not claimed: it was
+stopped when the configured environment reached an external OpenRouter request;
+no credential-bearing external test traffic was authorized. Protected CI must
+provide the clean-room full-suite evidence on this exact head.
+
+PR #1348 exact head `5fa67db3bbeabae9cc7ad121a97f9f10d33875e5`
+remained Proposed after review found two runtime defects. The SearXNG overlay
+placed both `SEARXNG_SECRET` and `WARDNET_EGRESS_PROXY_TOKEN` in the container
+environment, contrary to the repository KV boundary, and GitHub Advisory fetches
+omitted the required identified `User-Agent`, so every GHSA check could degrade
+to `unverified` without evaluating the record.
+
+The repair resolves both SearXNG values from the credential registry in a
+fail-closed renderer, atomically writes the settings below a mode-`0700` host
+directory, and mounts that file read-only through Compose. The SearXNG runtime
+environment now carries only the non-secret settings path. Official-record
+requests carry the repository's identified `User-Agent`. RED contracts observed
+the missing renderer module, both secret names in Compose, and the absent header;
+the corresponding focused contracts are the acceptance boundary. Live SearXNG
+startup, authenticated Wardnet egress, protected exact-head Checks, independent
+approval, ordinary merge, immutable release, and Strix/Noema consumer adoption
+remain unverified; the PR stays Draft until those source-review findings and
+hosted gates are cleared.
+
+PR #1348 next reproduced an input-boundary inference: leading or trailing
+whitespace on either the caller CVE identifier or package name was stripped,
+so four padded identities each reached `supported` and
+`finding_allowed=true` against otherwise valid lock/CVE evidence. The boundary
+now rejects padded identity bytes before repository or network evidence is
+consulted. **Gap / Action / status:** unpadded caller identity is source-GREEN
+and remains Proposed pending exact-head review and hosted acceptance; wildcard and
+status-change semantics, complete CNA/ADP reconciliation, central Strix/Noema
+integration, immutable release, and consumer verification remain open.
+
+PR #1348 next exposed an undocumented ten-second official-record deadline:
+both the `ModelClient` and validated transport call forced `timeout=10`, so an
+otherwise authoritative slow CVE/GHSA response could be converted into an
+`unverified` verdict solely by elapsed time. The path now inherits the shared
+`timeout=None` default without introducing another retry or fallback.
+**Gap / Action / status:** no fixed official-record deadline is source-GREEN
+and remains Proposed pending exact-head review and hosted acceptance; explicit
+external cancellation and provider termination remain transport concerns,
+while wildcard/status-change semantics, complete CNA/ADP reconciliation,
+central Strix/Noema integration, immutable release, and consumer verification
+remain open.
+
+PR #1348 next reproduced two required-evidence partial matches. Python
+`match()` accepted a terminal line feed after both the CNA language tag `en`
+and the reference extension tag `x_project`; each malformed record then
+reached `supported` and `finding_allowed=true`. The existing pinned grammars
+now require full-input matches. **Gap / Action / status:** complete CNA
+language/reference-tag grammar consumption is source-GREEN and remains
+Proposed pending exact-head review and hosted acceptance; wildcard and
+status-change semantics, complete CNA/ADP reconciliation, central Strix/Noema
+integration, immutable release, and consumer verification remain open.
+
+PR #1348 next reproduced ambiguous official JSON admission. Python's default
+decoder retained only the last occurrence of a duplicate object member, so a
+nested CVE/GHSA evidence field could carry conflicting values without an
+executable reconciliation rule. RFC 8259 documents unique object names as the
+interoperable form and duplicate-name receiver behavior as unpredictable. The
+official-record boundary now rejects duplicate names at every nesting level
+before semantic evaluation. **Gap / Action / status:** deterministic official
+JSON member identity is source-GREEN and remains Proposed pending exact-head
+review and hosted acceptance; wildcard/status-change semantics, complete
+CNA/ADP reconciliation, central Strix/Noema integration, immutable release,
+and consumer verification remain open.
+
+The same duplicate-member root cause remained reachable through repository
+JSON evidence: a package-lock row containing both `version: 9.0.0` and
+`version: 1.5.0` inherited the final value and authorized an affected finding.
+Official advisory, `package.json`, and `package-lock.json` decoding now share
+the same RFC 8259-bound duplicate-name and non-finite-constant rejection; TOML
+continues to use its native duplicate-key rejection. This also closes the
+ignored-metadata path where `auditScore: NaN` survived beside otherwise valid
+package and version evidence. **Gap / Action / status:** deterministic
+repository JSON evidence is source-GREEN and remains Proposed pending
+exact-head review and hosted acceptance; clean-lock installation, complete
+CNA/ADP reconciliation, central Strix/Noema integration, immutable release,
+and consumer verification remain open.

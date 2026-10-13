@@ -16697,9 +16697,9 @@ class TaskOrchestrator:
                 "evidence_type": "external_attestation_required",
                 "completion_state": "warning",
                 "source_gap_status": "external_attestation_required",
-                "evidence": "Local supply-chain workflow metadata and central security scan workflow metadata exist, but the buyer packet still needs the latest hosted scan result or buyer-accepted equivalent.",
-                "action": "Attach latest CodeQL, pip-audit, Trivy, SBOM, and Scorecard results when CI completes or the buyer requests evidence.",
-                "exit_criteria": "Hosted scan outputs are attached, or the buyer explicitly accepts workflow definitions as sufficient for this stage.",
+                "evidence": "Local workflow metadata exists, but this runtime accepts and validates no immutable exact-revision hosted scan receipt; the buyer evidence gap remains open.",
+                "action": "Integrate a released Noema receipt contract that binds receipt_schema_version, scan_profile_id, required_scan_manifest_digest, and every scan_id result to repository_full_name, source_revision, workflow_run_id, run_attempt, job_id, artifact_name, digest_algorithm, artifact_digest, tool_name, tool_version, conclusion, and generated_at.",
+                "exit_criteria": "The runtime validates a released typed receipt for every required hosted scan and keeps any buyer waiver as a separate legal decision that never changes this evidence state.",
             },
             {
                 "item_name": "third_party_attestation_pen_test",

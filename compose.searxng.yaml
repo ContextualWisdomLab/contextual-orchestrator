@@ -1,0 +1,40 @@
+# Merge with compose.camoufox-wardnet.yaml: SearXNG has no direct Internet route.
+# Wardnet DNS plus authenticated CONNECT is required, not optional DNS-only setup.
+# Pinned image revision 4e2c1ea7f uses uid/gid 977 and Granian; nonroot avoids
+# entrypoint chown and root-only update-ca-certificates on a read-only root.
+services:
+  searxng:
+    image: docker.io/searxng/searxng@sha256:3284e8900e9b3e5df284ae8c48a26851ae2eff6f99b4b0b18ec3da5a4d9095c3
+    user: "977:977"
+    environment:
+      SEARXNG_SETTINGS_PATH: /run/secrets/searxng_settings
+      GRANIAN_HOST: "0.0.0.0"
+      PYTHONDONTWRITEBYTECODE: "1"
+    ports:
+      - "127.0.0.1:${SEARXNG_HOST_PORT:-8088}:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    secrets:
+      - searxng_settings
+    tmpfs:
+      - /var/cache/searxng:uid=977,gid=977,mode=0700
+      - /tmp:uid=977,gid=977,mode=0700
+    dns: [172.30.0.2]
+    depends_on:
+      wardnet:
+        condition: service_healthy
+    networks:
+      camoufox_egress: {}
+    restart: unless-stopped
+
+networks:
+  camoufox_egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+secrets:
+  searxng_settings:
+    file: ${SEARXNG_SETTINGS_FILE:-./.secrets/searxng-settings.yml}

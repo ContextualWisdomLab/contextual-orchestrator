@@ -1,4 +1,5 @@
 import re
+import tomllib
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -234,6 +235,43 @@ def test_python_lockfile_uses_hash_pinning():
     assert "fastapi==" in lock_text
     assert "uvicorn==" in lock_text
     assert "sqlalchemy==" in lock_text
+
+
+def test_mcp_sdk_2_is_declared_and_locked_for_protected_api_tests():
+    project = tomllib.loads(read_text("pyproject.toml"))
+    api_dependencies = project["project"]["optional-dependencies"]["api"]
+    project_lock = read_text("requirements.lock")
+    uv_packages = {
+        package["name"]: package["version"]
+        for package in tomllib.loads(read_text("uv.lock"))["package"]
+    }
+
+    assert "mcp>=2.0,<3.0" in api_dependencies
+    locked_version = re.search(r"(?m)^mcp==(\d+)\.", project_lock)
+    assert locked_version is not None and locked_version.group(1) == "2"
+    assert uv_packages["mcp"].split(".", 1)[0] == "2"
+
+
+def test_urllib3_security_release_is_locked_for_every_install_path():
+    """Keep the Trivy-verified urllib3 repair consistent across install paths."""
+    expected_version = "2.8.0"
+    compiled_versions = [
+        re.search(r"(?m)^urllib3==([^ ;\\]+)", read_text(lock_path)).group(1)
+        for lock_path in (
+            "requirements.lock",
+            "requirements-security-ci.txt",
+            "requirements-security-tools.txt",
+        )
+    ]
+    uv_packages = {
+        package["name"]: package["version"]
+        for package in tomllib.loads(read_text("uv.lock"))["package"]
+    }
+
+    assert compiled_versions == [expected_version] * len(compiled_versions)
+    assert uv_packages["urllib3"] == expected_version
+    for input_path in ("requirements-security-ci.in", "requirements-security-tools.in"):
+        assert "urllib3>=2.8.0" in read_text(input_path)
 
 
 def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
