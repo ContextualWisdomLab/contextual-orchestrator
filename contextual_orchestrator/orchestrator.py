@@ -1922,6 +1922,29 @@ def _log_provider_attempt(agent: ModelAgent, attempt: int, retry_limit: int) -> 
         )
 
 
+_STRUCTURED_REJECTION_REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _log_structured_candidate_rejected(agent: ModelAgent, stage: str, reason: str) -> None:
+    """DEBUG-log why a structured-output candidate was rejected, without provider content.
+
+    ``circuit_failure`` alone cannot tell an unusable response from a transport
+    failure; this line carries the bounded validation code (for example
+    ``schema_violation`` or ``invalid_json``) that the trace already stores.
+    """
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        if not _STRUCTURED_REJECTION_REASON_RE.match(reason):
+            reason = "unclassified"
+        _LOGGER.debug(
+            "structured_candidate_rejected agent_id=%s model=%s stage=%s reason=%s request_id=%s",
+            agent.id,
+            agent.model,
+            stage,
+            reason,
+            current_request_id() or "-",
+        )
+
+
 def _log_provider_attempt_failed(
     agent: ModelAgent, attempt: int, exc: Exception, transient: bool
 ) -> None:
@@ -7095,10 +7118,23 @@ class TaskOrchestrator:
                 f"provider {agent.id} returned no structured response content"
             )
 
-        def record_synthesis_failure(candidate: ModelAgent, *, rate_limited: bool = False) -> None:
-            """Record a failed attempt without treating quota rejection as unhealthy."""
+        def record_synthesis_failure(
+            candidate: ModelAgent,
+            *,
+            rate_limited: bool = False,
+            reason: str,
+            stage: str = "synthesis",
+        ) -> None:
+            """Record a failed attempt without treating quota rejection as unhealthy.
+
+            The bounded rejection line is emitted only together with a circuit
+            failure. HTTP 429 stays a quota cooldown and does not emit that line.
+            """
             nonlocal synthesis_failure_recorded
             if not rate_limited:
+                if stage not in {"synthesis", "repair"}:
+                    stage = "synthesis"
+                _log_structured_candidate_rejected(candidate, stage, reason)
                 self._record_failure(candidate.id)
             if candidate.group_name or free_only:
                 self._group_router.observe_failure(candidate.id)
@@ -7361,7 +7397,11 @@ class TaskOrchestrator:
                                         response["usage"], responses=response_request
                                     )
                                 structured_attempt_steps.append(dropped_step)
-                                record_synthesis_failure(candidate)
+                                record_synthesis_failure(
+                                    candidate,
+                                    reason="provider_error",
+                                    stage="repair" if repair_mode else "synthesis",
+                                )
                                 # Check incurred usage before another call. A client
                                 # rejection before return has no reported usage;
                                 # never copy it from an earlier candidate.
@@ -7383,6 +7423,8 @@ class TaskOrchestrator:
                             record_synthesis_failure(
                                 candidate,
                                 rate_limited=rate_signal is not None and rate_signal[0] == 429,
+                                reason="provider_upstream_error",
+                                stage="repair" if repair_mode else "synthesis",
                             )
                             if virtual_model and classified.retryable:
                                 last_retryable_upstream_error = classified
@@ -7656,7 +7698,9 @@ class TaskOrchestrator:
                         and exc.provider_status == 429
                     )
                 ):
-                    record_synthesis_failure(final_agent)
+                    record_synthesis_failure(
+                        final_agent, reason="synthesis_exception"
+                    )
                 if structured_attempt_steps:
                     persist_structured_record(
                         "",
@@ -7770,7 +7814,11 @@ class TaskOrchestrator:
                     not _is_request_too_large_error(exc)
                     and not synthesis_failure_recorded
                 ):
-                    record_synthesis_failure(final_agent)
+                    record_synthesis_failure(
+                        final_agent,
+                        reason="provider_upstream_error",
+                        stage="repair",
+                    )
                 persist_structured_record(
                     "",
                     failure_code=exc.error_code,
@@ -7794,6 +7842,7 @@ class TaskOrchestrator:
                         repaired["usage"], responses=response_request
                     )
                 structured_attempt_steps.append(repair_step)
+                _log_structured_candidate_rejected(final_agent, "repair", "provider_error")
                 self._record_failure(final_agent.id)
                 if final_agent.group_name or free_only:
                     self._group_router.observe_failure(final_agent.id)
@@ -7830,6 +7879,7 @@ class TaskOrchestrator:
                 break
 
             failed_agent = final_agent
+            _log_structured_candidate_rejected(failed_agent, "repair", repair_error)
             self._record_failure(failed_agent.id)
             if failed_agent.group_name or free_only:
                 self._group_router.observe_failure(failed_agent.id)
