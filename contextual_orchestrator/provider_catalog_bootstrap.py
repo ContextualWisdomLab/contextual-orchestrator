@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from contextlib import closing
 from dataclasses import dataclass, replace
 import threading
 from typing import Callable, Mapping, Sequence
@@ -442,7 +443,7 @@ def _restore_provider_credentials_atomically(
     if isinstance(backend, PostgresCredentialBackend):
         with backend._connect() as connection:  # noqa: SLF001 - package transaction
             backend._ensure_schema(connection)  # noqa: SLF001
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 for name in ordered:
                     previous = previous_credentials[name]
                     if previous is None:

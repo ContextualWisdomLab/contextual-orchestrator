@@ -13,6 +13,7 @@ import math
 import re
 import threading
 import uuid
+from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -24,6 +25,7 @@ from .model_discovery import (
     ModelUnitPrice,
     ProviderModelSource,
 )
+from .postgres_connection import PostgresDriverUnavailable, connect_pg8000
 
 if TYPE_CHECKING:
     from .privacy_policy_analysis import PrivacyPolicyAssessment
@@ -692,16 +694,15 @@ class PostgresProviderCatalogStore:
         return "postgres"
 
     def _connect(self):
-        """Open one catalog connection through the injected or psycopg factory."""
+        """Open one catalog connection through the injected or pg8000 factory."""
         if self._connection_factory is not None:
             return self._connection_factory()
         try:
-            import psycopg
-        except ImportError as exc:  # pragma: no cover - packaging boundary
+            return connect_pg8000(self._dsn)
+        except PostgresDriverUnavailable as exc:  # pragma: no cover - packaging boundary
             raise ProviderCatalogError(
                 "provider catalog requires contextual-orchestrator[db]"
             ) from exc
-        return psycopg.connect(self._dsn)  # pragma: no cover - live database
 
     def _ensure_schema(self, connection: object) -> None:
         """Create normalized catalog objects once per store instance."""
@@ -710,7 +711,7 @@ class PostgresProviderCatalogStore:
         with self._schema_lock:
             if self._schema_ready:
                 return
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 cursor.execute(PROVIDER_CATALOG_SCHEMA_SQL)
                 cursor.execute(
                     "ALTER TABLE provider_model "
@@ -794,7 +795,7 @@ class PostgresProviderCatalogStore:
         eligible = set(normalized).intersection(eligible_model_ids)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 account_id = self._upsert_account(cursor, source)
                 cursor.execute(
                     "UPDATE provider_model SET enabled_flag = false "
@@ -935,7 +936,7 @@ class PostgresProviderCatalogStore:
         stable_code = _normalize_error_code(error_code)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 account_id = self._upsert_account(cursor, source)
                 finished_at = _now()
                 cursor.execute(
@@ -977,7 +978,7 @@ class PostgresProviderCatalogStore:
         account_id = provider_account_id(source)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 cursor.execute(
                     "SELECT pm.model_name, pa.chat_base_url, pa.auth_scheme, "
                     "pm.max_output_tokens, pm.context_window, "
@@ -1056,7 +1057,7 @@ class PostgresProviderCatalogStore:
         normalized = _normalize_privacy_assessments(source, assessments)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 account_id = provider_account_id(source)
                 cursor.execute(
                     "SELECT model_name FROM provider_model WHERE provider_account_id = %s",
@@ -1106,7 +1107,7 @@ class PostgresProviderCatalogStore:
         account_id = provider_account_id(source)
         with self._connect() as connection:
             self._ensure_schema(connection)
-            with connection.cursor() as cursor:
+            with closing(connection.cursor()) as cursor:
                 cursor.execute(
                     "SELECT pm.model_name, mpa.policy_source_url, "
                     "mpa.zero_data_retention_available, mpa.supports_no_training, "
