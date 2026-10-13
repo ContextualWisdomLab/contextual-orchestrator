@@ -12,6 +12,9 @@ import pytest
 
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, register_credential, set_backend
 from contextual_orchestrator import experiential_billing_probe as probe
+from contextual_orchestrator.provider_errors import MAX_PROVIDER_ERROR_BODY_BYTES
+
+NATIVE_BUDGET = MAX_PROVIDER_ERROR_BODY_BYTES + 1
 
 
 @pytest.fixture(autouse=True)
@@ -90,9 +93,9 @@ def test_one_call_is_marked_before_send_and_costs_are_separate(tmp_path):
     path = tmp_path / "evidence.json"
     transport = FixtureTransport(path)
     result = _run(path, transport)
-    assert result["response_cost_usd"] == 0.0
-    assert result["generation_total_cost_usd"] == 0.25
-    assert result["ledger_charge_usd"] == 0.5
+    assert result["response_cost_usd"] == "0.0"
+    assert result["generation_total_cost_usd"] == "0.25"
+    assert result["ledger_charge_usd"] == "0.5"
     assert result["cost_comparison"] == "mismatch"
     assert result["outcome"] == "charge_observed"
     assert transport.posts == 1
@@ -141,9 +144,9 @@ def test_generation_cost_requires_returned_request_identity(tmp_path, receipt_id
         return status, headers, body
     result = _run(transport.path, request)
     matched = receipt_id in {"req-1", "gen-req-1"}
-    assert result["generation_total_cost_usd"] == (0.25 if matched else None)
+    assert result["generation_total_cost_usd"] == ("0.25" if matched else None)
     assert result["cost_comparison"] == ("mismatch" if matched else "unknown")
-    assert result["ledger_charge_usd"] == 0.5
+    assert result["ledger_charge_usd"] == "0.5"
     assert transport.posts == 1
 
 
@@ -242,7 +245,7 @@ def test_usage_cursor_is_followed_before_accepting_charge(tmp_path):
                 body = {"data": [], "next_cursor": None}
         return status, headers, body
     result = _run(transport.path, request)
-    assert result["ledger_charge_usd"] == 0.5
+    assert result["ledger_charge_usd"] == "0.5"
     assert transport.posts == 1
     assert any("cursor_ts=timestamp" in route and "cursor_id=row-1" in route
                for _, route, _ in transport.calls)
@@ -281,7 +284,7 @@ def test_catalog_pagination_does_not_treat_first_page_as_complete(tmp_path):
                 catalog["models"] = [{"model": {"slug": f"other-{i}"}} for i in range(100)]
             return 200, {}, catalog
         return transport(method, route, payload)
-    assert _run(transport.path, request)["ledger_charge_usd"] == 0.5
+    assert _run(transport.path, request)["ledger_charge_usd"] == "0.5"
     assert transport.posts == 1
 
 
@@ -347,7 +350,7 @@ def test_ambiguous_send_can_read_correlated_charge_without_replay(tmp_path):
     result = _run(transport.path, transport)
     assert result["send_outcome"] == "ambiguous"
     assert result["outcome"] == "charge_observed"
-    assert result["ledger_charge_usd"] == 0.5
+    assert result["ledger_charge_usd"] == "0.5"
     assert result["response_cost_usd"] is None
     assert result["generation_total_cost_usd"] is None
     assert transport.posts == 1
@@ -426,7 +429,7 @@ def test_transport_bounds_and_closes_response(monkeypatch):
             assert name == "x-request-id"
             return "req-1"
         def read(self, size=None):
-            assert size is None
+            assert size == NATIVE_BUDGET + 1
             return b'{"data":[]}'
     response = Response()
     monkeypatch.setattr(probe.ModelClient, "_validate_provider", lambda *_: "pinned")
@@ -436,7 +439,7 @@ def test_transport_bounds_and_closes_response(monkeypatch):
         assert request.full_url == "https://api.experientiallabs.ai/v1/models"
         return response
     monkeypatch.setattr(probe.ModelClient, "_open_provider", open_response)
-    assert probe._request("GET", "/v1/models")[0] == 200
+    assert probe._request("GET", "/v1/models", response_max_bytes=NATIVE_BUDGET)[0] == 200
     assert response.closed
 
 
@@ -456,9 +459,9 @@ def test_transport_closes_http_error_without_swallowing_baseexception(monkeypatc
     try:
         if cleanup_error is KeyboardInterrupt:
             with pytest.raises(KeyboardInterrupt):
-                probe._request("GET", "/v1/models")
+                probe._request("GET", "/v1/models", response_max_bytes=NATIVE_BUDGET)
         else:
-            assert probe._request("GET", "/v1/models") == (503, {"x-request-id": None}, {})
+            assert probe._request("GET", "/v1/models", response_max_bytes=NATIVE_BUDGET) == (503, {"x-request-id": None}, {})
         assert body.closed
     finally:
         close()
@@ -492,6 +495,7 @@ def test_workflow_bootstrap_normalizes_secret_and_runtime_uses_kv(tmp_path, monk
     script = textwrap.dedent(billing.split("python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0])
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("EXPERIENTAL_LABS_API_KEY", "fixture-secret\r\n")
+    monkeypatch.setenv("RESPONSE_MAX_BYTES", "64")
     for name, value in {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"}.items():
         monkeypatch.setenv(name, value)
     transport = FixtureTransport(tmp_path / "experiential-billing-evidence.json")

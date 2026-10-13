@@ -8,19 +8,23 @@ on:
         type: boolean
         required: false
         default: false
+      experiential_response_max_bytes:
+        description: "Operator per-response byte admission budget (required when measuring; not a billing threshold)"
+        type: string
+        required: false
+        default: ""
   schedule:
     - cron: "17 * * * *"
 
 permissions:
   contents: read
 
-concurrency:
-  group: provider-catalog-sync
-  cancel-in-progress: false
-
 jobs:
   experiential_billing:
     name: Measure one Experiential promotion charge
+    concurrency:
+      group: experiential-billing
+      cancel-in-progress: false
     if: >-
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
       inputs.measure_experiential_billing && github.run_attempt == 1
@@ -44,6 +48,7 @@ jobs:
         shell: bash
         env:
           EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTAL_LABS_API_KEY }}
+          RESPONSE_MAX_BYTES: ${{ inputs.experiential_response_max_bytes }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -59,7 +64,8 @@ jobs:
               register_credential(CREDENTIAL_NAME, os.environ.pop(CREDENTIAL_NAME, '').rstrip('\r\n'))
               run_probe(Path('experiential-billing-evidence.json'),
                         source_sha=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'],
-                        run_attempt=os.environ['GITHUB_RUN_ATTEMPT'])
+                        run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                        response_max_bytes=int(os.environ.pop('RESPONSE_MAX_BYTES')))
           except Exception:
               raise SystemExit('Billing probe did not complete; inspect bounded evidence if present.') from None
           finally:
@@ -78,6 +84,9 @@ jobs:
 
   sync:
     name: Refresh provider catalog with PostgreSQL
+    concurrency:
+      group: provider-catalog-sync
+      cancel-in-progress: false
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production

@@ -17,6 +17,14 @@ three observations separately:
 - `ledger_charge_usd`: exactly attributed settled export `cost_usd`, documented as
   charged credits only. BYOK estimates and `real_cost_usd` are not substituted.
 
+The completion, generation, and settled-export USD observations are serialized as
+**decimal strings or null** (`schema_version: 2`), never binary JSON floats.
+Provider JSON numeric literals use `Decimal` during parsing; finite, nonnegative
+values retain their exact units in USD, including tiny nonzero amounts. Numeric
+agreement and explicit zero use exact decimal comparison. A float supplied by a
+non-HTTP test adapter can only retain the precision it already carried; the native
+HTTP path does not convert money through float.
+
 Missing, malformed, negative, nonfinite, unpriced, duplicated, uncorrelated, or
 incompletely paginated evidence stays unknown. Explicit zero is accepted only from
 one priced, exactly attributed settled row. A mismatch is reported, not averaged
@@ -26,8 +34,17 @@ production admission.
 ## Safe execution
 
 Merge through the existing protected reviews first. On protected `main`, manually
-dispatch **Provider catalog sync** with `measure_experiential_billing=true`. The
-input defaults to false. The probe job is independent of catalog-sync success,
+dispatch **Provider catalog sync** with `measure_experiential_billing=true` and an
+explicit positive `experiential_response_max_bytes` (bytes per HTTP response).
+There is deliberately no default budget: the operator must select it for the
+runner's available resources, accounting for raw bytes, JSON decoding/object
+allocation overhead and other process state. Missing/invalid admission fails
+before any provider operation. This is a resource-admission control, not a
+provider size guarantee, cost threshold, or evidence of free usage.
+The opt-in input defaults to false. The probe and catalog sync use separate
+job-level concurrency groups (`experiential-billing` and `provider-catalog-sync`),
+with no cancellation or dependency between them. A stalled null-timeout probe
+cannot hold the scheduled catalog lock. The probe still
 requires the production environment, and runs only on the first Actions attempt.
 Scheduled runs and PR code cannot run it. Runtime credentials come from the KV;
 the organization secret `EXPERIENTAL_LABS_API_KEY` is environment transport only
@@ -88,12 +105,62 @@ requires exact consistent coverage, and does not invent a local page or row
 ceiling. Promotions are metadata observations, not guarantees about
 account eligibility, caps, provider waterfall, or a later request's price.
 
+## Response resource admission
+
+`run_probe(..., response_max_bytes=<operator integer>)` binds the same explicit
+budget to each native transport operation; `_request` also refuses a missing
+budget. Before credential lookup, evidence creation or any provider send, native
+admission requires the operator budget to cover the existing ModelClient error
+reader's `MAX_PROVIDER_ERROR_BODY_BYTES + 1` bytes. Smaller budgets are
+**unsupported for this native transport**, not silently increased; the value
+comes from the shared core error-reader constant, not a provider price or size
+heuristic. The common ModelClient reader is unchanged. On HTTP >=400 it can
+acquire at most that envelope, then the probe discards the error body entirely:
+no partial error JSON becomes a cost/charge claim, and no oversize-error-body
+classification is claimed. Injected offline transports own their own acquisition
+and are not evidence of native resource admission. `response_max_bytes` is
+retained in the artifact.
+For successful responses the reader validates every Content-Length declaration,
+including repeated fields and comma-joined members, before acquisition; only
+identical decimal lengths are accepted. It rejects a declared length beyond
+that budget before body acquisition; otherwise it reads at most budget plus one
+sentinel byte and rejects excess or truncated declared bodies. HTTP errors are
+not parsed for billing evidence; their framing is owned by the unchanged core
+reader, not this success-response framing validator. There is no unbounded
+adapter fallback. Oversized successful bodies are not parsed or treated as
+complete catalogs or zero-price receipts. HTTP status is classified before
+consumed HTTPError.close; ordinary cleanup Exception cannot replace it, while
+BaseException remains visible. This does not change propagated error ownership
+or the separate common response lifecycle owner (#1140).
+`response_resource_admission=exceeded` distinguishes unsupported response evidence
+from a billing observation. Discovery failure prevents the POST; post-send
+refusal remains ambiguous and cannot authorize replay. A separately complete,
+exactly correlated settled receipt can still report a charge, but missing receipts
+and cost comparison remain unknown. No raw body or exception text is published.
+
+This bounds individual response acquisition and JSON input size, **not total RSS**,
+provider-generated tokens, cumulative provider-declared catalog pages, cursor
+history, or wall-clock time. The operator must consider JSON object expansion and
+full catalog accumulation; this change does not claim a process-wide memory
+budget. Provider pagination, null timeout, and single observation remain unchanged.
+An admission refusal is never billing truth and must not be recovered by another
+inference dispatch. No fixed response ceiling is inferred from provider docs.
+
+The existing `ModelClient._read_bounded_response` was inspected, but its legacy
+TypeError compatibility path calls unbounded `read()`, and it does not reject a
+short body against the original Content-Length. It is therefore not reused or
+changed in this isolated probe fix. Other catalog/search readers use fixed
+local caps with different contracts. No streaming JSON parser dependency exists
+in this source/lock inventory; no package or invented parser is introduced.
+
 ## Local verification and current acceptance
 
 Use the project's existing isolated Python interpreter:
 
 ```bash
 python -W error -m pytest tests/test_experiential_billing_probe.py \
+  tests/test_experiential_review_fixes.py \
+  tests/test_experiential_response_budget_successor.py \
   tests/test_provider_bootstrap_secret_normalization.py \
   tests/test_release_checks_required_allowlist.py \
   tests/test_repository_security_metadata.py -q
@@ -106,6 +173,16 @@ pre-send persistence, exact callable identity, cost separation, unknown evidence
 pagination, rerun exclusion, bootstrap-to-KV behavior, secret-safe output, and
 owned response/error closure. They do not prove complete production transport
 connection closure; inherited ModelClient lifecycle ownership remains #1140.
+
+The PR #1350 private successor at `8d9b770c` reproduces three reviewer
+failures: shared workflow concurrency, decimal underflow/false agreement, and
+unbounded native HTTP acquisition (GET and POST). Focused RED JUnit and logs
+remain in the private candidate receipt directory. The successor's focused
+strict suite (`test_experiential_billing_probe.py`, reviewer regressions,
+bootstrap normalization, release allowlist, repository metadata) passed
+**175 tests, 0 skipped** with `-W error`; `actionlint` and `git diff --check`
+returned exit 0. These are offline fixtures, not a hosted charge or workflow
+execution. Existing historical counts below refer to previous sources.
 
 On 2026-09-30, the inherited implementation baseline was one failed test (missing
 `run_probe`) and one passed selector test. The first implementation check passed
