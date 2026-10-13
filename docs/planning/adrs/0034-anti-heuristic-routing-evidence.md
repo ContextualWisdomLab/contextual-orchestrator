@@ -358,6 +358,39 @@ carries the verdict so callers can audit every accept/reject decision.
 Disabling the flag keeps the legacy verification shape for deployments
 without a judge-capable member.
 
+A judge failure that carries no evidence about the answer is still a
+rejection (ADR 0001: `accepted` stays `false`), but it is marked
+`judge_status` and is not a quality observation:
+
+- `misconfigured`: no judge can run (fast-mlsirm missing, broken, or not
+  constructible, or no eligible judge agent). Logged at error level.
+- `unavailable`: the judge's own provider call failed for a reason that says
+  nothing about the answer, classified from the exception the gateway's judge
+  adapter observed: anything the canonical provider taxonomy marks retryable,
+  any judge 5xx (including 501, 505, 507, and 520-530), connection, DNS
+  (including NXDOMAIN) and TLS failures (including certificate verification),
+  timeouts and other `OSError`s, `EndpointUnavailableError`, and
+  `BudgetExceededError`. An HTTP status decides on its own: a raw 400 or 413 is
+  never `unavailable`, although `HTTPError` is an `OSError`. Logged at warning
+  level with the reason "model judge call failed transiently".
+
+The `misconfigured` ERROR log is rate-limited to once per distinct reason per
+300 seconds per process; repeats in between are logged at debug level.
+
+For either status, `route_once` records no quality-ledger or psychometric
+observation and stops failing over (the next candidate would meet the same
+judge). It returns the answer of the attempt whose judging could not run,
+still unaccepted, with the marker on its verification and trace row. That is
+the top-ranked candidate unless earlier candidates were already judged and
+rejected, in which case their failures stay recorded and the current
+(lower-ranked) candidate's answer is returned. Streamed and batched answers
+get the same marker and also record no observation. Unjudged results are
+never written to the response cache. Every other judge failure, including
+ones the candidate answer can cause (request too large, missing assistant
+content, exhausted structured output, parse or encoding errors), any other
+4xx, and unknown exceptions, remains an ordinary rejection: one failure is
+recorded and failover continues.
+
 ## Alternatives rejected
 
 - Keeping keyword tables behind a feature flag: preserves silent rot and

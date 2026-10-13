@@ -12,6 +12,7 @@ import copy
 import errno
 import hashlib
 from dataclasses import dataclass, replace
+from dataclasses import field as _dataclass_field
 from decimal import Decimal
 from functools import wraps
 import http.client
@@ -56,6 +57,7 @@ from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_fi
 from .reasoning_effort_profile import EffortProfileError
 from .provider_errors import (
     PROVIDER_OUTCOME_UNKNOWN_CODE,
+    PROVIDER_RATE_LIMITED_CODE,
     MAX_PROVIDER_ERROR_BODY_BYTES,
     ProviderUpstreamError,
     classify_provider_failure,
@@ -616,6 +618,101 @@ class FastMLSIRMJudgeComponents:
     format_error: type[Exception]
 
 
+#: ``judge_status`` values for fail-closed verdicts that carry no evidence about
+#: the judged answer: the verdict still rejects (ADR 0001), but it records no
+#: ledger/IRT observation, stops the route_once cascade, and is never cached.
+JUDGE_STATUS_MISCONFIGURED = "misconfigured"
+JUDGE_STATUS_UNAVAILABLE = "unavailable"
+UNJUDGED_JUDGE_STATUSES = frozenset({JUDGE_STATUS_MISCONFIGURED, JUDGE_STATUS_UNAVAILABLE})
+
+#: Upstream error codes that describe the judge's connection, not the answer:
+#: connection/DNS failures (including non-retryable NXDOMAIN), TLS failures
+#: (including certificate verification), timeouts, and rate limits.
+_TRANSIENT_JUDGE_UPSTREAM_CODES = frozenset(
+    {
+        "rate_limit_exceeded",
+        PROVIDER_RATE_LIMITED_CODE,
+        "service_unavailable",
+        "provider_timeout",
+        "provider_connection_error",
+        "tls_failure",
+        "tls_verification_failed",
+    }
+)
+
+
+def _is_transient_judge_http_status(status: int) -> bool:
+    """Return whether an HTTP status is a server/rate-limit outcome (never 413)."""
+    return status != 413 and (500 <= status <= 599 or status in (408, 425, 429))
+
+
+def _judge_failure_http_status(exc: object) -> int | None:
+    """Return the HTTP status carried by a raw exception, if any.
+
+    ``urllib.error.HTTPError`` exposes it as ``code`` and is an ``OSError``
+    subclass, so it must be read before the generic OSError fallback.
+    """
+    candidates = (
+        (getattr(exc, "code", None), getattr(exc, "status", None))
+        if isinstance(exc, urllib.error.HTTPError)
+        else (getattr(exc, "status", None), getattr(exc, "status_code", None))
+    )
+    return next((value for value in candidates if type(value) is int), None)
+
+
+def _is_transient_judge_failure(exc: BaseException) -> bool:
+    """Return whether one judge provider-call exception says nothing about the answer.
+
+    Counted as judge infrastructure (``unavailable``): anything the canonical
+    provider taxonomy marks retryable, *any* judge 5xx (including 501, 505,
+    507, and Cloudflare 520-530), connection/DNS/TLS failures (including
+    NXDOMAIN and certificate errors, which the taxonomy marks non-retryable),
+    timeouts/OSError, an unavailable endpoint, or an exhausted spend budget.
+    A request the candidate answer made too large (413), missing assistant
+    content, exhausted structured output, any other 4xx, and anything unknown
+    stay ordinary rejections (ledger failure + cascade).
+    """
+    if isinstance(exc, ProviderRequestTooLargeError):
+        return False
+    if isinstance(exc, (BudgetExceededError, EndpointUnavailableError)):
+        return True
+    if isinstance(exc, ProviderUpstreamError):
+        status = exc.provider_status
+        if exc.error_code == "request_too_large" or status == 413:
+            return False
+        if exc.retryable:
+            return True
+        if type(status) is int and 500 <= status <= 599:
+            return True
+        return exc.error_code in _TRANSIENT_JUDGE_UPSTREAM_CODES
+    if isinstance(exc, ProviderResponseError):
+        return False
+    status = _judge_failure_http_status(exc)
+    if status is not None:
+        # Decided by status alone: HTTPError is an OSError, but a 400/413 is not an outage.
+        return _is_transient_judge_http_status(status)
+    return isinstance(exc, (TimeoutError, OSError))
+
+
+#: A misconfigured judge fails every request identically; log ERROR at most
+#: once per distinct reason per interval (per process), DEBUG in between.
+JUDGE_MISCONFIGURED_LOG_INTERVAL_SECONDS = 300.0
+_JUDGE_MISCONFIGURED_LOG_LAST: dict[str, float] = {}
+_JUDGE_MISCONFIGURED_LOG_LOCK = threading.Lock()
+_judge_log_clock = time.monotonic
+
+
+def _judge_misconfigured_log_level(reason: str) -> int:
+    """Return ERROR for the first report of ``reason`` in an interval, DEBUG otherwise."""
+    now = _judge_log_clock()
+    with _JUDGE_MISCONFIGURED_LOG_LOCK:
+        last = _JUDGE_MISCONFIGURED_LOG_LAST.get(reason)
+        if last is not None and now - last < JUDGE_MISCONFIGURED_LOG_INTERVAL_SECONDS:
+            return logging.DEBUG
+        _JUDGE_MISCONFIGURED_LOG_LAST[reason] = now
+        return logging.ERROR
+
+
 def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
     """Resolve the fast-mlsirm adapter symbols without importing unconditionally."""
     try:
@@ -641,6 +738,10 @@ class _FastMLSIJudgeAdapter:
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
     excluded_agent_ids: set[str] | None = None
+    # Exceptions raised by this adapter's own provider calls. fast-mlsirm
+    # re-raises any adapter failure as JudgeFormatError ``from None``, so the
+    # gateway classifies the failure it observed here, not the wrapped error.
+    call_errors: list[BaseException] = _dataclass_field(default_factory=list)
 
     @property
     def contextual_orchestrator_contract(self) -> str:
@@ -656,15 +757,19 @@ class _FastMLSIJudgeAdapter:
         """Return one judge completion through the constrained adapter."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, served_model, usage = self.orchestrator._invoke(
-            self._agent(),
-            messages,
-            text=self.text,
-            role="judge",
-            allowed_agent_ids=self.allowed_agent_ids,
-            eligibility_role="verifier",
-            excluded_agent_ids=self.excluded_agent_ids,
-        )
+        try:
+            output, served_id, served_model, usage = self.orchestrator._invoke(
+                self._agent(),
+                messages,
+                text=self.text,
+                role="judge",
+                allowed_agent_ids=self.allowed_agent_ids,
+                eligibility_role="verifier",
+                excluded_agent_ids=self.excluded_agent_ids,
+            )
+        except Exception as exc:
+            self.call_errors.append(exc)
+            raise
         return self._completion_payload(
             output, served_id, served_model, usage, self.mode if mode is None else mode
         )
@@ -697,9 +802,13 @@ class _FastMLSIJudgeAdapter:
                 agent, request, effort_profile
             )
         request["stream"] = False
-        response = self.orchestrator.client.proxy_send(
-            agent, "chat/completions", request
-        )
+        try:
+            response = self.orchestrator.client.proxy_send(
+                agent, "chat/completions", request
+            )
+        except Exception as exc:
+            self.call_errors.append(exc)
+            raise
         # Captured immediately once the provider call itself returns, before
         # _response_content's own content validation gets a chance to raise
         # on a malformed structured response (Devin review on #961): that
@@ -8102,10 +8211,16 @@ class TaskOrchestrator:
             return result
         route_decision = self._resolved_route_decision(messages, mode, model_name, cheap_decision)
         result = self._dispatch(messages, mode, model_name, route_decision=route_decision)
-        try:
-            cache.put(key, result)
-        except Exception:  # noqa: BLE001 - optional cache must fail open
-            pass
+        verification = result.get("verification")
+        if not (
+            isinstance(verification, Mapping)
+            and verification.get("judge_status") in UNJUDGED_JUDGE_STATUSES
+        ):
+            # An unjudged answer must not be replayed after the judge recovers.
+            try:
+                cache.put(key, result)
+            except Exception:  # noqa: BLE001 - optional cache must fail open
+                pass
         result["cache_status"] = "miss"
         return result
 
@@ -8368,6 +8483,14 @@ class TaskOrchestrator:
             trace_step["usage"] = usage
         if isinstance(output_budget, dict):
             trace_step.update(output_budget)
+        if verification.get("judge_status") in UNJUDGED_JUDGE_STATUSES:
+            # Same marker route_once puts on its trace row; the streamed bytes
+            # are already sent, so there is no cascade to stop here.
+            trace_step["realtime_judge"] = {
+                "accepted": verification["accepted"],
+                "reason": verification["reason"],
+                "judge_status": verification["judge_status"],
+            }
         attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
         trace_step["selection_design"] = self._selection_design_receipt(
             [agent], attempted, agent
@@ -8898,6 +9021,8 @@ class TaskOrchestrator:
             "accepted": verification["accepted"],
             "reason": verification["reason"],
         }
+        if verification.get("judge_status") in UNJUDGED_JUDGE_STATUSES:
+            row["realtime_judge"]["judge_status"] = verification["judge_status"]
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": run_id,
@@ -9772,11 +9897,20 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
+            if verification.get("judge_status") in UNJUDGED_JUDGE_STATUSES:
+                row["realtime_judge"]["judge_status"] = verification["judge_status"]
             row["selection_design"] = self._selection_design_receipt(
                 ranked_pool, attempted, served
             )
             trace_rows.append(row)
             if verification["accepted"]:
+                break
+            if verification.get("judge_status") in UNJUDGED_JUDGE_STATUSES:
+                # The next candidate would meet the same missing judge: return
+                # this attempt's answer (still unaccepted) instead of spending
+                # another provider call. Earlier candidates here were judged and
+                # rejected (failures recorded), so this is not necessarily the
+                # top-ranked candidate.
                 break
             # Rejected answers already recorded a quality-ledger failure in
             # _realtime_route_judge; keep the last (best-available) answer but
@@ -9833,9 +9967,10 @@ class TaskOrchestrator:
         """Judge one direct-route answer now and feed the quality ledger.
 
         Accepted answers record one success observation (with provider token
-        counts when reported); rejected or unjudgeable answers record one
-        failure, so measured accuracy -- not just transport success -- steers
-        subsequent member ordering inside model groups. ``latency_seconds`` is
+        counts when reported); rejected answers record one failure, so measured
+        accuracy -- not just transport success -- steers subsequent member
+        ordering inside model groups. Unjudged verdicts (``judge_status``)
+        are returned fail-closed without any observation. ``latency_seconds`` is
         ``None`` when the caller has no single-attempt wall-clock timing to
         honestly attribute to this one answer (see
         ``ModelGroupRouter.observe_success``); the success/failure signal is
@@ -9875,6 +10010,9 @@ class TaskOrchestrator:
             free_only=free_only,
             required_tags=required_tags,
         )
+        if base.get("judge_status") in UNJUDGED_JUDGE_STATUSES:
+            # No verdict about this answer: stay fail-closed, record nothing.
+            return base
         accepted = bool(base.get("accepted"))
         raw_irt_row = base.get("judge_irt_row")
         irt_row = (
@@ -13188,7 +13326,14 @@ class TaskOrchestrator:
         excluded_agent_ids: set[str] | None = None,
         required_tags: tuple[str, ...] = (),
     ) -> dict[str, Any]:
-        """Ask a model for a strict structured verdict and fail closed on uncertainty."""
+        """Ask a model for a strict structured verdict and fail closed on uncertainty.
+
+        Every failure rejects (ADR 0001). Failures that say nothing about the
+        answer are additionally marked ``judge_status``: ``"misconfigured"``
+        (no judge can run) or ``"unavailable"`` (transient judge-call outage,
+        see ``_is_transient_judge_failure``). All other failures, including
+        ones the answer itself can cause, are unmarked ordinary rejections.
+        """
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
             return {
@@ -13200,19 +13345,17 @@ class TaskOrchestrator:
         try:
             components = _resolve_fast_mlsirm_components()
         except Exception:  # noqa: BLE001 - a broken installed judge must not bypass the required path
-            return {
-                "accepted": False,
-                "reason": "fast-mlsirm judge could not be loaded; verification failed closed",
-                "verifier_output": verifier_output,
-                "judge": "model",
-            }
+            return self._unjudged_verdict(
+                JUDGE_STATUS_MISCONFIGURED,
+                "fast-mlsirm judge could not be loaded; verification failed closed",
+                verifier_output,
+            )
         if components is None:
-            return {
-                "accepted": False,
-                "reason": "fast-mlsirm judge is unavailable; verification failed closed",
-                "verifier_output": verifier_output,
-                "judge": "model",
-            }
+            return self._unjudged_verdict(
+                JUDGE_STATUS_MISCONFIGURED,
+                "fast-mlsirm judge is unavailable; verification failed closed",
+                verifier_output,
+            )
         judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
             eligible_judges = [
@@ -13226,6 +13369,12 @@ class TaskOrchestrator:
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
                 if excluded_agent_ids is None or agent.id not in excluded_agent_ids
             ]
+            if not eligible_judges:
+                return self._unjudged_verdict(
+                    JUDGE_STATUS_MISCONFIGURED,
+                    "no eligible judge agent; verification failed closed",
+                    verifier_output,
+                )
             judge = eligible_judges[0]
             judge_allowed_agent_ids = {agent.id for agent in eligible_judges}
             # The judge is one bounded provider call.  Do not pass the
@@ -13239,11 +13388,19 @@ class TaskOrchestrator:
                 allowed_agent_ids=judge_allowed_agent_ids,
                 excluded_agent_ids=excluded_agent_ids,
             )
-            fast_judge = components.judge_cls(
-                judge_adapter,
-                mode="route",
-                accept_threshold=0.7,
-            )
+            try:
+                fast_judge = components.judge_cls(
+                    judge_adapter,
+                    mode="route",
+                    accept_threshold=0.7,
+                )
+            # Construction sees no answer data: a failure is a version/contract skew.
+            except Exception:  # noqa: BLE001
+                return self._unjudged_verdict(
+                    JUDGE_STATUS_MISCONFIGURED,
+                    "fast-mlsirm judge could not be constructed; verification failed closed",
+                    verifier_output,
+                )
             result = fast_judge.judge(
                 task=task,
                 answer=verifier_output,
@@ -13329,6 +13486,13 @@ class TaskOrchestrator:
                 verification["judge_irt_row"] = list(irt_row)
             return verification
         except components.format_error:
+            if self._judge_call_failed_transiently(judge_adapter):
+                return self._unjudged_verdict(
+                    JUDGE_STATUS_UNAVAILABLE,
+                    "model judge call failed transiently; verification failed closed",
+                    verifier_output,
+                    judge_adapter,
+                )
             return {
                 "accepted": False,
                 "reason": "model judge returned an invalid structured verdict; verification failed closed",
@@ -13337,6 +13501,13 @@ class TaskOrchestrator:
                 **self._judge_adapter_accounting_fields(judge_adapter),
             }
         except Exception:  # noqa: BLE001 - judge failure must not break the request
+            if self._judge_call_failed_transiently(judge_adapter):
+                return self._unjudged_verdict(
+                    JUDGE_STATUS_UNAVAILABLE,
+                    "model judge call failed transiently; verification failed closed",
+                    verifier_output,
+                    judge_adapter,
+                )
             return {
                 "accepted": False,
                 "reason": "model judge unavailable; verification failed closed",
@@ -13344,6 +13515,46 @@ class TaskOrchestrator:
                 "judge": "model",
                 **self._judge_adapter_accounting_fields(judge_adapter),
             }
+
+    @staticmethod
+    def _judge_call_failed_transiently(judge_adapter: _FastMLSIJudgeAdapter | None) -> bool:
+        """Return whether the judge failed only because its provider calls hit outages."""
+        errors = list(judge_adapter.call_errors) if judge_adapter is not None else []
+        return bool(errors) and all(_is_transient_judge_failure(error) for error in errors)
+
+    def _unjudged_verdict(
+        self,
+        status: str,
+        reason: str,
+        verifier_output: str,
+        judge_adapter: _FastMLSIJudgeAdapter | None = None,
+    ) -> dict[str, Any]:
+        """Build a fail-closed verdict that carries no evidence about the answer, and log it."""
+        error_types = sorted(
+            {type(error).__name__ for error in judge_adapter.call_errors}
+        ) if judge_adapter is not None else []
+        if status == JUDGE_STATUS_MISCONFIGURED:
+            _LOGGER.log(
+                _judge_misconfigured_log_level(reason),
+                "Judge misconfigured; answer returned unjudged and fail-closed: %s "
+                "(ERROR at most once per %.0fs per reason)",
+                reason,
+                JUDGE_MISCONFIGURED_LOG_INTERVAL_SECONDS,
+            )
+        else:
+            _LOGGER.warning(
+                "Judge unavailable; answer returned unjudged and fail-closed: %s error_types=%s",
+                reason,
+                ",".join(error_types) or "none",
+            )
+        return {
+            "accepted": False,
+            "reason": reason,
+            "verifier_output": verifier_output,
+            "judge": "model",
+            "judge_status": status,
+            **self._judge_adapter_accounting_fields(judge_adapter),
+        }
 
     @staticmethod
     def _judge_adapter_accounting_fields(
