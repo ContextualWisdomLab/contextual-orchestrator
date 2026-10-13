@@ -305,6 +305,7 @@ jobs:
             echo "::error::Downloaded CycloneDX SBOM is missing or empty at ${sbom_file}; refusing to publish." >&2
             exit 1
           fi
+          python scripts/ci/verify_runtime_sbom.py requirements.lock pyproject.toml "${sbom_file}"
 
       - name: Build the installable package for this exact commit
         run: |

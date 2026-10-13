@@ -456,3 +456,4 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [NIST SP 800-57pt1r5](https://doi.org/10.6028/NIST.SP.800-57pt1r5)
 - [NIST SP 800-63b](https://doi.org/10.6028/NIST.SP.800-63b)
 - [NIST SP 800-92](https://doi.org/10.6028/NIST.SP.800-92)
+- [U.S. Department of Commerce / NTIA (2021), *The Minimum Elements for a Software Bill of Materials*](https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom) — official report grounding the release SBOM's component identity and dependency-relationship checks; linked rather than redistributed pending a documented reuse-license check.

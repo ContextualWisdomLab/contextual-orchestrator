@@ -66,6 +66,11 @@ check those contracts separately before replacing a source pin.
 5. A successful `security.yml` run for that exact commit exposes a non-empty
    `cyclonedx-sbom/cyclonedx-sbom.json` artifact. Lookup, download, upload,
    empty-file or content-verification failure is fatal, not best effort.
+   The SBOM is scanned from an isolated Python 3.12 environment containing
+   only the hash-locked runtime packages. Both workflows verify its project
+   identity, exact package/version set, and rooted dependency graph against
+   `requirements.lock`; CI audit tools are excluded. The wheel digest is
+   recorded separately in `SHA256SUMS` and release asset attestations.
    The read-only release job builds the Python wheel from that same checkout,
    installs it into an isolated directory to verify its declared version and
    package contents, compares two builds at the source commit's fixed timestamp,
@@ -185,6 +190,7 @@ are resumed rather than deleted by this workflow.
 - [GitHub CLI release creation](https://cli.github.com/manual/gh_release_create)
 - [Release attestation verification](https://cli.github.com/manual/gh_release_verify)
 - [Release asset verification](https://cli.github.com/manual/gh_release_verify-asset)
+- [NTIA, *The Minimum Elements for a Software Bill of Materials* (2021)](https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom) — component identity and dependency relationships motivate the runtime-only inventory and graph check.
 
 The executable local regression is
 `python -m pytest -q tests/test_release_immutable_publication.py`. It executes
