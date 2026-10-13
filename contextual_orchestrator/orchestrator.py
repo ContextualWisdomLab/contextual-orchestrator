@@ -78,6 +78,19 @@ from .pii_protection import (
     is_encrypted_detail,
     load_pii_encryptor,
 )
+from .domain.budget import BudgetExceededError, CallPurpose
+from .domain.pricing import AdmissionTokenBounds
+from .spend_guard import (
+    SpendGuard,
+    declare_pre_egress,
+    enforce_admitted_output_cap,
+    mark_provider_egress,
+    guarded_provider_call,
+    guarded_provider_stream,
+    metered_passthrough_call,
+    raise_if_stream_limit_event,
+    with_run_scope,
+)
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -99,6 +112,7 @@ from .reasoning_effort_profile import (
 from .token_counting import (
     TokenCountUnavailable,
     build_token_counter,
+    describe_message_count,
     prompt_token_lower_bound as _prompt_token_lower_bound_evidence,
     shared_context_output_budget,
 )
@@ -323,14 +337,6 @@ def _safe_provider_probe_error_type(exc: Exception) -> str:
     """Keep provider diagnostics package-owned instead of echoing exception classes."""
     name = type(exc).__name__
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
-
-
-class BudgetExceededError(RuntimeError):
-    """Raised when an operator-configured spend budget is already exhausted."""
-
-    def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
-        super().__init__(message)
-        self.detail = detail or {}
 
 
 class ProviderResponseError(RuntimeError):
@@ -1047,6 +1053,24 @@ def _is_general_chat_agent(agent: ModelAgent) -> bool:
             if tag.startswith("output:")
         ),
     )
+
+
+def _batch_results_usage(results: Any) -> dict[str, int] | None:
+    """Total provider usage across Batch API rows, or ``None`` if any row lacks it."""
+    if not isinstance(results, dict) or not results:
+        return None
+    prompt_total = completion_total = 0
+    for row in results.values():
+        usage = row.get("usage") if isinstance(row, dict) else None
+        if not isinstance(usage, dict):
+            return None
+        prompt = usage.get("prompt_tokens")
+        completion = usage.get("completion_tokens")
+        if type(prompt) is not int or type(completion) is not int:
+            return None
+        prompt_total += prompt
+        completion_total += completion
+    return {"prompt_tokens": prompt_total, "completion_tokens": completion_total}
 
 
 def _validate_batch_results(
@@ -2457,6 +2481,10 @@ def _notify_progress(
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
+    #: Spend guard used for an implicit single-call scope when a paid call
+    #: arrives with no active run (ADR 0138); wired by ``TaskOrchestrator``.
+    spend_guard: SpendGuard | None = None
+
     def __init__(
         self,
         timeout: float | None = None,
@@ -2563,6 +2591,10 @@ class ModelClient:
                 raise ValueError("allowed_provider_hosts entries must be bare host names")
             normalized.add(value)
         return frozenset(normalized)
+
+    def peek_usage(self) -> dict[str, Any] | None:
+        """Return provider-reported usage from the most recent call without clearing it."""
+        return getattr(self._local, "usage", None)
 
     def take_usage(self) -> dict[str, Any] | None:
         """Return and clear provider-reported usage from the most recent chat() on this thread."""
@@ -2723,7 +2755,14 @@ class ModelClient:
             return vectors, None
         destination = self._validate_provider(agent)  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
-        response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
+        # ADR 0138: embeddings are paid calls; admit (ceiling per input) and meter.
+        response = metered_passthrough_call(  # pragma: no cover
+            agent,
+            lambda: self._send_raw(agent, "embeddings", payload, destination),
+            channel="embeddings",
+            payload=payload,
+            guard=self.spend_guard,
+        )
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
         if not isinstance(data, list) or len(data) != len(texts):  # pragma: no cover
             raise RuntimeError(  # pragma: no cover
@@ -2755,12 +2794,62 @@ class ModelClient:
         top_p: float | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
     ) -> str:
+        """Send one chat request through the active run's spend guard (ADR 0138)."""
+        return guarded_provider_call(
+            agent,
+            messages,
+            lambda: self._chat_transport(agent, messages, temperature, top_p, effort_profile),
+            usage_reader=self.peek_usage,
+            token_bounds=lambda: self._admission_token_bounds(agent, messages, effort_profile),
+            guard=self.spend_guard,
+        )
+
+    def _admission_token_bounds(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        effort_profile: ReasoningEffortProfile | None = None,
+    ) -> AdmissionTokenBounds:
+        """Exact prompt tokens and the output cap sent upstream, for spend admission.
+
+        The prompt count is used only when provenance-exact (never a lower
+        bound). The output cap is the final ``max_tokens`` the transport sends:
+        an effort profile overwrites it with ``profile.max_output_tokens``
+        (``apply_request_profile``), otherwise the effective cap. Either may be
+        ``None``, in which case admission falls back to the model's
+        ``context_window`` ceiling (ADR 0138). The transport re-checks the sent
+        value with ``enforce_admitted_output_cap``.
+        """
+        output_cap = self.effective_max_output_tokens(agent)
+        if isinstance(effort_profile, ReasoningEffortProfile):
+            output_cap = effort_profile.max_output_tokens
+        tools = self.request_settings_snapshot().get("tools")
+        try:
+            prompt_tokens: int | None = describe_message_count(
+                self.token_counter, messages, agent.model, tools=tools
+            ).token_count
+        except (TokenCountUnavailable, TypeError, ValueError):
+            prompt_tokens = None
+        return AdmissionTokenBounds(
+            prompt_tokens=prompt_tokens,
+            max_output_tokens=output_cap if type(output_cap) is int else None,
+        )
+
+    def _chat_transport(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        top_p: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
         When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
         ``default_top_p`` are used so request-scoped Completions sampling can be
         applied without threading kwargs through every orchestrator hop.
         """
+        declare_pre_egress()  # ADR 0138: failures before egress cost nothing
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
@@ -2852,6 +2941,9 @@ class ModelClient:
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
+        # ADR 0138: never send more output tokens than admission priced.
+        payload = enforce_admitted_output_cap(payload)
+        mark_provider_egress()
         parsed_provider = urlparse(agent.base_url)
         resolved_timeout = self._resolved_model_timeout(agent)
         deadline = _model_deadline(resolved_timeout)
@@ -2958,8 +3050,29 @@ class ModelClient:
                 }
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-                    content = self._send(agent, payload, destination)
+                probe_messages = payload["messages"]
+
+                def send_probe() -> str:
+                    with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                        return self._send(agent, payload, destination)
+
+                def probe_bounds() -> AdmissionTokenBounds:
+                    counted = self._admission_token_bounds(agent, probe_messages)
+                    return AdmissionTokenBounds(
+                        prompt_tokens=counted.prompt_tokens, max_output_tokens=1
+                    )
+
+                # ADR 0138: a readiness probe is a paid call; it is admitted
+                # and metered in the active run or an implicit single-call scope.
+                content = guarded_provider_call(
+                    agent,
+                    probe_messages,
+                    send_probe,
+                    usage_reader=self.peek_usage,
+                    channel="probe",
+                    token_bounds=probe_bounds,
+                    guard=self.spend_guard,
+                )
                 usage = self.take_usage()
             if not content.strip():
                 failure_code = "provider_empty_probe_response"
@@ -3389,12 +3502,33 @@ class ModelClient:
         effort_profile: ReasoningEffortProfile | None = None,
         include_usage: bool = False,
     ):
+        """Stream one chat request through the active run's spend guard (ADR 0138)."""
+        yield from guarded_provider_stream(
+            agent,
+            messages,
+            lambda: self._stream_chat_transport(
+                agent, messages, temperature, effort_profile, include_usage
+            ),
+            usage_reader=self.peek_usage,
+            token_bounds=lambda: self._admission_token_bounds(agent, messages, effort_profile),
+            guard=self.spend_guard,
+        )
+
+    def _stream_chat_transport(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+        include_usage: bool = False,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        declare_pre_egress()  # ADR 0138: failures before egress cost nothing
         if type(include_usage) is not bool:
             raise TypeError("include_usage must be a boolean")
         self._local.usage = None
@@ -3427,6 +3561,8 @@ class ModelClient:
         if include_usage:
             payload["stream_options"] = {"include_usage": True}
         payload = self.apply_effort_profile(agent, payload, effort_profile)
+        # ADR 0138: never send more output tokens than admission priced.
+        payload = enforce_admitted_output_cap(payload)
         parsed_provider = urlparse(agent.base_url)
         resolved_timeout = self._resolved_model_timeout(agent)
         deadline = _model_deadline(resolved_timeout)
@@ -3515,6 +3651,7 @@ class ModelClient:
         stream_choices: list[dict[str, str]] = []
         response_bytes = 0
         try:
+            mark_provider_egress()
             with self._open_model_provider(
                 request,
                 destination,
@@ -3550,6 +3687,7 @@ class ModelClient:
                         continue
                     if not isinstance(chunk, dict):
                         continue
+                    raise_if_stream_limit_event(agent, chunk)
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         self._local.usage = usage
@@ -3647,8 +3785,40 @@ class ModelClient:
         allow_transient_retries: bool,
         operation_kind: str = "request",
     ) -> dict[str, Any]:
+        """Admit and meter one passthrough call in the active run (ADR 0138).
+
+        The admission bound is derived from the request body (exact prompt
+        tokens and its output cap when parsable, else the context-window
+        ceiling); the call is refused before it is sent when no active limit
+        can afford it.
+        """
+        return metered_passthrough_call(
+            agent,
+            lambda: self._proxy_send_transport(
+                agent,
+                endpoint,
+                payload,
+                allow_transient_retries=allow_transient_retries,
+                operation_kind=operation_kind,
+            ),
+            channel="probe" if operation_kind == "capability_probe" else "passthrough",
+            payload=payload,
+            token_counter=self.token_counter,
+            guard=self.spend_guard,
+        )
+
+    def _proxy_send_transport(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        *,
+        allow_transient_retries: bool,
+        operation_kind: str = "request",
+    ) -> dict[str, Any]:
         """Apply the shared passthrough contract with a selectable retry policy."""
         self._local.shared_context_budget = None
+        declare_pre_egress()  # ADR 0138: failures before egress cost nothing
         normalized_endpoint = endpoint.strip("/")
         if normalized_endpoint.startswith("v1/"):
             normalized_endpoint = normalized_endpoint[3:]
@@ -3765,6 +3935,7 @@ class ModelClient:
                     chat_payload.setdefault("max_tokens", local_cap)
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
+                mark_provider_egress()
                 with _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):
                     chat_response = self._send_raw_with_retry(
                         agent,
@@ -3774,6 +3945,7 @@ class ModelClient:
                         allow_transient_retries=allow_transient_retries,
                     )
                 return _chat_to_responses_payload(chat_response, payload)
+            mark_provider_egress()
             with _local_provider_slot(agent, self.local_concurrency, self._resolved_model_timeout(agent)):  # pragma: no cover
                 return self._send_raw_with_retry(
                     agent,
@@ -3786,7 +3958,21 @@ class ModelClient:
     def proxy_send_bytes(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> tuple[bytes, str]:
+        """Admit and meter one binary passthrough call in the active run (ADR 0138)."""
+        return metered_passthrough_call(
+            agent,
+            lambda: self._proxy_send_bytes_transport(agent, endpoint, payload),
+            channel="passthrough_bytes",
+            payload=payload,
+            token_counter=self.token_counter,
+            guard=self.spend_guard,
+        )
+
+    def _proxy_send_bytes_transport(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> tuple[bytes, str]:
         """Passthrough a provider response whose body is binary media."""
+        declare_pre_egress()  # ADR 0138: failures before egress cost nothing
         payload = _pin_openrouter_zdr(agent, payload)
         if agent.base_url.startswith("mock://"):
             return b"mock audio", "audio/mpeg"
@@ -3801,7 +3987,9 @@ class ModelClient:
             method="POST",
         )
         try:
-            with self._open_model_provider(request, self._validate_provider(agent), agent) as response:  # pragma: no cover
+            destination = self._validate_provider(agent)  # pragma: no cover
+            mark_provider_egress()
+            with self._open_model_provider(request, destination, agent) as response:  # pragma: no cover
                 return self._read_bounded_response(
                     response, MAX_PROVIDER_RESPONSE_BYTES
                 ), response.headers.get_content_type()
@@ -4200,9 +4388,21 @@ class ModelClient:
             destination = self._validate_provider(agent)  # pragma: no cover
             batch_error: ProviderUpstreamError | None = None
             try:
-                results = self._batch_run(  # pragma: no cover
-                    agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
+                # ADR 0138: one Batch API submission is admitted as one call
+                # whose bound covers every row, then metered from the rows'
+                # reported usage (unknown when any row omits it).
+                results = metered_passthrough_call(  # pragma: no cover
+                    agent,
+                    lambda: self._batch_run(
+                        agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
+                    ),
+                    channel="batch",
+                    token_bounds=self._batch_admission_bounds(agent, requests, effort_profile),
+                    usage_from_result=_batch_results_usage,
+                    guard=self.spend_guard,
                 )
+            except BudgetExceededError:
+                raise  # a spend refusal is not a provider failure; nothing was sent
             except Exception as exc:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
                 # public gateway boundary; provider bodies and exception text stay
@@ -4214,6 +4414,29 @@ class ModelClient:
             if batch_error is not None:
                 raise batch_error
         return _validate_batch_results(requests, results)
+
+    def _batch_admission_bounds(
+        self,
+        agent: ModelAgent,
+        requests: dict[str, list[ChatMessage]],
+        effort_profile: ReasoningEffortProfile | None,
+    ) -> AdmissionTokenBounds:
+        """Sum per-row admission bounds for one Batch API submission (ADR 0138)."""
+        rows = [
+            self._admission_token_bounds(agent, messages, effort_profile)
+            for messages in requests.values()
+        ]
+        prompts = [row.prompt_tokens for row in rows]
+        outputs = [row.max_output_tokens for row in rows]
+        return AdmissionTokenBounds(
+            prompt_tokens=(
+                sum(prompts) if rows and all(type(v) is int for v in prompts) else None
+            ),
+            max_output_tokens=(
+                sum(outputs) if rows and all(type(v) is int for v in outputs) else None
+            ),
+            calls=max(1, len(rows)),
+        )
 
     def _local_batch_chat(
         self,
@@ -5691,7 +5914,10 @@ class TaskOrchestrator:
         token_counter: Any = None,
         rate_limit_wait_seconds: float = 30.0,
         rate_limit_unknown_cooldown_seconds: float = 5.0,
+        spend_guard: SpendGuard | None = None,
     ) -> None:
+        # Per-run cap, virtual-key/tenant budgets, provider drop, metering (ADR 0138).
+        self.spend_guard = spend_guard if spend_guard is not None else SpendGuard()
         self._assistant_message_local = threading.local()
         self._output_budget_local = threading.local()
         self._context_window_local = threading.local()
@@ -5743,6 +5969,11 @@ class TaskOrchestrator:
         # only the default client is wired to this orchestrator's counter so
         # the shared-context output-budget decision has evidence to work from.
         self.client = client or ModelClient(token_counter=self.token_counter)
+        if getattr(self.client, "spend_guard", None) is None:
+            # Defense in depth (ADR 0138): a paid send that reaches the
+            # client without a run scope still gets this guard's caps and
+            # metering through an implicit single-call scope.
+            self.client.spend_guard = self.spend_guard
         # The cost coordinator installs this optional sink. Direct orchestrator
         # callers still retain audit evidence without inventing price or usage.
         self._race_usage_sink: Callable[[str, Any], None] | None = None
@@ -6147,6 +6378,7 @@ class TaskOrchestrator:
     )
 
     @_request_execution_scoped
+    @with_run_scope
     def proxy_completion(
         self,
         body: dict[str, Any],
@@ -6177,6 +6409,9 @@ class TaskOrchestrator:
         ``role_effort_catalog`` is configured (``_role_effort_profile``
         returns ``None`` and behavior is unchanged).
         """
+        spend_scope = SpendGuard.active_scope()
+        if spend_scope is not None:
+            spend_scope.raise_if_exhausted()
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
@@ -7227,6 +7462,8 @@ class TaskOrchestrator:
                                 orchestration.update(output_budget)
                     return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                    if isinstance(exc, BudgetExceededError):
+                        raise  # spend guard refusals fail closed (ADR 0138)
                     try:
                         if isinstance(exc, ToolFallbackStoppedError):
                             current_route = (
@@ -7647,6 +7884,8 @@ class TaskOrchestrator:
             try:
                 raw, final_agent = send_synthesis(upstream)
             except Exception as exc:
+                if isinstance(exc, BudgetExceededError):
+                    raise  # spend guard refusals fail closed (ADR 0138)
                 if (
                     not _is_request_too_large_error(exc)
                     and not isinstance(exc, EffortProfileError)
@@ -8034,6 +8273,7 @@ class TaskOrchestrator:
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
     @_request_execution_scoped
+    @with_run_scope
     def complete(
         self,
         messages: list[ChatMessage],
@@ -8164,6 +8404,7 @@ class TaskOrchestrator:
         return not self._needs_workflow(text)
 
     @_request_execution_scoped
+    @with_run_scope
     def stream_route(
         self,
         messages: list[ChatMessage],
@@ -8243,6 +8484,8 @@ class TaskOrchestrator:
                     parts.append(delta)
                     yield delta
             except Exception as exc:
+                if isinstance(exc, BudgetExceededError):
+                    raise  # spend guard refusals fail closed (ADR 0138)
                 request_too_large = _is_request_too_large_error(exc)
                 if (agent.group_name or free_only) and not request_too_large:
                     self._group_router.observe_failure(agent.id)
@@ -8447,6 +8690,7 @@ class TaskOrchestrator:
         )
 
     @_request_execution_scoped
+    @with_run_scope
     def run(
         self,
         messages: list[ChatMessage],
@@ -8536,6 +8780,9 @@ class TaskOrchestrator:
         additional_cost_usd: float | None = 0.0,
     ) -> None:
         """Fail before another provider call would cross an operator budget."""
+        spend_scope = SpendGuard.active_scope()
+        if spend_scope is not None:
+            spend_scope.raise_if_exhausted()
         with self._budget_spend_lock:
             spent_output_tokens = self._budget_spent_output_tokens
             spent_cost_decimal = self._budget_spent_cost_usd
@@ -8597,6 +8844,7 @@ class TaskOrchestrator:
         return output_tokens, round(output_cost, 6)
 
     @_request_execution_scoped
+    @with_run_scope
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
 
@@ -8987,6 +9235,7 @@ class TaskOrchestrator:
         )
         return evaluation
 
+    @with_run_scope
     def compare_to_baseline(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
         """Measure the orchestration engine against a single-worker baseline.
 
@@ -9008,9 +9257,36 @@ class TaskOrchestrator:
             orchestrated = self._dispatch(messages, mode)
             orchestrated_latency = round((time.perf_counter() - start) * 1000, 2)
 
-            start = time.perf_counter()
-            baseline = self.route_once(messages)
-            baseline_latency = round((time.perf_counter() - start) * 1000, 2)
+            # Sampled baselines are charged to the same run guard and are the
+            # first spend to be skipped when headroom runs short (ADR 0138).
+            spend_scope = SpendGuard.active_scope()
+            baseline = None
+            skip_reason = spend_scope.baseline_skip_reason() if spend_scope is not None else None
+            if skip_reason is None:
+                start = time.perf_counter()
+                try:
+                    with SpendGuard.call_purpose(CallPurpose.BASELINE):
+                        baseline = self.route_once(messages)
+                except BudgetExceededError as exc:
+                    baseline = None
+                    # Record why: a paid baseline below the headroom ratio is
+                    # ``baseline_headroom_exhausted``; other refusals keep
+                    # their own spend-guard reason (ADR 0138).
+                    skip_reason = str(exc.detail.get("reason") or "spend_budget")
+                baseline_latency = round((time.perf_counter() - start) * 1000, 2)
+            if baseline is None:
+                results.append({
+                    "prompt": prompt[:120],
+                    "orchestrated": {
+                        "mode": orchestrated["mode"],
+                        "latency_ms": orchestrated_latency,
+                        "steps": len(orchestrated["trace"]),
+                        "verified": bool(orchestrated.get("verification", {}).get("accepted")),
+                        "answer_length": len(orchestrated["answer"]),
+                    },
+                    "baseline": {"skipped": True, "reason": skip_reason or "spend_budget"},
+                })
+                continue
 
             orchestrated_steps = len(orchestrated["trace"])
             baseline_steps = len(baseline["trace"])
@@ -9034,9 +9310,12 @@ class TaskOrchestrator:
             })
 
         count = len(results)
+        all_results = results
+        results = [row for row in all_results if not row["baseline"].get("skipped")]
+        compared = len(results)
 
         def avg(select: Any) -> float:
-            return round(sum(select(row) for row in results) / count, 2) if count else 0.0
+            return round(sum(select(row) for row in results) / compared, 2) if compared else 0.0
 
         aggregate = {
             "orchestrated_avg_latency_ms": avg(lambda row: row["orchestrated"]["latency_ms"]),
@@ -9045,12 +9324,13 @@ class TaskOrchestrator:
             "orchestrated_avg_steps": avg(lambda row: row["orchestrated"]["steps"]),
             "baseline_avg_steps": avg(lambda row: row["baseline"]["steps"]),
             "avg_structural_coverage_delta": avg(lambda row: row["structural_coverage_delta"]),
-            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / count, 2) if count else 0.0,
+            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / compared, 2) if compared else 0.0,
+            "baseline_skipped_count": count - compared,
         }
         return {
             "mode": mode,
             "prompt_count": count,
-            "results": results,
+            "results": all_results,
             "aggregate": aggregate,
             "quality_proxy": (
                 "structural proxy from mock/runtime outputs (contributing steps + verifier-pass presence); "
@@ -9573,6 +9853,7 @@ class TaskOrchestrator:
         self._route_evidence_local.value = value
 
     @_request_execution_scoped
+    @with_run_scope
     def route_once(
         self,
         messages: list[ChatMessage],
@@ -9907,6 +10188,7 @@ class TaskOrchestrator:
         return tokens
 
     @_request_execution_scoped
+    @with_run_scope
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -11438,6 +11720,7 @@ class TaskOrchestrator:
 
         return completed, finalize
 
+    @with_run_scope
     def proxy_capability(
         self,
         body: dict[str, Any],
@@ -11540,6 +11823,8 @@ class TaskOrchestrator:
                     if binary
                     else self.client.proxy_send(agent, provider_endpoint, payload)
                 )
+            except BudgetExceededError:
+                raise  # spend guard refusals fail closed (ADR 0138)
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
                 classified = (
                     exc
@@ -11796,6 +12081,8 @@ class TaskOrchestrator:
                             else self.client.chat(agent, messages)
                         )
                 except Exception as exc:
+                    if isinstance(exc, BudgetExceededError):
+                        raise  # spend guard refusals fail closed (ADR 0138)
                     if _is_request_too_large_error(exc):
                         bounded_request_too_large_failures += 1
                         _append_typed_route_failure(
@@ -12243,6 +12530,9 @@ class TaskOrchestrator:
             and self._agent_matches_required_tags(agent, required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
+        spend_scope = SpendGuard.active_scope()
+        if spend_scope is not None:
+            eligible = spend_scope.filter_candidates(eligible)
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
         healthy = healthy or eligible

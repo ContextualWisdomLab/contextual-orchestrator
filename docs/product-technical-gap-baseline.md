@@ -7443,6 +7443,66 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
 
+## 2026-09-26 Per-run spend admission upper-bound and concurrency authority
+
+**Gap.** PR #1268 described a hard spend cap but admitted paid calls from a
+prompt-only token lower bound. A completion could therefore exceed the cap in
+one call. The check and settlement were also separate: concurrent branches
+could each observe the same remaining headroom and both send. Baseline
+admission additionally depended on an undocumented `0.5` remaining-budget
+ratio. An error without usage released its reservation as though no billable
+work might have occurred.
+
+**RED evidence.** The focused contracts
+`test_run_cap_refuses_paid_call_without_a_total_cost_upper_bound`,
+`test_run_cap_fails_closed_when_total_token_ceiling_is_unknown`,
+`test_run_cap_reserves_in_flight_upper_bounds_atomically`, and
+`test_unknown_failure_cost_consumes_the_reserved_upper_bound` failed on
+`850829890584803876622df680a3fcb49daa1ffc`: the first two calls reached the
+transport, both concurrent branches sent, and an unknown failure left measured
+spend at zero. `test_estimate_is_a_total_cost_upper_bound` observed the
+prompt-only `$2` lower bound instead of the safe `$200` ceiling in its unequal
+price fixture. The baseline contracts observed the `0.5` rule.
+
+**Action and owner.** `contextual-orchestrator` remains the canonical owner.
+ADR 0138 now requires a known total-token ceiling and prices it entirely at the
+more expensive prompt/completion rate, which bounds every possible token split.
+Unknown price or ceiling fails closed. The first repair made admission atomic
+inside one `RunSpendScope`; it did not protect shared virtual-key/tenant
+headroom across separate run scopes or JSONL projections. Follow-up RED
+contracts `test_tenant_budget_reserves_across_concurrent_run_scopes`,
+`test_jsonl_budget_reserves_across_concurrent_store_instances`, and
+`test_jsonl_unknown_outcome_reservation_survives_a_new_store_instance` exposed
+that remaining boundary. `SpendLedgerStore` now owns the transaction and active
+reservation projection. JSONL appends durable reservation/release events under
+a POSIX file lock after refreshing the ledger; an unknown outcome or crash
+leaves its reservation active with no inferred expiry. A runtime without that
+lock still meters uncapped work but refuses shared hard-budget admission as
+`reservation_authority_unavailable`. Review follow-up contracts additionally
+make unknown-cost ledger entries mark run/key/tenant positions incomplete,
+refuse cross-currency prices without exchange-rate evidence, contain recursive
+provider JSON parsing failures, and map ledger path I/O failures to the CLI
+argument-error surface. *Owner revision 2026-09-27:* the removal of the
+baseline threshold was not requested and is reverted in behaviour. Under a hard
+cap a paid sampled baseline runs only while at least
+`baseline_min_remaining_ratio` (default `0.5`, CLI/KV configurable) of every
+applicable run, virtual-key, and tenant cap would remain after its upper-bound
+cost; otherwise it is skipped as `baseline_headroom_exhausted`. Zero-cost or
+uncapped baselines always run. Admission is bounded by exact prompt tokens x
+prompt price + sent `max_output_tokens` x completion price when both are known,
+else by the `context_window` ceiling; a priced route with neither is refused as
+`missing_context_window`. Unknown-outcome reservations expire with their budget
+window, and an operator can settle one with an explicit cost, reason, and
+operator (`spend-settle`, append-only `spend_settlement` event); all-time
+budgets stay fail closed until that settlement. `measurement_unavailable`
+refusals name the original provider error.
+
+**Verification and status.** Focused spend-domain, provider-limit, metering,
+guard, and CLI tests are GREEN locally; exact command and counts are recorded
+in the PR repair receipt.
+ADR 0138 stays **Proposed**. Fresh exact-head hosted Security/CodeQL/SAST checks,
+independent approval, protected-main integration, and immutable release remain
+required; no deployment or production-cost claim is made.
 
 ## 2026-09-20 Protected-main CI regression RCA
 
