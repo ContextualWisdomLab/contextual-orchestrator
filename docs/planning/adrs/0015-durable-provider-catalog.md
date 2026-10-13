@@ -77,13 +77,18 @@ When live discovery activates a real chat model, only agents explicitly tagged
 `bootstrap_seed` are retired. A `mock://` transport alone is not proof that an
 agent is disposable; operator-configured mock agents remain in the declared
 pool unless the operator disables them.
-Catalog presence is also not spend admission. At runtime startup, OpenRouter's
-authenticated credits contract supplies `total_credits` and `total_usage`.
-Paid OpenRouter models remain individually discoverable but disabled unless
-their exact difference is strictly positive; catalog-declared free models stay
-eligible. Missing, malformed, or non-finite credit evidence never fabricates
-paid capacity. Other providers remain unchanged until they publish an
-equivalent machine-readable balance contract.
+Catalog presence is also not spend admission. At runtime startup, the
+OpenRouter inference key is probed with `GET /api/v1/key`, whose
+`data.limit_remaining` reports that key's remaining spending limit. The account
+balance endpoint `GET /api/v1/credits` is not used because it requires a
+management key, which discovery never holds. Paid OpenRouter models remain
+individually discoverable but disabled unless `limit_remaining` is a finite
+number strictly above zero; catalog-declared free models stay eligible. A
+`null` limit (the key has no spending limit) or a value at or below zero does
+not admit paid use. A missing or malformed field, a non-200 response, a network
+error, or invalid JSON yields the fail-closed "could not determine" result and
+never fabricates paid capacity. Other providers remain unchanged until they
+publish an equivalent machine-readable limit or balance contract.
 
 ## Consequences
 
@@ -91,8 +96,8 @@ equivalent machine-readable balance contract.
 - NVIDIA primary and secondary keys are independent provider accounts.
 - One provider outage does not erase other providers or its own last-known-good set.
 - Unknown price remains unknown rather than becoming fabricated zero cost.
-- A listed paid OpenRouter model cannot enter routing when its provider attests
-  zero or negative remaining credit.
+- A listed paid OpenRouter model cannot enter routing unless its key attests a
+  positive remaining spending limit; an unlimited key does not qualify.
 - The protected hourly workflow can persist catalog metadata without claiming
   that its ephemeral runner has activated a durable agent-pool database.
 - Long-running deployments may separately synchronize selected catalog rows into
@@ -116,5 +121,8 @@ National Institute of Standards and Technology. (2024). *Artificial
 intelligence risk management framework: Generative artificial intelligence
 profile* (NIST AI 600-1). https://doi.org/10.6028/NIST.AI.600-1
 
-OpenRouter. (n.d.). *Get remaining credits*. Retrieved August 27, 2026, from
+OpenRouter. (n.d.). *Get current API key*. Retrieved September 26, 2026, from
+https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key
+
+OpenRouter. (n.d.). *Get remaining credits*. Retrieved September 26, 2026, from
 https://openrouter.ai/docs/api/api-reference/credits/get-credits
