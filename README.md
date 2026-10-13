@@ -48,6 +48,8 @@ it out of exported variables and process arguments.
 
 ## Quick Start
 
+Development and full-suite verification require Python 3.12 and Node.js 24.18.1. Node executes the HTML `pattern` contract under UnicodeSets (`v` flag) semantics; the local quality workflow pins the same maintained LTS release instead of relying on the runner image's ambient tools.
+
 ```bash
 python -m contextual_orchestrator "Summarize why model orchestration helps long coding tasks." \
   --agents examples/agents.mock.json
