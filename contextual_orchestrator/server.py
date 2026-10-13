@@ -536,6 +536,8 @@ class SecurityConfig:
         if not raw.lower().startswith("bearer "):
             raise RequestError(401, "unauthorized", "bearer token is required")
         token = raw.split(" ", 1)[1].strip()
+        if not token:
+            raise RequestError(401, "unauthorized", "bearer token is required")
         if self.bearer_verifier is not None:
             try:
                 valid = bool(self.bearer_verifier(token, scope))
@@ -564,7 +566,7 @@ class SecurityConfig:
                     expected = ""
             else:
                 expected = ""
-            valid = bool(expected) and secrets.compare_digest(token, expected)
+            valid = bool(expected) and self._constant_time_token_match(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         return effective_purpose
@@ -626,6 +628,8 @@ class SecurityConfig:
 
     def establish_admin_session(self, presented_token: str) -> str:
         """Mint a bounded opaque session after validating the admin credential."""
+        if not isinstance(presented_token, str) or not presented_token.strip():
+            raise RequestError(401, "unauthorized", "bearer token is required")
         if self.bearer_verifier is not None:
             try:
                 valid = bool(self.bearer_verifier(presented_token, "admin"))
