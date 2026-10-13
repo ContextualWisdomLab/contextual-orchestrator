@@ -213,6 +213,40 @@ def test_update_prior_contract_preserves_observation_counts() -> None:
     assert after["failure_count"] == 1
 
 
+def test_fractional_prior_refresh_preserves_single_observation_exactly() -> None:
+    """Float drift in prior replacement must not erase one completed outcome."""
+    router = ModelGroupRouter()
+    router.register_member("member_c")
+    router.observe_success("member_c", 0.2)
+
+    # 2.0 + (0.4 - 1.0) - 0.4 is 0.9999999999999999 in binary float.
+    # The domain invariant is still exactly one completed Bernoulli outcome.
+    router.update_prior("member_c", 0.4, 1.0)
+
+    report = router.member_report("member_c")
+    assert report["success_count"] == 1
+    assert report["failure_count"] == 0
+    assert router.member_observation_count("member_c") == 1
+
+
+def test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior() -> None:
+    """Large prior mass must not erase completed Bernoulli outcomes."""
+
+    router = ModelGroupRouter()
+    router.observe_success("member_d", 0.2)
+    router.observe_failure("member_d")
+
+    router.update_prior("member_d", 1e20, 1e20)
+    report = router.member_report("member_d")
+    assert report["success_count"] == 1
+    assert report["failure_count"] == 1
+    assert router.member_observation_count("member_d") == 2
+
+    router.update_prior("member_d", 1.0, 1.0)
+    report = router.member_report("member_d")
+    assert report["success_posterior_mean"] == 0.5
+
+
 def test_update_prior_rejects_invalid_components() -> None:
     """Negative or non-finite prior components are rejected outright."""
     import pytest
@@ -439,5 +473,7 @@ if __name__ == "__main__":
     test_unavailable_uptime_poll_is_a_no_op()
     test_background_loop_accumulates_and_stop_joins()
     test_update_prior_contract_preserves_observation_counts()
+    test_fractional_prior_refresh_preserves_single_observation_exactly()
+    test_extreme_prior_refresh_preserves_integer_outcomes_and_posterior()
     test_update_prior_rejects_invalid_components()
     print("ok")
