@@ -204,8 +204,8 @@ mix, task rubric, model versions, resource budget, and failure accounting.
 
 | Outcome | Target | Guardrail |
 | --- | --- | --- |
-| Delivered-correct fraction over all accepted requests | At least +1 percentage point versus baseline, with a 95% confidence interval for the difference wholly above zero. | Independently adjudicated observed outcomes; paired or randomized design declared before evaluation; no silent exclusion of failed delivery. |
-| Routing-decision p95 | At most 20 ms and at least 10% lower than baseline, with the 95% interval for the candidate/baseline ratio wholly below 1. | Include selection and durable acknowledgement; preserve workload and failure accounting. This is not the full-page latency SLO. |
+| Delivered-correct fraction over all accepted requests | At least +1 percentage point versus baseline, with the 95% confidence interval lower bound for the difference above +1 percentage point. | Independently adjudicated observed outcomes; paired or randomized design declared before evaluation; no silent exclusion of failed delivery. |
+| Routing-decision p95 | At most 20 ms and at least 10% lower than baseline, with the 95% interval upper bound for the candidate/baseline ratio below 0.90. | Include selection and durable acknowledgement; preserve workload and failure accounting. This is not the full-page latency SLO. |
 | Numerical parameter recovery | No regression in family-wise aligned RMSE under the declared numerical tolerance. | Known-truth unit tests only; never substitute for observed customer outcomes. |
 
 The end target requires both customer accuracy and decision-latency criteria.

@@ -460,9 +460,9 @@ close without evidence (user-explicit, no valid delta, malicious change,
 or verified complete inheritance only).
 
 Product acceptance stays observed-only: delivered-correct fraction at
-least +1 point with the 95% difference interval wholly above zero, and
+least +1 point with the 95% difference interval lower bound above +1 point, and
 routing-decision p95 at most 20 ms with at least 10% reduction and the
-95% candidate/baseline ratio interval wholly below 1, each with declared
+95% candidate/baseline ratio interval upper bound below 0.90, each with declared
 population, workload, failure denominators, and uncertainty. Synthetic
 true-parameter recovery is unit evidence only (family-wise aligned RMSE,
 no regression); never substitute it for buyer accuracy. Latency claims
