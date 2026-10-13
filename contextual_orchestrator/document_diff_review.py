@@ -89,7 +89,6 @@ _FINDING_FIELDS = frozenset(
 _REPO = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 _BLOB = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _OBJECT_HASH = re.compile(r"sha256:[0-9a-f]{64}")
-_DATA_URI = re.compile(r"data:[^,\s]*,", re.IGNORECASE)
 _BASE64_RUN = re.compile(r"[A-Za-z0-9+/_-]{200,}={0,2}")
 _RESIDENT_REGISTRATION_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 # ZIP (DOCX/HWPX), PDF, PNG, JPEG, GIF, and OLE (HWP) signatures as decoded text.
@@ -124,9 +123,18 @@ def _exact_object(value: Any, allowed: frozenset[str], field: str, *, required: 
     return value
 
 
+def _has_data_uri(value: str) -> bool:
+    """Find a data URI without rescanning a long header at every prefix."""
+    for token in value.lower().split():
+        start = token.find("data:")
+        if start != -1 and token.find(",", start + 5) != -1:
+            return True
+    return False
+
+
 def _scan_for_leaks(value: str, field: str) -> None:
     """Reject inline binary/media, credentials, and resident identifiers."""
-    if any(signature in value for signature in _BINARY_SIGNATURES) or _DATA_URI.search(value) or _BASE64_RUN.search(value):
+    if any(signature in value for signature in _BINARY_SIGNATURES) or _has_data_uri(value) or _BASE64_RUN.search(value):
         raise _reject("inline_binary_content", f"{field} must not carry inline binary or media data", 422)
     if any(pattern.search(value) for pattern in SECRET_PATTERNS):
         raise _reject("secret_detected", f"{field} matches a credential pattern", 422)
