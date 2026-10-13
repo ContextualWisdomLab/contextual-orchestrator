@@ -23,8 +23,10 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
+from jsonschema import validate
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.api_contract import OPENAPI_SPEC  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     ProviderResponseError,
@@ -665,6 +667,10 @@ def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
         server.server_close()
 
     assert status == 429
+    validate(body, OPENAPI_SPEC["components"]["schemas"]["GatewayError"])
+    assert body["error_code"] == body["error"]["code"]
+    assert body["error_message"] == body["error"]["message"]
+    assert body["error_detail"] == body["error"]["detail"]
     error = body["error"]
     assert error["code"] == "rate_limit_exceeded"
     assert "gpt-x" in error["message"] and "worker_agent" in error["message"]

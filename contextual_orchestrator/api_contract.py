@@ -8,7 +8,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -22,6 +22,31 @@ OPENAPI_SPEC = {
             },
         },
         "schemas": {
+            "GatewayError": {
+                "type": "object",
+                "description": (
+                    "A gateway failure envelope. Its code identifies a request, "
+                    "provider, or infrastructure failure; it is never an authoritative "
+                    "review finding. The top-level fields mirror the nested error "
+                    "object for existing clients. An unknown provider outcome "
+                    "requires reconciliation before any replay."
+                ),
+                "required": ["error", "error_code", "error_message", "error_detail"],
+                "properties": {
+                    "error": {
+                        "type": "object",
+                        "required": ["code", "message", "detail"],
+                        "properties": {
+                            "code": {"type": "string"},
+                            "message": {"type": "string"},
+                            "detail": {"type": "object"},
+                        },
+                    },
+                    "error_code": {"type": "string"},
+                    "error_message": {"type": "string"},
+                    "error_detail": {"type": "object"},
+                },
+            },
             "AuthoritativeUsage": {
                 "type": ["object", "null"],
                 "required": ["prompt_tokens", "completion_tokens"],
@@ -363,10 +388,40 @@ OPENAPI_SPEC = {
                             "application/json": {
                                 "schema": {"$ref": "#/components/schemas/ChatCompletionResponse"}
                             },
-                            "text/event-stream": {"schema": {"type": "string"}},
+                            "text/event-stream": {
+                                "schema": {
+                                    "type": "string",
+                                    "description": (
+                                        "After headers, an upstream failure may emit a GatewayError "
+                                        "data frame followed by finish_reason=error; a generic "
+                                        "failure may only emit finish_reason=error. Neither is a "
+                                        "completed review finding."
+                                    ),
+                                },
+                            },
                         },
                     },
-                    "400": {"description": "Invalid request"},
+                    "default": {
+                        "description": (
+                            "Non-success request, provider, or infrastructure outcome. "
+                            "Unsafe replay outcomes such as provider_outcome_unknown "
+                            "and tool fallback stops also set x-should-retry: false."
+                        ),
+                        "headers": {
+                            "x-should-retry": {
+                                "description": (
+                                    "Present as false for an unsafe replay outcome; "
+                                    "absence does not establish replay safety."
+                                ),
+                                "schema": {"type": "string", "enum": ["false"]},
+                            }
+                        },
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/GatewayError"}
+                            }
+                        },
+                    },
                 },
             }
         },

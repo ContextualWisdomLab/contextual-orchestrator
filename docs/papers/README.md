@@ -10,6 +10,20 @@ permission for this repository to redistribute it. See the
 Version-page licenses are recorded below. Additional redistribution permission,
 where required, and the contents of release archives remain unverified.
 
+## Distributed outcome and replay
+
+Helland, P. (2007). *Life beyond Distributed Transactions: An Apostate's
+Opinion*. 3rd Biennial Conference on Innovative Data Systems Research.
+[Conference program](https://www.cidrdb.org/cidr2007/program.html) ·
+[source PDF](https://ics.uci.edu/~cs223/papers/cidr07p15.pdf) ·
+[stored PDF](helland_2007_life_beyond_distributed_transactions.pdf).
+The paper's message-retry and idempotence discussion motivates a distinct
+unknown-outcome surface: a gateway error cannot by itself authorize replay or
+stand in for a completed review finding. This is design grounding, not a
+measurement of this gateway. The stored PDF's first page grants redistribution
+with attribution under [CC BY 2.5](https://creativecommons.org/licenses/by/2.5/).
+SHA-256: `a2e1af4dc44b405c3b7041108f63d1d9e0d38c2ed64d52ee5f44633efa7b7935`.
+
 ## Stored PDF version inventory
 
 First-page text inspection on 2026-09-09 identifies the following versions.
