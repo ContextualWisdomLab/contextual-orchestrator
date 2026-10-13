@@ -24,6 +24,7 @@ import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
+from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 _TEST_AUTH_TOKEN = "review_free_multimodal_image_failclosed_token"  # noqa: S105
 
@@ -515,8 +516,11 @@ def test_free_image_pool_fails_closed_when_only_single_tool_image_agent_exists()
         client=client,
     )
 
-    with pytest.raises(RuntimeError, match="no eligible provider candidate"):
+    with pytest.raises(ProviderUpstreamError) as caught:
         orchestrator.proxy_completion(_two_tool_figure_request())
+
+    assert caught.value.error_code == "request_capability_unavailable"
+    assert caught.value.client_status == 503
 
     assert client.calls == []
 
@@ -939,3 +943,18 @@ def test_virtual_image_preflight_accepts_paid_mixed_capacity(model, tags) -> Non
     assert _require_pool_model(
         orchestrator, model, messages=_figure_messages(), orchestration_mode="conduct"
     ) == model
+
+
+@pytest.mark.parametrize("image_request", [False, True])
+@pytest.mark.parametrize("tool_tags, admitted", [((), False), (("tool_call:single",), True), (("tool_call:multi",), True)])
+def test_review_free_tools_require_positive_evidence_for_text_and_images(
+    image_request: bool, tool_tags: tuple[str, ...], admitted: bool
+) -> None:
+    """Known image input must preserve the review pool's positive tool evidence gate."""
+    tags = _IMAGE_FREE_TAGS if image_request else ("cost:free", "input:text", "output:text")
+    agent = ModelAgent("review_candidate", "review-model", tags=(*tags, "review", *tool_tags))
+    orchestrator = TaskOrchestrator([agent])
+    body = _one_tool_figure_request(parallel_tool_calls=False)
+    if not image_request:
+        body["messages"] = [{"role": "user", "content": "review"}]
+    assert (agent.id in orchestrator._free_pool_agent_ids(chat_body=body)) is admitted

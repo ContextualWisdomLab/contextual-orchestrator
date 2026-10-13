@@ -1,9 +1,9 @@
 """Tests for issue #1106: owner-versioned review-pool admission contract.
 
-The free review pool must expose typed, request-scoped provenance so a leaf
+The free review pool exposes typed catalog provenance so a leaf
 caller can send only the gateway token plus ``model: orchestrator/free`` and
-delete its own provider/model/credential/probing/admission preflight. These
-tests exercise the real contract behavior, not the mere presence of a name.
+delete its own provider/model/credential preflight. Request-shaped admission
+and live readiness require separate evidence.
 """
 
 from __future__ import annotations

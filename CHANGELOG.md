@@ -12,12 +12,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Structured `orchestrator/free` review synthesis now treats bodyless HTTP 404
+  and 410 as unproved outcomes and stops before another provider send. An
+  explicit provider `model_not_found` refusal still advances to an eligible
+  free sibling, preserving the existing fail-closed replay boundary.
+- Sticky `orchestrator/free` review failures now retain the complete typed
+  route receipt. An explicit 429 followed by an ambiguous terminal provider
+  failure records both candidates and `terminal_reason=fail_closed` without
+  replaying either request or changing the original provider error taxonomy.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one
   route, another rate-limited route can still recover. This repair changes
   retry timing, not the Chat Completions JSON-schema request or response
-  fields; explicit model pins and expired budgets remain fail-closed.
+  fields; explicit model pins and expired budgets remain fail-closed. A zero
+  wait budget now limits only an all-cooling pool and does not prevent
+  immediate failover from an explicit 429 to an already-ready sibling.
 - Structured non-stream `/v1/responses` requests now preflight every required
   conduct role for `orchestrator/free`. Image-capable worker-only pools fail
   closed with typed HTTP 400 before template planning instead of surfacing a

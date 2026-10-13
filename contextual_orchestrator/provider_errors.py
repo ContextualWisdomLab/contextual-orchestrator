@@ -394,6 +394,17 @@ def classify_provider_failure(
         # holding just the classified ProviderUpstreamError -- e.g. _invoke's
         # chat transport -- can still record and wait out the same cooldown.
         extra_detail: dict[str, Any] = {}
+        if status in (404, 410):
+            try:
+                body = _json.loads(provider_error_body(exc))
+            except Exception:  # noqa: BLE001 - provider error bodies are untrusted streams
+                body = None
+            if (
+                isinstance(body, dict)
+                and isinstance(body.get("error"), dict)
+                and body["error"].get("code") == "model_not_found"
+            ):
+                extra_detail["model_refusal_proven"] = True
         if status in (429, 503):
             retry_after = resolve_retry_after_seconds(exc)
             if retry_after is not None:
