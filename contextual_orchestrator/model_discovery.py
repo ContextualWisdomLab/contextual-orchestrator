@@ -386,6 +386,14 @@ class ProviderModelSource:
     bootstrap_required: bool = True
     evidence_only: bool = False
     models_dev_provider_id: str | None = None
+    required_models_dev_npm: str | None = None
+    # True when serving this source at all costs money on a recurring plan
+    # (OpenCode Go), independently of the per-token rates its catalog
+    # reports. Such an endpoint reports zero token rates because tokens are
+    # included in the subscription -- not because serving is free -- so
+    # ``_parse_openai_compatible`` publishes those rates as unknown and never
+    # marks the row free. See the ``opencode_go`` source below.
+    requires_paid_subscription: bool = False
 
 
 def configured_gateway_source(
@@ -468,12 +476,26 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         models_dev_provider_id="opencode",
     ),
     ProviderModelSource(
+        # A separate paid subscription on top of Zen, at a distinct endpoint
+        # (/zen/go/v1/... vs Zen's own /zen/v1/...) with its own models.dev
+        # catalog ("opencode-go", 34 models, verified live -- distinct from
+        # "opencode"/Zen's 97). The credential is *not* separate: subscribing
+        # to Go unlocks these endpoints for the same OpenCode Zen account key
+        # (owner-confirmed 2026-09-03; see docs/product-technical-gap-baseline.md's
+        # "OpenCode Go endpoint is not registered" entry for the corrected
+        # investigation trail). `bootstrap_required=False` matches Zen's own
+        # optional-integration treatment -- not every OpenCode Zen account has
+        # a Go subscription, so a missing/failing Go catalog must not block
+        # startup any more than a missing Zen one does.
         provider_name="opencode_go",
         credential_name="OPENCODE_ZEN_API_KEY",
         list_url="https://opencode.ai/zen/go/v1/models",
         chat_base_url="https://opencode.ai/zen/go/v1",
         capabilities=("chat",),
         bootstrap_required=False,
+        models_dev_provider_id="opencode-go",
+        required_models_dev_npm="@ai-sdk/openai-compatible",
+        requires_paid_subscription=True,
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -662,7 +684,7 @@ def _fetch_models_dev_metadata(*, timeout: float | None) -> Any | None:
     """Fetch the shared Models.dev catalog with a small retry count.
 
     Every ``models_dev_provider_id``-joined source (``opencode_zen``,
-    ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
+    ``opencode_go``, ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
     unauthenticated, best-effort, third-party fetch for its free-cost
     evidence; none of those providers report their own pricing, so a lone
     transient failure here (a timeout, a reset connection, or the
@@ -1006,11 +1028,14 @@ def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> An
         modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
         limits = model.get("limit") if isinstance(model.get("limit"), dict) else {}
         model_provider = model.get("provider")
-        models_dev_npm = (
-            model_provider.get("npm")
-            if isinstance(model_provider, dict)
-            else provider_row.get("npm")
-        )
+        # A model's ``provider`` block overrides the adapter only when it
+        # actually names one. Models.dev ships blocks carrying other keys and
+        # no ``npm`` (``sakana`` and ``zenifra`` publish ``{"shape": ...}``),
+        # and reading ``npm`` straight off the block turned those into a null
+        # adapter -- which ``_parse_openai_compatible`` then treats as a
+        # mismatch and drops, discarding models the provider default admits.
+        model_npm = model_provider.get("npm") if isinstance(model_provider, dict) else None
+        models_dev_npm = model_npm or provider_row.get("npm")
         original_architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
         merged_max_output_tokens = _positive_int_metadata(limits.get("output"))
         if merged_max_output_tokens is None:
@@ -1435,6 +1460,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         model_id = row.get("id")
         if type(model_id) is not str or not model_id:
             continue
+        if (
+            source.required_models_dev_npm
+            and row.get("_models_dev_npm") != source.required_models_dev_npm
+        ):
+            continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
         supported_parameters = (
@@ -1514,6 +1544,22 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             if key in UNIT_PRICE_DIMENSIONS
             and _valid_price_component(value)
         )
+        is_free = _row_is_free(row, pricing=pricing, inputs=inputs, outputs=outputs)
+        if source.requires_paid_subscription:
+            # The recurring plan is what serving costs here; a zero token rate
+            # only means tokens are included in it, never that serving is
+            # free. Publishing that zero as a *known* price would admit a
+            # subscription-gated model into every zero-cost route -- the
+            # ``cost:free`` serving tag and, independently of it,
+            # ``refresh_price_book`` feeding ``_is_free_agent``'s price-only
+            # branch (which reads the price book, not ``is_free``, so
+            # clearing the tag alone would not keep it out). Report a zero
+            # component as unknown instead -- the same honesty rule Bytez's
+            # GPU-second pricing follows below. A genuinely non-zero rate is
+            # real evidence and is kept.
+            is_free = False
+            prompt_price = prompt_price or None
+            completion_price = completion_price or None
         discovered.append(
             DiscoveredModel(
                 provider_name=source.provider_name,
@@ -1537,12 +1583,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 unit_prices=unit_prices,
-                is_free=_row_is_free(
-                    row,
-                    pricing=pricing,
-                    inputs=inputs,
-                    outputs=outputs,
-                ),
+                is_free=is_free,
                 supports_zero_data_retention=(
                     row["supports_zero_data_retention"]
                     if isinstance(row.get("supports_zero_data_retention"), bool)
@@ -2070,8 +2111,8 @@ def discover_all_models(
     or OpenRouter credits endpoint (#971 review finding: "shared metadata
     fetches bypass discovery deadline").
 
-    Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
-    ``openai``) each want the same Models.dev catalog. When any registered
+    Up to five sources (``opencode_zen``, ``opencode_go``, ``nvidia_nim``,
+    ``nvidia_nim_sub``, ``openai``) each want the same Models.dev catalog. When any registered
     source declares ``models_dev_provider_id``, fetch it here exactly once
     (:func:`_fetch_models_dev_metadata`, with its own small retry count) and
     hand every source the identical parsed payload, instead of each source
