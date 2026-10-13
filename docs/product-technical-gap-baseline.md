@@ -1,5 +1,34 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-10-02 security-tool urllib3 lock parity — Proposed
+
+PR [#1352](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1352)
+predecessor head `5f66743fd7675b89ff4906683b0ad4d4d6431fe6` raised the
+application dependency floor and regenerated the application locks for the
+three urllib3 advisories fixed in 2.8.0, but left
+`requirements-security-ci.txt` and `requirements-security-tools.txt` pinned
+to vulnerable urllib3 2.7.0. RED repository metadata coverage reproduced the
+missing declarative floors. A clean Python 3.12
+`pip install --require-hashes -r requirements-security-ci.txt` then exposed a
+second contract gap: regenerating the CI lock without its prior transitive
+`typing-extensions` entry made the documented hash installation incomplete.
+
+Ordinary-forward repair commit
+`e582818e6dcf3d3892f74577569574e4fdbb3e5d` (tree
+`fcfe8eabed8398dd7711e3516b6cbbc7eb580adf`) adds explicit
+`urllib3>=2.8.0` inputs to both security-tool lock roots, preserves
+`typing-extensions==4.16.0` as an explicit CI input, regenerates both locks,
+and adds executable lock-floor and pin-parity contracts. The focused metadata
+suite completes **18 tests**; the clean Python 3.12 hash installation succeeds;
+and `pip-audit` reports **no known vulnerabilities** for each regenerated
+security lock. `git diff --check` also passes.
+
+This evidence is **Proposed**, not acceptance. The prerequisite stack
+#1346 → #1348 → #1351 remains unmerged, the PR remains Draft, and protected
+exact-head Security/Quality, CodeQL, independent approval, ordinary merge,
+immutable release, and consumer verification remain required. A skipped gate
+on a non-`main` stacked base is not GREEN.
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
@@ -7920,3 +7949,74 @@ repository JSON evidence is source-GREEN and remains Proposed pending
 exact-head review and hosted acceptance; clean-lock installation, complete
 CNA/ADP reconciliation, central Strix/Noema integration, immutable release,
 and consumer verification remain open.
+## 2026-09-30 Experiential billing probe promotion-identity ambiguity
+
+PR #1350 exact predecessor `a1098c269b8253b099dfc8fbdcd594d087c2fddc`
+collected every callable, active, text-capable free-promotion pair and returned
+`min(candidates)`. With more than one eligible pair, lexical model and promotion
+identifiers therefore decided which provider request incurred the measurement.
+No statistical model, provider contract, experiment, or administrator decision
+authorized that tie-break, so it violated the no-heuristics routing and
+admission boundary even though every candidate individually passed discovery.
+
+The owner repair adds a RED multi-candidate contract and requires exactly one
+eligible `(model_id, promotion_id)` pair. Zero or multiple pairs now fail closed
+before inference. The focused billing, credential-bootstrap, release-allowlist,
+and repository-security suite passes **93 tests** with warnings treated as
+errors; the broader related suite passes **98 tests**. `compileall` and
+`git diff --check` pass. This is source evidence only: authenticated inference
+count remains zero, measured charge remains unknown, and protected exact-head
+Checks, independent approval, ordinary merge, and a reviewed one-time dispatch
+remain outstanding.
+
+## 2026-09-30 PR #1350 measurement-bound authority repair
+
+PR #1350 exact predecessor `cd3797c5314b06fef0aa069bf33f2793b22e2025`
+still allowed undocumented local constants to determine whether billing evidence
+was collected or rejected: 16 catalog pages/1,600 rows, three settled-export
+pages, three receipt rounds separated by five seconds, a 16-token completion
+cap, a 30-second transport timeout, a 15-minute Actions timeout, a 200-character
+provider-identifier ceiling, a 30-digit run-identity ceiling, and a <=2^53
+token-evidence ceiling. None came
+from a released measurement model, experiment, or provider settlement contract.
+
+The owner repair follows the provider's returned catalog `total`/`limit`/`offset`
+until exact completion and its documented settled-export cursor until
+`next_cursor=null`; inconsistent, malformed, non-progressing, or repeated
+evidence still fails closed. Because the provider documents pull/poll but no
+settlement-ready signal or cadence, the probe performs one immediate receipt
+observation and leaves absent evidence unknown. The inference uses the provider's
+documented minimal verification body plus `safety_identifier`, the gateway model
+timeout remains `null`, and the job adds no elapsed-time cutoff. Provider identities
+remain syntax-validated and secret-filtered without a local length threshold;
+numeric Actions run identities have no undocumented digit ceiling. RED reproduced
+nine failures; non-negative integral token evidence likewise has no undocumented
+numeric ceiling. The focused strict-warning suite passes **43 tests** and the
+adjacent billing/bootstrap/release/security command passes **104 tests**.
+`compileall` and `git diff --check` pass; local `actionlint` is unavailable.
+The full repository run is explicitly non-GREEN at **5,257 passed, 6 skipped,
+54 failed, 30 errors**; its dominant error cluster lacks the optional native
+`contextual_orchestrator._decision_receipt` module, and unrelated suites also
+fail. A predecessor rerun was not used to bypass the execution safety boundary
+around possible external-provider contact. Protected
+exact-head Checks, independent approval, ordinary merge, artifact publication,
+and the one-time authenticated observation remain outstanding.
+
+## 2026-09-30 Data-URI leak scan without a heuristic cutoff
+
+PR [#1340](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1340)
+at reviewed head `240ce0845e126d11843e70ecd09ca913b7b7800d` removed CodeQL
+`py/polynomial-redos` by limiting the data-URI header to 256 characters. That
+made runtime linear but introduced an undocumented security decision: a valid
+data URI with a longer header was treated as ordinary text and could cross the
+document-review boundary. The existing test explicitly approved that false
+negative.
+
+The proposed owner repair replaces the bounded expression with a single scan
+over fixed `data:`, comma, and whitespace tokens. It recognizes the original
+`data:[^,\s]*,` language without rescanning suffixes and without a header-length
+threshold. A header beyond the former cutoff was observed RED before the
+repair; the focused long-header, repeated-prefix, whitespace, and varied-input
+contracts are GREEN afterward. Protected exact-head CodeQL/Security Checks,
+independent approval, and ordinary merge remain required, so this record is
+**Proposed** rather than released evidence.

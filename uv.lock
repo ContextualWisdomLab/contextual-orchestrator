@@ -329,6 +329,7 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
     { name = "rfc3986-validator" },
+    { name = "urllib3" },
 ]
 
 [package.optional-dependencies]
@@ -382,6 +383,7 @@ requires-dist = [
     { name = "redis", marker = "extra == 'queue'", specifier = ">=5.0" },
     { name = "rfc3986-validator", specifier = ">=0.1.1,<0.2" },
     { name = "sqlalchemy", marker = "extra == 'db'", specifier = ">=2.0" },
+    { name = "urllib3", specifier = ">=2.8.0" },
     { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.38.0" },
 ]
 provides-extras = ["test", "api", "db", "fuzz", "queue"]

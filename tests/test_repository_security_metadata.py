@@ -2,6 +2,10 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
+
+LOCK_PATHS = ("requirements-security-ci.txt", "requirements-security-tools.txt")
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
@@ -302,6 +306,152 @@ def test_security_tool_lockfile_uses_hash_pinning():
     assert "--hash=sha256:" in lock_text
     assert "pip-audit==2.10.1" in lock_text
     assert "cyclonedx-bom==7.3.0" in lock_text
+    assert "typing-extensions==4.16.0" in lock_text
+
+
+def assert_reviewed_pip_lock(lock_text: str) -> None:
+    """Admit only the reviewed pip 26.2.1 wheel/sdist digest set.
+
+    Source: https://pypi.org/pypi/pip/26.2.1/json (public release digests,
+    independently retrieved and equal to the reviewed CI install lock).
+    Grammar: generated package rows joined by trailing backslashes, with
+    whitespace and # comments. The pip row permits only an exact pin and two
+    sha256 options; markers, extras, URLs and other options fail closed.
+    This compares lock declarations, not downloaded artifact contents. A future
+    pip update needs explicit version/digest review; tests never fetch a registry.
+    """
+    rows = []
+    pending = ""
+    for line in lock_text.splitlines():
+        content = line.split("#", 1)[0].strip()
+        if not content:
+            continue
+        continued = content.endswith("\\")
+        pending += " " + (content[:-1].rstrip() if continued else content)
+        if not continued:
+            rows.append(pending.strip())
+            pending = ""
+    assert not pending, "unterminated requirement continuation"
+    pip_rows = []
+    for row in rows:
+        name = re.match(r"[A-Za-z0-9_.-]+", row)
+        if name and re.sub(r"[-_.]+", "-", name.group()).lower() == "pip":
+            pip_rows.append(row)
+    assert len(pip_rows) == 1, "expected exactly one logical pip requirement"
+    tokens = pip_rows[0].split()
+    assert tokens[0] == "pip==26.2.1", "unsupported or unreviewed pip pin"
+    hashes = tokens[1:]
+    assert all(re.fullmatch(r"--hash=sha256:[0-9a-f]{64}", h) for h in hashes), "unsupported pip options"
+    expected = {
+        "--hash=sha256:71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e",
+        "--hash=sha256:f6ad667e89a1fe78046c8f13232b247200f5258d7828f3f7883d660878e0813f",
+    }
+    assert len(hashes) == 2 and set(hashes) == expected, "unreviewed or incomplete pip artifact hashes"
+
+
+def test_security_tool_lockfiles_hash_pin_pip_api_dependency(tmp_path):
+    """Lock pip-api's declared pip dependency even if the producer calls it unsafe."""
+    from importlib.metadata import Distribution
+
+    # Requires-Dist copied from installed pip-api 0.0.34's public METADATA.
+    # Builtin distribution fixture keeps this guard independent of installed tools.
+    metadata_dir = tmp_path / "pip_api-0.0.34.dist-info"
+    metadata_dir.mkdir()
+    (metadata_dir / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: pip-api\nVersion: 0.0.34\n"
+        "Requires-Dist: pip\n",
+        encoding="utf-8",
+    )
+    dependencies = Distribution.at(metadata_dir).requires
+    assert dependencies == ["pip"]
+    for lock_path in ("requirements-security-ci.txt", "requirements-security-tools.txt"):
+        lock_text = read_text(lock_path)
+        assert re.search(r"(?m)^pip-api==0\.0\.34 \\$", lock_text)
+        for dependency in dependencies:
+            assert dependency == "pip"
+            assert_reviewed_pip_lock(lock_text)
+
+
+@pytest.mark.parametrize("lock_path", LOCK_PATHS)
+@pytest.mark.parametrize("version", ("26.2.1", "1.0"))
+def test_pip_lock_guard_rejects_duplicate_rows(lock_path, version, monkeypatch, tmp_path):
+    """Invoke the actual metadata guard with otherwise unchanged repository text."""
+    original = read_text
+    mutated = original(lock_path) + f"\npip=={version} \\\n    --hash=sha256:" + "0" * 64 + "\n"
+    monkeypatch.setitem(globals(), "read_text", lambda p: mutated if p == lock_path else original(p))
+    with pytest.raises(AssertionError):
+        test_security_tool_lockfiles_hash_pin_pip_api_dependency(tmp_path)
+
+
+@pytest.mark.parametrize("lock_path", LOCK_PATHS)
+@pytest.mark.parametrize("hash_index", (0, 1))
+def test_pip_lock_guard_rejects_wrong_valid_hash(lock_path, hash_index, monkeypatch, tmp_path):
+    original = read_text
+    text = original(lock_path)
+    block = re.search(r"(?m)^pip==26\.2\.1 \\\n(?:    --hash=.*\n)+", text).group()
+    digest = re.findall(r"sha256:([0-9a-f]{64})", block)[hash_index]
+    mutated = text.replace(block, block.replace(digest, "0" * 64))
+    monkeypatch.setitem(globals(), "read_text", lambda p: mutated if p == lock_path else original(p))
+    with pytest.raises(AssertionError):
+        test_security_tool_lockfiles_hash_pin_pip_api_dependency(tmp_path)
+
+
+@pytest.mark.parametrize("lock_path", LOCK_PATHS)
+@pytest.mark.parametrize("mutation", (
+    "missing_pip", "comment_only", "missing_wheel", "missing_sdist", "missing_both",
+    "extra_hash", "duplicate_hash", "identical_duplicate", "wrong_version",
+    "marker", "extra", "url", "unpin", "option", "dangling", "uppercase_duplicate",
+))
+def test_pip_lock_guard_rejects_unsupported_declarations(lock_path, mutation, monkeypatch, tmp_path):
+    """Portable controls mutate the actual lock, not the distribution fixture."""
+    original = read_text
+    text = original(lock_path)
+    block = re.search(r"(?m)^pip==26\.2\.1 \\\n(?:    --hash=.*\n)+", text).group()
+    hashes = re.findall(r"--hash=sha256:[0-9a-f]{64}", block)
+    rows = {
+        "missing_pip": "",
+        "comment_only": "\n".join("# " + line for line in block.splitlines()) + "\n",
+        "missing_wheel": "pip==26.2.1 " + hashes[1] + "\n",
+        "missing_sdist": "pip==26.2.1 " + hashes[0] + "\n",
+        "missing_both": "pip==26.2.1\n",
+        "extra_hash": " ".join(["pip==26.2.1", *hashes, "--hash=sha256:" + "0" * 64]) + "\n",
+        "duplicate_hash": " ".join(["pip==26.2.1", hashes[0], hashes[0]]) + "\n",
+        "identical_duplicate": block + block,
+        "wrong_version": block.replace("pip==26.2.1", "pip==26.2.0"),
+        "marker": block.replace("pip==26.2.1", "pip==26.2.1 ; python_version > '3'"),
+        "extra": block.replace("pip==26.2.1", "pip[test]==26.2.1"),
+        "url": block.replace("pip==26.2.1", "pip @ https://example.invalid/pip.whl"),
+        "unpin": block.replace("pip==26.2.1", "pip>=26.2.1"),
+        "option": " ".join(["pip==26.2.1", *hashes, "--no-deps"]) + "\n",
+        "dangling": block.rstrip() + " \\\n",
+        "uppercase_duplicate": block + block.replace("pip==", "PIP=="),
+    }
+    mutated = text.replace(block, rows[mutation])
+    monkeypatch.setitem(globals(), "read_text", lambda p: mutated if p == lock_path else original(p))
+    with pytest.raises(AssertionError):
+        test_security_tool_lockfiles_hash_pin_pip_api_dependency(tmp_path)
+
+
+@pytest.mark.parametrize("lock_path", LOCK_PATHS)
+def test_pip_lock_guard_accepts_reviewed_rows_and_comments(lock_path):
+    text = read_text(lock_path)
+    assert_reviewed_pip_lock(text)
+    block = re.search(r"(?m)^pip==26\.2\.1 \\\n(?:    --hash=.*\n)+", text).group()
+    hashes = re.findall(r"--hash=sha256:[0-9a-f]{64}", block)
+    # Hash order and physical wrapping are not artifact identity. Commented
+    # duplicate/incorrect rows and pip-api must not be counted as pip packages.
+    replacement = " ".join(["pip==26.2.1", *reversed(hashes)]) + " # reviewed\n"
+    assert_reviewed_pip_lock(text.replace(block, replacement) + "\n# pip==1.0\n")
+
+
+def test_security_tool_lockfiles_retain_the_reviewed_urllib3_floor():
+    """Every security-tool environment must retain the reviewed urllib3 fix."""
+    for input_path, lock_path in (
+        ("requirements-security-ci.in", "requirements-security-ci.txt"),
+        ("requirements-security-tools.in", "requirements-security-tools.txt"),
+    ):
+        assert "urllib3>=2.8.0" in read_text(input_path)
+        assert re.search(r"(?m)^urllib3==2\.8\.0 \\$", read_text(lock_path))
 
 
 if __name__ == "__main__":  # pragma: no cover

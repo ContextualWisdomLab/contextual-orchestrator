@@ -96,6 +96,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   no-redirect transport. SearXNG remains an explicitly invoked informational
   search tool; its ranking, indexing, or availability no longer controls
   claim admission. Missing authoritative record evidence still fails closed.
+- Security-tool dependency inputs now declare the same `urllib3>=2.8.0`
+  floor as the application dependency set. Both generated security locks pin
+  `urllib3==2.8.0` with hashes, and the CI lock preserves its complete
+  `--require-hashes` install closure through an explicit
+  `typing-extensions==4.16.0` input. Repository metadata tests reject a
+  missing floor or stale security-lock pin.
 - `orchestrator/free` JSON-schema final synthesis now waits within the
   configured request budget when every eligible route returns HTTP 429, then
   retries only final synthesis on a ready route. After HTTP 413 retires one
