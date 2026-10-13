@@ -33,3 +33,16 @@ def _serve_forever(self, poll_interval: float = 0.01):
 
 
 socketserver.BaseServer.serve_forever = _serve_forever
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_free_serving_ledger():
+    """Keep the process-wide free-now cost ledger from leaking between tests."""
+    from contextual_orchestrator.free_serving_evidence import FREE_SERVING_LEDGER
+
+    FREE_SERVING_LEDGER.reset()
+    yield
+    FREE_SERVING_LEDGER.reset()
