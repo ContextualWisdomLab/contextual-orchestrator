@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.document_diff_review import (  # noqa: E402
     DocumentDiffReviewError,
+    _scan_for_leaks,
     validate_document_diff_envelope,
     validate_document_diff_findings,
 )
@@ -254,6 +255,13 @@ def _mutated(**changes) -> dict:
             target = target[int(key)] if key.isdigit() else target[key]
         target[leaf] = value
     return envelope
+
+
+def test_repeated_data_uri_prefixes_without_comma_are_accepted() -> None:
+    """A bounded adversarial header must not trigger repeated regex scans."""
+    _scan_for_leaks("data:" * 1600, "head_text")
+    with pytest.raises(DocumentDiffReviewError, match="inline binary"):
+        _scan_for_leaks("DATA:image/png;base64,AAAA", "head_text")
 
 
 @pytest.mark.parametrize(
