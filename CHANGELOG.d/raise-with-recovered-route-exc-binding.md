@@ -1,0 +1,5 @@
+### Rate-limit recovery binds its upstream error before re-raising
+
+- `_invoke_with_rate_limit_recovery`'s `raise_with_recovered_route` closure read the handler's `except ProviderUpstreamError as exc` name as a free variable. Python unbinds that name when the handler ends, and `ruff check --select F821` reported it as undefined (`orchestrator.py` lines 12768 and 12779).
+- The closure now binds the exception at definition time (`failure: ProviderUpstreamError = exc`) and raises `failure`. It no longer depends on being called before the handler ends. The raised error type, attached route evidence, and recovery decisions are unchanged.
+- Regression: `tests/test_rate_limit_aware_admission.py::test_upstream_failure_after_recovery_round_raises_upstream_error_with_route` drives the path after a wait round and checks that the upstream `ProviderUpstreamError` is raised with both rounds' route evidence. `test_raise_with_recovered_route_does_not_close_over_handler_exception` checks that the closure no longer has `exc` as a free variable.

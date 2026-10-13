@@ -1436,3 +1436,82 @@ def test_http_route_once_retries_cooling_candidate_after_mixed_exhaustion(other_
         "fallback_free_agent",
         "primary_free_agent",
     ]
+
+
+def test_upstream_failure_after_recovery_round_raises_upstream_error_with_route() -> None:
+    """A terminal non-429 failure after a wait round keeps its own error type.
+
+    Drives ``_invoke_with_rate_limit_recovery``'s ``raise_with_recovered_route``
+    closure with a non-empty ``merged_attempts`` (both rounds' attempts). It
+    must raise the real upstream error with that route evidence attached --
+    never a ``NameError`` from an ``except ... as`` name that Python unbinds
+    when the handler ends (the closure binds the exception at definition).
+    """
+    orchestrator = TaskOrchestrator(
+        _free_route_agents(), tool_retry_attempts=0, rate_limit_wait_seconds=5.0
+    )
+    slept: list[float] = []
+    orchestrator._rate_limit_sleep = slept.append
+    not_found = ProviderUpstreamError(
+        agent_id="primary_free_agent", model="primary-free-model",
+        error_code="model_not_found", message="model unavailable",
+        client_status=404, provider_status=404, retryable=False, transport="chat",
+    )
+    bad_gateway = ProviderUpstreamError(
+        agent_id="fallback_free_agent", model="fallback-free-model",
+        error_code="provider_unavailable", message="bad gateway",
+        client_status=502, provider_status=502, retryable=True, transport="chat",
+    )
+    chat_outcomes = QueuedChatOutcomes(
+        {
+            "primary_free_agent": [_rate_limited_upstream_error(1.0), not_found],
+            "fallback_free_agent": [_rate_limited_upstream_error(1.0), bad_gateway],
+        }
+    )
+    orchestrator.client.chat = chat_outcomes
+
+    try:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
+            orchestrator.route_once(
+                [{"role": "user", "content": "hello"}],
+                model_name=TaskOrchestrator.FREE_MODEL,
+            )
+    finally:
+        orchestrator.close()
+
+    assert not isinstance(excinfo.value, NameError)
+    assert excinfo.value.provider_status in (404, 502)
+    route = excinfo.value.extra_detail["route"]
+    assert route["eligible_agent_ids"] == ["primary_free_agent", "fallback_free_agent"]
+    assert len(route["attempted"]) == 4
+    assert [attempt["outcome"] for attempt in route["attempted"]][:2] == [
+        "retryable_transport",
+        "retryable_transport",
+    ]
+    assert slept == [pytest.approx(1.0, abs=0.5)]
+
+
+def test_raise_with_recovered_route_does_not_close_over_handler_exception() -> None:
+    """The closure must not read the ``except ... as exc`` name as a free variable.
+
+    Python deletes that name when the handler ends, so a closure that closes
+    over it depends on always being called inside the handler (ruff F821).
+    """
+    import types
+
+    def nested_code(code: types.CodeType, name: str) -> types.CodeType | None:
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                if const.co_name == name:
+                    return const
+                found = nested_code(const, name)
+                if found is not None:
+                    return found
+        return None
+
+    closure_code = nested_code(
+        TaskOrchestrator._invoke_with_rate_limit_recovery.__code__,
+        "raise_with_recovered_route",
+    )
+    assert closure_code is not None
+    assert "exc" not in closure_code.co_freevars
