@@ -1,0 +1,8 @@
+{
+  "verdict": {
+    "bump": "minor",
+    "reason": "Uncertain additive change.",
+    "evidence_refs": ["changelog:feat: maybe"],
+    "confidence": 0.42
+  }
+}
