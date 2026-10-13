@@ -128,12 +128,12 @@ def test_get_backend_handles_another_thread_winning_initialization(
 
     class _WinningLock:
         def __enter__(self) -> None:
-            credentials._backend = winner
+            credentials._credential_backend = winner
 
         def __exit__(self, *_args: object) -> None:
             return None
 
-    monkeypatch.setattr(credentials, "_backend_lock", _WinningLock())
+    monkeypatch.setattr(credentials, "_credential_backend_lock", _WinningLock())
 
     assert credentials.get_backend() is winner
 
