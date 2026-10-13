@@ -5340,6 +5340,12 @@ class _StateStore:
                     ("measurement_unit", {"http_request", "explicit_scope"}),
                     ("metric_scope", {"initial_task_route_decision"}),
                     ("admission_boundary", {"explicit_scope", "validated_endpoint", "first_execution_slot"}),
+                    ("endpoint_path", {"/v1/chat/completions", "/v1/completions", "/v1/responses",
+                                       "/v1/embeddings", "/v1/batch/embeddings", "other_execution_endpoint"}),
+                    ("route_mode", {"explicit_proxy", "automatic_proxy", "stream_route",
+                                    "capability_race", "capability_proxy", "text_race",
+                                    "embedding_submission", "unclassified"}
+                     | {"invocation_" + role for role in ("thinker", "worker", "verifier", "judge", "synthesizer")}),
                 ):
                     field_value = measurement.get(field_name)
                     row[field_name] = field_value if isinstance(field_value, str) and field_value in allowed_values else None

@@ -175,6 +175,8 @@ def test_http_export_retains_fixed_cohort_links_after_restart(tmp_path):
         first_row = first["observations"][0]
         assert first_row["durable_ack_elapsed_ns"] is not None
         assert first_row["decision_latency_ms"] == first_row["durable_ack_elapsed_ns"] / 1_000_000
+        assert first_row["endpoint_path"] == "/v1/chat/completions"
+        assert first_row["route_mode"] == "invocation_worker"
         assert len(first_row["workflow_outcomes"]) == 1
         assert first_row["batch_associations"] == []
         prior_run = restored._store.load("workflow_run")[0]

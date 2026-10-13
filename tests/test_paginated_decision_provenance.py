@@ -4,6 +4,33 @@ from contextual_orchestrator.orchestrator import _StateStore
 import pytest
 
 
+def test_export_keeps_bounded_cohort_identity_without_provider_text(tmp_path):
+    store = _StateStore(str(tmp_path / "cohort.db"))
+    try:
+        for request_id, endpoint, mode in (
+            ("route", "/v1/chat/completions", "invocation_worker"),
+            ("invalid", "private endpoint text", "private provider text"),
+        ):
+            store.save("accepted_request", request_id, {
+                "request_id": request_id, "endpoint_path": endpoint, "route_mode": mode,
+            }, durable=True)
+            store.save("initial_decision", request_id, {
+                "request_id": request_id, "status": "selected", "selection_elapsed_ns": 10,
+                "durable_ack_elapsed_ns": None, "route_mode": mode,
+            }, durable=True)
+            store.save("decision_receipt", request_id, {
+                "request_id": request_id, "status": "acknowledged",
+                "selection_elapsed_ns": 10, "durable_ack_elapsed_ns": 20,
+                "endpoint_path": endpoint, "route_mode": mode,
+            }, durable=True)
+        valid, invalid = store.export_request_outcomes()["observations"]
+        assert (valid["endpoint_path"], valid["route_mode"]) == (
+            "/v1/chat/completions", "invocation_worker")
+        assert (invalid["endpoint_path"], invalid["route_mode"]) == (None, None)
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("receipt_fields", [{}, {"durable_ack_elapsed_ns": 20}])
 def test_receipt_cannot_inherit_an_admission_acknowledgement(tmp_path, receipt_fields):
     """Admission values cannot supply missing selection or acknowledgement evidence."""

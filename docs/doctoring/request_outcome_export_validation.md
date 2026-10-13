@@ -1,5 +1,22 @@
 # Retained outcome export validation
 
+## Request cohort identity, 2026-09-28
+
+The retained admin export now includes allowlisted `endpoint_path` and
+`route_mode` values from the same request measurement as `decision_latency_ms`.
+Unrecognized stored text becomes null, so an operator can separate known
+endpoint and initial selection kinds without disclosing arbitrary record text.
+This is additive cohort metadata, not a p95 estimator. `route_mode` identifies
+the selection hook, not the caller's route/conduct choice; those populations
+still need a separately validated request-mode field before comparison.
+The export remains local and incomplete until ingress reconciliation and real
+outcome adjudication are available.
+
+RED: the new projection case failed with `KeyError: 'endpoint_path'`.
+After the native module was built in this isolated worktree, the strict
+projection and HTTP export suites passed (63 tests); the restarted HTTP
+cohort test also passed with exact endpoint and selection-kind assertions.
+
 ## Request decision milliseconds, 2026-09-13
 
 Hosted acceptance remains outstanding at documentation head
