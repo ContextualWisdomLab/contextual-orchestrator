@@ -309,6 +309,7 @@ jobs:
       - name: Build the installable package for this exact commit
         run: |
           set -euo pipefail
+          uv run --no-sync python -m scripts.ci.build_runtime_identity "${TARGET_SHA}" "${RELEASE_VERSION}"
           SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${TARGET_SHA}")"
           export SOURCE_DATE_EPOCH
           uv build --wheel --python 3.12 --out-dir dist
@@ -334,6 +335,7 @@ jobs:
           assert distributions[0].version == os.environ["RELEASE_VERSION"]
           assert (site / "contextual_orchestrator/__init__.py").is_file()
           PY
+          (cd "${release_site}" && PYTHONPATH="${release_site}" "${GITHUB_WORKSPACE}/.venv/bin/python" -B -c 'import os; from contextual_orchestrator.runtime_identity import verified_runtime_identity; receipt = verified_runtime_identity(); assert receipt["source_sha"] == os.environ["TARGET_SHA"]; assert receipt["version"] == os.environ["RELEASE_VERSION"]')
 
       - name: Upload rendered notes and SBOM for the publish job
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
