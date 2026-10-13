@@ -80,7 +80,7 @@ def test_hung_provider_embedding_runner_does_not_block_process_exit_after_close(
         assert backend.poll(job)["status"] == "running"
 
         backend.close()
-        assert backend.poll(job)["status"] == "running"
+        assert backend.poll(job)["status"] == "cancelled"
         # No explicit sys.exit()/os._exit(): a genuinely non-blocking fix
         # must let normal interpreter shutdown proceed on its own, with the
         # hung runner thread still blocked in the background.

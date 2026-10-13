@@ -1,6 +1,10 @@
 import re
 from pathlib import Path
 
+import pytest
+
+from scripts.ci.prepare_runtime_lock_audit import prepare_runtime_lock_audit
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
@@ -57,16 +61,27 @@ def test_security_workflow_covers_core_repository_security_process():
         "wait-for-processing: false",
         "codeql github upload-results",
         "actions/setup-python@v6",
-        "python -m pip install --require-hashes -r requirements-security-ci.txt",
-        "python -m pip install --require-hashes -r requirements.lock",
-        "python -m pip install --no-deps -e .",
-        "python -m pip_audit -r requirements.lock",
-        "cyclonedx-py environment",
+        "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1",
+        "uv sync --locked --extra api --extra db --extra queue --group dev",
+        'uv sync --locked --extra api --extra db --extra queue --group dev --no-install-project',
+        'uv sync --locked --extra api --extra db --extra queue --group dev --no-build-isolation',
+        '"$RUNNER_TEMP/security-tools/bin/python" -m pip install --require-hashes -r requirements-security-ci.txt',
+        '"$RUNNER_TEMP/security-tools/bin/pip-audit" --require-hashes -r requirements-security-ci.txt',
+        "uv pip install --python .venv/bin/python --require-hashes -r requirements-opencode-review-ci.txt",
+        "uv pip install --python .venv/bin/python --require-hashes -r fuzz/requirements-property.txt -r fuzz/requirements-atheris.txt",
+        '"$RUNNER_TEMP/security-tools/bin/pip-audit" --path "$PWD/.venv/lib/python3.12/site-packages" --format json',
+        '"$RUNNER_TEMP/security-tools/bin/pip-audit" --require-hashes --disable-pip -r "$audit_lock"',
+        "prepare_runtime_lock_audit.py requirements.lock uv.lock",
+        '"$RUNNER_TEMP/security-tools/bin/cyclonedx-py" environment "$PWD/.venv/bin/python" --output-format json',
+        "uv build --wheel --no-build-isolation --out-dir dist",
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
 
     for expected_token in expected_tokens:
         assert expected_token in workflow_text
+    assert "pip install --require-hashes -r requirements.lock" not in workflow_text
+    assert '== ["contextual-orchestrator", "fast-mlsirm"]' in workflow_text
+    assert 'contains("09f762ded35786dd1078222a4577ff09d649816f")' in workflow_text
 
     removed_duplicate_scanners = [
         "actions/dependency-review-action@",
@@ -250,6 +265,16 @@ def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     assert workflow_text.index(locked_sync) < workflow_text.index(native_build) < workflow_text.index(full_tests)
 
 
+def test_security_sbom_build_backend_is_locked_before_project_install():
+    workflow = read_text(".github/workflows/security.yml").split("- name: Install audit and project dependencies", 1)[1]
+    pyproject = read_text("pyproject.toml")
+    lock = read_text("uv.lock")
+    assert '[build-system]\nrequires = ["setuptools==84.0.0"]' in pyproject
+    assert '"setuptools==84.0.0"' in pyproject
+    assert 'name = "setuptools"\nversion = "84.0.0"' in lock
+    assert workflow.index("--no-install-project") < workflow.index("--no-build-isolation")
+
+
 def test_local_full_suite_installs_runtime_and_test_lockfiles():
     """The documented local command must exercise the project lock."""
     makefile_text = read_text("Makefile")
@@ -264,6 +289,42 @@ def test_security_tool_lockfile_uses_hash_pinning():
     assert "--hash=sha256:" in lock_text
     assert "pip-audit==2.10.1" in lock_text
     assert "cyclonedx-bom==7.3.0" in lock_text
+
+
+def test_runtime_lock_audit_keeps_every_unexpected_requirement(tmp_path):
+    """Only the one exact VCS pin may leave the hashed lock audit input."""
+    source = tmp_path / "requirements.lock"
+    uv_lock = tmp_path / "uv.lock"
+    output = tmp_path / "audit.txt"
+    vcs_pin = (
+        "fast-mlsirm @ git+https://github.com/ContextualWisdomLab/"
+        "fast-mlsirm.git@09f762ded35786dd1078222a4577ff09d649816f\n"
+    )
+    retained = "anyio==4.14.2 --hash=sha256:" + "a" * 64 + "\n"
+    unexpected = "other @ git+https://example.org/other.git@1234567890\n"
+    source.write_text(retained + vcs_pin + unexpected, encoding="utf-8")
+    uv_lock.write_text(
+        '[[package]]\nname = "fast-mlsirm"\n'
+        'source = { git = "https://github.com/ContextualWisdomLab/'
+        'fast-mlsirm.git?rev=09f762ded35786dd1078222a4577ff09d649816f'
+        '#09f762ded35786dd1078222a4577ff09d649816f" }\n',
+        encoding="utf-8",
+    )
+
+    prepare_runtime_lock_audit(source, uv_lock, output)
+    assert output.read_text(encoding="utf-8") == retained + unexpected
+
+    for malformed in (retained, retained + vcs_pin[:-41] + "short\n", retained + vcs_pin * 2):
+        source.write_text(malformed, encoding="utf-8")
+        output.unlink(missing_ok=True)
+        with pytest.raises(ValueError, match="one pinned fast-mlsirm source"):
+            prepare_runtime_lock_audit(source, uv_lock, output)
+        assert not output.exists()
+
+    source.write_text(retained + vcs_pin, encoding="utf-8")
+    uv_lock.write_text('[[package]]\nname = "fast-mlsirm"\nsource = { git = "wrong" }\n')
+    with pytest.raises(ValueError, match="same fast-mlsirm source"):
+        prepare_runtime_lock_audit(source, uv_lock, output)
 
 
 if __name__ == "__main__":  # pragma: no cover

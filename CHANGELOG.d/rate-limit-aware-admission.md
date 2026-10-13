@@ -52,3 +52,5 @@ candidate, while an explicit concrete model id keeps failing fast
 unconditionally, regardless of how many failover candidates exist --
 preserving the `tests/test_provider_error_taxonomy.py` single-candidate,
 no-header 429 contract that must never wait.
+
+An explicit quota rejection advances to the next eligible candidate before a same-agent tool retry. Unknown-duration 429 recovery retains the existing administrator-owned assumed cooldown and labels it as assumed; it does not become a provider-declared timing claim.
