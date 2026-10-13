@@ -1248,6 +1248,11 @@ def main(argv: list[str] | None = None) -> None:
                 "--production/--allow-public-bind requires admin and inference tokens "
                 "to resolve to distinct credential values"
             )
+        if args.production and any(
+            agent.base_url.startswith("mock://") for agent in orchestrator.agents
+        ):
+            orchestrator.close()
+            parser.error("--production cannot serve enabled mock agents")
         serve(
             orchestrator,
             host=args.host,
