@@ -8,8 +8,8 @@ for the full design and its explicit non-goals.
 ## What a release is, and is not
 
 A canonical release is an annotated git tag `vX.Y.Z`, a published GitHub
-Release with `immutable: true`, its verified Python wheel and SHA-256 manifest,
-and its verified mandatory SBOM. A versioned
+Release with `immutable: true`, its verified Python wheel, hash-locked runtime
+requirements, SHA-256 manifest, and mandatory SBOM. A versioned
 URL alone is not evidence that GitHub has locked the tag and assets.
 
 - `.../releases/tag/vX.Y.Z` identifies the version-specific release. Consumers
@@ -69,7 +69,8 @@ check those contracts separately before replacing a source pin.
    The read-only release job builds the Python wheel from that same checkout,
    installs it into an isolated directory to verify its declared version and
    package contents, compares two builds at the source commit's fixed timestamp,
-   records its SHA-256 digest, and passes both files to publication.
+   records the wheel and `requirements.lock` SHA-256 digests, and passes both
+   files to publication.
    The build and isolated install use `uv` with Python 3.12 so they do not rely
    on runner-global `setuptools` or `pip`. This wheel
    is the installable Python package; the separately built Rust decision
@@ -106,11 +107,12 @@ check those contracts separately before replacing a source pin.
      section over GitHub's 125,000-character body limit on a line boundary
      and linking the complete CHANGELOG.md at that commit;
    - downloads the exact-commit mandatory CycloneDX SBOM, builds the Python
-     wheel, records its SHA-256 digest, and passes these with the notes to the
+     wheel, copies the exact-commit dependency lock, records both SHA-256
+     digests, and passes these with the notes to the
      publisher through an Actions artifact.
 5. The write-scoped `publish` job, only after verification succeeds:
    - rechecks fresh-main identity and exact-target checks before mutation;
-   - requires non-empty notes, SBOM and wheel inputs, then checks the wheel
+   - requires non-empty notes, SBOM, wheel and dependency-lock inputs, then checks both
      against the SHA-256 manifest;
    - creates and pushes an annotated tag only for a fresh publication;
    - verifies the exact remote tag object and its peeled target, so GitHub
@@ -118,7 +120,7 @@ check those contracts separately before replacing a source pin.
    - admits an existing release only as a typed, matching-tag, non-prerelease
      Draft, or a complete already-published immutable release;
    - creates a new release with `--verify-tag --draft`;
-   - attaches any missing SBOM, wheel and manifest **only while the release is
+   - attaches any missing SBOM, wheel, dependency lock and manifest **only while the release is
      a Draft**, then downloads each and compares its bytes with the verified
      input;
    - publishes the verified Draft. An already-public immutable release is
@@ -127,8 +129,21 @@ check those contracts separately before replacing a source pin.
      matching-tag and `immutable: true`, then runs `gh release verify` and
      `gh release verify-asset` for each asset.
 6. Confirm the version-specific release, successful publication run, exact
-   tag/commit, immutable state, wheel digest, SBOM and signed asset attestations. Do not admit
+   tag/commit, immutable state, wheel and lock digests, SBOM and signed asset attestations. Do not admit
    a release merely because it appears in the GitHub Releases list.
+
+Install the downloaded wheel with the matching release's `requirements.lock`:
+
+```bash
+sha256sum -c SHA256SUMS
+uv pip install --require-hashes -r requirements.lock
+uv pip install --no-deps contextual_orchestrator-X.Y.Z-py3-none-any.whl
+```
+
+Use an isolated Python 3.12 environment. The lock covers the gateway's
+`api`, `db`, and `queue` extras; the wheel is installed without a second
+dependency resolution. Pin and verify the release assets before running these
+commands. This does not prove the deployed process uses that release.
 
 ## Recovery and known limitations
 
