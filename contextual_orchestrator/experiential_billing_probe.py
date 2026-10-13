@@ -215,6 +215,8 @@ def _catalog(request: Callable) -> dict:
         raise ValueError("catalog pagination is unavailable")
     models = list(rows)
     promotions = body.get("promotions")
+    if not isinstance(promotions, list):
+        raise ValueError("catalog promotions are unavailable")
     while len(models) < total:
         offset = len(models)
         body = _get(request, "/api/models?" + urlencode({"limit": limit, "offset": offset}))
@@ -223,6 +225,8 @@ def _catalog(request: Callable) -> dict:
                 or body.get("offset") != offset or not isinstance(rows, list)
                 or len(rows) != min(limit, total - offset)):
             raise ValueError("catalog pagination is incomplete")
+        if not isinstance(body.get("promotions"), list) or body["promotions"] != promotions:
+            raise ValueError("catalog promotions are inconsistent")
         models.extend(rows)
     return {"models": models, "promotions": promotions}
 

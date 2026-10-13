@@ -102,7 +102,12 @@ without a local length-admission threshold; numeric Actions run identities likew
 have no undocumented digit ceiling. Catalog discovery follows
 pagination reported by the provider's first page (`total`, `limit`, `offset`),
 requires exact consistent coverage, and does not invent a local page or row
-ceiling. Promotions are metadata observations, not guarantees about
+ceiling. Every page must explicitly supply the same `promotions` list; missing,
+non-list, or unequal observations fail discovery before any inference POST.
+This is a conservative consistency requirement while page-local versus global
+promotion semantics remain undocumented, not a claim about provider guarantees.
+No missing promotion values are filled or merged. Promotions are metadata
+observations, not guarantees about
 account eligibility, caps, provider waterfall, or a later request's price.
 
 ## Response resource admission
