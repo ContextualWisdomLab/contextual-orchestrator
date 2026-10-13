@@ -80,12 +80,12 @@ def test_commercial_acceptance_check_report_classifies_external_gaps_as_warnings
     )
     items = item_by_name(report)
 
-    assert report["acceptance_status"] == "commercial_acceptance_ready_with_warnings"
+    assert report["acceptance_status"] == "commercial_acceptance_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_acceptance_check"
     assert "not a valuation guarantee" in report["source_note"]
     assert report["acceptance_summary"]["blocked_count"] == 0
-    assert report["acceptance_summary"]["warning_count"] == 2
+    assert report["acceptance_summary"]["warning_count"] == 3
     assert report["concrete_blockers"] == []
     assert report["follow_up_items"][0]["evidence_type"] == "proposed_until_production"
     assert report["follow_up_items"][1]["evidence_type"] == "proposed_until_buyer_specific"
@@ -98,8 +98,11 @@ def test_commercial_acceptance_check_report_classifies_external_gaps_as_warnings
     ]
     assert items["verification_evidence"]["evidence_type"] == "measured_local"
     assert items["figma_stakeholder_artifacts"]["evidence_type"] == "figma_artifact"
-    assert report["review_process_policy"]["is_blocker"] is False
-    assert report["related_runtime_reports"]["commercial_export_status"] == "commercial_export_ready_with_warnings"
+    assert items["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in items["review_process_policy"]["evidence"]
+    assert "pending checks without concrete failure are not blockers" not in items["review_process_policy"]["evidence"]
+    assert report["review_process_policy"]["is_blocker"] is True
+    assert report["related_runtime_reports"]["commercial_export_status"] == "commercial_export_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["acceptance_links"]["runtime_endpoint"] == "/api/v1/commercial_acceptance_checks/latest"
 
@@ -120,7 +123,7 @@ def test_commercial_acceptance_check_endpoint_openapi_admin_and_docs_contract() 
     assert "/api/v1/commercial_acceptance_checks/latest" in acceptance_doc
     assert "KRW 2B Commercial Acceptance Check" in acceptance_doc
     assert "Figma Code Connect is not used" in acceptance_doc
-    assert "Review process is not a blocker" in acceptance_doc
+    assert "matches release authorization" in acceptance_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in acceptance_doc
 
     server = build_server(

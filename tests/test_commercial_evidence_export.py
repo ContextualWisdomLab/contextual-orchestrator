@@ -80,11 +80,12 @@ def test_commercial_evidence_export_report_packages_buyer_diligence_index() -> N
     )
     sections = section_by_name(report)
 
-    assert report["export_status"] == "commercial_export_ready_with_warnings"
+    assert report["export_status"] == "commercial_export_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_evidence_export"
     assert "not a valuation guarantee" in report["source_note"]
     assert report["export_summary"]["blocked_count"] == 0
+    assert sections["saleability_decision"]["completion_state"] == "ready"
     assert report["export_summary"]["warning_count"] == 2
     assert report["concrete_blockers"] == []
     assert report["required_external_evidence"][0]["evidence_type"] == "proposed_until_production"
@@ -96,8 +97,10 @@ def test_commercial_evidence_export_report_packages_buyer_diligence_index() -> N
     assert sections["runtime_reports"]["evidence_type"] == "measured_local"
     assert sections["buyer_packet_documents"]["evidence_type"] == "repository_artifact"
     assert sections["figma_stakeholder_artifacts"]["evidence_type"] == "figma_artifact"
-    assert report["review_process_policy"]["is_blocker"] is False
-    assert report["related_runtime_reports"]["saleability_status"] == "saleability_ready_with_warnings"
+    assert sections["review_process_policy"]["completion_state"] == "warning"
+    assert "exact-head checks" in sections["review_process_policy"]["evidence"]
+    assert report["review_process_policy"]["is_blocker"] is True
+    assert report["related_runtime_reports"]["saleability_status"] == "saleability_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["export_links"]["runtime_endpoint"] == "/api/v1/commercial_evidence_exports/latest"
 
@@ -118,7 +121,7 @@ def test_commercial_evidence_export_endpoint_openapi_admin_and_docs_contract() -
     assert "/api/v1/commercial_evidence_exports/latest" in export_doc
     assert "KRW 2B Commercial Evidence Export" in export_doc
     assert "Figma Code Connect is not used" in export_doc
-    assert "Review process is not a blocker" in export_doc
+    assert "matches release authorization" in export_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in export_doc
 
     server = build_server(

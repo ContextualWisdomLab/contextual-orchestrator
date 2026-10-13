@@ -17,9 +17,9 @@ production compliance certificate.
 
 Figma Code Connect is not used.
 
-Review process is not a blocker. Review delay, review bot delay, queued model
-review, or a pending check without a concrete failure is process state, not a
-commercial acceptance blocker.
+Review process matches release authorization. A missing or failing snapshot
+is a blocker. Review delay is not a blocker only after exact-head checks,
+independent approval, and findings evidence pass.
 
 Do not create a separate library, Git submodule, or extracted package now. The
 acceptance check reviews one product: a compatible inference API plus an admin
@@ -52,7 +52,9 @@ evidence control plane.
 - `follow_up_items`: production and buyer-specific evidence gaps;
 - `concrete_blockers`: blocked commercial evidence export items;
 - `acceptance_gates`: go, warning, and blocked rules;
-- `review_process_policy`: explicit rule that review delay is not a blocker;
+- `review_process_policy`: matches release authorization. A missing or failing
+  snapshot is a blocker; review delay is not a blocker only after exact-head
+  checks, independent approval, and findings evidence pass.
 - `library_split_decision`: current single-product packaging decision.
 
 ## Acceptance Status Rules

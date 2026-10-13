@@ -6,7 +6,7 @@ It does not certify a completed sale. It separates launchable repository evidenc
 
 Figma Code Connect is not used.
 
-Review process is not a blocker unless it reports a concrete product, security, API-contract, or document defect.
+Review process matches release authorization. A missing or failing snapshot is a blocker. Review delay is not a blocker only after exact-head checks, independent approval, and findings evidence pass.
 
 Do not create a separate library, Git submodule, or extracted package now. The launch packet remains one deployable enterprise control-plane product until a second product, independent release cadence, or provenance requirement exists.
 
@@ -32,7 +32,7 @@ Do not create a separate library, Git submodule, or extracted package now. The l
 - `launch_summary`: ready, warning, blocked, external input, buyer environment, production telemetry, commercial signature, and review-process counts.
 - `launch_items`: evidence rows with owner, sources, evidence type, completion state, action, and exit criteria.
 - `related_runtime_reports`: GTM, operations, onboarding, acceptance, and analytics status links.
-- `review_process_policy`: review delay is not a blocker without a concrete failure.
+- `review_process_policy`: matches release authorization. A missing or failing snapshot is a blocker; review delay is not a blocker only after exact-head checks, independent approval, and findings evidence pass.
 - `library_split_decision`: keep one product.
 - `launch_links`: Figma design file, FigJam board, runtime endpoint, and this document.
 

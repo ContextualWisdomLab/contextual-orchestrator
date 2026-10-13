@@ -80,32 +80,32 @@ def test_commercial_demo_scenario_report_packages_buyer_demo() -> None:
     )
     steps = step_by_name(report)
 
-    assert report["demo_status"] == "commercial_demo_ready_with_warnings"
+    assert report["demo_status"] == "commercial_demo_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_demo_scenarios"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["demo_summary"]["blocked_count"] == 0
+    assert report["demo_summary"]["blocked_count"] == 3
     assert report["demo_summary"]["warning_count"] == 1
     assert report["demo_summary"]["persona_count"] == 5
-    assert report["demo_summary"]["review_process_is_blocker"] is False
+    assert report["demo_summary"]["review_process_is_blocker"] is True
     assert report["demo_summary"]["code_connect_used"] is False
-    assert report["concrete_blockers"] == []
+    assert report["concrete_blockers"] == ["commercial_launch_blocked"]
     for step_name in [
         "compatible_api_smoke",
         "conducted_workflow_trace",
         "access_list_inspection",
         "evaluation_replay",
-        "admin_readiness_console",
         "metric_truthfulness",
         "figma_stakeholder_review",
-        "buyer_acceptance_decision",
     ]:
         assert steps[step_name]["completion_state"] == "ready"
+    assert steps["admin_readiness_console"]["completion_state"] == "blocked"
+    assert steps["buyer_acceptance_decision"]["completion_state"] == "blocked"
     assert steps["production_buyer_followups"]["completion_state"] == "warning"
     assert "/v1/chat/completions" in report["required_runtime_endpoints"]
     assert "/api/v1/commercial_demo_scenarios/latest" in report["required_runtime_endpoints"]
-    assert report["related_runtime_reports"]["commercial_completion_status"] == "commercial_completion_ready_with_warnings"
-    assert report["related_runtime_reports"]["buyer_acceptance_workflow_status"] == "buyer_acceptance_workflow_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_completion_status"] == "commercial_completion_blocked"
+    assert report["related_runtime_reports"]["buyer_acceptance_workflow_status"] == "buyer_acceptance_workflow_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["demo_links"]["runtime_endpoint"] == "/api/v1/commercial_demo_scenarios/latest"
 
@@ -130,7 +130,7 @@ def test_commercial_demo_scenarios_endpoint_openapi_admin_and_docs_contract() ->
         "KRW 2B Commercial Demo Scenarios",
         "local_commercial_demo_scenarios",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "matches release authorization",
         "Do not create a separate library, Git submodule, or extracted package now",
     ]:
         assert expected_text in demo_doc
