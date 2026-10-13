@@ -105,9 +105,16 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
       - name: Install pinned runtime dependencies
         timeout-minutes: 10
-        run: python -m pip install --require-hashes -r requirements.lock
+        run: |
+          uv sync --locked --extra api --extra db --extra queue
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Install OpenCode CLI
         timeout-minutes: 10

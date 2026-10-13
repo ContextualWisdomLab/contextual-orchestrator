@@ -1,5 +1,53 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-26 protected-main test-signal recovery — Proposed
+
+Canonical owner PR [#1266](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1266)
+recovers the runtime and test authority lost by earlier restack merges. Its exact
+CI-equivalent baseline exposed 153 failures plus one collection error on
+protected `main@5665b0ad`; the first owner repair removes 77 OpenRouter
+availability/answer-quality violations and restores collection so remaining
+failures are visible rather than hidden.
+
+The existing RED
+`test_unbounded_synchronous_embedding_waits_for_provider_completion` proves
+that the application default `timeout=None` reached
+`ProviderEmbeddingBatchBackend.wait`, where `math.isfinite(None)` raised
+`TypeError` instead of waiting for provider completion. GREEN
+`343bf7f82fd4f483ca829295c735b4e75017e31c` accepts `None` and non-finite
+numeric deadlines as the same explicit unbounded contract; documentation
+successor `ea1ac223bd8eb8c137c490ef7871734a27558a69` records that boundary.
+This is source evidence only until fresh exact-head hosted tests execute.
+
+Hosted RED run [36147466940](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36147466940)
+selected the repository's pinned Rust 1.97.1 directory override, whose
+`profile = "minimal"` omitted `rustfmt` and `clippy`; the Rust gate therefore
+failed before formatting or linting. GREEN source
+`6e70a196d715fd3c9ba9b89bc8698f252ead04e5` declares both components in
+`rust-toolchain.toml`. This is configuration evidence only until its fresh
+exact-head hosted Rust gate completes.
+
+Follow-up source at `f882ee7b12e805bd5924a28d3a23999d7e76f160`
+integrates the previously dropped #1074 request-policy/effort snapshots,
+psychometric deployment identities and selection-design receipts; restores typed
+EgressWeave allowlist failures; repairs the planning ADR filename and paper
+inventory; and moves affected CI installs to the exact `uv.lock` environment.
+These source deltas supersede the earlier “not fixed” bucket descriptions; their
+hosted verification remains pending.
+
+Current-head review found the OpenRouter telemetry fetch still used unbounded
+`response.read()`. RED `e76d3b3954de37c293a98339aefadbdd016e0d90`
+read the full oversized payload (requested size `-1`) and returned a parsed
+99.5 value. GREEN `9cf335ab8021923cf4e301f951e4e37a5bae01fb`
+reads only the shared 8 MiB provider-response bound plus one byte and rejects an
+oversized payload before JSON parsing. Exact source/test AST parsing passed; the
+direct behavior probe rejected the oversized response with one 65-byte read
+under a test-injected 64-byte bound and preserved a valid 99.5 response.
+
+Status remains **Proposed**. Fresh exact-head hosted tests, independent approval,
+protected integration, an immutable fast-mlsirm release instead of VCS
+consumption, and consumer pins remain unverified.
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
@@ -7443,6 +7491,103 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
 
+## 2026-09-27 PR #1269 executable-fixture carryover — Proposed
+
+Canonical successor PR #1266 already contains predecessor #1269's two
+production repairs: `ProviderEmbeddingBatchBackend.wait(timeout=None)` keeps
+the no-implicit-deadline contract, and EgressWeave allowlist misses remain typed,
+non-retryable `provider_connection_error` 502 responses. Existing successor
+tests cover direct unbounded completion, infinite waits, coordinator defaults,
+and allowlist classification/failover.
+
+The remaining distinct executable requirements are carried at
+`2eceb6474c2904ae308991e89595b1f44c852940`: a finite wait returns while the
+provider is blocked, and the real default `/v1/embeddings` HTTP route forwards
+`ModelClient.timeout=None` unchanged to the provider backend. The predecessor's
+exact `cd30956feda8452aedb751a30a7f0206c442e1b2` reported 8/8 focused GREEN;
+the successor's isolated finite-deadline case passes and its exact test blob
+`8db8c9ec80757d25cd715aa3acaf191c7f613640` compiles. Fresh exact-head hosted
+execution and independent approval remain required; status stays Proposed.
+
+## 2026-09-27 Same-agent selection receipt fidelity — Proposed
+
+PR #1266's deterministic selection receipt recorded each candidate once even
+when the research-backed retry decision made multiple real calls to the same
+Agent. That understated request execution and contradicted the existing
+endpoint-race invariant that `attempted_deployment_ids` reproduces actual call
+order and multiplicity. RED `f56e10d3` extends the ordinary free-pool retry
+fixture: five real provider calls produced only three receipt entries. GREEN
+`9188e232` appends the deployment identity inside the retry loop, preserving
+each call without changing retry admission, ordering, weights, or fallback.
+
+Publication commit `cad76d46` exposed a transfer-path defect: a locally
+captured large-file payload contained an output-truncation marker, corrupting
+`orchestrator.py`, and the same path truncated this baseline. Forward repair
+`bd3d83d9` restores the source from protected predecessor blob `5e7bf08b`
+plus the reviewed one-line change. This receipt restores the full baseline
+directly from exact `ca5efdc0` authority. No force push or history rewrite was
+used. Exact-head hosted execution, independent approval, protected-main
+integration, and immutable release remain required; status stays Proposed.
+
+## 2026-09-27 PR #1266 review-boundary repair — Proposed
+
+Exact head `2a4bd5583f1dc03d563e013121d2d752e1d9fe46` retained three valid
+review findings. The OpenRouter uptime fake accepted no bounded-read size, so
+its `TypeError` was caught as availability failure and the assertion never
+proved the 8 MiB read ceiling. The finite embedding-wait worker used its own
+two-second escape, making completion race the assertion. Most importantly,
+`_observe_contextual_quality` held the psychometric persistence lock while
+`_embed_cached` could perform a provider-backed call under the product's
+`timeout=null` contract, serializing unrelated observation persistence and
+Agent-pool edits behind an intentionally unbounded wait.
+
+The repair makes the uptime fake record the exact requested size, keeps the
+embedding worker blocked until deterministic fixture cleanup, and splits the
+psychometric critical section around embedding. Deployment identity is checked
+before the call and revalidated under the same lock before mutation and
+persistence, so stale observations remain fail-closed without holding a shared
+lock across network I/O. The concurrent retirement regression test was RED on
+the reviewed head and GREEN after the change; the three affected test modules
+then reported `121 passed`. The released fast-mlsirm consumer update below
+replaces the deprecated DIF call with `detect_dif_logistic_purified` and removes
+the stale pytest-asyncio option that emitted an unknown-configuration warning
+without the plugin. Hosted
+exact-head checks and independent approval remain required; status stays
+Proposed. All three reviewed threads are resolved and the PR is Ready; queued
+hosted checks are still non-terminal and do not establish merge authority.
+
+## 2026-09-27 PR #1266 lockfile-audit restoration — Proposed
+
+Codex review of successor head `24dd16188ca679a06caba1a4682feabe973ffa86`
+found that the Python supply-chain job audited only the environment installed
+from `uv.lock`, although repository governance defines `requirements.lock` as
+the audit authority. The two locks could diverge while the gate remained GREEN.
+The previous `requirements.lock` audit had been replaced because its
+commit-pinned fast-mlsirm VCS requirement could not participate in pip's hash
+checking mode.
+
+The canonical owner has since published immutable
+[fast-mlsirm v0.11.4](https://github.com/ContextualWisdomLab/fast-mlsirm/releases/tag/v0.11.4)
+from commit `e44b52d851596910dc7a8fa3f174f2aff03872fa`, 399 commits after the
+consumer's old `09f762ded35786dd1078222a4577ff09d649816f` pin. This repair bumps
+the consumer to exact `fast-mlsirm==0.11.4`, regenerates `uv.lock` and the
+hash-complete `requirements.lock`, and restores
+`pip_audit --require-hashes -r requirements.lock`. The CycloneDX artifact still
+describes the installed `.venv`, so lockfile vulnerability admission and
+runtime SBOM evidence remain separate. RED showed both the weakened workflow
+and VCS dependency contract. The first restored full audit then found
+`anyio==4.14.1` vulnerable to CVE-2026-63374, CVE-2026-64847, and
+CVE-2026-63349; regenerating the audit lock upgraded the package to the fixed
+`anyio==4.14.2`. GREEN resolved and hash-validated all 46 locked packages and
+reported no known vulnerabilities; `uv lock --check` passed and the synced
+environment reports `fast-mlsirm 0.11.4`. The constrained Atheris and property
+fuzz locks were regenerated with the runtime lock so their common
+`typing-extensions==4.16.0` pin remains jointly installable. The held-out DIF
+benchmark uses the release's non-deprecated `detect_dif_logistic_purified`
+entry point, records that exact method identity and its explicit compatibility
+configuration, and emits neither predecessor warning. Fresh exact-head hosted Security,
+CodeQL, Semgrep, and review results remain required; status stays Proposed.
+
 
 ## 2026-09-20 Protected-main CI regression RCA
 
@@ -7491,3 +7636,46 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-27 protected-main refresh for #1266 — Proposed
+
+Ordinary merge `3a114546` preserves protected main `6ef802bf`, including
+#1291 fresh-runner pinned Rust bootstrap and #1220 document review. Initial
+strict verification failed three inherited recovery assertions (session
+`14510`): they assumed a retry deadline for headerless 429. Recovery fixtures
+now use provider-owned integer Retry-After; the mixed 429/500 matrix also
+retains absent-timing no-replay cases for both zero and positive wait budgets.
+Intermediate fixture errors (nonexistent exception attribute, fractional
+Retry-After) were corrected before acceptance; no production policy changed.
+
+Six affected suites passed **245 tests**, warnings as errors, process exit 0
+(session `58118`); actionlint and diff check passed. This is local integration
+evidence, not hosted checks or independent approval.
+
+Ledger: loop `1016-main-refresh`, parent `1016`, owner #1266 integration,
+status locally verified; next_action push once and restack descendants, then
+verify current-head CI/review; return_to #1016 protected/versioned contract.
+
+## 2026-09-27 full-suite contract drift repair — Proposed
+
+At #1231 `4bfe89a9`, the CI full-test command with Python 3.12 and the
+locked decision extension ended **4 failed, 5344 passed, 5 skipped**, exit 1
+(session `54149`, 286.58s; log `/private/tmp/co-1231-full-suite-4bfe89a9.log`).
+The skips concern the separate tokenizer extension. This is not full-suite
+success or strict-warning acceptance.
+
+The two text/image tests expected synthetic recovery for headerless 429;
+their unavailable-timing rows now assert 429 and one call per candidate while
+provider-timed recovery remains tested. The subprocess shutdown test assumed
+a memory-only job remained running after close; it now asserts cancellation
+and terminal visibility while the provider runner remains genuinely stalled,
+preserving the normal-process-exit proof. These parent-owned corrections passed
+24 strict tests across image storms, process exit, HTTP wait and batch routing
+(session `48689`). No production policy or provider timeout changed.
+
+The separate #1231 stream assertion expected silent success without DONE;
+its focused successor retains both partial deltas, then asserts typed
+provider_stream_incomplete and retryable false. Client-boundary and streaming
+suites passed 88 strict tests (session `31181`). Current-head hosted full
+tests and independent review remain required; prior whole-suite counts are
+historical evidence, never transferred into a green claim.

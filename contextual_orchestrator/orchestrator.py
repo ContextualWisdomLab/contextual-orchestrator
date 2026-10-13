@@ -92,6 +92,7 @@ from .tool_fallback import (
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
 from .reasoning_effort_profile import (
+    EffortCatalogSnapshot,
     ReasoningEffortProfile,
     apply_request_profile,
     snapshot_role_effort_catalog,
@@ -2721,7 +2722,7 @@ class ModelClient:
                 centered = [(value / 255.0) * 2.0 - 1.0 for value in raw]
                 vectors.append(centered)
             return vectors, None
-        destination = self._validate_provider(agent)  # pragma: no cover
+        destination = self._validated_destination(agent, transport="embedding")  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
         response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
@@ -3409,7 +3410,7 @@ class ModelClient:
                 yield answer[start : start + 24]
             return
 
-        destination = self._validate_provider(agent)  # pragma: no cover
+        destination = self._validated_destination(agent, transport="stream")  # pragma: no cover
         settings = self.request_settings_snapshot()
         payload = {  # pragma: no cover
             "model": agent.model,
@@ -3801,7 +3802,7 @@ class ModelClient:
             method="POST",
         )
         try:
-            with self._open_model_provider(request, self._validate_provider(agent), agent) as response:  # pragma: no cover
+            with self._open_model_provider(request, self._validated_destination(agent, transport="passthrough"), agent) as response:  # pragma: no cover
                 return self._read_bounded_response(
                     response, MAX_PROVIDER_RESPONSE_BYTES
                 ), response.headers.get_content_type()
@@ -3827,7 +3828,7 @@ class ModelClient:
             agent,
             "GET",
             f"/{endpoint.lstrip('/')}",
-            destination=self._validate_provider(agent),
+            destination=self._validated_destination(agent, transport="passthrough"),
             max_response_bytes=max_response_bytes,
         )
 
@@ -3839,7 +3840,7 @@ class ModelClient:
             agent,
             "DELETE",
             f"/{endpoint.lstrip('/')}",
-            destination=self._validate_provider(agent),
+            destination=self._validated_destination(agent, transport="passthrough"),
             max_response_bytes=max_response_bytes,
         )
 
@@ -3857,7 +3858,7 @@ class ModelClient:
             method="GET",
         )
         with self._open_model_provider(  # pragma: no cover
-            request, self._validate_provider(agent), agent
+            request, self._validated_destination(agent, transport="passthrough"), agent
         ) as response:
             return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
 
@@ -3894,7 +3895,7 @@ class ModelClient:
             method="POST",
         )
         with self._open_model_provider(  # pragma: no cover
-            request, self._validate_provider(agent), agent
+            request, self._validated_destination(agent, transport="passthrough"), agent
         ) as response:
             result = json.loads(
                 self._read_bounded_response(response, max_response_bytes).decode("utf-8")
@@ -4066,6 +4067,15 @@ class ModelClient:
             "echo": echoed,
         }
 
+    def _validated_destination(self, agent: ModelAgent, *, transport: str) -> ProviderDestination:
+        """Preserve the caller's transport without changing provider overrides."""
+        try:
+            return self._validate_provider(agent)
+        except ProviderUpstreamError as exc:
+            raise classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport=transport
+            ) from None
+
     def _validate_provider(self, agent: ModelAgent) -> ProviderDestination:
         """Reject unsafe model endpoints and return the exact address to connect to."""
         # Runtime secret must be resolvable from the KV — never an env var name,
@@ -4197,7 +4207,7 @@ class ModelClient:
         elif _is_local_provider_url(agent.base_url):
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
-            destination = self._validate_provider(agent)  # pragma: no cover
+            destination = self._validated_destination(agent, transport="batch")  # pragma: no cover
             batch_error: ProviderUpstreamError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
@@ -5784,7 +5794,7 @@ class TaskOrchestrator:
         # production uses full jitter to avoid synchronized retry bursts.
         self._tool_retry_sleep = time.sleep
         self._tool_retry_jitter = random.uniform
-        self.policy = OrchestrationPolicy()
+        self._configured_policy = OrchestrationPolicy()
         # Opt-in issue #568 catalog. None keeps production answers and payload
         # keys unchanged. Operator next action: pass default_role_effort_catalog()
         # to attach a replayable snapshot; do not treat that as a default change.
@@ -5825,6 +5835,7 @@ class TaskOrchestrator:
         # gate actually changes which value is currently winning, and
         # removed when _rate_limit_remaining expires the cooldown.
         self._rate_limit_assumed: set[str] = set()
+        self._rate_limit_recorded_at: dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
         # Injectable wait seam (mirrors _tool_retry_sleep) so a rate-limit-storm
         # test can assert the requested wait duration without a real sleep.
@@ -6487,6 +6498,7 @@ class TaskOrchestrator:
 
             for candidate in eligible_round:
                 started_at = time.perf_counter()
+                cooldown_attempt_started = time.monotonic()
                 candidate_payload = dict(upstream)
                 candidate_payload["model"] = candidate.model
                 if isinstance(file_replicas, dict):
@@ -6628,7 +6640,7 @@ class TaskOrchestrator:
                             candidate.id,
                             resolve_retry_after_seconds(signal_http_error)
                             if signal_http_error is not None
-                            else None,
+                            else classified.extra_detail.get("retry_after_seconds"),
                             status=signal_status,
                         )
                     if (
@@ -6657,7 +6669,7 @@ class TaskOrchestrator:
                             consumed_response.close()
                         except Exception:
                             pass  # Preserve classification and failover on cleanup failure.
-                self._record_success(candidate.id)
+                self._record_success(candidate.id, attempt_started_at=cooldown_attempt_started)
                 if candidate.group_name:
                     self._group_router.observe_success(
                         candidate.id, time.perf_counter() - started_at
@@ -8236,6 +8248,7 @@ class TaskOrchestrator:
             parts = []
             emitted = False
             started_at = time.perf_counter()
+            cooldown_attempt_started = time.monotonic()
             try:
                 record_initial_selection([agent.id], "stream_route")
                 for delta in self.client.stream_chat(agent, messages, **stream_kwargs):
@@ -8336,7 +8349,7 @@ class TaskOrchestrator:
             output_budget_callback(output_budget)
         if agent.group_name or free_only:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
-        self._record_success(agent.id)
+        self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
         answer = "".join(parts)
         # Real-time judging after the stream: already-sent bytes cannot be
         # recalled, so the verdict never changes this response -- it feeds the
@@ -8347,6 +8360,7 @@ class TaskOrchestrator:
             text=text,
             answer=answer,
             served_id=agent.id,
+            served_candidate_id=self._psychometric_candidate_id(agent),
             latency_seconds=latency_seconds,
             usage=usage,
             free_only=free_only,
@@ -8370,7 +8384,7 @@ class TaskOrchestrator:
             trace_step.update(output_budget)
         attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
         trace_step["selection_design"] = self._selection_design_receipt(
-            [agent], attempted, agent
+            candidates, attempted, agent
         )
         record = self._with_effort_snapshot(
             {
@@ -8890,6 +8904,7 @@ class TaskOrchestrator:
             text=prompt,
             answer=result["content"],
             served_id=agent.id,
+            served_candidate_id=self._psychometric_candidate_id(agent),
             latency_seconds=None,
             usage=result.get("usage"),
             free_only=False,
@@ -9174,6 +9189,7 @@ class TaskOrchestrator:
             updated_agents = [agent for agent in updated_candidates if not agent.disabled]
             self.candidates = updated_candidates
             self.agents = updated_agents
+            self._retain_psychometric_candidates()
             self._append_audit_event(
                 "model_timeout_policy_changed",
                 {
@@ -9661,6 +9677,7 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             selection_start = len(_REQUEST_SELECTION_ATTEMPTS.get() or ())
             attempt_answer, attempt_served_id, attempt_served_model, attempt_usage = (
                 self._invoke_with_rate_limit_recovery(
@@ -9671,8 +9688,13 @@ class TaskOrchestrator:
                     allowed_agent_ids=allowed_agent_ids,
                     virtual_selector=virtual_selector,
                     prompt_token_lower_bound=prompt_bound,
+                    selection_design_sink=selection_design.append,
                 )
             )
+            if not selection_design:
+                selection_design.append(self._selection_design_receipt(
+                    ranked_pool, [candidate], self._agent(attempt_served_id)
+                ))
             attempted = list((_REQUEST_SELECTION_ATTEMPTS.get() or [candidate])[selection_start:])
             current_route_evidence = self._last_route_evidence
             self._last_route_evidence = None
@@ -9739,6 +9761,7 @@ class TaskOrchestrator:
             }
             if attempt_usage is not None:
                 row["usage"] = attempt_usage
+            row["selection_design"] = selection_design[0]
             if isinstance(output_budget, dict):
                 row.update(output_budget)
             if attempt_served_id != candidate.id:
@@ -9761,7 +9784,7 @@ class TaskOrchestrator:
                     text=text,
                     answer=answer,
                     served_id=served_id,
-                    served_candidate_id=self._psychometric_candidate_id(served),
+                    served_candidate_id=selection_design[0]["selected_deployment_id"],
                     latency_seconds=latency_seconds,
                     usage=attempt_usage,
                     free_only=free_only,
@@ -9772,9 +9795,6 @@ class TaskOrchestrator:
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
-            row["selection_design"] = self._selection_design_receipt(
-                ranked_pool, attempted, served
-            )
             trace_rows.append(row)
             if verification["accepted"]:
                 break
@@ -10058,6 +10078,7 @@ class TaskOrchestrator:
                 )
                 step_prompt_bound = prompt_bound
             start = time.perf_counter()
+            selection_design: list[dict[str, Any]] = []
             output, served_id, _served_model, usage = self._invoke_with_rate_limit_recovery(
                 agent,
                 step_messages,
@@ -10069,7 +10090,12 @@ class TaskOrchestrator:
                 excluded_agent_ids=_excluded_agent_ids,
                 virtual_selector=virtual_selector,
                 prompt_token_lower_bound=step_prompt_bound,
+                selection_design_sink=selection_design.append,
             )
+            if not selection_design:
+                selection_design.append(self._selection_design_receipt(
+                    [agent], [agent], self._agent(served_id)
+                ))
             extras = self._last_assistant_message
             self._last_assistant_message = None
             output_budget = self._last_output_budget
@@ -10089,13 +10115,12 @@ class TaskOrchestrator:
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
+            row["selection_design"] = selection_design[0]
             if isinstance(output_budget, dict):
                 row.update(output_budget)
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
-            attempted = list(_REQUEST_SELECTION_ATTEMPTS.get() or [agent])
-            row["selection_design"] = self._selection_design_receipt([agent], attempted, agent)
             trace.append(row)
             if progress is not None:
                 _notify_progress(progress, step.role, "completed", redact_value(output))
@@ -10234,6 +10259,10 @@ class TaskOrchestrator:
                 + ", ".join(unsupported_roles)
             )
 
+
+
+
+
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
         """Use the active request revision; preserve standalone single-role adapters."""
         active = _REQUEST_EXECUTION_SNAPSHOT.get()
@@ -10288,51 +10317,8 @@ class TaskOrchestrator:
         if attempts is not None:
             attempts.append(agent)
 
-    def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
-        """Bind routing evidence to the declared deployment and decode policy."""
-        return self._psychometric_candidate_ids((agent,))[0]
 
-    def _psychometric_candidate_ids(self, agents: Iterable[ModelAgent]) -> list[str]:
-        """Bind an ordered batch to the request's validated decode-policy snapshot."""
-        agents = list(agents)
-        if not agents:
-            return []
-        effort_snapshot = self._effort_snapshot()
-        effort_catalog = effort_snapshot.snapshot_hash if effort_snapshot is not None else None
-        candidate_ids = []
-        for agent in agents:
-            configuration = json.dumps(
-                {"agent": agent.to_config(), "role_effort_catalog": effort_catalog},
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            )
-            revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
-            candidate_ids.append(f"{agent.id}:{revision}")
-        return candidate_ids
 
-    def _selection_design_receipt(
-        self,
-        candidates: Iterable[ModelAgent],
-        attempted: Iterable[ModelAgent],
-        selected: ModelAgent,
-    ) -> dict[str, Any]:
-        """Describe the observed deterministic assignment without inventing propensity."""
-        policy = json.dumps(
-            self.policy.as_dict(), sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-        candidates = list(candidates)
-        attempted = list(attempted)
-        deployment_ids = self._psychometric_candidate_ids([*candidates, *attempted, selected])
-        return {
-            "assignment_mechanism": "deterministic_ranked",
-            "propensity_status": "not_identified",
-            "selected_probability": None,
-            "policy_snapshot_hash": hashlib.sha256(policy).hexdigest(),
-            "candidate_deployment_ids": deployment_ids[:len(candidates)],
-            "attempted_deployment_ids": deployment_ids[len(candidates):-1],
-            "selected_deployment_id": deployment_ids[-1],
-        }
 
     def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
         """Attach effective policy and an opt-in replayable role-effort snapshot.
@@ -10709,6 +10695,52 @@ class TaskOrchestrator:
         return [by_evidence_id[evidence_id] for evidence_id in evidenced_ids] + [
             candidate for candidate in candidates if candidate.id not in evidenced_agent_ids
         ]
+
+    def _psychometric_candidate_id(self, agent: ModelAgent) -> str:
+        """Bind observed quality to a deployment and its decode policy."""
+        return self._psychometric_candidate_ids((agent,))[0]
+
+    def _psychometric_candidate_ids(self, agents: Iterable[ModelAgent]) -> list[str]:
+        """Preserve ordered candidates under one validated effort revision."""
+        agents = list(agents)
+        if not agents:
+            return []
+        snapshot = self._effort_snapshot()
+        catalog_hash = snapshot.snapshot_hash if snapshot is not None else None
+        identities = []
+        for agent in agents:
+            configuration = json.dumps(
+                {"agent": agent.to_config(), "role_effort_catalog": catalog_hash},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            revision = hashlib.sha256(configuration.encode("utf-8")).hexdigest()
+            identities.append(f"{agent.id}:{revision}")
+        return identities
+
+    def _selection_design_receipt(
+        self,
+        candidates: Iterable[ModelAgent],
+        attempted: Iterable[ModelAgent],
+        selected: ModelAgent,
+    ) -> dict[str, Any]:
+        """Describe deterministic assignment without fabricating a propensity."""
+        policy = json.dumps(
+            self.policy.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        candidates = list(candidates)
+        attempted = list(attempted)
+        identities = self._psychometric_candidate_ids([*candidates, *attempted, selected])
+        return {
+            "assignment_mechanism": "deterministic_ranked",
+            "propensity_status": "not_identified",
+            "selected_probability": None,
+            "policy_snapshot_hash": hashlib.sha256(policy).hexdigest(),
+            "candidate_deployment_ids": identities[:len(candidates)],
+            "attempted_deployment_ids": identities[len(candidates):-1],
+            "selected_deployment_id": identities[-1],
+        }
 
     def _observe_contextual_quality(
         self,
@@ -11533,6 +11565,7 @@ class TaskOrchestrator:
                 else endpoint
             )
             started_at = time.perf_counter()
+            cooldown_attempt_started = time.monotonic()
             try:
                 record_initial_selection([agent.id], "capability_proxy")
                 result = (
@@ -11569,10 +11602,10 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     agent.id, time.perf_counter() - started_at
                 )
-                self._record_success(agent.id)
+                self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
                 return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
-            self._record_success(agent.id)
+            self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
             return result
         if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
@@ -11601,6 +11634,7 @@ class TaskOrchestrator:
         eligibility_role: str | None = None,
         excluded_agent_ids: set[str] | None = None,
         prompt_token_lower_bound: int | None = None,
+        selection_design_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -11648,6 +11682,7 @@ class TaskOrchestrator:
                     + ", ".join(required_tags)
                 )
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        attempted: list[ModelAgent] = []
         route_attempts: list[dict[str, Any]] = []
         eligible_agent_ids = [candidate.id for candidate in candidates]
         race_members = self._equivalent_race_members(candidates, capability="text")
@@ -11749,7 +11784,13 @@ class TaskOrchestrator:
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
                 )
+                if selection_design_sink is not None:
+                    selection_design_sink(self._selection_design_receipt(
+                        candidates, race_members,
+                        next(member for member in race_members if member.id == outcome.winner_endpoint_id),
+                    ))
                 return output, served_id, served_model, usage
+            attempted.extend(race_members)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         bounded_provider_response_failures = 0
         bounded_request_too_large_failures = 0
@@ -11766,8 +11807,10 @@ class TaskOrchestrator:
         for agent in candidates:
             retry_attempt = 0
             while True:
+                attempted.append(agent)
                 try:
                     attempt_start = time.perf_counter()
+                    cooldown_attempt_started = time.monotonic()
                     effort_profile = self._role_effort_profile(role)
                     # This loop already decides retry-same-agent vs. failover
                     # per attempt below; single_attempt_transport() keeps
@@ -11922,6 +11965,7 @@ class TaskOrchestrator:
                     # health observation for measured group routing.
                     if (
                         action is ToolFallbackAction.RETRY_SAME_AGENT
+                        and not quota_rejection
                         and retry_attempt < retry_limit
                     ):
                         retry_attempt += 1
@@ -12004,7 +12048,9 @@ class TaskOrchestrator:
                         output_tokens=output_tokens,
                         total_tokens=total_tokens,
                     )
-                self._record_success(agent.id)
+                self._record_success(agent.id, attempt_started_at=cooldown_attempt_started)
+                if selection_design_sink is not None:
+                    selection_design_sink(self._selection_design_receipt(candidates, attempted, agent))
                 if route_attempts:
                     route_attempts.append(
                         {
@@ -12477,9 +12523,17 @@ class TaskOrchestrator:
             },
         )
 
-    def _record_success(self, agent_id: str) -> None:
+    def _record_success(self, agent_id: str, *, attempt_started_at: float | None = None) -> None:
         with self._circuit_lock:
             cleared = self._circuit.pop(agent_id, None)
+        # An older in-flight success cannot disprove a newer 429 from another
+        # request on this agent. Unknown attempt order preserves the cooldown.
+        with self._rate_limit_lock:
+            recorded_at = self._rate_limit_recorded_at.get(agent_id)
+            if recorded_at is not None and attempt_started_at is not None and attempt_started_at > recorded_at:
+                self._rate_limit_until.pop(agent_id, None)
+                self._rate_limit_assumed.discard(agent_id)
+                self._rate_limit_recorded_at.pop(agent_id, None)
         if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
 
@@ -12528,6 +12582,7 @@ class TaskOrchestrator:
         )
         until = time.monotonic() + resolved_seconds
         with self._rate_limit_lock:
+            self._rate_limit_recorded_at[agent_id] = time.monotonic()
             current = self._rate_limit_until.get(agent_id)
             if current is None or until > current:
                 self._rate_limit_until[agent_id] = until
@@ -12547,6 +12602,7 @@ class TaskOrchestrator:
             if remaining <= 0:
                 self._rate_limit_until.pop(agent_id, None)
                 self._rate_limit_assumed.discard(agent_id)
+                self._rate_limit_recorded_at.pop(agent_id, None)
                 return None
             return remaining
 
@@ -12580,6 +12636,8 @@ class TaskOrchestrator:
                     stale = self._rate_limit_until.get(agent_id)
                     if stale is not None and stale - time.monotonic() <= 0:
                         self._rate_limit_until.pop(agent_id, None)
+                        self._rate_limit_assumed.discard(agent_id)
+                        self._rate_limit_recorded_at.pop(agent_id, None)
         return snapshot
 
     def _rate_limit_wait_budget(self, agent: ModelAgent) -> float:
@@ -12702,6 +12760,7 @@ class TaskOrchestrator:
         excluded_agent_ids: set[str] | None = None,
         virtual_selector: bool,
         prompt_token_lower_bound: int | None = None,
+        selection_design_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call :meth:`_invoke`, retrying only cooled-down candidates after exhaustion.
 
@@ -12744,6 +12803,7 @@ class TaskOrchestrator:
                     eligibility_role=eligibility_role,
                     excluded_agent_ids=excluded_agent_ids,
                     prompt_token_lower_bound=prompt_token_lower_bound,
+                    selection_design_sink=selection_design_sink,
                 )
             except ProviderUpstreamError as exc:
                 current_route = exc.extra_detail.get("route")

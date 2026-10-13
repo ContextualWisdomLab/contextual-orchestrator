@@ -50,7 +50,11 @@ class _SyntheticExactCounter:
 
 
 def test_default_client_keeps_batch_lifecycle_separate_from_model_timeout() -> None:
-    """A null model timeout does not break the existing batch-retention boundary."""
+    """A null model timeout leaves the batch execution deadline unbounded.
+
+    The registry retention window is not substituted as an implicit deadline;
+    see ``test_unbounded_execution_timeout_never_substitutes_registry_retention``.
+    """
     coordinator = CostRoutingCoordinator(
         TaskOrchestrator([], allow_empty_agents=True),
         embedding_token_counter=_SyntheticExactCounter(),

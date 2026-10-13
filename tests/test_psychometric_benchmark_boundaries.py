@@ -13,6 +13,13 @@ import pytest
 from scripts import benchmark_psychometric_heldout as heldout
 from scripts import benchmark_psychometric_routing as routing
 
+DECLARED_DIF_CONTROLS = {
+    "fdr_q": heldout.DECLARED_DIF_FDR_Q,
+    "max_iter": heldout.DECLARED_DIF_MAX_ITER,
+    "max_rounds": heldout.DECLARED_DIF_MAX_ROUNDS,
+    "min_anchor_items": heldout.DECLARED_DIF_MIN_ANCHOR_ITEMS,
+}
+
 SMALL_HELDOUT_BOOTSTRAP = {
     "resample_count": 20,
     "confidence_level": 0.95,
@@ -292,16 +299,22 @@ def test_candidate_group_dif_requires_declared_sample_size() -> None:
     parameters = inspect.signature(heldout._validate_candidate_group_dif).parameters
     assert parameters["sample_size"].default is None
     with pytest.raises(ValueError, match="sample_size"):
-        heldout._validate_candidate_group_dif()
+        heldout._validate_candidate_group_dif(**DECLARED_DIF_CONTROLS)
     with pytest.raises(ValueError, match="sample_size"):
-        heldout._validate_candidate_group_dif(sample_size=True)
+        heldout._validate_candidate_group_dif(
+            sample_size=True, **DECLARED_DIF_CONTROLS
+        )
     with pytest.raises(ValueError, match="even"):
-        heldout._validate_candidate_group_dif(sample_size=3)
+        heldout._validate_candidate_group_dif(
+            sample_size=3, **DECLARED_DIF_CONTROLS
+        )
 
 
 def test_candidate_group_dif_uses_declared_sample_size() -> None:
     """The declared sample size is the actual two-group DIF population."""
-    report = heldout._validate_candidate_group_dif(sample_size=40)
+    report = heldout._validate_candidate_group_dif(
+        sample_size=40, **DECLARED_DIF_CONTROLS
+    )
     assert report["sample_size"] == 40
     assert len(report["expected_dif_items"]) == 1
 

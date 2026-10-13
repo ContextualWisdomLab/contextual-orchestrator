@@ -913,7 +913,6 @@ def test_http_virtual_free_structured_retries_429_with_400_in_either_order(
     client = _StructuredFailThenServeClient()
     orchestrator = TaskOrchestrator(
         _free_agents(), client=client, rate_limit_wait_seconds=0.2,
-        rate_limit_unknown_cooldown_seconds=0.001,
     )
     calls: list[str] = []
 
@@ -937,6 +936,7 @@ def test_http_virtual_free_structured_retries_429_with_400_in_either_order(
             provider_status=status,
             retryable=status == 429,
             transport="structured_synthesis",
+            extra_detail={"retry_after_seconds": 0.001} if status == 429 else {},
         )
 
     monkeypatch.setattr(client, "proxy_send_once", send)

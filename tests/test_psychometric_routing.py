@@ -745,8 +745,12 @@ def test_heldout_report_pairs_every_delta_with_its_interval(monkeypatch) -> None
     }
     assert "not live decision latency" in adaptive["known_limit"]
     dif = report["candidate_group_dif_validation"]
-    assert dif["method"] == "logistic_dif_purified"
+    assert dif["method"] == "detect_dif_logistic_purified"
     assert dif["sample_size"] == heldout_benchmark.DECLARED_DIF_SAMPLE_SIZE
+    assert dif["fdr_q"] == heldout_benchmark.DECLARED_DIF_FDR_Q
+    assert dif["max_iter"] == heldout_benchmark.DECLARED_DIF_MAX_ITER
+    assert dif["max_rounds"] == heldout_benchmark.DECLARED_DIF_MAX_ROUNDS
+    assert dif["min_anchor_items"] == heldout_benchmark.DECLARED_DIF_MIN_ANCHOR_ITEMS
     assert dif["expected_dif_items"] == [0]
     assert dif["flagged_items"] == [0]
     assert dif["known_dif_recall"] == 1.0
@@ -1028,6 +1032,58 @@ def test_runtime_deployment_change_discards_contextual_judge_observation() -> No
     orchestrator.close()
 
 
+def test_discovery_replacement_discards_obsolete_observation() -> None:
+    original = ModelAgent("model_a", "model-a", tags=("discovered", "reasoning", "writing"))
+    orchestrator = TaskOrchestrator([original])
+    try:
+        orchestrator._observe_contextual_quality(
+            "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
+        )
+        orchestrator.sync_discovered_agents([
+            replace(original, model="model-b")
+        ])
+        assert orchestrator._psychometric_router.records() == []
+        orchestrator.sync_discovered_agents([original])
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
+
+def test_timeout_patch_discards_obsolete_observation(tmp_path: Path) -> None:
+    agent = ModelAgent("model_a", "model-a")
+    orchestrator = TaskOrchestrator([agent], agents_db=str(tmp_path / "agents.sqlite3"))
+    try:
+        orchestrator._observe_contextual_quality(
+            "system/user", "model_a", accepted=True, latency_seconds=0.1, output_tokens=10
+        )
+        orchestrator.patch_agent("default", "model_a", {"model_timeout_seconds": 7200})
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
+
+def test_inflight_answer_does_not_judge_replacement_deployment(monkeypatch) -> None:
+    original = ModelAgent("model_a", "model-a", tags=("reasoning", "writing"))
+    orchestrator = TaskOrchestrator([original])
+    original_deployment = orchestrator._psychometric_candidate_id(original)
+
+    def reply(_agent, _messages, **_kwargs):
+        orchestrator.patch_agent("default", original.id, {"priority": 2})
+        return "answer from original deployment"
+
+    monkeypatch.setattr(orchestrator.client, "chat", reply)
+    monkeypatch.setattr(
+        orchestrator, "_model_judge_verification",
+        lambda *_args, **_kwargs: {"accepted": True, "reason": "unit verdict", "judge": "model"},
+    )
+    try:
+        result = orchestrator.route_once([{"role": "user", "content": "answer this"}])
+        assert result["trace"][0]["selection_design"]["selected_deployment_id"] == original_deployment
+        assert orchestrator._psychometric_router.records() == []
+    finally:
+        orchestrator.close()
+
+
 def test_runtime_change_cannot_race_a_persisted_psychometric_observation(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1297,12 +1353,10 @@ def test_selection_receipt_does_not_mix_catalog_revisions() -> None:
         yield agent
 
     try:
+        starting_id = orchestrator._psychometric_candidate_id(agent)
         receipt = orchestrator._selection_design_receipt([agent], attempted_agents(), agent)
         selected_id = receipt["selected_deployment_id"]
-        assert selected_id == (
-            "audit_candidate:"
-            "91dad5c97d95337b359e020fd9d2636cfaeebb0257622cc5490620ed7cf5b13e"
-        )
+        assert selected_id != starting_id
         assert receipt["candidate_deployment_ids"] == [selected_id]
         assert receipt["attempted_deployment_ids"] == [selected_id]
 
@@ -1348,6 +1402,60 @@ def test_empty_pool_retention_discards_evidence_without_catalog_validation() -> 
     finally:
         orchestrator.close()
 
+
+def test_slow_observation_embedding_does_not_block_candidate_retirement(monkeypatch) -> None:
+    """A slow embedding must not hold up pool changes or revive a removed member."""
+    agent = ModelAgent("departing_agent", "model-departing")
+    orchestrator = TaskOrchestrator([agent])
+    entered = threading.Event()
+    release = threading.Event()
+    retiring = threading.Event()
+    retired = threading.Event()
+    errors: list[Exception] = []
+
+    def slow_embedding(_text: str) -> list[float]:
+        entered.set()
+        assert release.wait(timeout=5)
+        return [1.0]
+
+    def observe() -> None:
+        try:
+            orchestrator._observe_contextual_quality(
+                "departing context", agent.id, accepted=True,
+                latency_seconds=None, output_tokens=None,
+            )
+        except Exception as error:
+            errors.append(error)
+
+    def retire() -> None:
+        try:
+            retiring.set()
+            orchestrator._retain_psychometric_candidates()
+        except Exception as error:
+            errors.append(error)
+        finally:
+            retired.set()
+
+    monkeypatch.setattr(orchestrator, "_embed_cached", slow_embedding)
+    observer = threading.Thread(target=observe)
+    retainer = threading.Thread(target=retire)
+    observer.start()
+    try:
+        assert entered.wait(timeout=5)
+        orchestrator.candidates = []
+        retainer.start()
+        assert retiring.wait(timeout=5)
+        assert retired.wait(timeout=1)
+    finally:
+        release.set()
+        observer.join(timeout=5)
+        if retainer.ident is not None:
+            retainer.join(timeout=5)
+        orchestrator.close()
+
+    assert not observer.is_alive() and not retainer.is_alive()
+    assert errors == []
+    assert orchestrator._psychometric_router.records() == []
 
 def test_departed_served_agent_observation_is_skipped_not_raised() -> None:
     """A pool refresh during judging must not fail a request that already has its answer."""
