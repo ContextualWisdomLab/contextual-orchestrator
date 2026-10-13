@@ -8,6 +8,7 @@ fails closed when the installed SDK is missing or has another major version.
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 import secrets
 from typing import Any
 
@@ -21,6 +22,18 @@ from .web_search import web_search
 
 MCP_SERVER_TOKEN_CREDENTIAL = "WEB_SEARCH_MCP_TOKEN"
 MCP_SERVER_SCOPE = "web-search"
+_LOGGER = logging.getLogger(__name__)
+
+
+def _mcp_tool_error(name: str, cause: Exception) -> Any:
+    """Return a fixed public error while retaining the cause in server logs."""
+    from mcp.types import CallToolResult, TextContent
+
+    _LOGGER.error("MCP tool %r failed: %s", name, cause, exc_info=cause)
+    return CallToolResult(
+        content=[TextContent(type="text", text=f"Error executing tool {name}")],
+        isError=True,
+    )
 
 
 class _StaticMCPTokenVerifier:
@@ -105,7 +118,10 @@ def build_web_search_mcp_server() -> Any:
 
     @server.tool(name="web_search", description="Search the configured SearXNG instance.")
     def web_search_tool(query: str) -> list[dict[str, Any]]:
-        return web_search_tool_payload(query)
+        try:
+            return web_search_tool_payload(query)
+        except Exception as exc:
+            return _mcp_tool_error("web_search", exc)
 
     @server.tool(
         name="assess_vulnerability_claim",

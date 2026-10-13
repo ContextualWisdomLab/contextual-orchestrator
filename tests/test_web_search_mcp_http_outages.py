@@ -148,6 +148,16 @@ class OwnedReset(OwnedStall):
         connection.close()
 
 
+def test_mcp_error_envelope_redacts_cause(caplog):
+    """The source-owned error result keeps cause details server-side only."""
+    cause = RuntimeError('sentinel provider detail')
+    with caplog.at_level('ERROR', logger='contextual_orchestrator.web_search_mcp'):
+        result = gateway._mcp_tool_error('web_search', cause)
+    assert result.is_error is True
+    assert [item.text for item in result.content] == ['Error executing tool web_search']
+    assert 'sentinel provider detail' in caplog.text
+
+
 @pytest.mark.parametrize('condition', ['synthetic-success', 'missingconfig', 'owned-reset', 'stall'])
 def test_streamable_http_envelope(monkeypatch, condition):
     """Characterize actual SDK envelopes, not external-service incident causes."""
