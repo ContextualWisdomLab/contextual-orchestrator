@@ -10121,31 +10121,36 @@ class TaskOrchestrator:
 
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
+            answer = outputs[steps[-1].id]
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
             if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
                 verification = self._model_judge_verification(
                     task,
                     verification,
+                    answer=answer,
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
                     excluded_agent_ids=_excluded_agent_ids,
                     required_tags=required_tags,
                 )
-            answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
         else:
+            answer = outputs[steps[-1].id]
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
                 verification = self._model_judge_verification(
                     task,
                     verification,
+                    answer=answer,
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
                     excluded_agent_ids=_excluded_agent_ids,
                     required_tags=required_tags,
                 )
-            answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            # The verifier step (steps[2]) writes a review report, never the answer; the
+            # synthesizer's final step answers regardless of ``verifier_required``, matching
+            # the generated-plan branch above. The flag only controls the worker fallback.
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
@@ -13183,12 +13188,22 @@ class TaskOrchestrator:
         task: str,
         fallback: dict[str, Any],
         *,
+        answer: str | None = None,
         free_only: bool = False,
         allowed_agent_ids: set[str] | None = None,
         excluded_agent_ids: set[str] | None = None,
         required_tags: tuple[str, ...] = (),
     ) -> dict[str, Any]:
-        """Ask a model for a strict structured verdict and fail closed on uncertainty."""
+        """Judge an answer against verifier evidence and fail closed on uncertainty.
+
+        Direct-route callers (``route_once``, streaming, and batch, all via
+        ``_realtime_route_judge``) omit ``answer``: the verifier output is the
+        response itself. Conduct callers pass their final-step response as
+        ``answer``, and the verifier report goes to fast-mlsirm as
+        ``reference_answer`` (a comparison standard, not evidence), so the
+        verdict describes the response that may be returned. Threshold and
+        criteria are identical on both paths.
+        """
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
             return {
@@ -13246,7 +13261,8 @@ class TaskOrchestrator:
             )
             result = fast_judge.judge(
                 task=task,
-                answer=verifier_output,
+                # Conduct judges its final answer; the verifier report is the reference.
+                answer=verifier_output if answer is None else answer,
                 criteria=(
                     components.criterion_cls(
                         criterion_id="evidence_quality",
@@ -13259,6 +13275,7 @@ class TaskOrchestrator:
                         weight=1.0,
                     ),
                 ),
+                **({} if answer is None else {"reference_answer": verifier_output}),
             )
             verification = {
                 "accepted": result.accepted,

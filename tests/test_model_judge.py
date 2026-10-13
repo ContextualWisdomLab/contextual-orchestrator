@@ -77,8 +77,15 @@ class _ScriptedFastJudge:
         self.mode = mode
         self.accept_threshold = accept_threshold
 
-    def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
-        del task, answer, criteria
+    def judge(
+        self,
+        *,
+        task: str,
+        answer: str,
+        criteria: tuple,
+        reference_answer: str | None = None,
+    ) -> object:
+        del task, answer, criteria, reference_answer
         completion = self.adapter.complete([{"role": "user", "content": "judge"}], mode=self.mode)
         decision, reason = _parse_model_judge_reply(completion["answer"])
         accepted = decision == "ACCEPT"
@@ -159,8 +166,20 @@ def test_completed_judge_call_with_no_reported_usage_still_counts_toward_budget(
     by coincidence.
     """
     class _ZeroAggregateUsageJudge(_ScriptedFastJudge):
-        def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
-            result = super().judge(task=task, answer=answer, criteria=criteria)
+        def judge(
+            self,
+            *,
+            task: str,
+            answer: str,
+            criteria: tuple,
+            reference_answer: str | None = None,
+        ) -> object:
+            result = super().judge(
+                task=task,
+                answer=answer,
+                criteria=criteria,
+                reference_answer=reference_answer,
+            )
             result.usage = {
                 "prompt_tokens": 0,
                 "completion_tokens": 0,

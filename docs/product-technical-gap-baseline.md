@@ -7491,3 +7491,41 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-27 Conduct final-answer judgment boundary — PR #1264
+
+**Context Map / owner boundary:** contextual-orchestrator owns the workflow and
+the response/reference wiring; released fast-mlsirm owns semantic scoring and
+future calibrated decision policy. The product does not copy an estimator or
+infer quality from verifier keywords.
+
+**Exact evidence:** PR #1264 predecessor head
+`235bf8fbbea7720e051245cedef9ccf7fb325f78` passed the verifier report as the
+fast-mlsirm `answer` in both fixed-template and generated conduct paths, then
+used that verdict to select a worker or synthesizer response. A
+template/generated regression reproduces that object mismatch. Commit
+`350da480` fixed the wiring but also replaced `accept_threshold=0.7` with `1.0`
+and renamed the criteria on every judged path; that scoring redesign was not
+requested, had no evaluation behind it, and would have changed the meaning of
+positional psychometric IRT rows. Revision r3 keeps only the wiring: conduct
+judges the final-step response with the verifier report as `reference_answer`
+(fast-mlsirm's comparison standard). Threshold `0.7` and the
+`evidence_quality`/`risk_signal` criteria are unchanged on every path, and
+direct routes (`route_once`, streaming, batch via `_realtime_route_judge`) are
+unchanged. Tests pin conduct (template/generated), `route_once`, and
+`_realtime_route_judge`.
+
+| Gap | Action | Status |
+| --- | --- | --- |
+| Judgment measured a review report instead of the response candidate. | Pass the final conduct output as `answer` and the verifier report as `reference_answer`. | Repaired on PR #1264; exact-head Checks/review pending. |
+| `0.7`, equal weights, and verifier-worded criteria have no calibration artifact; criteria still say "the verifier output" when conduct judges its final answer. | Keep them unchanged here; any threshold or criteria redesign needs its own PR and ADR with evaluation evidence and a plan for positional IRT rows. | Open; out of scope for PR #1264. |
+| fast-mlsirm lacks a released calibrated decision-policy artifact consumed by CO. | Owner RED contract must include held-out design, estimator/release identity, uncertainty, criterion provenance, immutable digest, and consumer bump. | Open upstream Gap; no source copy or mutable dependency. |
+| `verifier_required=False` can publish a response despite a rejected verdict. | Reconcile the opt-out with fail-closed publication semantics in a separate policy decision and contract migration. | Open; explicitly not claimed complete by PR #1264. |
+
+**PRD/TRD/UML/ERD status:** PRD safety goal and TRD call boundary are updated
+by the Proposed ADR `docs/planning/adrs/0139-final-answer-judgment-boundary.md`.
+No database schema or aggregate boundary changes, so the current ERD is
+unaffected. Conduct runtime sequence is now task + final response + verifier
+reference → fast-mlsirm judge → verdict → existing conduct gate. This local
+evidence is not a release, protected-branch acceptance, or held-out
+model-quality result.
