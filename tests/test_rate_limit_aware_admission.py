@@ -298,7 +298,7 @@ def test_mixed_failure_wait_retries_only_explicitly_rejected_candidate() -> None
     )
 
     result = orchestrator.proxy_completion(
-        {"model": TaskOrchestrator.FREE_MODEL, "messages": [{"role": "user", "content": "hi"}]}
+        {"model": TaskOrchestrator.FREE_MODEL, "orchestration_mode": "route", "messages": [{"role": "user", "content": "hi"}]}
     )
 
     assert result["id"] == "chatcmpl_recovered"
@@ -566,6 +566,7 @@ def test_http_route_once_waits_out_storm_and_serves_the_request() -> None:
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "hello"}],
             },
             token,
@@ -688,6 +689,7 @@ def test_http_fail_closed_after_503_keeps_route_and_stops() -> None:
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "hello"}],
             },
             token,
@@ -988,6 +990,7 @@ def test_http_route_once_all_size_exhaustion_preserves_route_evidence() -> None:
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "large request"}],
             },
             token,
@@ -1033,6 +1036,7 @@ def test_http_route_once_storm_without_budget_returns_429() -> None:
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "hello"}],
             },
             token,
@@ -1092,6 +1096,7 @@ def test_http_route_once_storm_with_no_retry_after_waits_the_assumed_cooldown() 
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "hello"}],
             },
             token,
@@ -1134,6 +1139,7 @@ def test_http_route_once_storm_with_no_retry_after_and_no_budget_returns_429_ass
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "hello"}],
             },
             token,
@@ -1419,6 +1425,7 @@ def test_http_route_once_retries_cooling_candidate_after_mixed_exhaustion(other_
             server.server_address[1],
             {
                 "model": TaskOrchestrator.FREE_MODEL,
+                "orchestration_mode": "route",
                 "messages": [{"role": "user", "content": "hello"}],
             },
             token,

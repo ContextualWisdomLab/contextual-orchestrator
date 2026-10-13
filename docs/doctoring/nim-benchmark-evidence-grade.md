@@ -445,12 +445,20 @@ sequenceDiagram
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
 
-### Declared candidate-group DIF sample size (2026-09-08, proposed)
+### Declared candidate-group DIF protocol (2026-10-01, proposed)
 
 The purified logistic DIF screen used a hidden 4,000-row two-group sample.
 That number chose Monte Carlo precision without an operator declaration.
-`_validate_candidate_group_dif` now requires an even `sample_size`. The
-harness run writes 4,000 as this run's choice and records `sample_size`.
+`_validate_candidate_group_dif` now requires an even `sample_size` plus
+explicit `exclude_studied_item`, `fdr_q`, `max_iter`, `max_rounds`, and
+`min_anchor_items` controls.
+The harness run records every declaration and uses the released
+`detect_dif_logistic_purified` API. Missing or invalid controls fail closed;
+the deprecated alias and its hidden historical defaults are gone. The
+script-entry declarations preserve fixture comparability and do not authorize
+production routing or a purified-screen FDR guarantee. Every item IRLS fit is
+counted; any failed fit or nonconverged purification loop invalidates the
+artifact before flags are interpreted.
 
 This slice does not change production route/conduct defaults. Score-reliability
 sample size is the successor slice recorded below.
@@ -876,4 +884,3 @@ sequenceDiagram
     Cell->>Report: Configured budget and observed usage
     Note over Operator,Report: Production route and conduct defaults stay locked
 ```
-

@@ -1101,10 +1101,10 @@ class WorkflowStep:
 class OrchestrationPolicy:
     """Policy knobs that govern routing, verification, and admin visibility.
 
-    Route-vs-conduct selection is evidence-based: one exact-schema model
-    triage call (cached by content hash) replaces the former keyword-hint and
-    character-length rules, which were hand-tuned heuristics with no
-    literature or measured grounding.
+    Special auto models currently fail closed to conduct without a triage
+    dispatch. The former keyword-hint and character-length rules remain absent;
+    a released calibrated decision-uncertainty contract is required before
+    automatic route admission can return.
     """
 
     route_p95_seconds: float = 2.5
@@ -5729,12 +5729,11 @@ class TaskOrchestrator:
         )
         self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
-        # task text and agent metadata, plus strict triage verdicts keyed by
-        # content hash. Bounds are operational memory limits, never weights.
+        # task text and agent metadata. Triage verdicts are deliberately not
+        # cached because candidate and fitted-evidence identity can change.
         self._evidence_lock = threading.Lock()
         self._task_vector_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._descriptor_vector_cache: OrderedDict[str, list[float]] = OrderedDict()
-        self._triage_cache: OrderedDict[str, bool] = OrderedDict()
         # Strict structured verdict parser seam; tests may substitute it, and
         # production always uses the exact-schema implementation below.
         self._triage_fn = self._triage_workflow_required
@@ -8050,12 +8049,9 @@ class TaskOrchestrator:
             raise ValueError("model_name must be a non-empty string")
         if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
-        # Only resolve route-vs-conduct now when it is free: mode="route"/"conduct"
-        # and an explicitly-named model (e.g. FREE_MODEL) settle without a live
-        # triage call. The remaining case -- mode="auto" against the gateway
-        # default/AUTO_MODEL -- genuinely depends on _needs_workflow()'s model
-        # call, so it stays undetermined (None) until a cache miss confirms one
-        # is actually needed; a warm cache entry must never pay for it.
+        # Resolve the containment decision before cache lookup. Otherwise a
+        # legacy unresolved auto key could return a point-estimate-authorized
+        # route response without reaching the current fail-closed boundary.
         cheap_decision = self._would_route_without_triage(mode, model_name)
         cache = self._cache_provider if self._cache_provider is not None else self._cache
         zdr_only = _REQUEST_ZDR_ONLY.get()
@@ -8093,6 +8089,7 @@ class TaskOrchestrator:
         if (
             isinstance(cached, Mapping)
             and isinstance(cached.get("mode"), str)
+            and cached["mode"] == resolved_mode
             and isinstance(cached.get("answer"), str)
             and isinstance(cached.get("trace"), list)
         ):
@@ -8123,21 +8120,19 @@ class TaskOrchestrator:
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
 
-    def _would_route_without_triage(self, mode: str, model_name: str) -> bool | None:
-        """``would_route()``'s answer when it never requires a live triage call.
+    def _would_route_without_triage(self, mode: str, model_name: str) -> bool:
+        """Return the route decision that requires no live triage call.
 
-        Mirrors ``would_route()``'s short-circuiting exactly, stopping one step
-        short of the only branch that calls ``_needs_workflow()`` (a real model
-        request): ``mode="auto"`` against the gateway default or ``AUTO_MODEL``.
-        Returns ``None`` there so a caller can defer that live call until it is
-        known to be necessary (e.g. after a response-cache lookup misses).
+        Special auto models fail closed to conduct until fast-mlsirm releases
+        calibrated decision uncertainty. Resolving here also versions the
+        cache key by ``conduct`` and prevents legacy unresolved route hits.
         """
         if mode == "route":
             return True
         if mode == "auto":
-            if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
+            if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}:
                 return True
-            return None
+            return False
         return False
 
     def _resolved_route_decision(
@@ -8157,11 +8152,7 @@ class TaskOrchestrator:
         model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
-        cheap_decision = self._would_route_without_triage(mode, model_name)
-        if cheap_decision is not None:
-            return cheap_decision
-        text = self._latest_user_text(messages)
-        return not self._needs_workflow(text)
+        return self._would_route_without_triage(mode, model_name)
 
     @_request_execution_scoped
     def stream_route(
@@ -11100,9 +11091,9 @@ class TaskOrchestrator:
             )
         return affinities
 
-    # --- structured complexity triage (replaces keyword hint tables) -------
+    # --- dormant structured triage contract (no auto dispatch) -------------
 
-    #: Exact-schema instruction for the single structured triage call.
+    #: Exact-schema instruction retained for the future released contract.
     TRIAGE_SYSTEM_PROMPT = (
         "You classify whether a user task requires an orchestrated multi-step "
         "workflow (planning plus verification across steps) or one direct answer. "
@@ -11110,54 +11101,32 @@ class TaskOrchestrator:
         '{"workflow_required": false} and nothing else.'
     )
 
-    def _triage_workflow_required(self, text: str) -> bool:
-        """Decide route-vs-conduct with one strict JSON verdict; fail to conduct.
+    def _triage_workflow_required(
+        self,
+        text: str,
+        prompt_context: str | None = None,
+    ) -> bool:
+        """Delegate to the contained workflow decision.
 
-        Evidence policy: the decision is made by a model under an exact output
-        schema, never by keyword matching. Any failure of the triage call or
-        parse fails closed toward the orchestrated path, which carries verifier
-        assurance; an absent triage agent degrades to the direct path because
-        no evidence source exists at all. Verdicts are cached by content hash.
+        The default does not dispatch a model. It returns conduct until the
+        canonical owner releases calibrated decision uncertainty. This wrapper
+        remains for the future contract and deterministic unit seams.
         """
-        digest = hashlib.sha256(
-            (
-                _request_endpoint_partition()
-                + "\x1f"
-                + text
-                + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")
-            ).encode("utf-8")
-        ).hexdigest()
-        with self._evidence_lock:
-            cached = self._triage_cache.get(digest)
-        if cached is not None:
-            return cached
-        verdict = self._compute_triage_verdict(text)
-        self._cache_put(self._triage_cache, digest, verdict)
-        return verdict
+        return self._compute_triage_verdict(text, prompt_context)
 
-    def _compute_triage_verdict(self, text: str) -> bool:
-        """One uncached triage decision for :meth:`_triage_workflow_required`."""
-        try:
-            candidates = self._ranked_agents(text, "worker", free_only=True)
-        except RuntimeError:
-            candidates = []
-        if not candidates and not _REQUEST_ZDR_ONLY.get():
-            candidates = [
-                agent for agent in self.agents if _agent_matches_request_endpoint(agent)
-            ]
-        if not candidates:
-            return False
-        triage_agent = candidates[0]
-        messages: list[ChatMessage] = [
-            {"role": "system", "content": self.TRIAGE_SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ]
-        try:
-            with observe_auxiliary_dispatch([triage_agent.id], "structured_triage"):
-                reply = self.client.chat(triage_agent, messages, temperature=0.0)
-            return _parse_triage_reply(reply)
-        except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
-            return True
+    def _compute_triage_verdict(
+        self,
+        text: str,
+        prompt_context: str | None = None,
+    ) -> bool:
+        """Fail closed until calibrated decision uncertainty is released.
+
+        The installed fast-mlsirm contract exposes point predictions only.
+        Point order cannot authorize the lower-assurance direct route; owner
+        issue fast-mlsirm#2315 tracks the required versioned uncertainty and
+        dominance evidence.
+        """
+        return True
 
     def _select_agent(
         self,
@@ -13019,16 +12988,20 @@ class TaskOrchestrator:
             raise KeyError(agent_pool_id)
         return self._agent(worker_agent_id)
 
-    def _needs_workflow(self, text: str) -> bool:
-        """Route-vs-conduct decision from a strict structured triage verdict.
+    def _needs_workflow(
+        self,
+        text: str,
+        prompt_context: str | None = None,
+    ) -> bool:
+        """Return the configured route-vs-conduct workflow decision.
 
         Keyword hint tables are intentionally absent: keyword matching cannot
         handle negation, mixed language, or tasks that quote trigger words, and
-        hand-tuned thresholds are not evidence. The verdict comes from one
-        exact-schema model call (cached by content hash) and fails closed to
-        the orchestrated path on any uncertainty.
+        hand-tuned thresholds are not evidence. The current default fails
+        closed without a model dispatch until calibrated decision uncertainty
+        is released; the callable remains an explicit test seam.
         """
-        return bool(self._triage_fn(text))
+        return bool(self._triage_fn(text, prompt_context))
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         for message in reversed(messages):

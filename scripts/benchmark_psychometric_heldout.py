@@ -37,6 +37,14 @@ DECLARED_ASSIGNMENT_TRIALS = 24_000
 ASSIGNMENT_SEED = 260_905
 EXPLORATION_RATE = 0.2
 DECLARED_DIF_SAMPLE_SIZE = 4_000
+# Frozen run declarations preserving the pre-fast-mlsirm-0.11.4 comparison
+# protocol. They are reported evidence inputs, not library or production
+# defaults. See ADR 0050.
+DECLARED_DIF_FDR_Q = 0.05
+DECLARED_DIF_EXCLUDE_STUDIED_ITEM = False
+DECLARED_DIF_MAX_ITER = 50
+DECLARED_DIF_MAX_ROUNDS = 3
+DECLARED_DIF_MIN_ANCHOR_ITEMS = 4
 DIF_SEED = 260_906
 DECLARED_JUDGE_SAMPLE_SIZE = 1_000
 JUDGE_SEED = 260_907
@@ -103,6 +111,15 @@ def _require_declared_confidence_level(value: object) -> float:
     if type(value) is not float or not math.isfinite(value) or not 0.0 < value < 1.0:
         raise ValueError(
             "confidence_level must be a declared finite exclusive unit interval"
+        )
+    return value
+
+
+def _require_declared_probability(value: object, field_name: str) -> float:
+    """Reject missing or non-exclusive-unit-interval probability declarations."""
+    if type(value) is not float or not math.isfinite(value) or not 0.0 < value < 1.0:
+        raise ValueError(
+            f"{field_name} must be a declared finite exclusive unit interval"
         )
     return value
 
@@ -1205,19 +1222,37 @@ def _validate_selection_utility() -> dict[str, object]:
 def _validate_candidate_group_dif(
     *,
     sample_size: int | None = None,
+    exclude_studied_item: bool | None = None,
+    fdr_q: float | None = None,
+    max_iter: int | None = None,
+    max_rounds: int | None = None,
+    min_anchor_items: int | None = None,
 ) -> dict[str, object]:
     """Recover one known candidate-cohort item shift after criterion purification.
 
-    ``sample_size`` is a required even positive declaration. ``None`` is a
-    fail-closed sentinel, not a statistical default.
+    Every numerical and decision control is a required declaration. ``None``
+    is a fail-closed sentinel, not a statistical default.
     """
     declared_sample_size = _require_declared_positive_int(
         sample_size, "sample_size"
     )
     if declared_sample_size % 2:
         raise ValueError("sample_size must be a declared even positive integer")
+    if type(exclude_studied_item) is not bool:
+        raise ValueError("exclude_studied_item must be a declared boolean")
+    declared_exclude_studied_item = exclude_studied_item
+    declared_fdr_q = _require_declared_probability(fdr_q, "fdr_q")
+    declared_max_iter = _require_declared_positive_int(max_iter, "max_iter")
+    declared_max_rounds = _require_declared_positive_int(
+        max_rounds, "max_rounds"
+    )
+    declared_min_anchor_items = _require_declared_positive_int(
+        min_anchor_items, "min_anchor_items"
+    )
     generator = np.random.default_rng(DIF_SEED)
     item_count = 8
+    if declared_min_anchor_items > item_count:
+        raise ValueError("min_anchor_items cannot exceed the declared item count")
     group = np.repeat((0, 1), declared_sample_size // 2)
     ability = generator.normal(size=declared_sample_size)
     intercept = np.linspace(-1.4, 1.4, item_count)
@@ -1227,19 +1262,55 @@ def _validate_candidate_group_dif(
     responses = (
         generator.random((declared_sample_size, item_count)) < probabilities
     ).astype(np.int8)
-    result = fast_mlsirm.logistic_dif_purified(responses, group)
+    result = fast_mlsirm.detect_dif_logistic_purified(
+        responses,
+        group,
+        exclude_studied_item=declared_exclude_studied_item,
+        fdr_q=declared_fdr_q,
+        max_iter=declared_max_iter,
+        max_rounds=declared_max_rounds,
+        min_anchor_items=declared_min_anchor_items,
+    )
+    raw_item_converged = np.asarray(result["converged"])
+    if (
+        raw_item_converged.shape != (item_count,)
+        or raw_item_converged.dtype != np.bool_
+    ):
+        raise ValueError("DIF item-fit convergence denominator is malformed")
+    item_converged = raw_item_converged.astype(bool, copy=False)
+    item_fit_attempted = int(item_converged.size)
+    item_fit_failed = int(item_fit_attempted - np.count_nonzero(item_converged))
+    if item_fit_attempted != item_count:
+        raise ValueError(
+            "DIF item-fit denominator does not match the declared item count"
+        )
+    if item_fit_failed:
+        raise ValueError(
+            f"{item_fit_failed} of {item_fit_attempted} item fits failed"
+        )
+    purification_converged = bool(result["purify_converged"])
+    if not purification_converged:
+        raise ValueError("DIF purification failed to converge")
     flagged_items = np.flatnonzero(result["flagged_bh"]).tolist()
     expected_items = [0]
     return {
-        "method": "logistic_dif_purified",
+        "method": "purified_logistic_regression_dif",
+        "api_symbol": "detect_dif_logistic_purified",
         "sample_size": declared_sample_size,
         "seed": DIF_SEED,
+        "exclude_studied_item": declared_exclude_studied_item,
+        "fdr_q": declared_fdr_q,
+        "max_iterations": declared_max_iter,
+        "max_purification_rounds": declared_max_rounds,
+        "minimum_anchor_items": declared_min_anchor_items,
+        "item_fit_attempted": item_fit_attempted,
+        "item_fit_failed": item_fit_failed,
         "expected_dif_items": expected_items,
         "flagged_items": flagged_items,
         "known_dif_recall": len(set(flagged_items) & set(expected_items))
         / len(expected_items),
         "false_positive_count": len(set(flagged_items) - set(expected_items)),
-        "purification_converged": bool(result["purify_converged"]),
+        "purification_converged": purification_converged,
         "purification_termination_reason": str(
             result["purify_termination_reason"]
         ),
@@ -1869,11 +1940,16 @@ def run_benchmark(
     resample_count: int | None = None,
     confidence_level: float | None = None,
     seed: int | None = None,
+    dif_exclude_studied_item: bool | None = None,
+    dif_fdr_q: float | None = None,
+    dif_max_iter: int | None = None,
+    dif_max_rounds: int | None = None,
+    dif_min_anchor_items: int | None = None,
 ) -> dict[str, object]:
     """Return paired held-out accuracy uncertainty and decision latency.
 
-    Bootstrap resample count, percentile coverage, and seed are required
-    declarations. ``None`` is a fail-closed sentinel, not a statistical default.
+    Bootstrap and candidate-group DIF controls are required declarations.
+    ``None`` is a fail-closed sentinel, not a statistical default.
     """
     bootstrap = _declared_bootstrap(
         resample_count=resample_count,
@@ -1953,7 +2029,12 @@ def run_benchmark(
     classification_decision = _validate_classification_decision()
     selection_utility = _validate_selection_utility()
     candidate_group_dif = _validate_candidate_group_dif(
-        sample_size=DECLARED_DIF_SAMPLE_SIZE
+        sample_size=DECLARED_DIF_SAMPLE_SIZE,
+        exclude_studied_item=dif_exclude_studied_item,
+        fdr_q=dif_fdr_q,
+        max_iter=dif_max_iter,
+        max_rounds=dif_max_rounds,
+        min_anchor_items=dif_min_anchor_items,
     )
     judge_effects = _validate_judge_effects(
         sample_size=DECLARED_JUDGE_SAMPLE_SIZE
@@ -2285,6 +2366,11 @@ def main() -> None:
         resample_count=DECLARED_BOOTSTRAP_RESAMPLE_COUNT,
         confidence_level=DECLARED_BOOTSTRAP_CONFIDENCE_LEVEL,
         seed=DECLARED_BOOTSTRAP_SEED,
+        dif_exclude_studied_item=DECLARED_DIF_EXCLUDE_STUDIED_ITEM,
+        dif_fdr_q=DECLARED_DIF_FDR_Q,
+        dif_max_iter=DECLARED_DIF_MAX_ITER,
+        dif_max_rounds=DECLARED_DIF_MAX_ROUNDS,
+        dif_min_anchor_items=DECLARED_DIF_MIN_ANCHOR_ITEMS,
     )
     print(json.dumps(result, sort_keys=True))
 

@@ -166,7 +166,7 @@ def test_http_chat_conduct_accepts_advertised_gateway_default_model() -> None:
         server.server_close()
 
 
-def test_http_chat_orchestrator_free_auto_stays_on_route_for_long_review_prompt() -> None:
+def test_http_chat_orchestrator_free_auto_conducts_on_free_agents_only() -> None:
     orchestrator = TaskOrchestrator(
         [
             ModelAgent("paid_agent", "paid-model", tags=("planning", "reasoning")),
@@ -196,8 +196,10 @@ def test_http_chat_orchestrator_free_auto_stays_on_route_for_long_review_prompt(
         )
         assert status == 200, body
         assert body["model"] == TaskOrchestrator.FREE_MODEL
-        assert body["orchestration"]["mode"] == "route"
-        assert len(body["orchestration"]["trace"]) == 1
+        assert body["orchestration"]["mode"] == "conduct"
+        trace = body["orchestration"]["trace"]
+        assert len(trace) > 1
+        assert "paid_agent" not in json.dumps(trace)
     finally:
         server.shutdown()
         thread.join(timeout=5)

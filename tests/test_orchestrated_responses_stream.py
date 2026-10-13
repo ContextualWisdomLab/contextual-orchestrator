@@ -69,13 +69,10 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         for event in events
         if event["type"] == "response.reasoning_summary_text.delta"
     ]
-    # orchestrator/free's auto mode always stays on the single-step route
-    # path regardless of workflow need, even for this workflow-needing
-    # prompt (#9173923b); only orchestrator/auto still reaches the full
-    # 4-phase conduct workflow here. /v1/responses streaming has no
-    # per-request mode override, so this reflects the free-tier model's
-    # real HTTP-reachable behavior, not a test gap.
-    expected_mode = "route" if model == "orchestrator/free" else "conduct"
+    # Both virtual selectors triage in auto mode, so this workflow-needing
+    # prompt reaches the 4-phase conduct workflow; orchestrator/free keeps
+    # every step on free agents.
+    expected_mode = "conduct"
     if expected_mode == "conduct":
         assert summaries == [
             "Planning the approach.",
@@ -490,11 +487,8 @@ def test_http_virtual_responses_preserves_message_array_and_sampling_controls() 
         server.server_close()
 
     assert observed_messages
-    # orchestrator/free's auto mode always stays on the single-step route
-    # path now (#9173923b), which passes the original message array through
-    # without conduct's leading workflow-instruction message -- so assert
-    # the input order survives as a contiguous run wherever it lands,
-    # rather than pinning it to conduct's specific offset.
+    # Route and conduct place the caller messages at different offsets, so
+    # assert the input order survives as a contiguous run wherever it lands.
     expected_roles = ["system", "user", "assistant"]
     assert any(
         [message.get("role") for message in messages][start : start + len(expected_roles)]
@@ -551,11 +545,9 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
     ])
-    # orchestrator/free's auto mode always stays on the single-step route
-    # path now (#9173923b), so the failure this test simulates must come
-    # from stream_route (the route path's own call), not conduct -- which
-    # is never reached for this model/mode combination any more.
+    # orchestrator/free triages in auto mode, so fail both paths.
     orchestrator.stream_route = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
+    orchestrator.conduct = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -93,6 +93,15 @@ See the [read scope and proposed experiment](../doctoring/irt_router_measurement
 
 ## Query routing (which upstream / which tier)
 
+- Candell, G. L., & Drasgow, F. (1988). An iterative procedure for linking
+  metrics and assessing item bias in item response theory. *Applied
+  Psychological Measurement, 12*(3), 253–260.
+  https://doi.org/10.1177/014662168801200304. Citation only; no PDF vendored.
+- French, B. F., & Maller, S. J. (2007). Iterative purification and effect
+  size use with logistic regression for differential item functioning
+  detection. *Educational and Psychological Measurement, 67*(3), 373–393.
+  https://doi.org/10.1177/0013164406294781. Citation only; no PDF vendored.
+
 - Song et al. (2025), *IRT-Router: Effective and interpretable multi-LLM routing
   via item response theory*, https://doi.org/10.18653/v1/2025.acl-long.761.
   See the [measurement review](../doctoring/irt_router_measurement_review.md)

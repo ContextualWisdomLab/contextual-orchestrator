@@ -108,8 +108,8 @@ def test_virtual_selector_accepts_exact_ids_and_rejects_aliases() -> None:
         server.server_close()
 
     # Exact id, and the same id with surrounding whitespace, stay on the route path.
-    assert observed[TaskOrchestrator.FREE_MODEL] == (200, "route"), observed
-    assert observed[f"  {TaskOrchestrator.FREE_MODEL}  "] == (200, "route"), observed
+    assert observed[TaskOrchestrator.FREE_MODEL] == (200, "conduct"), observed
+    assert observed[f"  {TaskOrchestrator.FREE_MODEL}  "] == (200, "conduct"), observed
 
     # A provider-qualified alias is refused outright rather than falling through
     # to single-agent passthrough, where worker re-selection would be lost.

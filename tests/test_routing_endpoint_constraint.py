@@ -116,7 +116,7 @@ def test_endpoint_scope_is_concurrent_and_rejects_model_conflicts() -> None:
         pass
 
 
-def test_endpoint_scope_partitions_response_and_triage_caches() -> None:
+def test_endpoint_scope_partitions_response_cache_without_triage_cache() -> None:
     orchestrator = _orchestrator()
     messages = [{"role": "user", "content": "same synthetic prompt"}]
     with orchestrator.routing_endpoint_scope("https://a.example", "orchestrator/auto"):
@@ -126,7 +126,7 @@ def test_endpoint_scope_partitions_response_and_triage_caches() -> None:
         cache_b = orchestrator._cache_key(messages, "route")
         orchestrator._triage_workflow_required("same synthetic prompt")
     assert cache_a != cache_b
-    assert len(orchestrator._triage_cache) == 2
+    assert not hasattr(orchestrator, "_triage_cache")
 
 
 @pytest.mark.parametrize(

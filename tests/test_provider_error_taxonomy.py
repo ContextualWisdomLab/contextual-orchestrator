@@ -516,7 +516,9 @@ def test_invoke_preserves_final_classified_failure_across_candidates(
         ModelAgent("backup_worker", "mock-b", tags=("reasoning",)),
     ]
     orchestrator = TaskOrchestrator(agents, client=RateLimited())
-    orchestrator._triage_fn = lambda text: False  # single-step route accounting
+    orchestrator._triage_fn = (  # single-step route accounting
+        lambda text, prompt_context=None: False
+    )
     orchestrator._rate_limit_sleep = advance_clock
     try:
         with pytest.raises(ProviderUpstreamError) as excinfo:
@@ -566,7 +568,7 @@ def test_invoke_mixed_failure_retries_only_rejected_candidate(monkeypatch, wait_
         agents, client=MixedFailure(), tool_retry_attempts=0, rate_limit_wait_seconds=wait_seconds,
         rate_limit_unknown_cooldown_seconds=5.0,
     )
-    orchestrator._triage_fn = lambda text: False
+    orchestrator._triage_fn = lambda text, prompt_context=None: False
     orchestrator._rate_limit_sleep = advance_clock
     try:
         if wait_seconds:
@@ -609,7 +611,7 @@ def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> 
         ModelAgent("backup_worker", "mock-b", tags=("reasoning",), priority=1),
     ]
     orchestrator = TaskOrchestrator(agents, client=client, tool_retry_attempts=2)
-    orchestrator._triage_fn = lambda text: False
+    orchestrator._triage_fn = lambda text, prompt_context=None: False
 
     result = orchestrator.route_once([{"role": "user", "content": "route this"}])
 
@@ -650,7 +652,7 @@ def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
         [ModelAgent("worker_agent", "gpt-x", tags=("reasoning",))],
         client=_UpstreamDown(),
     )
-    orchestrator._triage_fn = lambda text: False
+    orchestrator._triage_fn = lambda text, prompt_context=None: False
     token = "taxonomy_token"
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
