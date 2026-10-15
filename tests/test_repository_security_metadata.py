@@ -2,6 +2,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from _ci_workflow_contract import execution_contract
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
@@ -34,7 +36,11 @@ def test_readme_links_deepwiki_and_security_workflow_badges():
 
 def test_security_workflow_covers_core_repository_security_process():
     """Assert the pinned runner image, required steps, and dedupe list."""
-    workflow_text = read_text(".github/workflows/security.yml")
+    workflow_text = execution_contract(ROOT_DIR, ".github/workflows/security.yml")
+
+    caller_text = read_text(".github/workflows/security.yml")
+    if workflow_text != caller_text:
+        workflow_text = caller_text + "\n" + workflow_text
 
     expected_tokens = [
         "name: Security and Quality",
@@ -92,7 +98,12 @@ def test_security_workflow_covers_core_repository_security_process():
     assert not (ROOT_DIR / ".github/workflows/ci.yml").exists()
     assert not (ROOT_DIR / ".github/workflows/fuzz.yml").exists()
     selector = '${{ github.event_name == \'push\' && github.ref == \'refs/heads/main\' && fromJSON(\'["self-hosted","linux","x64","cwlab"]\') || \'ubuntu-24.04\' }}'
-    assert workflow_text.count("runs-on: " + selector) == 4
+    if "runs-on: " + selector in workflow_text:
+        assert workflow_text.count("runs-on: " + selector) == 4
+    else:
+        assert workflow_text.count("group: CWL CI isolated") == 4
+        assert workflow_text.count("labels: [self-hosted, linux, x64, cwlab-ci-isolated]") == 4
+        assert "ubuntu-" not in workflow_text
     assert "runs-on: ubuntu-latest" not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
@@ -276,7 +287,7 @@ def test_urllib3_security_release_is_locked_for_every_install_path():
 
 def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     """CI must install the uv lock so git-backed runtime dependencies are present."""
-    workflow_text = read_text(".github/workflows/security.yml")
+    workflow_text = execution_contract(ROOT_DIR, ".github/workflows/security.yml")
     setup_uv_line = find_uses_line(workflow_text, "astral-sh/setup-uv")
 
     assert re.search(r"@[0-9a-f]{40}(?:\s+#|$)", setup_uv_line)
@@ -324,7 +335,7 @@ def test_native_workflows_bootstrap_the_repository_pinned_rust_toolchain():
     action = "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87"
     for path, expected_count in ((".github/workflows/security.yml", 2),
                                  (".github/workflows/release.yml", 1)):
-        text = read_text(path)
+        text = execution_contract(ROOT_DIR, path) if path.endswith("/security.yml") else read_text(path)
         assert text.count(action) == expected_count
         assert text.count(f'toolchain: "{version}"') == expected_count
         assert "rustup toolchain install stable" not in text
@@ -339,7 +350,7 @@ def test_native_workflows_bootstrap_the_repository_pinned_rust_toolchain():
 def test_rust_gate_selects_shared_python_for_pyo3_linking():
     """Rust test binaries must link against the configured Python runtime."""
     rust_job = (
-        read_text(".github/workflows/security.yml")
+        execution_contract(ROOT_DIR, ".github/workflows/security.yml")
         .split("  rust:\n", 1)[1]
         .split("\n  security:\n", 1)[0]
     )
@@ -359,7 +370,7 @@ def test_full_suite_workflows_prepare_compose_before_render_checks():
     """Full suites need Compose independently of the runner's plugin state."""
     action = "docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a"
     for path in (".github/workflows/security.yml", ".github/workflows/release.yml"):
-        text = read_text(path)
+        text = execution_contract(ROOT_DIR, path) if path.endswith("/security.yml") else read_text(path)
         assert action in text
         assert 'version: "v5.4.0"' in text
         assert text.index(action) < text.index("docker compose version") < text.index("-m pytest")

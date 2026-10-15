@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from _ci_workflow_contract import execution_contract
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,9 +66,7 @@ def test_compatibility_monkeypatch_module_is_absent() -> None:
 
 def test_tests_workflow_enforces_nim_coverage_docstrings_and_package_smoke() -> None:
     """The exact PR head must prove 100% branches, docstrings, and installability."""
-    workflow = (REPOSITORY_ROOT / ".github/workflows/security.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = execution_contract(REPOSITORY_ROOT, ".github/workflows/security.yml")
     assert "  tests:" in workflow
     assert "name: Tests and package quality" in workflow
     assert "coverage run --branch" in workflow
