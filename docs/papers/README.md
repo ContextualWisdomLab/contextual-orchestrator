@@ -429,6 +429,7 @@ Case and sentence-final punctuation are normalized by the inventory test.
 - [RFC 4193](https://doi.org/10.17487/RFC4193)
 - [RFC 6265](https://doi.org/10.17487/RFC6265)
 - [RFC 6598](https://doi.org/10.17487/RFC6598)
+- [RFC 8259](https://doi.org/10.17487/RFC8259) — JSON reference cited by [ADR 0123](../adr/0123-web-search-mcp-a2a-gateway-foundation.md); inventory registration does not establish a new full-text review or redistribution permission.
 - [RFC 9110](https://doi.org/10.17487/RFC9110)
 - [DOI 10.18653/v1/2020.emnlp-main.550](https://doi.org/10.18653/v1/2020.emnlp-main.550)
 - [DOI 10.18653/v1/2025.acl-long.761](https://doi.org/10.18653/v1/2025.acl-long.761)

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import sys
+import threading
+import traceback
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,6 +59,196 @@ def _discovered(
     )
 
 
+def _close_orchestrator(orchestrator: object) -> None:
+    """Release and verify background workers owned by a test-built orchestrator."""
+    close = getattr(orchestrator, "close", None)
+    if not callable(close):
+        raise AssertionError("test-built orchestrator does not expose close()")
+    close()
+    collector = getattr(orchestrator, "_openrouter_collector", None)
+    thread = getattr(collector, "_thread", None)
+    if thread is not None and thread.is_alive():
+        raise AssertionError("OpenRouter uptime collector is still alive after close()")
+
+
+@contextmanager
+def _closed_orchestrator(orchestrator: object):
+    """Report paired failures with the unchanged body error first and as cause."""
+    primary: BaseException | None = None
+    try:
+        yield
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        secondary: BaseException | None = None
+        try:
+            _close_orchestrator(orchestrator)
+        except BaseException as cleanup_error:
+            if primary is None:
+                raise
+            secondary = cleanup_error
+        if secondary is not None:
+            raise BaseExceptionGroup(
+                "test body and orchestrator cleanup both failed", [primary, secondary]
+            ) from primary
+
+
+@contextmanager
+def _closed_captured_orchestrator(captured: dict[str, object]):
+    """Report captured-owner cleanup failures alongside the unchanged body error."""
+    primary: BaseException | None = None
+    try:
+        yield
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        orchestrator = captured.get("orchestrator")
+        if orchestrator is not None:
+            secondary: BaseException | None = None
+            try:
+                _close_orchestrator(orchestrator)
+            except BaseException as cleanup_error:
+                if primary is None:
+                    raise
+                secondary = cleanup_error
+            if secondary is not None:
+                raise BaseExceptionGroup(
+                    "test body and orchestrator cleanup both failed", [primary, secondary]
+                ) from primary
+
+
+class _DummyCollectorThread:
+    """Tiny stand-in for collector worker liveness checks."""
+
+    def __init__(self, alive: bool) -> None:
+        self._alive = alive
+
+    def is_alive(self) -> bool:
+        """Return the configured liveness state."""
+        return self._alive
+
+
+class _DummyCollector:
+    """Tiny stand-in exposing a collector thread."""
+
+    def __init__(self, alive: bool) -> None:
+        self._thread = _DummyCollectorThread(alive)
+
+
+class _DummyOrchestrator:
+    """Tiny stand-in for cleanup helper contracts."""
+
+    def __init__(self, *, alive: bool = False, close_error: BaseException | None = None) -> None:
+        self._openrouter_collector = _DummyCollector(alive)
+        self.close_error = close_error
+        self.close_calls = 0
+
+    def close(self) -> None:
+        """Record close calls and optionally fail like a broken owned closer."""
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
+def test_close_orchestrator_rejects_missing_close():
+    """Cleanup helpers fail closed when no owned close seam exists."""
+    with pytest.raises(AssertionError, match="does not expose close"):
+        _close_orchestrator(object())
+
+
+def test_close_orchestrator_reports_live_uptime_worker():
+    """A returned close call alone is not accepted when the worker remains alive."""
+    orchestrator = _DummyOrchestrator(alive=True)
+
+    with pytest.raises(AssertionError, match="still alive"):
+        _close_orchestrator(orchestrator)
+
+    assert orchestrator.close_calls == 1
+
+
+@pytest.mark.parametrize("captured", [False, True], ids=["direct", "captured"])
+@pytest.mark.parametrize("fault", ["live-worker", "close-error"])
+def test_closed_orchestrator_surfaces_combined_failure(captured, fault):
+    """Body and cleanup errors remain distinct, pytest-visible group members."""
+    release = threading.Event()
+    worker = threading.Thread(target=release.wait, name="openrouter-uptime-v3-control")
+    worker.start()
+    primary = AssertionError("primary failure")
+    cleanup_error = RuntimeError("cleanup failed")
+    close_calls = []
+
+    def close():
+        close_calls.append("close")
+        if fault == "close-error":
+            release.set()
+            worker.join(timeout=2)
+            assert not worker.is_alive()
+            raise cleanup_error
+
+    orchestrator = SimpleNamespace(
+        close=close, _openrouter_collector=SimpleNamespace(_thread=worker)
+    )
+    scope = (
+        _closed_captured_orchestrator({"orchestrator": orchestrator})
+        if captured else _closed_orchestrator(orchestrator)
+    )
+    try:
+        with pytest.raises(BaseExceptionGroup) as excinfo:
+            with scope:
+                raise primary
+        group = excinfo.value
+        assert len(group.exceptions) == 2
+        assert group.exceptions[0] is primary
+        assert group.__cause__ is primary
+        assert group.__context__ is primary
+        assert close_calls == ["close"]
+        rendered = "".join(traceback.format_exception(group))
+        assert "primary failure" in rendered
+        if fault == "live-worker":
+            assert worker.is_alive()  # Observe helper failure before fixture recovery.
+            assert isinstance(group.exceptions[1], AssertionError)
+            assert "still alive" in str(group.exceptions[1])
+            assert "still alive" in rendered
+        else:
+            assert not worker.is_alive()
+            assert group.exceptions[1] is cleanup_error
+            assert "cleanup failed" in rendered
+    finally:
+        # Independent recovery does not credit the owned closer with settlement.
+        release.set()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("captured", [False, True], ids=["direct", "captured"])
+def test_closed_orchestrator_preserves_body_only_failure(captured):
+    """Successful cleanup propagates the original body exception unchanged."""
+    orchestrator = _DummyOrchestrator()
+    primary = AssertionError("primary failure")
+    scope = (
+        _closed_captured_orchestrator({"orchestrator": orchestrator})
+        if captured else _closed_orchestrator(orchestrator)
+    )
+    with pytest.raises(AssertionError) as excinfo:
+        with scope:
+            raise primary
+    assert excinfo.value is primary
+    assert orchestrator.close_calls == 1
+
+
+def test_closed_orchestrator_reports_cleanup_failure_without_primary():
+    """A cleanup failure still fails the test when no primary error exists."""
+    orchestrator = _DummyOrchestrator(close_error=RuntimeError("cleanup failed"))
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        with _closed_orchestrator(orchestrator):
+            pass
+
+    assert orchestrator.close_calls == 1
+
+
 def test_build_review_orchestrator_registers_all_credentials_but_serves_free_sources(
     monkeypatch,
 ):
@@ -71,20 +265,20 @@ def test_build_review_orchestrator_registers_all_credentials_but_serves_free_sou
     }
 
     orchestrator = review_gateway.build_review_orchestrator(environment)
-
-    assert {agent.credential_key for agent in orchestrator.agents} == {
-        "OPENROUTER_API_KEY",
-        "NVIDIA_NIM_API_KEY",
-    }
-    assert all(not agent.disabled for agent in orchestrator.agents)
-    assert all("cost:free" in agent.tags for agent in orchestrator.agents)
-    assert all("input:text" in agent.tags for agent in orchestrator.agents)
-    assert all("output:text" in agent.tags for agent in orchestrator.agents)
-    assert {agent.priority for agent in orchestrator.agents} == {0}
-    assert all(
-        get_credential(name) == environment[name]
-        for name in review_gateway.REVIEW_CREDENTIAL_NAMES
-    )
+    with _closed_orchestrator(orchestrator):
+        assert {agent.credential_key for agent in orchestrator.agents} == {
+            "OPENROUTER_API_KEY",
+            "NVIDIA_NIM_API_KEY",
+        }
+        assert all(not agent.disabled for agent in orchestrator.agents)
+        assert all("cost:free" in agent.tags for agent in orchestrator.agents)
+        assert all("input:text" in agent.tags for agent in orchestrator.agents)
+        assert all("output:text" in agent.tags for agent in orchestrator.agents)
+        assert {agent.priority for agent in orchestrator.agents} == {0}
+        assert all(
+            get_credential(name) == environment[name]
+            for name in review_gateway.REVIEW_CREDENTIAL_NAMES
+        )
 
 
 def test_build_review_orchestrator_rejects_paid_rows(monkeypatch):
@@ -140,8 +334,8 @@ def test_build_review_orchestrator_excludes_explicit_non_chat_models(monkeypatch
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-
-    assert [agent.model for agent in orchestrator.agents] == ["review-model"]
+    with _closed_orchestrator(orchestrator):
+        assert [agent.model for agent in orchestrator.agents] == ["review-model"]
 
 
 def test_build_review_orchestrator_admits_free_image_chat_model_for_figure_review(
@@ -166,12 +360,12 @@ def test_build_review_orchestrator_admits_free_image_chat_model_for_figure_revie
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-
-    assert [agent.model for agent in orchestrator.agents] == ["vision-review-model"]
-    assert "input:image" in orchestrator.agents[0].tags
-    assert not orchestrator._is_general_free_agent(orchestrator.agents[0])
-    assert orchestrator._is_free_agent(orchestrator.agents[0])
-    assert orchestrator._agent_supports_image_input(orchestrator.agents[0])
+    with _closed_orchestrator(orchestrator):
+        assert [agent.model for agent in orchestrator.agents] == ["vision-review-model"]
+        assert "input:image" in orchestrator.agents[0].tags
+        assert not orchestrator._is_general_free_agent(orchestrator.agents[0])
+        assert orchestrator._is_free_agent(orchestrator.agents[0])
+        assert orchestrator._agent_supports_image_input(orchestrator.agents[0])
 
 
 def test_build_review_orchestrator_unions_blind_free_and_image_chat_models(
@@ -192,11 +386,11 @@ def test_build_review_orchestrator_unions_blind_free_and_image_chat_models(
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-
-    assert {agent.model for agent in orchestrator.agents} == {
-        "text-review",
-        "vision-review",
-    }
+    with _closed_orchestrator(orchestrator):
+        assert {agent.model for agent in orchestrator.agents} == {
+            "text-review",
+            "vision-review",
+        }
 
 
 def test_build_review_orchestrator_fails_closed_without_credentials():
@@ -240,16 +434,17 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
     monkeypatch.setattr(sys, "argv", ["review_gateway", "--port", "18181"])
 
-    review_gateway.main()
+    with _closed_captured_orchestrator(captured):
+        review_gateway.main()
 
-    assert captured["host"] == "127.0.0.1"
-    assert captured["port"] == 18181
-    security = captured["security"]
-    assert security.auth_token == "local-review-token"
-    assert security.allow_public_bind is False
-    assert security.max_body_bytes == review_gateway.REVIEW_MAX_BODY_BYTES
-    assert review_gateway.REVIEW_MAX_BODY_BYTES == 32 * 1024 * 1024
-    assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
+        assert captured["host"] == "127.0.0.1"
+        assert captured["port"] == 18181
+        security = captured["security"]
+        assert security.auth_token == "local-review-token"
+        assert security.allow_public_bind is False
+        assert security.max_body_bytes == review_gateway.REVIEW_MAX_BODY_BYTES
+        assert review_gateway.REVIEW_MAX_BODY_BYTES == 32 * 1024 * 1024
+        assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
 
 
 def test_main_configures_redacted_logging_before_discovery(monkeypatch, capsys):
@@ -266,13 +461,14 @@ def test_main_configures_redacted_logging_before_discovery(monkeypatch, capsys):
         return discovered, []
 
     monkeypatch.setattr(review_gateway, "discover_all_models", fake_discover)
-    monkeypatch.setattr(
-        review_gateway,
-        "serve",
-        lambda orchestrator, **kwargs: logging.getLogger(
-            "contextual_orchestrator.server"
-        ).info("http_request status=200 latency_ms=1 request_id=test-request"),
-    )
+    def fake_serve(orchestrator, **kwargs):
+        """Emit one redacted summary and close the test-owned orchestrator."""
+        with _closed_orchestrator(orchestrator):
+            logging.getLogger("contextual_orchestrator.server").info(
+                "http_request status=200 latency_ms=1 request_id=test-request"
+            )
+
+    monkeypatch.setattr(review_gateway, "serve", fake_serve)
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "local-review-token")
     monkeypatch.setattr(sys, "argv", ["review_gateway", "--log-level", "info"])
@@ -309,10 +505,11 @@ def test_main_forwards_repeated_credential_array_to_candidate_scope(monkeypatch)
         ["review_gateway", "--credential-name", "BYTEZ_API_KEY"],
     )
 
-    review_gateway.main()
+    with _closed_captured_orchestrator(captured):
+        review_gateway.main()
 
-    orchestrator = captured["orchestrator"]
-    assert [agent.credential_key for agent in orchestrator.agents] == ["BYTEZ_API_KEY"]
+        orchestrator = captured["orchestrator"]
+        assert [agent.credential_key for agent in orchestrator.agents] == ["BYTEZ_API_KEY"]
 
 
 def test_main_requires_authentication(monkeypatch):
@@ -339,12 +536,12 @@ def test_build_review_orchestrator_admits_every_evidence_eligible_candidate(monk
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-
-    assert {agent.model for agent in orchestrator.agents} == {
-        model.model_id for model in discovered
-    }
-    assert len(orchestrator.agents) == len(discovered)
-    assert {agent.priority for agent in orchestrator.agents} == {0}
+    with _closed_orchestrator(orchestrator):
+        assert {agent.model for agent in orchestrator.agents} == {
+            model.model_id for model in discovered
+        }
+        assert len(orchestrator.agents) == len(discovered)
+        assert {agent.priority for agent in orchestrator.agents} == {0}
 
 
 def test_review_gateway_cli_has_no_decision_affecting_model_cap():
@@ -381,8 +578,8 @@ def test_build_review_orchestrator_sizes_failover_budget_to_the_admitted_pool(mo
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-
-    assert orchestrator.tool_retry_attempts == MAX_TOOL_RETRY_ATTEMPTS
+    with _closed_orchestrator(orchestrator):
+        assert orchestrator.tool_retry_attempts == MAX_TOOL_RETRY_ATTEMPTS
 
 
 def test_build_review_orchestrator_never_exceeds_a_small_pool(monkeypatch):
@@ -393,5 +590,5 @@ def test_build_review_orchestrator_never_exceeds_a_small_pool(monkeypatch):
     orchestrator = review_gateway.build_review_orchestrator(
         {"OPENROUTER_API_KEY": "router-secret"}
     )
-
-    assert orchestrator.tool_retry_attempts == 0
+    with _closed_orchestrator(orchestrator):
+        assert orchestrator.tool_retry_attempts == 0

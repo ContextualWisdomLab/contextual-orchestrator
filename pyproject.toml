@@ -12,6 +12,7 @@ dependencies = [
   "jsonschema>=4.26.0",
   "egressweave>=0.1.0,<0.2.0",
   "fast-mlsirm==0.11.4",
+  "rfc3986-validator>=0.1.1,<0.2",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,7 @@ test = [
 ]
 api = [
   "fastapi>=0.128.0",
+  "mcp>=2.0,<3.0",
   "uvicorn>=0.38.0",
 ]
 db = [

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -188,6 +190,39 @@ def _assert_discovery_finishes(call) -> None:
     assert errors == []
 
 
+_DISCOVERY_FIXTURE_THREAD_NAMES = {
+    "discover-models-dev-metadata",
+    "discover-openrouter-zdr-model-ids",
+    "discover-openrouter-paid-inference",
+}
+
+
+def _release_discovery_fixture_events(*events: threading.Event) -> None:
+    """Release this test module's intentionally hung discovery workers."""
+    for event in events:
+        event.set()
+    deadline = time.monotonic() + 1.0
+    remaining_workers: list[str] = []
+    while True:
+        workers = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name in _DISCOVERY_FIXTURE_THREAD_NAMES
+        ]
+        if not workers:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            remaining_workers = [thread.name for thread in workers if thread.is_alive()]
+            break
+        for worker in workers:
+            worker.join(timeout=min(0.05, max(0.0, remaining)))
+    if remaining_workers and sys.exc_info()[0] is None:
+        raise AssertionError(
+            "discovery fixture workers did not exit: " + ", ".join(remaining_workers)
+        )
+
+
 def test_discover_all_models_bounds_every_shared_metadata_fetch() -> None:
     """Models.dev, OpenRouter ZDR, and credit metadata share the control-plane bound."""
     set_backend(InMemoryCredentialBackend())
@@ -195,62 +230,71 @@ def test_discover_all_models_bounds_every_shared_metadata_fetch() -> None:
         register_credential("OPENAI_API_KEY", "sk-openai")
         never_models_dev = threading.Event()
         source = replace(OPENAI_SOURCE, models_dev_provider_id="openai")
-        with (
-            patch(
-                "contextual_orchestrator.model_discovery._fetch_models_dev_metadata",
-                side_effect=lambda **_kwargs: never_models_dev.wait(),
-            ),
-            patch(
-                "contextual_orchestrator.model_discovery.discover_provider_models",
-                return_value=[],
-            ),
-            patch(
-                "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
-                return_value=set(),
-            ),
-        ):
-            _assert_discovery_finishes(
-                lambda: discover_all_models((source,), discovery_deadline=0.05)
-            )
+        try:
+            with (
+                patch(
+                    "contextual_orchestrator.model_discovery._fetch_models_dev_metadata",
+                    side_effect=lambda **_kwargs: never_models_dev.wait(),
+                ),
+                patch(
+                    "contextual_orchestrator.model_discovery.discover_provider_models",
+                    return_value=[],
+                ),
+                patch(
+                    "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+                    return_value=set(),
+                ),
+            ):
+                _assert_discovery_finishes(
+                    lambda: discover_all_models((source,), discovery_deadline=0.05)
+                )
+        finally:
+            _release_discovery_fixture_events(never_models_dev)
 
         set_backend(InMemoryCredentialBackend())
         register_credential("OPENROUTER_API_KEY", "sk-router")
         never_zdr = threading.Event()
-        with (
-            patch(
-                "contextual_orchestrator.model_discovery.discover_provider_models",
-                return_value=[],
-            ),
-            patch(
-                "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
-                side_effect=lambda **_kwargs: never_zdr.wait(),
-            ),
-            patch(
-                "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
-                return_value=None,
-            ),
-        ):
-            _assert_discovery_finishes(
-                lambda: discover_all_models((OPENROUTER_SOURCE,), discovery_deadline=0.05)
-            )
+        try:
+            with (
+                patch(
+                    "contextual_orchestrator.model_discovery.discover_provider_models",
+                    return_value=[],
+                ),
+                patch(
+                    "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+                    side_effect=lambda **_kwargs: never_zdr.wait(),
+                ),
+                patch(
+                    "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+                    return_value=None,
+                ),
+            ):
+                _assert_discovery_finishes(
+                    lambda: discover_all_models((OPENROUTER_SOURCE,), discovery_deadline=0.05)
+                )
+        finally:
+            _release_discovery_fixture_events(never_zdr)
 
         never_credit = threading.Event()
-        with (
-            patch(
-                "contextual_orchestrator.model_discovery.discover_provider_models",
-                return_value=[],
-            ),
-            patch(
-                "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
-                return_value=set(),
-            ),
-            patch(
-                "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
-                side_effect=lambda **_kwargs: never_credit.wait(),
-            ),
-        ):
-            _assert_discovery_finishes(
-                lambda: discover_all_models((OPENROUTER_SOURCE,), discovery_deadline=0.05)
-            )
+        try:
+            with (
+                patch(
+                    "contextual_orchestrator.model_discovery.discover_provider_models",
+                    return_value=[],
+                ),
+                patch(
+                    "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+                    return_value=set(),
+                ),
+                patch(
+                    "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+                    side_effect=lambda **_kwargs: never_credit.wait(),
+                ),
+            ):
+                _assert_discovery_finishes(
+                    lambda: discover_all_models((OPENROUTER_SOURCE,), discovery_deadline=0.05)
+                )
+        finally:
+            _release_discovery_fixture_events(never_credit)
     finally:
         set_backend(None)
