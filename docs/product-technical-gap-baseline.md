@@ -1,5 +1,11 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-30 document diff data-URI scan — Proposed
+
+| Gap ID | Status | Exact-head evidence | Repair / next gate |
+|---|---|---|---|
+| CO-DOCUMENT-DIFF-REDOS-01 | **Proposed — source repaired; hosted acceptance pending** | `contextual-orchestrator#1221@4dcf9e32b057cde83bca67bfd45975fc6deda458`; central CodeQL run `36447487525`, Python job `109084173022`, rule `py/polynomial-redos`, security severity 7.5, `contextual_orchestrator/document_diff_review.py:129`; SARIF artifact `11026927998`, digest `sha256:0145d9b03e8c0064c2a57be79bc3f8168bcd45dc93b488aa4a4b1f81c23898a5`. | Replace the unanchored data-URI regular expression with a disjoint-segment linear scanner while preserving fail-closed inline-media rejection. RED imports the absent scanner; GREEN covers ordinary, case-insensitive, whitespace-terminated, later-valid, and 1,600-prefix adversarial inputs. Re-run exact-head CodeQL only after this cause change; protected Checks and independent review remain required. |
+
 ## 2026-09-19 free multimodal review routing — Proposed
 
 Canonical owner PR
@@ -7443,7 +7449,6 @@ keeps the value administrator-owned through `OrchestrationPolicy`, and adds
 (prompt and parser follow the policy value; default stays 6). Not established:
 an ablation of the bound itself, which belongs to the #568 equal-budget lane.
 
-
 ## 2026-09-20 Protected-main CI regression RCA
 
 PR #995 exact head `d4f7e135719b16a0f0d72377d1bbe9b3614a8600`
@@ -7491,6 +7496,28 @@ serving loop and closed the injected embedding backend but did not release the
 test-owned listening socket. The fixture now calls `server_close()` in
 `finally` after the serving thread joins. This changes no production server
 lifecycle policy and keeps ResourceWarning visible as a failure signal.
+
+## 2026-09-27 Observed-health admission authority — Proposed
+
+PR #1221 exposed an operator-activatable routing policy whose fixed weight,
+failure-rate threshold, observation window, cooldown, exponential escalation,
+and all-open ordering changed candidate admission without a released
+mathematical, statistical, psychometric, standards-based, or experimentally
+validated authority. An opt-in Boolean or KV value records intent, not evidence;
+the failure-only sidecar replay is explicitly biased and cannot calibrate those
+decisions.
+
+RED `ee58cb09` proves both supported activation surfaces remained reachable:
+the constructor accepted `observed_health_quarantine=True`, and KV `enabled`
+activated the same heuristic policy. The forward repair removes that
+decision-affecting runtime surface and its replay artifacts instead of replacing
+one arbitrary policy with another. The independent provider boundary remains:
+HTTP 429 records quota cooldown evidence but never breaker health, while 503
+remains an availability failure. Focused authority and three-path HTTP status
+contracts must be GREEN on the exact successor before review. A future health
+policy requires immutable owner identity, executable calibration provenance,
+validated sampling/failure denominators, and a versioned released contract;
+until then activation fails closed.
 
 ## 2026-09-30 Data-URI leak scan without a heuristic cutoff
 
